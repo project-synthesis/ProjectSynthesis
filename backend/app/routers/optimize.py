@@ -13,6 +13,7 @@ import app.config as _cfg
 from app.config import PROMPTS_DIR, settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
+from app.dependencies.write_queue import get_write_queue
 from app.models import Optimization, OptimizationPattern
 from app.services.heuristic_suggestions import generate_heuristic_suggestions
 from app.services.passthrough import assemble_passthrough_prompt
@@ -25,6 +26,7 @@ from app.services.pipeline_constants import (
 from app.services.preferences import PreferencesService
 from app.services.project_service import resolve_effective_repo, resolve_project_id
 from app.services.taxonomy import get_engine as get_taxonomy_engine
+from app.services.write_queue import WriteQueue
 from app.utils.sse import format_sse
 from app.utils.text_cleanup import split_prompt_and_changes, title_case_label, validate_intent_label
 
@@ -112,6 +114,7 @@ async def optimize(
     body: OptimizeRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
     _rate: None = Depends(RateLimit(lambda: settings.OPTIMIZE_RATE_LIMIT)),
 ):
     from app.services.routing import RoutingContext
@@ -238,7 +241,9 @@ async def optimize(
 
         trace_id = str(uuid.uuid4())
         opt_id = str(uuid.uuid4())
-        pending = Optimization(
+        # v0.4.13 cycle 8: route the pending Optimization INSERT through
+        # the write queue under operation_label='optimize_passthrough_prepare'.
+        _pending_kwargs = dict(
             id=opt_id, raw_prompt=body.prompt, status="pending",
             trace_id=trace_id, provider="web_passthrough", routing_tier="passthrough",
             strategy_used=strategy_name,
@@ -250,8 +255,15 @@ async def optimize(
             repo_full_name=effective_repo,
             project_id=effective_project_id,
         )
-        db.add(pending)
-        await db.commit()
+
+        async def _do_pt_prepare(write_db: AsyncSession) -> None:
+            pending = Optimization(**_pending_kwargs)
+            write_db.add(pending)
+            await write_db.commit()
+
+        await write_queue.submit(
+            _do_pt_prepare, operation_label="optimize_passthrough_prepare",
+        )
         logger.info(
             "Passthrough prepared: trace_id=%s strategy=%s prompt_len=%d assembled_len=%d",
             trace_id, strategy_name, len(body.prompt), len(assembled),
@@ -369,10 +381,15 @@ async def update_optimization(
     body: OptimizationUpdateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> OptimizationDetail:
     """Update an optimization's metadata (e.g., rename its intent_label).
 
     Uses the optimization ``id`` (UUID), not ``trace_id``.
+
+    v0.4.13 cycle 8: the rename UPDATE routes through
+    ``write_queue.submit()`` under
+    ``operation_label='optimization_intent_rename'``.
     """
     result = await db.execute(
         select(Optimization).where(Optimization.id == optimization_id)
@@ -396,7 +413,13 @@ async def update_optimization(
             )
 
     if changed:
-        await db.commit()
+        async def _do_rename_commit(write_db: AsyncSession) -> None:
+            await write_db.commit()
+
+        await write_queue.submit(
+            _do_rename_commit,
+            operation_label="optimization_intent_rename",
+        )
         # Publish event so SSE subscribers (Navigator, ActivityPanel) update
         try:
             from app.services.event_bus import event_bus
@@ -518,6 +541,7 @@ async def passthrough_prepare(
     body: OptimizeRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
     _rate: None = Depends(RateLimit(lambda: settings.OPTIMIZE_RATE_LIMIT)),
 ) -> PassthroughPrepareResponse:
     """Assemble an optimization prompt for manual passthrough to an external LLM.
@@ -602,7 +626,9 @@ async def passthrough_prepare(
     trace_id = str(uuid.uuid4())
     opt_id = str(uuid.uuid4())
 
-    pending = Optimization(
+    # v0.4.13 cycle 8: route the pending Optimization INSERT through the
+    # write queue under operation_label='optimize_passthrough_prepare'.
+    _pt2_pending_kwargs = dict(
         id=opt_id,
         raw_prompt=body.prompt,
         status="pending",
@@ -618,8 +644,15 @@ async def passthrough_prepare(
         repo_full_name=_pt2_effective_repo,
         project_id=_pt2_project_id,
     )
-    db.add(pending)
-    await db.commit()
+
+    async def _do_pt2_prepare(write_db: AsyncSession) -> None:
+        pending = Optimization(**_pt2_pending_kwargs)
+        write_db.add(pending)
+        await write_db.commit()
+
+    await write_queue.submit(
+        _do_pt2_prepare, operation_label="optimize_passthrough_prepare",
+    )
 
     return PassthroughPrepareResponse(
         trace_id=trace_id,
@@ -634,6 +667,7 @@ async def passthrough_save(
     body: PassthroughSaveRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
     _rate: None = Depends(RateLimit(lambda: settings.OPTIMIZE_RATE_LIMIT)),
 ) -> OptimizationDetail:
     """Save an externally-optimized prompt result.
@@ -747,7 +781,15 @@ async def passthrough_save(
     opt.status = "completed"
     opt.model_used = body.model or "external"
     opt.models_by_phase = {"optimize": body.model or "external"}
-    await db.commit()
+
+    # v0.4.13 cycle 8: route the passthrough save commit through the
+    # write queue under operation_label='optimize_passthrough_save'.
+    async def _do_pt_save_commit(write_db: AsyncSession) -> None:
+        await write_db.commit()
+
+    await write_queue.submit(
+        _do_pt_save_commit, operation_label="optimize_passthrough_save",
+    )
     await db.refresh(opt)
 
     # Publish event

@@ -108,6 +108,7 @@ async def app_client(mock_provider, db_session, tmp_path):
     import app.config as _cfg
     from app.config import PROMPTS_DIR
     from app.database import get_db
+    from app.dependencies.write_queue import get_write_queue
     from app.main import app
     from app.services.context_enrichment import ContextEnrichmentService
     from app.services.event_bus import EventBus
@@ -156,11 +157,31 @@ async def app_client(mock_provider, db_session, tmp_path):
 
     app.dependency_overrides[get_db] = override_get_db
 
+    # v0.4.13 cycle 8: install a synthetic write_queue that runs submit
+    # callbacks against the same in-memory db_session so REST router tests
+    # don't need a real WriteQueue worker. Cycle 9 lifespan installs the
+    # real queue on app.state in production; tests use this stand-in to
+    # exercise the same code path without spinning up a worker thread.
+    class _TestWriteQueue:
+        async def submit(self, work, *, timeout=None, operation_label=None):
+            # Run the callback against db_session directly. The db_session
+            # is the same session the routes read from, so commits are
+            # immediately visible. Mirrors the production semantics where
+            # the queue worker uses the writer engine but tests collapse
+            # the read+write to one in-memory DB.
+            return await work(db_session)
+
+    test_write_queue = _TestWriteQueue()
+    app.state.write_queue = test_write_queue
+    app.dependency_overrides[get_write_queue] = lambda: test_write_queue
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
     app.dependency_overrides.clear()
+    if hasattr(app.state, "write_queue"):
+        del app.state.write_queue
     _cfg.DATA_DIR = original_data_dir
 
 
