@@ -170,6 +170,28 @@ async def execute_cold_path(
         ColdPathResult with quality metrics and acceptance status.
     """
     import time as _time
+
+    # v0.4.13 cycle 9 (HIGH-3, C-v4-3): cold path performs a full refit
+    # via the read engine (writes flow through ``WriterLockedAsyncSession``
+    # — kept for v0.4.13 to defer the cold-path-on-queue redesign to
+    # v0.4.14). Toggle ``cold_path_mode`` so the read-engine audit hook
+    # bypasses cleanly. ``finally`` clears the flag even under exception.
+    from app.database import read_engine_meta
+    read_engine_meta.cold_path_mode = True
+    try:
+        return await _execute_cold_path_inner(engine, db)
+    finally:
+        read_engine_meta.cold_path_mode = False
+
+
+async def _execute_cold_path_inner(
+    engine: TaxonomyEngine,
+    db: AsyncSession,
+) -> ColdPathResult:
+    """Original cold-path body. See ``execute_cold_path`` for the
+    audit-hook wrapper.
+    """
+    import time as _time
     _cold_t0 = _time.monotonic()
 
     nodes_created = 0
@@ -1280,9 +1302,25 @@ async def execute_umap_projection(
     Also assigns OKLab colors to newly positioned nodes and updates
     domain node UMAP positions from their children.
 
+    v0.4.13 cycle 9: writes occur on ``WriterLockedAsyncSession`` against
+    the read engine — toggle ``cold_path_mode`` so the audit hook
+    bypasses on the UPDATE statements that persist coordinates + colors.
+
     Returns:
         Number of clusters that received UMAP coordinates.
     """
+    from app.database import read_engine_meta
+    read_engine_meta.cold_path_mode = True
+    try:
+        return await _execute_umap_projection_inner(engine, db)
+    finally:
+        read_engine_meta.cold_path_mode = False
+
+
+async def _execute_umap_projection_inner(
+    engine: "TaxonomyEngine",
+    db: AsyncSession,
+) -> int:
     import time as _time
 
     _t0 = _time.monotonic()
