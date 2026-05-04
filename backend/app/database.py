@@ -53,6 +53,7 @@ write via HTTP POST events, not direct DB writes, so they don't compete here.
 import asyncio
 import logging
 import re
+import traceback
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -353,12 +354,28 @@ def install_read_engine_audit_hook(target_engine) -> None:  # noqa: ANN001
             return
         if not _is_write_statement(statement):
             return
-        err = WriteOnReadEngineError(
-            f"write statement on read engine outside allow-list: {statement[:120]}..."
+
+        # Cycle 9.6 diagnostic: capture call site so each WARN line tells you
+        # the exact source path. Sliced to skip SQLAlchemy + sqlite3 cursor
+        # frames so the top of the printed stack is usually the application
+        # site that triggered the write. Single-block warning (one log
+        # call) keeps grep -A 7 'read-engine audit:' parsing trivial.
+        stack = traceback.extract_stack(limit=24)
+        # Drop the top 2 frames (this _audit + sqlalchemy event dispatch);
+        # take the last 8 application-side frames in oldest-first order so
+        # a triage reader sees the orchestrator → service → DB call chain.
+        site_frames = stack[-10:-2] if len(stack) > 10 else stack[:-2]
+        site = "\n".join(
+            f"  {f.filename}:{f.lineno} {f.name}" for f in site_frames
         )
+        err_msg = (
+            f"write statement on read engine outside allow-list: "
+            f"{statement[:120]}...\n{site}"
+        )
+        err = WriteOnReadEngineError(err_msg)
         if settings.WRITE_QUEUE_AUDIT_HOOK_RAISE:
             raise err
-        logger.warning("read-engine audit: %s", err)
+        logger.warning("read-engine audit:\n%s", err_msg)
 
     event.listen(target_engine.sync_engine, "before_cursor_execute", _audit)
     _audit_listener = _audit
