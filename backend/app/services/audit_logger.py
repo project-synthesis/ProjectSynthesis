@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 async def log_event(
-    db: AsyncSession,
+    db: AsyncSession | None,
     action: str,
     actor_ip: str | None = None,
     actor_session: str | None = None,
@@ -39,8 +39,9 @@ async def log_event(
     """Write an audit log entry.
 
     When ``write_queue`` is supplied, the INSERT + commit route through
-    ``write_queue.submit()`` under ``operation_label='audit_log_event'``.
-    Otherwise the legacy direct-session path is used.
+    ``write_queue.submit()`` under ``operation_label='audit_log_event'``;
+    ``db`` is unused in that path and may be ``None``. Otherwise the
+    legacy direct-session path requires a non-None ``db``.
     """
     if write_queue is not None:
         async def _do_log(write_db: AsyncSession) -> None:
@@ -59,6 +60,10 @@ async def log_event(
         return
 
     # Legacy: write through ``db`` directly.
+    if db is None:
+        raise ValueError(
+            "log_event: db must be non-None when write_queue is not supplied"
+        )
     entry = AuditLog(
         action=action,
         actor_ip=actor_ip,
@@ -72,7 +77,7 @@ async def log_event(
 
 
 async def prune_audit_log(
-    db: AsyncSession,
+    db: AsyncSession | None,
     retention_days: int = 90,
     *,
     write_queue: "WriteQueue | None" = None,
@@ -80,7 +85,9 @@ async def prune_audit_log(
     """Delete audit log entries older than retention_days.
 
     When ``write_queue`` is supplied, the DELETE + commit route through
-    ``write_queue.submit()`` under ``operation_label='audit_log_prune'``.
+    ``write_queue.submit()`` under ``operation_label='audit_log_prune'``;
+    ``db`` is unused in that path and may be ``None``. Otherwise the
+    legacy direct-session path requires a non-None ``db``.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
 
@@ -103,6 +110,10 @@ async def prune_audit_log(
         return deleted
 
     # Legacy: write through ``db`` directly.
+    if db is None:
+        raise ValueError(
+            "prune_audit_log: db must be non-None when write_queue is not supplied"
+        )
     result = await db.execute(
         delete(AuditLog).where(AuditLog.timestamp < cutoff)
     )
