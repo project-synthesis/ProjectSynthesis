@@ -30,3 +30,21 @@ class TestAuditLoggerSignatureRelaxation:
             )
         finally:
             await wq.stop(drain_timeout=2.0)
+
+
+class TestStrategiesAuditLogMigration:
+    """routers/strategies.py:164 audit-log uses log_event with write_queue."""
+
+    def test_strategies_strategy_updated_audit_uses_log_event_with_write_queue(self):
+        import app.routers.strategies as _strat_mod
+        src = Path(_strat_mod.__file__).read_text()
+        # Migrated source MUST NOT have async with async_session_factory in
+        # the audit-log block.
+        assert "async with async_session_factory() as audit_db:" not in src, (
+            "strategies.py:164 audit-log site still uses bare session factory"
+        )
+        # Migrated source MUST call log_event with write_queue=
+        assert "log_event(" in src and "write_queue=" in src, (
+            "strategies.py audit-log must thread write_queue= into log_event call"
+        )
+        assert '"strategy_updated"' in src, "action name preserved"
