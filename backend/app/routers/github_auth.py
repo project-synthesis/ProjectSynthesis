@@ -380,20 +380,36 @@ async def github_me(
             "GitHub token validation failed for session %s — cleaning up",
             session_id[:8],
         )
-        result = await db.execute(
-            select(GitHubToken).where(GitHubToken.session_id == session_id)
+        # v0.4.14 cycle 3e.3: route the cleanup deletes through the
+        # WriteQueue. We snapshot session_id before declaring the
+        # closure so the work_fn references no outer state, then
+        # re-fetch + delete both rows inside the writer session.
+        captured_session_id = session_id
+
+        async def _do_cleanup(write_db: AsyncSession) -> None:
+            res = await write_db.execute(
+                select(GitHubToken).where(
+                    GitHubToken.session_id == captured_session_id
+                )
+            )
+            row = res.scalar_one_or_none()
+            if row:
+                await write_db.delete(row)
+            res = await write_db.execute(
+                select(LinkedRepo).where(
+                    LinkedRepo.session_id == captured_session_id
+                )
+            )
+            linked = res.scalar_one_or_none()
+            if linked:
+                await write_db.delete(linked)
+            await write_db.commit()
+
+        from app.tools._shared import get_write_queue
+        await get_write_queue().submit(
+            _do_cleanup,
+            operation_label="github_auth_me_revoke_cleanup",
         )
-        token_row = result.scalar_one_or_none()
-        if token_row:
-            await db.delete(token_row)
-        # Also remove the linked repo tied to this session
-        result = await db.execute(
-            select(LinkedRepo).where(LinkedRepo.session_id == session_id)
-        )
-        linked_row = result.scalar_one_or_none()
-        if linked_row:
-            await db.delete(linked_row)
-        await db.commit()
         response.delete_cookie("session_id", path="/api")
         raise HTTPException(401, "GitHub token expired or revoked. Please reconnect.")
     # Update cached user info if it changed
