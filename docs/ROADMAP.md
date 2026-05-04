@@ -118,7 +118,7 @@ This violates the design intent. Domain emergence should be **signal concentrati
 ---
 
 ### Topic Probe — agentic targeted exploration of a user-specified concern against the linked codebase
-**Status:** **Tier 1 SHIPPED** (v0.4.12, 2026-04-29). Tier 2 / Tier 3 / Tier 4 remain **Planned** within the 0.4.x line: T2=v0.4.13, T3=v0.4.14, T4=v0.4.15.
+**Status:** **Tier 1 SHIPPED** (v0.4.12, 2026-04-29). Tier 2 / Tier 3 / Tier 4 remain **Planned** within the 0.4.x line: T2=v0.4.14, T3=v0.4.15, T4=v0.4.16. (Tier 2 was originally scheduled for v0.4.13 but bumped after that release was reallocated to the SQLite writer-slot contention architectural fix; see SHIPPED.md v0.4.13 entry.)
 
 **Tier 1 deliverables (SHIPPED):**
 - `POST /api/probes` (SSE), `GET /api/probes`, `GET /api/probes/{id}`

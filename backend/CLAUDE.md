@@ -111,7 +111,7 @@ User-driven, codebase-aware seed mode. The user specifies a `topic` (e.g., "embe
 - 7 `probe_*` events: `probe_started`, `probe_grounding`, `probe_generating`, `probe_prompt_completed`, `probe_taxonomy_change`, `probe_completed`, `probe_failed`
 - Optimizer timeout calibration: `_CLI_TIMEOUT_SECONDS=600` per-LLM-call (was 300 — caused silent retries on Opus 4.7 xhigh runs); `_post=1800s` and `probe.py httpx=3600s` cover the audit-class p99 with headroom
 
-All 4 Topic Probe tiers ship within v0.4.x: T1=v0.4.12 (this), T2=v0.4.13 (save-as-suite + replay + UI navigator), T3=v0.4.14 (cross-tier composition: probe → seed-agent promotion, drill-into-cluster from seed run), T4=v0.4.15 (substrate unification: SeedRun and ProbeRun collapse to one model).
+All 4 Topic Probe tiers ship within v0.4.x: T1=v0.4.12 (this), T2=v0.4.14 (save-as-suite + replay + UI navigator — bumped from v0.4.13 after that release shipped the SQLite contention fix), T3=v0.4.15 (cross-tier composition: probe → seed-agent promotion, drill-into-cluster from seed run), T4=v0.4.16 (substrate unification: SeedRun and ProbeRun collapse to one model).
 
 ## Pipeline architecture
 
