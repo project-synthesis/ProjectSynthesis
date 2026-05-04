@@ -18,6 +18,8 @@ All writes route through `app.state.write_queue.submit(work_fn, *, timeout, oper
 - Reentrancy: hard-fail via `WriteQueueReentrancyError` if `submit()` called from within the worker task.
 - Migration completeness: 100% of hot+warm writers route through queue. Cold path is the sole exception (kept on `WriterLockedAsyncSession`; v0.4.14 chunks).
 - Telemetry writes (e.g., `task_type_telemetry`) use fire-and-forget `submit()` — failure does NOT block the caller.
+- `WriteQueue.submit_batch(work_fns, *, timeout, operation_label)` runs multiple writes in ONE queued task, ONE transaction, ONE writer session. Work_fns MUST NOT call db.commit(). Failure of any work_fn raises `SubmitBatchError(index, fn_name, original)` and rolls back ALL prior writes. Used by OAuth callback + token revoke. Inside submit_batch, call `audit_logger` directly via `AuditLog` insert (NOT `log_event`) because `log_event`'s legacy-mode commit violates the commit-forbidden contract.
+- v0.4.14: short-lived writers route through queue (REST routers + MCP optimize-passthrough + sampling-pipeline persist + audit logs + bg-task helper `_update_synthesis_status`). Long-handler sites (refine/save_result/optimize internal pipeline) + cold path + `_bg_index`/`build_index` retain legacy session pending v0.4.15.
 
 See `docs/specs/sqlite-writer-queue-2026-05-02.md` for full design rationale.
 

@@ -6,6 +6,31 @@ For active work, see [`ROADMAP.md`](ROADMAP.md). For per-change detail with file
 
 ---
 
+### v0.4.14 — SQLite migration finalization (2026-05-04)
+
+Closes the v0.4.13 short-lived-write deferred sites. After v0.4.14, every short-lived write path inside the foreground request lifecycle (passthrough pending insert, sampling-pipeline persist, audit logs, OAuth flows, status updates) routes through the WriteQueue. Long-handler sites (refine, save_result, optimize internal-pipeline) and cold-path full-refit + `_bg_index`/`build_index` remain on the legacy path; all are tracked for v0.4.15 architectural cycles.
+
+**Migration scope:** ~395 LOC across 5 cycles, ~24 new tests.
+
+**New surface:**
+- `WriteQueue.submit_batch()` helper.
+- `SubmitBatchError` + `SubmitBatchCommitError` exceptions.
+
+**Migrated sites:** `tools/optimize.py:125`, `services/sampling_pipeline.py:846`, 6 `github_auth.py` routers, 3 audit-log writers (via existing `log_event(write_queue=)` kwarg), `_update_synthesis_status` background-task helper.
+
+**Acceptance:** OPERATE regression bar (probe + 30 seeds + 100 feedbacks + 5 optimize-pt + 3 sampling + 3 device-poll + 5 strategy_updated + 5 api_key flows) passes with 0 locks + 0 audit warns + p95 ≤ 1s + 0 queue failures.
+
+**Time-gated follow-ups (v0.4.14.x patches):**
+- Audit-hook RAISE-in-production switch — 7+ days post-v0.4.14 ship with zero locks/warns.
+- `WriterLockedAsyncSession` removal — gated on RAISE switch + 7 days zero flush events.
+
+**Deferred to v0.4.15 architectural cycles:**
+- `tools/refine.py:50, :156` — handler wraps RefinementService LLM call inside session.
+- `tools/save_result.py:85` — handler wraps heuristic scoring + analyzer A4 LLM fallback.
+- `tools/optimize.py:198` — handler wraps PipelineOrchestrator 4-LLM SSE loop.
+- Cold-path commit chunking with per-phase Q-gates.
+- `_bg_index` / `RepoIndexService.build_index()` per-file write batching.
+
 ### v0.4.13 — 2026-05-04
 
 **SQLite writer-slot contention — architectural fix (P0).** The hardest cycle of the v0.4.x line. Closes the cycle-19→22 v2 + probe v22-v29 audit chain (`docs/audits/probe-v22-v29-2026-04-29.md`) where 11 of 26 historical probe runs silently lost their optimization rows under realistic concurrent-writer load. The v0.4.12 hardening (verify-after-persist gate, per-prompt streaming, early-abort, warm-path Groundhog Day fix) made failures loud and structured but did NOT fix the root cause — confirmed when v27 ran with MCP server stopped (only backend) and still went catastrophic, proving contention was purely within-backend, not cross-process.

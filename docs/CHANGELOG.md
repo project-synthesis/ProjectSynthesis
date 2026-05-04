@@ -4,6 +4,19 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- `WriteQueue.submit_batch(work_fns)` helper for atomic multi-write groupings (single transaction, single session, single queue task). Used by OAuth callback + token revoke for atomic write+audit pairs.
+- `SubmitBatchError` + `SubmitBatchCommitError` diagnostic exceptions with index/fn_name context. Lambda + functools.partial fn_name fallback covered by explicit pin test.
+
+### Changed
+- Migrated `tools/optimize.py:125` (passthrough pending insert) + `services/sampling_pipeline.py:846` (Optimization persist + applied-pattern tracking + injection-provenance flush) to write queue via `submit()`.
+- Migrated 6 GitHub auth router write sites: `_refresh_token_if_expired`, `/auth/callback` (submit_batch), `/auth/me` cleanup-on-revoke + user-info-update, `/auth/logout`, `/auth/device/poll` revoke (submit_batch).
+- Migrated 3 audit-log writers (strategies.py:164 strategy_updated, providers.py:124 api_key_set, providers.py:159 api_key_deleted) by threading `write_queue=get_write_queue()` into the existing `audit_logger.log_event()` kwarg (added in v0.4.13 cycle 8). Relaxed `log_event` signature to accept `db: AsyncSession | None = None` for kwarg-only callers.
+- `routers/github_repos.py::_update_synthesis_status` accepts `write_queue` keyword; threaded through `_run_explore_synthesis` → background `_bg_index` task spawn sites. Catches `WriteQueueStoppedError` to survive lifespan teardown race during long-running explore synthesis.
+
+### Fixed
+- Audit-hook scope reduction holds: 0 read-engine audit warnings under v0.4.14 cycle 5 OPERATE regression bar (workload includes new MCP optimize-passthrough + sampling-pipeline + github_auth callback + strategy_updated + api_key flows).
+
 ## v0.4.13 — 2026-05-04
 
 ### Added

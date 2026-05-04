@@ -2,7 +2,7 @@
 
 Living document tracking planned improvements. Items are prioritized but not scheduled. Each entry links to the relevant spec or ADR when available.
 
-**Snapshot:** v0.4.14-dev (in development, post-v0.4.13). Last release: v0.4.13 (2026-05-04 — SQLite writer-slot contention architectural fix via single-writer queue; suite 3457 passing + 1 skipped).
+**Snapshot:** v0.4.15-dev (in development, post-v0.4.14). Last release: v0.4.14 (2026-05-04 — SQLite migration finalization; short-lived foreground writes now route through WriteQueue; long-handler + cold-path + bg-index sites tracked for v0.4.15 architectural cycles).
 
 > **Shipped work archived in [`SHIPPED.md`](SHIPPED.md).** This file tracks only forward-looking items (Immediate, Planned, Exploring, Deferred) plus partial-tier work where a follow-up tier is still active.
 
@@ -463,52 +463,58 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 
 ---
 
-### Cold-path commit chunking via `WriteQueue` (v0.4.14 P1)
-**Status:** Planned for v0.4.14
-**Context:** v0.4.13 shipped the single-writer queue but kept the taxonomy cold-path full-refit on `WriterLockedAsyncSession` + `cold_path_mode` audit-hook bypass. The refit's transaction span (multi-second commits across thousands of cluster rows) does not fit the queue's per-task timeout model.
+### Cold-path commit chunking with per-phase Q-gates (v0.4.15 P0)
+**Status:** Planned for v0.4.15
+**Context:** v0.4.13 shipped the single-writer queue and v0.4.14 finalized short-lived foreground writes, but the taxonomy cold-path full-refit remains on `WriterLockedAsyncSession` + `cold_path_mode` audit-hook bypass. The refit's transaction span (multi-second commits across thousands of cluster rows) does not fit the queue's per-task timeout model.
 
-**Plan:** chunk each refit phase (re-embedding pass, cluster reassignment, label reconciliation, member-count repair) into per-batch `submit()` calls with `await asyncio.sleep(0)` between. Each chunk fits the default `timeout=300s` envelope. Removes the last `cold_path_mode` audit-hook bypass; cold path becomes structurally identical to hot/warm in routing terms.
+**Plan:** chunk each refit phase (re-embedding pass, cluster reassignment, label reconciliation, member-count repair) into per-batch `submit()` calls with `await asyncio.sleep(0)` between, gated by per-phase Q-gates so a downstream phase only runs after its upstream chunk batch confirms commit. Each chunk fits the default `timeout=300s` envelope. Removes the last `cold_path_mode` audit-hook bypass; cold path becomes structurally identical to hot/warm in routing terms.
 
 **Files:** `backend/app/services/taxonomy/cold_path.py`, `taxonomy/warm_phases.py` (refit invocation), audit-hook flag retirement in `database.py`.
 
 ---
 
-### Migrate remaining MCP tool sites (v0.4.14 P1)
-**Status:** Planned for v0.4.14
-**Context:** v0.4.13 cycle 9 migrated 3 of 7 MCP tool handlers through the queue. The remaining 4 are deferred — each needs careful review for write semantics in the MCP context (cross-process bridge timing, structured_output coupling).
+### `tools/refine.py` handler restructure (v0.4.15 P1)
+**Status:** Planned for v0.4.15
+**Context:** v0.4.14 deferred `tools/refine.py:50, :156` because the handler wraps `RefinementService` LLM call inside its own session — write-queue migration requires extracting the LLM call out of the session lifetime so the queued submit owns only the persistence boundary, not the multi-second LLM round-trip.
 
-**Files:** `backend/app/tools/<remaining>.py`. Estimated: ~40 LOC + 4 handler-level tests.
-
----
-
-### Migrate `github_auth` + `clusters` routers through `WriteQueue` (v0.4.14 P1)
-**Status:** Planned for v0.4.14
-**Context:** 11 sites deferred from v0.4.13 — OAuth retry handling (`github_auth`) needs careful work because the device-flow polling loop has its own retry/backoff semantics; taxonomy state mutation routes (`clusters`) need transactional grouping that the queue's submit-per-call shape doesn't compose with cleanly without helper primitives.
-
-**Plan:** introduce a `WriteQueue.submit_batch(work_fns, *, timeout)` helper that lets a router run multiple writes inside one queued task while preserving the single-writer ordering guarantee. Then migrate the affected routes.
-
-**Files:** `backend/app/services/write_queue.py`, `routers/github_auth.py`, `routers/clusters.py`.
+**Files:** `backend/app/tools/refine.py`, `services/refinement_service.py` (session boundary refactor).
 
 ---
 
-### Migrate `_update_synthesis_status` background task (v0.4.14 P1)
-**Status:** Planned for v0.4.14
-**Context:** `github_repos.py` schedules a background task that writes synthesis-status updates outside the request-response cycle. v0.4.13 left it on the read engine with `cold_path_mode` flag bypass to keep the migration scope finite; v0.4.14 routes it through the queue.
+### `tools/save_result.py` handler restructure (v0.4.15 P1)
+**Status:** Planned for v0.4.15
+**Context:** v0.4.14 deferred `tools/save_result.py:85` because the handler wraps heuristic scoring + analyzer A4 LLM fallback inside its own session. Same restructure pattern as refine: extract LLM call from session lifetime, keep only persistence inside the queued submit.
 
-**Files:** `backend/app/routers/github_repos.py`, async task wrapper.
-
----
-
-### Switch read-engine audit hook to RAISE in production (v0.4.14 P2)
-**Status:** Planned for v0.4.14
-**Context:** v0.4.13 ships the audit hook in WARN mode for dev/prod and RAISE-only for CI (`WRITE_QUEUE_AUDIT_HOOK_RAISE` env flag). Once 7+ days of zero locks confirmed in real usage, switch the production default to RAISE. Drift writes that escape the migration become hard failures at source instead of WARN-and-continue.
-
-**Trigger:** 7 consecutive days with zero `database is locked` errors and zero audit-hook WARN events on the active branch.
+**Files:** `backend/app/tools/save_result.py`, scoring/analyzer call-site refactor.
 
 ---
 
-### Remove `WriterLockedAsyncSession` defense-in-depth class (v0.4.14 P2)
-**Status:** Planned for v0.4.14
+### `tools/optimize.py:198` orchestrator restructure (v0.4.15 P1)
+**Status:** Planned for v0.4.15
+**Context:** v0.4.14 deferred the `tools/optimize.py:198` site because the handler wraps the full `PipelineOrchestrator` 4-LLM SSE loop. The orchestrator must be split so each persistence boundary is a discrete `submit()` while the long LLM phases run outside any session.
+
+**Files:** `backend/app/tools/optimize.py`, `services/pipeline.py` (SSE persistence boundary extraction).
+
+---
+
+### `_bg_index` / `RepoIndexService.build_index()` per-file batching (v0.4.15 P1)
+**Status:** Planned for v0.4.15
+**Context:** v0.4.14 left `_bg_index` and `RepoIndexService.build_index()` on the legacy session because per-file index inserts span minutes for large repos. Plan: per-file write batching where each batch is one `submit()` call that fits the default `timeout=300s` envelope, with progress events between batches so users see live indexing.
+
+**Files:** `backend/app/services/repo_index_service.py`, `routers/github_repos.py` (background-task integration).
+
+---
+
+### Switch read-engine audit hook to RAISE in production (v0.4.14.x time-gated)
+**Status:** Planned for v0.4.14.x patch
+**Context:** v0.4.13 shipped the audit hook in WARN mode for dev/prod and RAISE-only for CI (`WRITE_QUEUE_AUDIT_HOOK_RAISE` env flag); v0.4.14 finalized the short-lived foreground writer migration with 0 audit warns under the OPERATE regression bar. Once 7+ days of zero locks/warns confirmed in real usage post-v0.4.14, switch the production default to RAISE. Drift writes that escape the migration become hard failures at source instead of WARN-and-continue.
+
+**Trigger:** 7 consecutive days post-v0.4.14 ship with zero `database is locked` errors and zero audit-hook WARN events on the active branch.
+
+---
+
+### Remove `WriterLockedAsyncSession` defense-in-depth class (v0.4.14.x time-gated)
+**Status:** Planned for v0.4.14.x patch
 **Context:** v0.4.13 retains the legacy `WriterLockedAsyncSession` (process-wide flush serializer) as defense-in-depth during the post-release watch window. Once the audit hook is RAISE in production AND no flush events fire for 7+ days, the class is dead code and gets deleted along with its tests.
 
 **Trigger:** post-RAISE-switch + zero flush events for 7+ days.
@@ -562,6 +568,7 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 For the historical record of completed work — every release tag from v0.3.6-dev to the current latest, with per-fix detail, file/line references, and audit cross-links — see [`SHIPPED.md`](SHIPPED.md).
 
 **Recent releases:**
+- **v0.4.14** (2026-05-04) — SQLite migration finalization: short-lived foreground writes (passthrough pending, sampling persist, audit logs, OAuth flows, status updates) routed through WriteQueue; `submit_batch()` helper added
 - **v0.4.13** (2026-05-04) — SQLite writer-slot contention architectural fix (single-writer queue), suite 3457 passing
 - **v0.4.12** (2026-05-02) — Topic Probe Tier 1 + post-Tier-1 architectural hardening
 - **v0.4.11** (2026-04-28) — domain proposal hardening (`fullstack` ghost-domain finding)
