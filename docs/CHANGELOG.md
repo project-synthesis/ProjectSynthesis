@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.13 — 2026-05-04
+
 ### Added
 
 - **v0.4.13 P0 — `WriteQueue` single-writer queue worker** (`backend/app/services/write_queue.py`) — SQLite "database is locked" eliminated structurally rather than via per-call-site retry/mutex layering. All writes route through one async worker on a separate writer engine (`writer_engine` in `database.py`, `pool_size=1, max_overflow=0`); read paths use the original read engine and remain unaffected by writer serialization. `submit(work_fn, *, timeout=300, operation_label)` API returns the work function's result; cancellation of the caller does NOT cancel in-flight work (shielded `__aexit__`); per-task timeout DOES. Reentrancy hard-fails via `WriteQueueReentrancyError` if `submit()` is invoked from inside the worker task. Rolling reservoir produces p95/p99 submit-to-completion latency on the `/api/health` queue block. Hard regression bar from cycle 10: probe + 30 seeds + 100 feedbacks fully concurrent — 0 locks, 0 audit-hook warns. Spec: `docs/specs/sqlite-writer-queue-2026-05-02.md` (v6 APPROVED after 6 review rounds). Plan: `docs/superpowers/plans/2026-05-02-sqlite-writer-queue.md` (v3 APPROVED after 3 review rounds). Validation evidence: `docs/v0.4.13-validation/`.
