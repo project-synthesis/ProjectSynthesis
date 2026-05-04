@@ -64,3 +64,14 @@ class TestProvidersApiKeySetAuditLog:
         assert "write_queue=" in window, (
             "providers.py api_key_set audit-log must thread write_queue= into log_event"
         )
+
+
+class TestProvidersApiKeyDeletedAuditLog:
+    def test_providers_api_key_deleted_audit_uses_log_event_with_write_queue(self):
+        import app.routers.providers as _prov_mod
+        src = Path(_prov_mod.__file__).read_text()
+        idx = src.find('"api_key_deleted"')
+        assert idx > 0, "api_key_deleted block not found"
+        window = src[max(0, idx - 600):idx + 200]
+        assert 'async with async_session_factory() as audit_db:' not in window
+        assert "write_queue=" in window
