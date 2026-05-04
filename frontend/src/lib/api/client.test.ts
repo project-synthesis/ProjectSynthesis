@@ -731,3 +731,31 @@ describe('connectEventStream', () => {
     es.close();
   });
 });
+
+// ── getHistory project_id passthrough (v0.4.15) ─────────────────
+
+describe('getHistory project_id passthrough (v0.4.15)', () => {
+  it('passes project_id through to URL query string', async () => {
+    const mock = mockFetch([{ match: '/history', response: { total: 0, count: 0, offset: 0, items: [], has_more: false, next_offset: null } }]);
+    await getHistory({ project_id: 'abc-123', limit: 50 });
+    const call = (mock as ReturnType<typeof vi.fn>).mock.calls[0];
+    const url = call[0] as string;
+    expect(url).toContain('project_id=abc-123');
+  });
+
+  it('omits project_id when null', async () => {
+    const mock = mockFetch([{ match: '/history', response: { total: 0, count: 0, offset: 0, items: [], has_more: false, next_offset: null } }]);
+    await getHistory({ project_id: null, limit: 50 });
+    const call = (mock as ReturnType<typeof vi.fn>).mock.calls[0];
+    const url = call[0] as string;
+    expect(url).not.toContain('project_id=');
+  });
+
+  it('omits project_id when undefined (legacy call)', async () => {
+    const mock = mockFetch([{ match: '/history', response: { total: 0, count: 0, offset: 0, items: [], has_more: false, next_offset: null } }]);
+    await getHistory({ limit: 50 });
+    const call = (mock as ReturnType<typeof vi.fn>).mock.calls[0];
+    const url = call[0] as string;
+    expect(url).not.toContain('project_id=');
+  });
+});
