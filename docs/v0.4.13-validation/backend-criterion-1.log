@@ -1,0 +1,792 @@
+INFO:     127.0.0.1:47496 - "POST /api/probes HTTP/1.1" 200 OK
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 20.76it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=17 indexed=464 above_threshold=16 cross_domain_cut=6 below_base_cut=442 diversity_excluded=3 doc_deferred=9 selected=13 top=0.403 fetch=17ms search=56ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 3 files (from_imports=3 from_doc_refs=0) of 2 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=5 (code=5 docs=0) graph=3 (imports=3 doc_refs=0) skips=5 budget=39600/40000 (99%) stop=budget near_misses=5 total=81ms
+INFO:     127.0.0.1:33858 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33890 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:33874 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=40628 cost=$0.2871 cache_read=63136
+INFO:     127.0.0.1:57088 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:57072 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=35578 effort=high cost=$0.1879 cache_read=65724
+INFO app.services.domain_resolver: Domain preservation: organic label 'security' preserved (blended=0.88 >= 0.50)
+INFO app.services.pipeline_constants: meta-prompting→chain-of-thought via intent_label='GitHub OAuth CSRF cookie security audit' (task_type=analysis). trace_id=fab94dd4-119a-4a17-b34a-535803d1425f
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.84it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.82it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.45it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.43it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.92it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.90it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.52it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=520 indexed=464 above_threshold=19 cross_domain_cut=52 below_base_cut=393 diversity_excluded=3 doc_deferred=3 selected=16 top=0.471 fetch=44ms search=88ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 5 files (from_imports=5 from_doc_refs=0) of 2 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=7 (code=7 docs=0) graph=5 (imports=5 doc_refs=0) skips=6 budget=79503/80000 (99%) stop=budget near_misses=5 total=134ms
+INFO app.services.strategy_intelligence: strategy_intelligence: exact=analysis+frontend: backend empty, fallback to analysis-only (3 strategies)
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=ready curated_files=7 curated_top=0.471 context_chars=83813 strategy_intel=yes total_assembled=83K elapsed=461ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=analysis+frontend: backend llm=analysis+security prompt=Audit the CSRF protection in `github_callback`. The `hmac.compare_digest(cookie_
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=40338 effort=high cost=$0.1933 cache_read=65686
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.21it/s]
+WARNING app.services.task_type_classifier: llm_classification_fallback: no provider supplied, skipping A4 fallback
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 20.12it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.27it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.25it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 13.74it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=439 indexed=464 above_threshold=8 cross_domain_cut=24 below_base_cut=432 diversity_excluded=0 doc_deferred=2 selected=8 top=0.528 fetch=14ms search=80ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 5 files (from_imports=5 from_doc_refs=0) of 3 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=8 (code=6 docs=2) graph=5 (imports=5 doc_refs=0) skips=3 budget=79450/80000 (99%) stop=relevance_exhausted near_misses=3 total=98ms
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=ready curated_files=8 curated_top=0.528 context_chars=83762 strategy_intel=none total_assembled=83K elapsed=356ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=general+general: security-audit llm=analysis+security prompt=Trace how `_refresh_token_if_expired` decides whether a GitHub access token need
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=49621 effort=high cost=$0.1976 cache_read=65706
+INFO app.services.pipeline_constants: meta-prompting→chain-of-thought via intent_label='GitHub auth error propagation audit' (task_type=analysis). trace_id=28c6a044-fe93-4021-b277-936db72e660a
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.72it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.70it/s]
+WARNING app.services.task_type_classifier: llm_classification_fallback: no provider supplied, skipping A4 fallback
+INFO app.services.context_enrichment: enrichment: tier=internal profile=knowledge_work repo=project-synthesis/ProjectSynthesis explore=no curated=n/a curated_files=0 curated_top=0.000 context_chars=0 strategy_intel=none total_assembled=0K elapsed=23ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=general+general: security-audit llm=analysis+backend prompt=Explore how `GitHubApiError` propagates through the auth stack. `GitHubClient._c
+INFO app.services.pattern_injection: Few-shot retrieval: 2 examples (max_sim=0.42). trace_id=28c6a044-fe93-4021-b277-936db72e660a
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=48979 effort=high cost=$0.2008 cache_read=65715
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 10.41it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  7.38it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  7.37it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  4.13it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  4.13it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 11.30it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=523 indexed=464 above_threshold=24 cross_domain_cut=22 below_base_cut=418 diversity_excluded=6 doc_deferred=5 selected=18 top=0.522 fetch=16ms search=95ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 5 files (from_imports=5 from_doc_refs=0) of 3 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=8 (code=8 docs=0) graph=5 (imports=5 doc_refs=0) skips=6 budget=79860/80000 (100%) stop=budget near_misses=5 total=115ms
+INFO app.services.strategy_intelligence: strategy_intelligence: exact=analysis+backend: fullstack empty, fallback to analysis-only (3 strategies)
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=ready curated_files=8 curated_top=0.522 context_chars=84172 strategy_intel=yes total_assembled=84K elapsed=610ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=analysis+backend: fullstack llm=analysis+security prompt=The `log_event` call in `github_callback` and `poll_device_code` records `action
+INFO app.services.pattern_injection: Few-shot retrieval: 1 examples (max_sim=0.48). trace_id=647801c2-7797-4d61-b1a0-a8650a8fc49d
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=64368 effort=high cost=$0.2033 cache_read=65696
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 14.65it/s]
+WARNING app.services.task_type_classifier: llm_classification_fallback: no provider supplied, skipping A4 fallback
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 15.30it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.17it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.96it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=461 indexed=464 above_threshold=20 cross_domain_cut=43 below_base_cut=401 diversity_excluded=3 doc_deferred=1 selected=17 top=0.500 fetch=13ms search=82ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 5 files (from_imports=5 from_doc_refs=0) of 2 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=7 (code=7 docs=0) graph=5 (imports=5 doc_refs=0) skips=7 budget=78560/80000 (98%) stop=budget near_misses=5 total=98ms
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=ready curated_files=7 curated_top=0.500 context_chars=82870 strategy_intel=none total_assembled=82K elapsed=327ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=general+general: security-audit llm=analysis+security prompt=How does `poll_device_code` handle session continuity when a `session_id` cookie
+INFO app.services.pattern_injection: Few-shot retrieval: 1 examples (max_sim=0.58). trace_id=3525ea04-f0ac-4bbe-ab9b-3fa45aa18a3b
+INFO:     127.0.0.1:47830 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:47826 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=86529 effort=max cost=$0.7121 cache_read=112924
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:57954 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:57948 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=107613 effort=max cost=$0.7865 cache_read=114169
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=110893 effort=max cost=$0.7639 cache_read=113551
+INFO app.services.prompt_lifecycle: Curation complete: archived=0, flagged=0, unflagged=0
+INFO:     127.0.0.1:56742 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:56740 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=72579 effort=max cost=$0.2345 cache_read=69820
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 18.67it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.96it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.93it/s]
+INFO app.services.score_blender: Score divergence on specificity: llm=5.5 heuristic=9.5 (delta=4.0)
+WARNING app.services.score_blender: Hybrid scoring divergence on 1 dimension(s): ['specificity']
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=169651 effort=max cost=$0.9652 cache_read=113474
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=202315 effort=max cost=$1.0171 cache_read=113039
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=13204 effort=low cost=$0.2142 cache_read=50600
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.85it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.83it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 10.43it/s]
+INFO app.services.batch_persistence: Bulk persist: 1 rows in 66ms
+INFO app.main: Dispatching taxonomy extraction for optimization f29b4fec-0ca4-495a-85af-d561830ccd55
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE optimizations SET project_id=? WHERE optimizations.id = ?...
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 14.54it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.27it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.25it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE optimizations SET transformation_embedding=? WHERE optimizations.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO prompt_cluster (id, parent_id, label, state, domain, task_type, dominant_project_id, centroid_embedding, mem...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET umap_x=?, umap_y=?, umap_z=?, color_hex=?, cluster_metadata=?, updated_at=? WHERE prompt_clust...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE optimizations SET phase_weights_json=?, cluster_id=? WHERE optimizations.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET member_count=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO:     127.0.0.1:47860 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:47844 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=97060 effort=max cost=$0.2401 cache_read=69770
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 16.34it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.20it/s]
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=129978 effort=max cost=$0.2727 cache_read=69748
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.69it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  6.54it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  6.53it/s]
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=11458 effort=low cost=$0.1639 cache_read=65088
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.02it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.00it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 11.13it/s]
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=12756 effort=low cost=$0.1638 cache_read=65077
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.60it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.58it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 11.72it/s]
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=61006 effort=max cost=$0.2188 cache_read=69948
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 14.73it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 13.16it/s]
+INFO app.services.score_blender: Score divergence on specificity: llm=9.0 heuristic=6.1 (delta=2.9)
+WARNING app.services.score_blender: Hybrid scoring divergence on 1 dimension(s): ['specificity']
+WARNING app.services.probe_service: Per-prompt persist failed for c11a16d5: (sqlite3.OperationalError) database is locked
+[SQL: INSERT INTO optimizations (id, created_at, raw_prompt, optimized_prompt, task_type, strategy_used, changes_summary, score_clarity, score_specificity, score_structure, score_faithfulness, score_conciseness, overall_score, provider, model_used, models_by_phase, scoring_mode, duration_ms, repo_full_name, codebase_context_snapshot, status, routing_tier, trace_id, tokens_total, context_sources, original_scores, score_deltas, intent_label, domain, embedding, optimized_embedding, transformation_embedding, qualifier_embedding, cluster_id, project_id, domain_raw, heuristic_flags, improvement_score, suggestions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('c11a16d5-4295-4b0b-8d5b-9cfbfae08bed', '2026-05-04 01:08:56.592852', "The `log_event` call in `github_callback` and `poll_device_code` records `action='github_login'` on success, but `_refresh_token_if_expired` silently ... (225 characters truncated) ...  from the audit log — token refresh, revocation-triggered cleanup in `github_me`, and logout — and what's the risk of that gap for a security review?", "Audit GitHub authentication against the `log_event` / `AuditLog` system to identify auth events that should produce audit entries but currently don't ... (1280 characters truncated) ...  which constitute compliance exposure (SOC 2 CC7.2 anomaly detection, GDPR Art. 32 processing integrity), and which are operational blind spots only.", 'analysis', 'structured-output', '## Changes\n\n| # | Change | Reason |\n|---|--------|--------|\n| 1 | **Specified 5-field output schema per gap** (action, current_signal, forensic_i ... (3038 characters truncated) ... e band for structured-output on a moderately-detailed analysis prompt; bullet structure is load-bearing (the schema is the deliverable), not padding.', 7.4, 8.3, 7.4, 7.3, 6.7, 7.54, 'claude_cli', 'claude-opus-4-7', '{"analyze": "claude-sonnet-4-6", "optimize": "claude-opus-4-7", "score": "claude-sonnet-4-6"}', 'hybrid', 286059, 'project-synthesis/ProjectSynthesis', None, 'completed', 'internal', '647801c2-7797-4d61-b1a0-a8650a8fc49d', None, '{"source": "batch_seed", "batch_id": "e490f44f-93e0-4a02-aea0-79535258a044", "agent": "", "codebase_context": true, "strategy_intelligence": true, "a ... (3792 characters truncated) ... tterns": false}, "combined_context_chars": 84172, "was_truncated": false, "profile_skipped_layers": ["applied_patterns"]}, "few_shot_examples": true}', '{"clarity": 3.8, "specificity": 5.0, "structure": 3.2, "faithfulness": 3.9, "conciseness": 3.5}', '{"clarity": 3.6, "specificity": 3.3, "structure": 4.2, "faithfulness": 3.4, "conciseness": 3.2}', 'Missing Auth Audit Event Gaps', 'security', <memory at 0x71e78dac4f40>, <memory at 0x71e78dac5180>, <memory at 0x71e78dac7400>, None, None, None, 'security: auth-audit', 'null', 3.57, '[{"text": "Improve conciseness by collapsing the \'Cover at minimum\' bullet list into a compact table with columns (function | failure modes) while  ... (562 characters truncated) ... \\u2264150-word risk verdict\' \\u2014 to prevent a discursive prose response that mixes catalog items with risk commentary.", "source": "strategy"}]')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 182, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 342, in _handle_exception
+    raise error
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 164, in execute
+    self.await_(_cursor.execute(operation, parameters))
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlite3.OperationalError: database is locked
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/probe_service.py", line 1065, in _persist_one
+    n = await bulk_persist(
+        ^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 243, in bulk_persist
+    inserted, inserted_pendings = await write_queue.submit(
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 324, in submit
+    return await future
+           ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 368, in _run_one
+    result = await asyncio.wait_for(work(db), timeout=deadline)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 209, in _do_persist
+    await db.commit()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1000, in commit
+    await greenlet_spawn(self.sync_session.commit)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 203, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2030, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 1311, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 1286, in _prepare_impl
+    self.session.flush()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4331, in flush
+    self._flush(objects)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4466, in _flush
+    with util.safe_reraise():
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 121, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4427, in _flush
+    flush_context.execute()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 93, in save_obj
+    _emit_insert_statements(
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 1048, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1419, in execute
+    return meth(
+           ^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 527, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2363, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 182, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 342, in _handle_exception
+    raise error
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 164, in execute
+    self.await_(_cursor.execute(operation, parameters))
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) database is locked
+[SQL: INSERT INTO optimizations (id, created_at, raw_prompt, optimized_prompt, task_type, strategy_used, changes_summary, score_clarity, score_specificity, score_structure, score_faithfulness, score_conciseness, overall_score, provider, model_used, models_by_phase, scoring_mode, duration_ms, repo_full_name, codebase_context_snapshot, status, routing_tier, trace_id, tokens_total, context_sources, original_scores, score_deltas, intent_label, domain, embedding, optimized_embedding, transformation_embedding, qualifier_embedding, cluster_id, project_id, domain_raw, heuristic_flags, improvement_score, suggestions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('c11a16d5-4295-4b0b-8d5b-9cfbfae08bed', '2026-05-04 01:08:56.592852', "The `log_event` call in `github_callback` and `poll_device_code` records `action='github_login'` on success, but `_refresh_token_if_expired` silently ... (225 characters truncated) ...  from the audit log — token refresh, revocation-triggered cleanup in `github_me`, and logout — and what's the risk of that gap for a security review?", "Audit GitHub authentication against the `log_event` / `AuditLog` system to identify auth events that should produce audit entries but currently don't ... (1280 characters truncated) ...  which constitute compliance exposure (SOC 2 CC7.2 anomaly detection, GDPR Art. 32 processing integrity), and which are operational blind spots only.", 'analysis', 'structured-output', '## Changes\n\n| # | Change | Reason |\n|---|--------|--------|\n| 1 | **Specified 5-field output schema per gap** (action, current_signal, forensic_i ... (3038 characters truncated) ... e band for structured-output on a moderately-detailed analysis prompt; bullet structure is load-bearing (the schema is the deliverable), not padding.', 7.4, 8.3, 7.4, 7.3, 6.7, 7.54, 'claude_cli', 'claude-opus-4-7', '{"analyze": "claude-sonnet-4-6", "optimize": "claude-opus-4-7", "score": "claude-sonnet-4-6"}', 'hybrid', 286059, 'project-synthesis/ProjectSynthesis', None, 'completed', 'internal', '647801c2-7797-4d61-b1a0-a8650a8fc49d', None, '{"source": "batch_seed", "batch_id": "e490f44f-93e0-4a02-aea0-79535258a044", "agent": "", "codebase_context": true, "strategy_intelligence": true, "a ... (3792 characters truncated) ... tterns": false}, "combined_context_chars": 84172, "was_truncated": false, "profile_skipped_layers": ["applied_patterns"]}, "few_shot_examples": true}', '{"clarity": 3.8, "specificity": 5.0, "structure": 3.2, "faithfulness": 3.9, "conciseness": 3.5}', '{"clarity": 3.6, "specificity": 3.3, "structure": 4.2, "faithfulness": 3.4, "conciseness": 3.2}', 'Missing Auth Audit Event Gaps', 'security', <memory at 0x71e78dac4f40>, <memory at 0x71e78dac5180>, <memory at 0x71e78dac7400>, None, None, None, 'security: auth-audit', 'null', 3.57, '[{"text": "Improve conciseness by collapsing the \'Cover at minimum\' bullet list into a compact table with columns (function | failure modes) while  ... (562 characters truncated) ... \\u2264150-word risk verdict\' \\u2014 to prevent a discursive prose response that mixes catalog items with risk commentary.", "source": "strategy"}]')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+WARNING app.services.probe_service: probe e490f44f-93e0-4a02-aea0-79535258a044 aborting run_batch -- per-prompt persist failed catastrophic (writer-slot contention). Cancelling 2 in-flight LLM calls; preserving 3 already-scored pendings.
+INFO:     127.0.0.1:41532 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:41516 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-haiku-4-5 duration_ms=71666 cost=$0.1159 cache_read=217450
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 17.50it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO meta_patterns (id, cluster_id, pattern_text, embedding, source_count, global_source_count, created_at, updat...
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 27.87it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO meta_patterns (id, cluster_id, pattern_text, embedding, source_count, global_source_count, created_at, updat...
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 23.17it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO meta_patterns (id, cluster_id, pattern_text, embedding, source_count, global_source_count, created_at, updat...
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 42.97it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO meta_patterns (id, cluster_id, pattern_text, embedding, source_count, global_source_count, created_at, updat...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO optimization_patterns (optimization_id, cluster_id, meta_pattern_id, global_pattern_id, relationship, simila...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO app.services.domain_resolver: DomainResolver loaded 8 domain labels (1 sub-domains)
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded qualifier vocab for 7 domains
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded 9 domains with 130 total keywords (live=8, bootstrap=1, live_only=False)
+INFO:     127.0.0.1:45992 - "OPTIONS /api/clusters/tree?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45996 - "OPTIONS /api/clusters/stats?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46012 - "OPTIONS /api/clusters/similarity-edges HTTP/1.1" 200 OK
+INFO app.main: Domain caches reloaded on taxonomy_changed event
+INFO:     127.0.0.1:46018 - "OPTIONS /api/clusters/injection-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46030 - "OPTIONS /api/domains HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45992 - "OPTIONS /api/domains/readiness?fresh=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45996 - "OPTIONS /api/taxonomy/pattern-density?period=7d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46012 - "OPTIONS /api/clusters/activity?limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46018 - "OPTIONS /api/clusters/activity/history?since=2026-04-28&until=2026-05-04&limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46070 - "GET /api/clusters/similarity-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46090 - "GET /api/domains HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46076 - "GET /api/clusters/injection-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46090 - "GET /api/clusters/activity/history?since=2026-04-28&until=2026-05-04&limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46076 - "GET /api/clusters/activity?limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46040 - "GET /api/clusters/tree?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO app.services.batch_persistence: Bulk persist: 1 rows in 45801ms
+INFO app.main: Dispatching taxonomy extraction for optimization aafa5e80-b1ec-499b-afaa-d2a4fa79b52a
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE optimizations SET project_id=? WHERE optimizations.id = ?...
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]INFO:     127.0.0.1:46056 - "GET /api/clusters/stats?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46070 - "GET /api/taxonomy/pattern-density?period=7d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46104 - "GET /api/domains/readiness?fresh=true HTTP/1.1" 200 OK
+Batches: 100%|██████████| 1/1 [00:00<00:00,  6.40it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  6.39it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.20it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE optimizations SET transformation_embedding=? WHERE optimizations.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO prompt_cluster (id, parent_id, label, state, domain, task_type, dominant_project_id, centroid_embedding, mem...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET umap_x=?, umap_y=?, umap_z=?, color_hex=?, cluster_metadata=?, updated_at=? WHERE prompt_clust...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE optimizations SET phase_weights_json=?, cluster_id=? WHERE optimizations.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET member_count=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-haiku-4-5 duration_ms=26221 cost=$0.0812 cache_read=212089
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]INFO app.services.taxonomy.warm_path: Warm path cycle: dirty_ids=2 (first_cycle=False, boundary=20)
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+Batches: 100%|██████████| 1/1 [00:00<00:00, 11.35it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO meta_patterns (id, cluster_id, pattern_text, embedding, source_count, global_source_count, created_at, updat...
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 20.74it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO meta_patterns (id, cluster_id, pattern_text, embedding, source_count, global_source_count, created_at, updat...
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 28.24it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO meta_patterns (id, cluster_id, pattern_text, embedding, source_count, global_source_count, created_at, updat...
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 27.42it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO meta_patterns (id, cluster_id, pattern_text, embedding, source_count, global_source_count, created_at, updat...
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 34.11it/s]
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO meta_patterns (id, cluster_id, pattern_text, embedding, source_count, global_source_count, created_at, updat...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO optimization_patterns (optimization_id, cluster_id, meta_pattern_id, global_pattern_id, relationship, simila...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO app.services.domain_resolver: DomainResolver loaded 8 domain labels (1 sub-domains)
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded qualifier vocab for 7 domains
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded 9 domains with 130 total keywords (live=8, bootstrap=1, live_only=False)
+INFO app.main: Domain caches reloaded on taxonomy_changed event
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO:     127.0.0.1:48546 - "GET /api/clusters/stats?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48554 - "GET /api/clusters/similarity-edges HTTP/1.1" 200 OK
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO:     127.0.0.1:48554 - "GET /api/clusters/activity?limit=200 HTTP/1.1" 200 OK
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO:     127.0.0.1:48568 - "GET /api/domains HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48564 - "GET /api/clusters/injection-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48554 - "GET /api/clusters/activity/history?since=2026-04-28&until=2026-05-04&limit=200 HTTP/1.1" 200 OK
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.services.batch_persistence: Taxonomy assign failed for f29b4fec: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.OperationalError) database is locked
+[SQL: UPDATE prompt_cluster SET centroid_embedding=?, member_count=?, weighted_member_sum=?, scored_count=?, updated_at=? WHERE prompt_cluster.id = ?]
+[parameters: (<memory at 0x71e8a3efda80>, 2, 1.2912516764751945, 2, '2026-05-04 01:09:46.296488', 'd440555d-370c-4c57-bff2-e418340dbd60')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+WARNING app.services.batch_persistence: Taxonomy assign failed for aafa5e80: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.OperationalError) database is locked
+[SQL: UPDATE prompt_cluster SET centroid_embedding=?, member_count=?, weighted_member_sum=?, scored_count=?, updated_at=? WHERE prompt_cluster.id = ?]
+[parameters: (<memory at 0x71e8a3efda80>, 2, 1.2912516764751945, 2, '2026-05-04 01:09:46.296488', 'd440555d-370c-4c57-bff2-e418340dbd60')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.services.probe_service: probe batch_taxonomy_assign failed
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/probe_service.py", line 1340, in _run_impl
+    await batch_taxonomy_assign(
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 421, in batch_taxonomy_assign
+    summary = await write_queue.submit(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 324, in submit
+    return await future
+           ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 368, in _run_one
+    result = await asyncio.wait_for(work(db), timeout=deadline)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 409, in _do_assign
+    await db.commit()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1000, in commit
+    await greenlet_spawn(self.sync_session.commit)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 190, in greenlet_spawn
+    result = context.switch(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2030, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 101, in _go
+    self._raise_for_prerequisite_state(fn.__name__, current_state)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 971, in _raise_for_prerequisite_state
+    raise sa_exc.PendingRollbackError(
+sqlalchemy.exc.PendingRollbackError: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.OperationalError) database is locked
+[SQL: UPDATE prompt_cluster SET centroid_embedding=?, member_count=?, weighted_member_sum=?, scored_count=?, updated_at=? WHERE prompt_cluster.id = ?]
+[parameters: (<memory at 0x71e8a3efda80>, 2, 1.2912516764751945, 2, '2026-05-04 01:09:46.296488', 'd440555d-370c-4c57-bff2-e418340dbd60')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.services.probe_service: probe e490f44f-93e0-4a02-aea0-79535258a044 partial persistence: 2 of 3 rows landed
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO:     127.0.0.1:48542 - "GET /api/clusters/tree?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET scored_count=?, avg_score=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET scored_count=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET scored_count=?, avg_score=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET centroid_embedding=?, weighted_member_sum=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET dominant_project_id=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET dominant_project_id=?, weighted_member_sum=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET dominant_project_id=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET dominant_project_id=?, centroid_embedding=?, weighted_member_sum=?, updated_at=? WHERE prompt_...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET dominant_project_id=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO:     127.0.0.1:48546 - "GET /api/taxonomy/pattern-density?period=7d HTTP/1.1" 200 OK
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET dominant_project_id=?, centroid_embedding=?, weighted_member_sum=?, updated_at=? WHERE prompt_...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET dominant_project_id=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET dominant_project_id=?, centroid_embedding=?, weighted_member_sum=?, updated_at=? WHERE prompt_...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET dominant_project_id=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET member_count=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET member_count=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET member_count=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET member_count=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET member_count=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET member_count=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO app.services.taxonomy.warm_phases: Reconciled 6 member_counts, 26 coherence, 25 scores
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO:     127.0.0.1:48576 - "GET /api/domains/readiness?fresh=true HTTP/1.1" 200 OK
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO app.services.taxonomy.warm_phases: Archived 17 zombie clusters (0 members)
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET state=?, archived_at=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: DELETE FROM prompt_cluster WHERE prompt_cluster.id = ?...
+WARNING app.services.taxonomy.warm_phases: Stale cluster pruning failed (non-fatal): (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.IntegrityError) FOREIGN KEY constraint failed
+[SQL: DELETE FROM prompt_cluster WHERE prompt_cluster.id = ?]
+[parameters: ('c6027b22-c21b-4e72-8209-293484a6f770',)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+WARNING app.services.taxonomy.warm_phases: Leaked pattern cleanup failed (non-fatal): This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.IntegrityError) FOREIGN KEY constraint failed
+[SQL: DELETE FROM prompt_cluster WHERE prompt_cluster.id = ?]
+[parameters: ('c6027b22-c21b-4e72-8209-293484a6f770',)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.services.taxonomy.warm_phases: Semi-orphan repair failed (non-fatal): This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.IntegrityError) FOREIGN KEY constraint failed
+[SQL: DELETE FROM prompt_cluster WHERE prompt_cluster.id = ?]
+[parameters: ('c6027b22-c21b-4e72-8209-293484a6f770',)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.services.taxonomy.warm_phases: Outlier reconciliation failed (non-fatal): This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.IntegrityError) FOREIGN KEY constraint failed
+[SQL: DELETE FROM prompt_cluster WHERE prompt_cluster.id = ?]
+[parameters: ('c6027b22-c21b-4e72-8209-293484a6f770',)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.services.taxonomy.warm_phases: OptimizationPattern repair failed (non-fatal): This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.IntegrityError) FOREIGN KEY constraint failed
+[SQL: DELETE FROM prompt_cluster WHERE prompt_cluster.id = ?]
+[parameters: ('c6027b22-c21b-4e72-8209-293484a6f770',)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+ERROR app.services.taxonomy.engine: Warm path failed: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.IntegrityError) FOREIGN KEY constraint failed
+[SQL: DELETE FROM prompt_cluster WHERE prompt_cluster.id = ?]
+[parameters: ('c6027b22-c21b-4e72-8209-293484a6f770',)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/taxonomy/engine.py", line 996, in run_warm_path
+    return await execute_warm_path(
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/taxonomy/warm_path.py", line 1209, in execute_warm_path
+    reconcile_result, q_baseline = await _run_in_writer_session(
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/taxonomy/warm_path.py", line 817, in _run_in_writer_session
+    return await work(db)
+           ^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/taxonomy/warm_path.py", line 1202, in _do_reconcile
+    result = await phase_reconcile(engine, db)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/taxonomy/warm_phases.py", line 2115, in phase_reconcile
+    await reconcile_template_counts(db)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/taxonomy/warm_phases.py", line 382, in reconcile_template_counts
+    drifted_q = await db.execute(
+                ^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 449, in execute
+    result = await greenlet_spawn(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 190, in greenlet_spawn
+    result = context.switch(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2351, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2239, in _execute_internal
+    conn = self._connection_for_bind(bind)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2108, in _connection_for_bind
+    return trans._connection_for_bind(engine, execution_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 2, in _connection_for_bind
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 101, in _go
+    self._raise_for_prerequisite_state(fn.__name__, current_state)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 971, in _raise_for_prerequisite_state
+    raise sa_exc.PendingRollbackError(
+sqlalchemy.exc.PendingRollbackError: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.IntegrityError) FOREIGN KEY constraint failed
+[SQL: DELETE FROM prompt_cluster WHERE prompt_cluster.id = ?]
+[parameters: ('c6027b22-c21b-4e72-8209-293484a6f770',)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: INSERT INTO taxonomy_snapshots (id, created_at, "trigger", q_system, q_coherence, q_separation, q_coverage, q_dbcv, q_he...
+INFO app.services.domain_resolver: DomainResolver loaded 8 domain labels (1 sub-domains)
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded qualifier vocab for 7 domains
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded 9 domains with 130 total keywords (live=8, bootstrap=1, live_only=False)
+INFO app.main: Domain caches reloaded on taxonomy_changed event
+INFO app.main: Warm path maintenance-only: q=0.0000 snapshot=a42d34a7-77d4-4819-8eff-fa23527ab22d
+INFO app.services.prompt_lifecycle: Curation complete: archived=0, flagged=0, unflagged=0
+INFO:     127.0.0.1:48542 - "GET /api/clusters/similarity-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48576 - "GET /api/clusters/tree?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48564 - "GET /api/domains HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48554 - "GET /api/clusters/injection-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48564 - "GET /api/clusters/activity?limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48546 - "GET /api/clusters/stats?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48578 - "POST /api/probes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48576 - "GET /api/clusters/activity/history?since=2026-04-28&until=2026-05-04&limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48542 - "GET /api/taxonomy/pattern-density?period=7d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48568 - "GET /api/domains/readiness?fresh=true HTTP/1.1" 200 OK
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 74.02it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=17 indexed=464 above_threshold=14 cross_domain_cut=6 below_base_cut=444 diversity_excluded=2 doc_deferred=8 selected=12 top=0.402 fetch=152ms search=19ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 3 files (from_imports=3 from_doc_refs=0) of 2 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=5 (code=5 docs=0) graph=3 (imports=3 doc_refs=0) skips=5 budget=39600/40000 (99%) stop=budget near_misses=5 total=174ms
+INFO:     127.0.0.1:36222 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:36220 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.services.prompt_lifecycle: Curation complete: archived=0, flagged=0, unflagged=0
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=35238 cost=$0.2434 cache_read=75283
+INFO:     127.0.0.1:38570 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:38568 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=43154 effort=high cost=$0.1936 cache_read=65689
+INFO app.services.domain_resolver: Domain preservation: organic label 'security' preserved (blended=0.59 >= 0.50)
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.99it/s]
+WARNING app.services.task_type_classifier: llm_classification_fallback: no provider supplied, skipping A4 fallback
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 16.51it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.32it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.31it/s]
+INFO app.services.context_enrichment: Curated retrieval skipped: task_type=general, no code keywords detected (repo=project-synthesis/ProjectSynthesis)
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=skipped_task_type curated_files=0 curated_top=0.000 context_chars=4291 strategy_intel=none total_assembled=4K elapsed=251ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=general+general: security-audit llm=analysis+security prompt=Explore how `_get_session_token` orchestrates the full session-to-token resoluti
+INFO app.services.pattern_injection: Few-shot retrieval: 2 examples (max_sim=0.68). trace_id=100fec66-daf4-4fa7-b66a-9e8300d2af2d
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=45267 effort=high cost=$0.1967 cache_read=65725
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 15.50it/s]
+WARNING app.services.task_type_classifier: llm_classification_fallback: no provider supplied, skipping A4 fallback
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.56it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.96it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.95it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.52it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.50it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=601 indexed=464 above_threshold=28 cross_domain_cut=29 below_base_cut=407 diversity_excluded=8 doc_deferred=7 selected=20 top=0.477 fetch=61ms search=112ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 4 files (from_imports=4 from_doc_refs=0) of 2 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=6 (code=6 docs=0) graph=4 (imports=4 doc_refs=0) skips=5 budget=76557/80000 (96%) stop=budget near_misses=5 total=176ms
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=ready curated_files=6 curated_top=0.477 context_chars=80865 strategy_intel=yes total_assembled=80K elapsed=446ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=general+fullstack llm=analysis+backend prompt=Refactor the orphan cleanup block inside `github_me`: when `GitHubClient.get_use
+INFO app.services.pattern_injection: Few-shot retrieval: 1 examples (max_sim=0.58). trace_id=49e725d1-0c99-49b4-856c-946c4fc329b2
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=46718 effort=high cost=$0.1910 cache_read=65697
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.59it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.56it/s]
+WARNING app.services.task_type_classifier: llm_classification_fallback: no provider supplied, skipping A4 fallback
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 17.98it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 10.45it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 13.30it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=453 indexed=464 above_threshold=16 cross_domain_cut=41 below_base_cut=407 diversity_excluded=1 doc_deferred=0 selected=15 top=0.551 fetch=16ms search=81ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 5 files (from_imports=5 from_doc_refs=0) of 2 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=7 (code=7 docs=0) graph=5 (imports=5 doc_refs=0) skips=5 budget=78560/80000 (98%) stop=budget near_misses=5 total=100ms
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=ready curated_files=7 curated_top=0.551 context_chars=82870 strategy_intel=none total_assembled=82K elapsed=337ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=general+backend: embeddings llm=analysis+security prompt=Trace the Device Flow path end-to-end: `request_device_code` fires the GitHub de
+INFO app.services.pattern_injection: Few-shot retrieval: 1 examples (max_sim=0.48). trace_id=0ccdfb8e-1592-4147-a38f-2badb740c159
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=45240 effort=high cost=$0.1943 cache_read=65704
+INFO app.services.pipeline_constants: meta-prompting→chain-of-thought via intent_label='GitHub token KDF migration audit' (task_type=analysis). trace_id=2d1d4669-f03c-4afa-9ed4-ef182bba6f00
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  7.70it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  7.68it/s]
+WARNING app.services.task_type_classifier: llm_classification_fallback: no provider supplied, skipping A4 fallback
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.20it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  9.18it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  6.10it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  6.09it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 14.51it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=466 indexed=464 above_threshold=32 cross_domain_cut=44 below_base_cut=388 diversity_excluded=2 doc_deferred=17 selected=30 top=0.545 fetch=22ms search=75ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 5 files (from_imports=5 from_doc_refs=0) of 2 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=7 (code=7 docs=0) graph=5 (imports=5 doc_refs=0) skips=5 budget=79274/80000 (99%) stop=budget near_misses=5 total=100ms
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=ready curated_files=7 curated_top=0.545 context_chars=83584 strategy_intel=none total_assembled=83K elapsed=499ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=general+embeddings: security llm=analysis+security prompt=Explore the token encryption layer: `GitHubService` calls `derive_fernet` with `
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=61409 effort=high cost=$0.2053 cache_read=65692
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.81it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 14.58it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 11.78it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.82it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=444 indexed=464 above_threshold=41 cross_domain_cut=73 below_base_cut=350 diversity_excluded=7 doc_deferred=2 selected=34 top=0.581 fetch=39ms search=83ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 4 files (from_imports=4 from_doc_refs=0) of 4 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=8 (code=7 docs=0) graph=4 (imports=4 doc_refs=0) skips=9 budget=78916/80000 (99%) stop=budget near_misses=5 total=125ms
+INFO app.services.strategy_intelligence: strategy_intelligence: exact=analysis+backend: validation empty, fallback to analysis-only (3 strategies)
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=ready curated_files=8 curated_top=0.581 context_chars=83228 strategy_intel=yes total_assembled=83K elapsed=377ms
+INFO app.services.classification_agreement: classification_disagreement: heuristic=analysis+backend: validation llm=analysis+security prompt=Audit the `_safe_github_json` helper across its four call sites in `github_auth.
+INFO app.services.pattern_injection: Few-shot retrieval: 1 examples (max_sim=0.61). trace_id=4f1a1a50-7860-4cfc-8ce1-1930f9fe7694
+INFO httpx: HTTP Request: GET https://api.github.com/repos/project-synthesis/ProjectSynthesis/branches/main "HTTP/1.1 200 OK"
+INFO app.main: index_refresh_cycle: cycle=1 checked=1 updated=0 unchanged=1 skipped=0 failed=0 files_changed=0 files_added=0 files_removed=0 elapsed=905ms
+INFO:     127.0.0.1:54502 - "OPTIONS /api/health HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:54518 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:54516 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43476 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:43466 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=104756 effort=max cost=$0.7629 cache_read=113689
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=92056 effort=max cost=$0.7483 cache_read=113914
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=112455 effort=max cost=$0.7841 cache_read=114309
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=127592 effort=max cost=$0.8283 cache_read=113476
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=128076 effort=max cost=$0.8155 cache_read=113021
+INFO:     127.0.0.1:57518 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:57516 - "GET /api/health HTTP/1.1" 200 OK
+ERROR sqlalchemy.pool.impl.AsyncAdaptedQueuePool: Exception terminating connection <AdaptedConnection <aiosqlite.core.Connection object at 0x71e895dd0b90>>
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 479, in do_terminate
+    dbapi_connection.terminate()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+asyncio.exceptions.CancelledError: Cancelled via cancel scope 71e78c428080 by <Task pending name='starlette.middleware.base.BaseHTTPMiddleware.__call__.<locals>.call_next.<locals>.coro' coro=<BaseHTTPMiddleware.__call__.<locals>.call_next.<locals>.coro() running at /home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/middleware/base.py:144> cb=[TaskGroup._spawn.<locals>.task_done() at /home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py:821]>
+WARNING app.services.probe_service: Probe 734270c6-b90f-4eb2-9b8b-b08fe29296d5 cancelled twice; GC will reconcile row
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 307, in rollback
+    self.await_(self._connection.rollback())
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 197, in rollback
+    await self._execute(self._conn.rollback)
+                        ^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 137, in _conn
+    raise ValueError("no active connection")
+ValueError: no active connection
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1128, in _rollback_impl
+    self.engine.dialect.do_rollback(self.connection)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 712, in do_rollback
+    dbapi_connection.rollback()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 309, in rollback
+    self._handle_exception(error)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 338, in _handle_exception
+    raise self.dbapi.sqlite.OperationalError(
+sqlite3.OperationalError: no active connection
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 198, in __call__
+    raise app_exc
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+    await self.app(scope, receive, send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+    await route.handle(scope, receive, send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+    await self.app(scope, receive, send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 112, in app
+    async with AsyncExitStack() as request_stack:
+  File "/usr/lib/python3.12/contextlib.py", line 754, in __aexit__
+    raise exc_details[1]
+  File "/usr/lib/python3.12/contextlib.py", line 737, in __aexit__
+    cb_suppress = await cb(*exc_details)
+                  ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/contextlib.py", line 217, in __aexit__
+    await anext(self.gen)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/database.py", line 201, in get_db
+    async with async_session_factory() as session:
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1071, in __aexit__
+    await asyncio.shield(task)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/database.py", line 189, in close
+    return await super().close()
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1016, in close
+    await greenlet_spawn(self.sync_session.close)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 203, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2507, in close
+    self._close_impl(invalidate=False)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2576, in _close_impl
+    transaction.close(invalidate)
+  File "<string>", line 2, in close
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 1417, in close
+    transaction.close()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2597, in close
+    self._do_close()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2735, in _do_close
+    self._close_impl()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2721, in _close_impl
+    self._connection_rollback_impl()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2713, in _connection_rollback_impl
+    self.connection._rollback_impl()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1130, in _rollback_impl
+    self._handle_dbapi_exception(e, None, None, None, None)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2363, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1128, in _rollback_impl
+    self.engine.dialect.do_rollback(self.connection)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 712, in do_rollback
+    dbapi_connection.rollback()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 309, in rollback
+    self._handle_exception(error)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 338, in _handle_exception
+    raise self.dbapi.sqlite.OperationalError(
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no active connection
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+INFO:     127.0.0.1:54598 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:54592 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54670 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:54660 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.services.prompt_lifecycle: Curation complete: archived=0, flagged=0, unflagged=0
+INFO:     127.0.0.1:52214 - "POST /api/events/_publish HTTP/1.1" 200 OK
