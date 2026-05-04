@@ -169,7 +169,6 @@ async def execute_cold_path(
     Returns:
         ColdPathResult with quality metrics and acceptance status.
     """
-    import time as _time
 
     # v0.4.13 cycle 9 (HIGH-3, C-v4-3): cold path performs a full refit
     # via the read engine (writes flow through ``WriterLockedAsyncSession``
