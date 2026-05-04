@@ -11,6 +11,8 @@ import uuid
 
 from mcp.server.fastmcp import Context
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import PROMPTS_DIR, settings
 from app.database import async_session_factory
 from app.models import Optimization
@@ -122,7 +124,9 @@ async def handle_optimize(
             few_shot_examples=_pt_few_shot,
         )
         trace_id = str(uuid.uuid4())
-        async with async_session_factory() as db:
+
+        async def _persist_pending_passthrough(db: AsyncSession) -> None:
+            """Insert pending passthrough Optimization sentinel row (mcp_passthrough)."""
             pending = Optimization(
                 id=str(uuid.uuid4()),
                 raw_prompt=prompt,
@@ -140,7 +144,13 @@ async def handle_optimize(
                 context_sources=enrichment.context_sources_dict,
             )
             db.add(pending)
-            await db.commit()
+            # NO commit — submit() handles it
+
+        from app.tools._shared import get_write_queue
+        await get_write_queue().submit(
+            _persist_pending_passthrough,
+            operation_label="optimize_passthrough_pending_insert",
+        )
         return OptimizeOutput(
             status="pending_external",
             pipeline_mode="passthrough",
