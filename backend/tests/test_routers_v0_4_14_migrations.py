@@ -75,3 +75,18 @@ class TestProvidersApiKeyDeletedAuditLog:
         window = src[max(0, idx - 600):idx + 200]
         assert 'async with async_session_factory() as audit_db:' not in window
         assert "write_queue=" in window
+
+
+class TestGithubAuthRefreshTokenMigration:
+    def test_refresh_token_if_expired_uses_submit(self):
+        import app.routers.github_auth as _gh_mod
+        src = Path(_gh_mod.__file__).read_text()
+        idx = src.find("def _refresh_token_if_expired")
+        assert idx > 0
+        # Grab the function body window (post-migration body grew with the
+        # write-queue closure, so widen the window to 4000 chars).
+        window = src[idx:idx + 4000]
+        assert "github_token_refresh" in window, (
+            "_refresh_token_if_expired must use operation_label='github_token_refresh'"
+        )
+        assert "get_write_queue()" in window
