@@ -131,6 +131,10 @@ async def _update_synthesis_status(
 
     try:
         if write_queue is None:
+            logger.debug(
+                "_update_synthesis_status: legacy fallback (no write_queue) for %s@%s -> %s",
+                repo_full_name, branch, status,
+            )
             # No queue threaded — keep legacy fallback for safety on call paths
             # that haven't been updated. This preserves audit-hook WARN behavior
             # rather than crashing.
