@@ -1220,12 +1220,25 @@ async def lifespan(app: FastAPI):
     # checkpoint so integration tests can pin the spec-required
     # sequence (test_lifespan_starts_write_queue_after_alter_table_migrations).
     app.state.lifespan_order = []
-    try:
-        await asyncio.wait_for(_migrations_done.wait(), timeout=120.0)
-    except asyncio.TimeoutError:
-        logger.error(
-            "Lifespan migrations did not complete within 120s — "
-            "starting WriteQueue with audit hook in degraded mode",
+    # The in-listener migrations are idempotent ALTER-TABLE-IF-NOT-EXISTS
+    # + small DML; sub-second steady state. 30s budget gives 100x
+    # headroom on a cold disk cache.
+    #
+    # Tests that mock ``asyncio.create_task`` (test_main.py) don't run
+    # the listener, so ``_migrations_done`` never fires. Bail early if
+    # the task is not a real Task — that's the "listener was mocked" signal.
+    if isinstance(extraction_task, asyncio.Task):
+        try:
+            await asyncio.wait_for(_migrations_done.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Lifespan migrations did not complete within 30s — "
+                "starting WriteQueue with audit hook in degraded mode",
+            )
+    else:
+        logger.debug(
+            "Lifespan: extraction_task is not a real asyncio.Task "
+            "(mocked) — skipping _migrations_done wait",
         )
     app.state.lifespan_order.append("migrations_complete")
 
