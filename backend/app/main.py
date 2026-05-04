@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 
 import asyncio
+import contextlib
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -341,16 +342,34 @@ async def lifespan(app: FastAPI):
     # orphan LinkedRepo rows. Complements run_startup_gc (which handles
     # cold-start dead records). Task handle lives on app.state and is
     # cancelled during shutdown.
+    #
+    # v0.4.13 cycle 9 (MED-6 / HIGH-8): pulls the WriteQueue from
+    # ``app.state.write_queue`` lazily so the queue is guaranteed
+    # initialized by the time the first iteration fires. The submit path
+    # surfaces ``WriteQueueStoppedError`` if shutdown beats us to the
+    # punch — that's the canonical signal to exit cleanly without
+    # logging an exception trace.
     async def _recurring_gc_task() -> None:
         from app.database import async_session_factory
         from app.services.gc import run_recurring_gc
+        from app.services.write_queue import (
+            WriteQueueDeadError,
+            WriteQueueStoppedError,
+        )
 
         while True:
             try:
+                wq = getattr(app.state, "write_queue", None)
                 async with async_session_factory() as db:  # type: ignore[assignment]
-                    await run_recurring_gc(db)  # type: ignore[arg-type]
+                    await run_recurring_gc(db, write_queue=wq)  # type: ignore[arg-type]
             except asyncio.CancelledError:
                 raise
+            except (WriteQueueStoppedError, WriteQueueDeadError) as exc:
+                logger.info(
+                    "recurring_gc: queue not available (%s) — exiting cleanly",
+                    type(exc).__name__,
+                )
+                return
             except Exception:
                 logger.exception("recurring_gc sweep failed")
             await asyncio.sleep(3600)  # 1h
@@ -391,6 +410,11 @@ async def lifespan(app: FastAPI):
 
     # Track in-flight extraction tasks for graceful shutdown
     extraction_tasks: set[asyncio.Task[None]] = set()
+
+    # v0.4.13 cycle 9: signaled when the in-listener migration block
+    # finishes so the lifespan can install the audit hook + start the
+    # WriteQueue at the correct ordering. See spec §3.3.
+    _migrations_done = asyncio.Event()
 
     # Shared EmbeddingService singleton — reused by taxonomy engine and context service
     from app.services.embedding_service import EmbeddingService
@@ -537,6 +561,14 @@ async def lifespan(app: FastAPI):
 
             # Warm-load TransformationIndex + OptimizedEmbeddingIndex from disk cache
             await engine.load_index_caches(DATA_DIR)
+
+            # v0.4.13 cycle 9: enter migration_mode so the audit hook
+            # (installed later in lifespan) does NOT fire on the
+            # idempotent ALTER TABLE / DML migrations below. Cleared
+            # immediately before the event-consumption ``async for``
+            # loop and signaled via ``_migrations_done``.
+            from app.database import read_engine_meta
+            read_engine_meta.migration_mode = True
 
             # Startup: ensure routing_tier column exists (SQLite ALTER TABLE)
             # SQLAlchemy create_all() only creates new tables, not new columns
@@ -1057,6 +1089,11 @@ async def lifespan(app: FastAPI):
                     "Cold-start bootstrap failed (non-fatal): %s", cs_exc
                 )
 
+            # v0.4.13 cycle 9: migrations done, exit migration_mode +
+            # signal lifespan. Audit hook + WriteQueue come online next.
+            read_engine_meta.migration_mode = False
+            _migrations_done.set()
+
             logger.info("Taxonomy extraction listener started — subscribing to event bus")
 
             _recently_dispatched: set[str] = set()  # dedup window
@@ -1160,12 +1197,72 @@ async def lifespan(app: FastAPI):
                         _apply_cross_process_dirty_marks(engine, event_data)
                         _warm_path_pending.set()
         except asyncio.CancelledError:
+            # v0.4.13 cycle 9: ensure lifespan can proceed even if the
+            # listener is cancelled mid-migration.
+            from app.database import read_engine_meta
+            read_engine_meta.migration_mode = False
+            _migrations_done.set()
             logger.info("Taxonomy extraction listener shutting down")
         except Exception as exc:
+            from app.database import read_engine_meta
+            read_engine_meta.migration_mode = False
+            _migrations_done.set()
             logger.error("Taxonomy extraction listener crashed: %s", exc, exc_info=True)
 
     extraction_task = asyncio.create_task(_taxonomy_extraction_listener())
     app.state.extraction_task = extraction_task
+
+    # v0.4.13 cycle 9 — Wait for the listener's migration block to
+    # complete (or to surface) before installing the audit hook + the
+    # WriteQueue. Spec §3.3 mandates: migrations → audit hook install →
+    # queue start → recurring tasks → yield.
+    #
+    # Telemetry: ``app.state.lifespan_order`` records each ordering
+    # checkpoint so integration tests can pin the spec-required
+    # sequence (test_lifespan_starts_write_queue_after_alter_table_migrations).
+    app.state.lifespan_order = []
+    try:
+        await asyncio.wait_for(_migrations_done.wait(), timeout=120.0)
+    except asyncio.TimeoutError:
+        logger.error(
+            "Lifespan migrations did not complete within 120s — "
+            "starting WriteQueue with audit hook in degraded mode",
+        )
+    app.state.lifespan_order.append("migrations_complete")
+
+    # Install audit hook on the read engine. Any INSERT/UPDATE/DELETE
+    # that hits the read engine outside of migration_mode/cold_path_mode
+    # will now WARN (dev/prod) or RAISE (CI WRITE_QUEUE_AUDIT_HOOK_RAISE=True).
+    try:
+        from app.database import engine as _read_engine
+        from app.database import install_read_engine_audit_hook
+
+        install_read_engine_audit_hook(_read_engine)
+        app.state.lifespan_order.append("audit_hook_installed")
+        logger.info("Read-engine audit hook installed")
+    except RuntimeError as _hook_exc:
+        logger.warning(
+            "Audit hook install skipped (already installed): %s",
+            _hook_exc,
+        )
+
+    # Start the WriteQueue worker bound to the writer engine.
+    try:
+        from app.database import writer_engine as _writer_engine
+        from app.services.write_queue import WriteQueue
+
+        write_queue = WriteQueue(_writer_engine)
+        await write_queue.start()
+        app.state.write_queue = write_queue
+        app.state.lifespan_order.append("write_queue_started")
+        logger.info(
+            "WriteQueue started: max_depth=%d default_timeout=%.1fs",
+            settings.WRITE_QUEUE_MAX_QUEUE_DEPTH,
+            settings.WRITE_QUEUE_DEFAULT_TIMEOUT_SECONDS,
+        )
+    except Exception as _wq_exc:
+        logger.error("Failed to start WriteQueue: %s", _wq_exc, exc_info=True)
+        app.state.write_queue = None
 
     # Initialize unified context enrichment service
     try:
@@ -1568,19 +1665,51 @@ async def lifespan(app: FastAPI):
             logger.warning("Timed out waiting for extraction tasks to finish")
 
     # Phase 4: Mark in-flight optimizations as interrupted + trace rotation.
+    #
+    # v0.4.13 cycle 9: route the UPDATE through the WriteQueue while it
+    # is still alive (we stop it after this phase). Falls back to direct
+    # write under migration_mode bypass if the queue is unavailable —
+    # that path is idempotent and only fires on shutdown.
     logger.info("Shutting down — marking in-flight optimizations as interrupted")
     try:
         from sqlalchemy import update
 
-        from app.database import async_session_factory
+        from app.database import async_session_factory, read_engine_meta
         from app.models import Optimization
-        async with async_session_factory() as db:  # type: ignore[assignment]
+
+        async def _mark_interrupted(db):  # type: ignore[no-untyped-def]
             await db.execute(
                 update(Optimization)
                 .where(Optimization.status == "running")
                 .values(status="interrupted")
             )
             await db.commit()
+
+        wq = getattr(app.state, "write_queue", None)
+        if wq is not None and wq.worker_alive:
+            try:
+                await wq.submit(
+                    _mark_interrupted,
+                    operation_label="shutdown_mark_interrupted",
+                )
+            except Exception as wq_exc:
+                logger.warning(
+                    "Shutdown queue submit failed (%s) — falling back to direct write",
+                    wq_exc,
+                )
+                read_engine_meta.migration_mode = True
+                try:
+                    async with async_session_factory() as db:  # type: ignore[assignment]
+                        await _mark_interrupted(db)
+                finally:
+                    read_engine_meta.migration_mode = False
+        else:
+            read_engine_meta.migration_mode = True
+            try:
+                async with async_session_factory() as db:  # type: ignore[assignment]
+                    await _mark_interrupted(db)
+            finally:
+                read_engine_meta.migration_mode = False
     except Exception as exc:
         logger.error("Shutdown cleanup failed: %s", exc)
 
@@ -1630,11 +1759,47 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error("Error while waiting for request drain: %s", exc)
 
+    # v0.4.13 cycle 9 — Phase 5a: stop the WriteQueue with drain budget.
+    # Recurring tasks have already been cancelled in Phase 2 so no new
+    # submits arrive; we drain in-flight + pending under
+    # WRITE_QUEUE_DRAIN_TIMEOUT_SECONDS, then fail any leftover Futures
+    # with WriteQueueDeadError. Audit hook is uninstalled afterwards.
+    wq = getattr(app.state, "write_queue", None)
+    if wq is not None:
+        try:
+            logger.info(
+                "Stopping WriteQueue (drain_timeout=%.1fs)",
+                settings.WRITE_QUEUE_DRAIN_TIMEOUT_SECONDS,
+            )
+            await wq.stop(
+                drain_timeout=settings.WRITE_QUEUE_DRAIN_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.error("WriteQueue stop failed: %s", exc, exc_info=True)
+        finally:
+            app.state.write_queue = None
+
+    # v0.4.13 cycle 9 — Phase 5b: uninstall the audit hook so subsequent
+    # disposal (which may issue PRAGMA wal_checkpoint) does not race
+    # against a registered listener.
+    try:
+        from app.database import uninstall_read_engine_audit_hook
+        uninstall_read_engine_audit_hook()
+    except Exception as exc:
+        logger.error("Audit hook uninstall failed: %s", exc)
+
     try:
         from app.database import dispose
         await dispose()
     except Exception as exc:
         logger.error("Database disposal failed: %s", exc)
+
+    # v0.4.13 cycle 9 — Phase 5c: dispose the writer engine pool.
+    try:
+        from app.database import dispose_writer
+        await dispose_writer()
+    except Exception as exc:
+        logger.error("Writer engine disposal failed: %s", exc)
 
 
 app = FastAPI(
