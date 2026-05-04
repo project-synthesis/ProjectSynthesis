@@ -1,6 +1,7 @@
 """Shared test fixtures + helpers."""
 
 import asyncio
+import os
 from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock
 
@@ -10,6 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.providers.base import LLMProvider
+
+# v0.4.13 cycle 9.5: force the read-engine audit hook into RAISE mode
+# for the entire test session. Any INSERT/UPDATE/DELETE that hits the
+# read engine outside the ``migration_mode`` / ``cold_path_mode``
+# allow-list now fails the test instead of silently warning. Must be
+# set at module import time so it precedes ``app.config.settings``
+# instantiation (Pydantic snapshots env at construction).
+os.environ.setdefault("WRITE_QUEUE_AUDIT_HOOK_RAISE", "true")
 
 # No custom event_loop fixture needed — pytest-asyncio manages it
 # automatically with asyncio_mode = "auto" in pyproject.toml.

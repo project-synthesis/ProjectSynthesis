@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
+from app.dependencies.write_queue import get_write_queue
 from app.models import Feedback, Optimization, OptimizationPattern
 from app.services.optimization_service import VALID_SORT_COLUMNS, OptimizationService
+from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +258,7 @@ async def delete_optimization(
         ..., description="Optimization id to delete (uuid)."
     ),
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> DeleteOptimizationResponse:
     """Delete one optimization and cascade dependents.
 
@@ -264,8 +267,11 @@ async def delete_optimization(
     Cascade semantics + event emission + dirty-marking are owned by
     ``OptimizationService.delete_optimizations`` (see the service for
     full contract). This router is a thin HTTP translator.
+
+    v0.4.13 cycle 9.5: thread the WriteQueue so the bulk DELETE +
+    cascade routes through the writer engine via the queue worker.
     """
-    svc = OptimizationService(db)
+    svc = OptimizationService(db, write_queue=write_queue)
     # Probe before delete so we can 404 unknown ids. The service itself
     # returns deleted=0 silently — fine for bulk_reset/gc_sweep callers,
     # but bad for a REST client typing a wrong id.
@@ -336,6 +342,7 @@ class DeleteOptimizationsResponse(BaseModel):
 async def bulk_delete_optimizations(
     body: BulkDeleteRequest,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> DeleteOptimizationsResponse:
     """Delete 1-100 optimizations in a single call.
 
@@ -348,8 +355,11 @@ async def bulk_delete_optimizations(
     No 404 translation here (unlike the single endpoint): when some ids
     don't exist, ``deleted < requested`` and the caller diffs. Matches
     the service contract.
+
+    v0.4.13 cycle 9.5: thread the WriteQueue so bulk DELETEs route
+    through the writer engine via the queue worker.
     """
-    svc = OptimizationService(db)
+    svc = OptimizationService(db, write_queue=write_queue)
     result = await svc.delete_optimizations(body.ids, reason=body.reason)
     return DeleteOptimizationsResponse(
         deleted=result.deleted,

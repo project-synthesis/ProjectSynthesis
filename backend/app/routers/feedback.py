@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
+from app.dependencies.write_queue import get_write_queue
 from app.services.feedback_service import FeedbackService
+from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +57,16 @@ class FeedbackRequest(BaseModel):
 async def submit_feedback(
     body: FeedbackRequest,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
     _rate: None = Depends(RateLimit(lambda: settings.FEEDBACK_RATE_LIMIT)),
 ) -> FeedbackSubmitResponse:
-    svc = FeedbackService(db)
+    # v0.4.13 cycle 9.5: thread the WriteQueue so the INSERT into
+    # ``feedbacks`` + StrategyAffinity bumps + degenerate-pattern
+    # detection commit all serialize through the writer engine via
+    # the queue worker. Pre-fix the read-engine audit hook caught
+    # 175 INSERT INTO feedbacks WARN lines under a 100-feedback
+    # concurrent stress (cycle 9.5 reproduction).
+    svc = FeedbackService(db, write_queue=write_queue)
     try:
         fb = await svc.create_feedback(body.optimization_id, body.rating, body.comment)
     except ValueError as e:
