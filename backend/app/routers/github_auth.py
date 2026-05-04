@@ -276,47 +276,71 @@ async def github_callback(
 
     session_id = request.cookies.get("session_id") or secrets.token_urlsafe(32)
 
-    result = await db.execute(
-        select(GitHubToken).where(GitHubToken.session_id == session_id)
-    )
-    existing = result.scalar_one_or_none()
-    if existing:
-        existing.token_encrypted = encrypted
-        existing.github_login = user.get("login")
-        existing.github_user_id = str(user.get("id", ""))
-        existing.avatar_url = user.get("avatar_url")
-        existing.expires_at = expires_at
-        existing.refresh_token_encrypted = refresh_encrypted
-        existing.refresh_token_expires_at = refresh_expires_at
-    else:
-        row = GitHubToken(
-            session_id=session_id,
-            token_encrypted=encrypted,
-            github_login=user.get("login"),
-            github_user_id=str(user.get("id", "")),
-            avatar_url=user.get("avatar_url"),
-            expires_at=expires_at,
-            refresh_token_encrypted=refresh_encrypted,
-            refresh_token_expires_at=refresh_expires_at,
+    # v0.4.14 cycle 3e.2: persist the token row and audit log atomically
+    # through submit_batch. Both writes share one writer session and one
+    # transaction. We snapshot every closure dependency BEFORE declaring
+    # the work_fns so they reference only captured_* values — never the
+    # outer ``request``/``db``/``user`` (would cross sessions).
+    captured_session_id = session_id
+    captured_user_login = user.get("login")
+    captured_actor_ip = request.client.host if request.client else None
+    captured_encrypted = encrypted
+    captured_expires_at = expires_at
+    captured_refresh_encrypted = refresh_encrypted
+    captured_refresh_expires_at = refresh_expires_at
+    captured_avatar_url = user.get("avatar_url")
+    captured_user_id = str(user.get("id", ""))
+
+    async def _persist_token(write_db: AsyncSession) -> None:
+        existing_q = await write_db.execute(
+            select(GitHubToken).where(GitHubToken.session_id == captured_session_id)
         )
-        db.add(row)
-    await db.commit()
+        existing = existing_q.scalar_one_or_none()
+        if existing:
+            existing.token_encrypted = captured_encrypted
+            existing.github_login = captured_user_login
+            existing.github_user_id = captured_user_id
+            existing.avatar_url = captured_avatar_url
+            existing.expires_at = captured_expires_at
+            existing.refresh_token_encrypted = captured_refresh_encrypted
+            existing.refresh_token_expires_at = captured_refresh_expires_at
+        else:
+            row = GitHubToken(
+                session_id=captured_session_id,
+                token_encrypted=captured_encrypted,
+                github_login=captured_user_login,
+                github_user_id=captured_user_id,
+                avatar_url=captured_avatar_url,
+                expires_at=captured_expires_at,
+                refresh_token_encrypted=captured_refresh_encrypted,
+                refresh_token_expires_at=captured_refresh_expires_at,
+            )
+            write_db.add(row)
+        # NO commit — submit_batch owns the transaction.
 
-    logger.info("GitHub OAuth callback completed: user=%s", user.get("login"))
-
-    # Audit log
-    try:
-        from app.services.audit_logger import log_event
-
-        await log_event(
-            db=db,
+    # NOTE: log_event canNOT be called inside submit_batch (it commits
+    # internally on both queue + legacy paths, which would either trigger
+    # SubmitBatchCommitError or WriteQueueReentrancyError). The audit row
+    # is inserted directly via the AuditLog model.
+    async def _record_audit(write_db: AsyncSession) -> None:
+        from app.models import AuditLog
+        entry = AuditLog(
             action="github_login",
-            actor_ip=request.client.host if request.client else None,
-            detail={"github_login": user.get("login")},
+            actor_ip=captured_actor_ip,
+            actor_session=None,
+            detail={"github_login": captured_user_login},
             outcome="success",
         )
-    except Exception:
-        logger.debug("Audit log write failed", exc_info=True)
+        write_db.add(entry)
+        # NO commit — submit_batch owns the transaction.
+
+    from app.tools._shared import get_write_queue
+    await get_write_queue().submit_batch(
+        [_persist_token, _record_audit],
+        operation_label="github_oauth_callback",
+    )
+
+    logger.info("GitHub OAuth callback completed: user=%s", captured_user_login)
 
     # Redirect to frontend app after successful OAuth
     frontend_url = settings.FRONTEND_URL.rstrip("/")
