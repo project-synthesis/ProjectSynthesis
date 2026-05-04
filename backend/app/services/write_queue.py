@@ -346,11 +346,11 @@ class WriteQueue:
 
     async def submit_batch(
         self,
-        work_fns: list[Callable[[AsyncSession], Awaitable[Any]]],
+        work_fns: list[Callable[[AsyncSession], Awaitable[T]]],
         *,
         timeout: float | None = None,
         operation_label: str | None = None,
-    ) -> list[Any]:
+    ) -> list[T]:
         """Run multiple writes in ONE queued task, ONE transaction, ONE writer session.
 
         See spec § 3.1. Contract:
@@ -393,6 +393,13 @@ class WriteQueue:
                             ),
                         )
                     results.append(result)
+                _emit_worker_event(
+                    "submit_batch_complete",
+                    {
+                        "label": operation_label or "submit_batch",
+                        "size": len(work_fns),
+                    },
+                )
             return results
 
         return await self.submit(
@@ -567,4 +574,6 @@ __all__ = [
     "WriteQueueDeadError",
     "WriteQueueReentrancyError",
     "WriteQueueMetrics",
+    "SubmitBatchError",
+    "SubmitBatchCommitError",
 ]
