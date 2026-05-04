@@ -1035,9 +1035,10 @@ async def execute_maintenance_phases(
         return await prune_snapshots(db)
 
     try:
+        # v0.4.13 cycle 9 (I3): renamed to fit ``warm_phase_*`` namespace.
         pruned = await _run_in_writer_session(
             write_queue, session_factory, _do_prune,
-            operation_label="warm_snapshot_prune",
+            operation_label="warm_phase_snapshot_prune",
         )
         if pruned:
             logger.info("Pruned %d old snapshots via retention policy", pruned)

@@ -1030,10 +1030,11 @@ class TaxonomyEngine:
 
                 try:
                     if write_queue is not None:
+                        # v0.4.13 cycle 9 (I3): renamed to fit ``warm_phase_*``.
                         snapshot_id = await write_queue.submit(
                             _do_error_snapshot,
                             timeout=120.0,
-                            operation_label="warm_error_snapshot",
+                            operation_label="warm_phase_error_snapshot",
                         )
                     else:
                         assert session_factory is not None
