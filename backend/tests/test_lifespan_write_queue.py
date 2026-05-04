@@ -22,12 +22,11 @@ Copyright 2025-2026 Project Synthesis contributors.
 """
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
 from app.database import (
@@ -40,7 +39,6 @@ from app.services.write_queue import (
     WriteQueueDeadError,
     WriteQueueStoppedError,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -352,6 +350,7 @@ class TestLifespanOrdering:
         # the production main.py records the ordering at all by importing
         # the module and inspecting the source.
         import inspect
+
         import app.main as main_mod
 
         src = inspect.getsource(main_mod.lifespan)
@@ -374,6 +373,7 @@ class TestLifespanOrdering:
         runs in-process and uses asyncio events to enforce the order).
         """
         import inspect
+
         import app.main as main_mod
 
         src = inspect.getsource(main_mod.lifespan)
@@ -390,6 +390,7 @@ class TestLifespanOrdering:
     def test_lifespan_stops_write_queue_after_drain(self):
         """Spec C8 — shutdown calls write_queue.stop() with drain budget."""
         import inspect
+
         import app.main as main_mod
 
         src = inspect.getsource(main_mod.lifespan)
@@ -401,6 +402,7 @@ class TestLifespanOrdering:
         stop in Phase 5a. Verified via source inspection.
         """
         import inspect
+
         import app.main as main_mod
 
         src = inspect.getsource(main_mod.lifespan)
