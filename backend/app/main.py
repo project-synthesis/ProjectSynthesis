@@ -1136,10 +1136,18 @@ async def lifespan(app: FastAPI):
                             # the same queue.
                             try:
                                 _wq = getattr(app.state, "write_queue", None)
-                                if _wq is None:
-                                    # Cold path / queue not yet started — fall
-                                    # back to the legacy session path so we
-                                    # don't lose the event entirely.
+                                # Cold path / queue not yet started / queue
+                                # worker died: fall back to the legacy
+                                # session path so we don't lose the event
+                                # entirely. ``worker_alive`` is False when
+                                # the queue's worker task isn't running
+                                # (test mocks asyncio.create_task with a
+                                # DummyTask that never executes the loop).
+                                _worker_alive = (
+                                    _wq is not None
+                                    and getattr(_wq, "worker_alive", False)
+                                )
+                                if _wq is None or not _worker_alive:
                                     async with async_session_factory() as db:
                                         await engine.process_optimization(oid, db)
                                     return
