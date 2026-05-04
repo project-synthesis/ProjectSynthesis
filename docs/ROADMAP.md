@@ -2,7 +2,7 @@
 
 Living document tracking planned improvements. Items are prioritized but not scheduled. Each entry links to the relevant spec or ADR when available.
 
-**Snapshot:** v0.4.10-dev (in development, post-v0.4.9). Last release: v0.4.9 (2026-04-28 — audit-prompt scoring hardening F1–F5; suite 3177 passing + 1 skipped).
+**Snapshot:** v0.4.14-dev (in development, post-v0.4.13). Last release: v0.4.13 (2026-05-04 — SQLite writer-slot contention architectural fix via single-writer queue; suite 3457 passing + 1 skipped).
 
 > **Shipped work archived in [`SHIPPED.md`](SHIPPED.md).** This file tracks only forward-looking items (Immediate, Planned, Exploring, Deferred) plus partial-tier work where a follow-up tier is still active.
 
@@ -463,53 +463,55 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 
 ---
 
-### SQLite writer-slot contention — architectural fix (v0.4.13 P0)
-**Status:** **Planned for v0.4.13** (trigger met by v0.4.12 probe integration validation)
+### Cold-path commit chunking via `WriteQueue` (v0.4.14 P1)
+**Status:** Planned for v0.4.14
+**Context:** v0.4.13 shipped the single-writer queue but kept the taxonomy cold-path full-refit on `WriterLockedAsyncSession` + `cold_path_mode` audit-hook bypass. The refit's transaction span (multi-second commits across thousands of cluster rows) does not fit the queue's per-task timeout model.
 
-**Context:** Probes v22 → v29 (live integration validation against the v0.4.12 probe Tier 1 surface, 2026-04-29) catalogued a sustained `database is locked` failure mode that defeats every layer of the existing writer-coordination stack (`busy_timeout=30s`, app-level `bulk_persist` retries 5×, `WriterLockedAsyncSession` asyncio.Lock, per-prompt streaming, early-abort, warm-path Groundhog Day fix). The orphan audit on `probe_run` found **11 of 26 historical runs** (every probe since v9's canonical-batch refactor) silently lost all 5 optimization rows.
+**Plan:** chunk each refit phase (re-embedding pass, cluster reassignment, label reconciliation, member-count repair) into per-batch `submit()` calls with `await asyncio.sleep(0)` between. Each chunk fits the default `timeout=300s` envelope. Removes the last `cold_path_mode` audit-hook bypass; cold path becomes structurally identical to hot/warm in routing terms.
 
-**Diagnostic chain (v22 → v29):**
-- **v22**: pytest racing + warm-path concurrent → 0 of 5 persisted, silent-success defect surfaced (probe reported `status='completed'` from in-memory aggregate). Verify-after-persist gate added in `ae379bf6` to make failures loud.
-- **v23/v24**: clean services, no pytest. Still catastrophic. Confirmed contention is not test-fixture-driven.
-- **v25**: rate-limit fallback path. All 5 persists collapsed into a tight window. Catastrophic. Per-prompt streaming added in `e32515eb` to reduce per-attempt window size.
-- **v26**: full architectural fix stack (verify-gate + streaming + warm-path-age fix + early-abort). Still catastrophic. Confirmed the contention is at a layer below all the orchestration fixes.
-- **v27**: **MCP server stopped, only backend running**. Still catastrophic. **This proves the contention is purely within-backend, not cross-process** — refining the framing in the original ROADMAP entry which suspected MCP-vs-backend was the dominant case.
-- **v28**: pool_size=1 + early-abort. Different failure mode (`QueuePool limit of size 1 overflow 0 reached, connection timed out, timeout 30.00`) — pool deadlocks when LLM calls hold connections inside `ContextEnrichmentService.enrich()` and peer Phase 3 tasks need a connection. Confirmed contention IS at the connection/pool layer, but pool_size=1 is too restrictive. Reverted in `7693efc8`.
-- **v29**: clean revert. Catastrophic again — same failure as v22-v27.
+**Files:** `backend/app/services/taxonomy/cold_path.py`, `taxonomy/warm_phases.py` (refit invocation), audit-hook flag retirement in `database.py`.
 
-**Root-cause analysis:** Within a single backend process, `WriterLockedAsyncSession` correctly serializes FLUSH calls via the process-wide asyncio.Lock. But SQLAlchemy's connection pool checks out separate underlying SQLite connections per session — the asyncio.Lock guards the flush moment, NOT the underlying connection's WAL writer-slot acquisition. When a connection releases the asyncio.Lock after commit, it may still hold lingering WAL state during transition cleanup; the next writer's connection sees `database is locked` despite holding the asyncio.Lock.
+---
 
-**Two implementation options for v0.4.13:**
+### Migrate remaining MCP tool sites (v0.4.14 P1)
+**Status:** Planned for v0.4.14
+**Context:** v0.4.13 cycle 9 migrated 3 of 7 MCP tool handlers through the queue. The remaining 4 are deferred — each needs careful review for write semantics in the MCP context (cross-process bridge timing, structured_output coupling).
 
-#### Option A — Single-writer queue worker (in-process, ~300 lines)
-Route ALL writes through one dedicated async worker that owns a single SQLite connection. Other code wanting to write enqueues a task and awaits its `Future`. Eliminates connection-pool races without changing the database engine.
+**Files:** `backend/app/tools/<remaining>.py`. Estimated: ~40 LOC + 4 handler-level tests.
 
-- **Pros:** Lower scope (no migration), preserves SQLite simplicity, no infrastructure changes, no test-fixture rewrites.
-- **Cons:** Doesn't help cross-process contention (MCP write paths) — but v27 proved cross-process is not the dominant case anyway. Throughput-bound by the single worker.
-- **Files:** new `app/services/write_queue.py` (worker + queue + `submit()` API), `bulk_persist`, `optimization_service`, `feedback_service`, `taxonomy/family_ops`, `taxonomy/warm_path` callsites refactored to enqueue. ~30 callsites total.
-- **Risk:** Higher latency on individual writes (queue serialization), debuggability harder during failure cascades.
+---
 
-#### Option B — PostgreSQL migration
-Replace `aiosqlite` with `asyncpg` + PostgreSQL. MVCC handles reader/writer contention natively at the DB layer.
+### Migrate `github_auth` + `clusters` routers through `WriteQueue` (v0.4.14 P1)
+**Status:** Planned for v0.4.14
+**Context:** 11 sites deferred from v0.4.13 — OAuth retry handling (`github_auth`) needs careful work because the device-flow polling loop has its own retry/backoff semantics; taxonomy state mutation routes (`clusters`) need transactional grouping that the queue's submit-per-call shape doesn't compose with cleanly without helper primitives.
 
-- **Pros:** Permanent architectural fix, supports concurrent multi-user access, scales horizontally.
-- **Cons:** Significant infrastructure change — Alembic migration, connection pooling re-config, Docker Compose for local dev, production deployment update, ~all test fixtures rewritten (in-memory PostgreSQL via `pgserver` or testcontainer).
-- **Files:** `database.py` (engine), `config.py` (DATABASE_URL), `main.py`/`mcp_server.py` (PRAGMA removal), `docker-compose.yml` (new), every test fixture.
-- **Risk:** Migration timing — if the user has existing local SQLite DBs with active probe data, need a migration tool.
+**Plan:** introduce a `WriteQueue.submit_batch(work_fns, *, timeout)` helper that lets a router run multiple writes inside one queued task while preserving the single-writer ordering guarantee. Then migrate the affected routes.
 
-**Recommendation:** Ship **Option A first** as the immediate v0.4.13 P0. Cheaper, faster, addresses the actually-observed failure mode (within-backend contention). Move PostgreSQL to a parallel track (v0.5.x) when concurrent multi-user access becomes a real requirement.
+**Files:** `backend/app/services/write_queue.py`, `routers/github_auth.py`, `routers/clusters.py`.
 
-**Prerequisite for Topic Probe Tier 2** (v0.4.13 save-as-suite + replay): persistence MUST be reliable for replay-mode regression detection to produce trustworthy results. Topic Probe Tier 2 ships AFTER the contention fix — same v0.4.13 release, Option A first.
+---
 
-**v0.4.12 partial mitigations already shipped** (see `docs/CHANGELOG.md`):
-- Verify-after-persist gate — no silent success
-- Per-prompt streaming — smaller transactions
-- Early-abort on catastrophic — saves 12-20 min of LLM tokens per failed run
-- Warm-path Groundhog Day fix — no compounding
+### Migrate `_update_synthesis_status` background task (v0.4.14 P1)
+**Status:** Planned for v0.4.14
+**Context:** `github_repos.py` schedules a background task that writes synthesis-status updates outside the request-response cycle. v0.4.13 left it on the read engine with `cold_path_mode` flag bypass to keep the migration scope finite; v0.4.14 routes it through the queue.
 
-These make failures loud and structured but don't fix the root cause. Probes under realistic concurrent-writer load still fail catastrophic.
+**Files:** `backend/app/routers/github_repos.py`, async task wrapper.
 
-**Files:** see Option A scope above. Tracking commit references: probes v22-v29 diagnostic chain in `docs/CHANGELOG.md`.
+---
+
+### Switch read-engine audit hook to RAISE in production (v0.4.14 P2)
+**Status:** Planned for v0.4.14
+**Context:** v0.4.13 ships the audit hook in WARN mode for dev/prod and RAISE-only for CI (`WRITE_QUEUE_AUDIT_HOOK_RAISE` env flag). Once 7+ days of zero locks confirmed in real usage, switch the production default to RAISE. Drift writes that escape the migration become hard failures at source instead of WARN-and-continue.
+
+**Trigger:** 7 consecutive days with zero `database is locked` errors and zero audit-hook WARN events on the active branch.
+
+---
+
+### Remove `WriterLockedAsyncSession` defense-in-depth class (v0.4.14 P2)
+**Status:** Planned for v0.4.14
+**Context:** v0.4.13 retains the legacy `WriterLockedAsyncSession` (process-wide flush serializer) as defense-in-depth during the post-release watch window. Once the audit hook is RAISE in production AND no flush events fire for 7+ days, the class is dead code and gets deleted along with its tests.
+
+**Trigger:** post-RAISE-switch + zero flush events for 7+ days.
 
 ---
 
@@ -560,6 +562,10 @@ These make failures loud and structured but don't fix the root cause. Probes und
 For the historical record of completed work — every release tag from v0.3.6-dev to the current latest, with per-fix detail, file/line references, and audit cross-links — see [`SHIPPED.md`](SHIPPED.md).
 
 **Recent releases:**
+- **v0.4.13** (2026-05-04) — SQLite writer-slot contention architectural fix (single-writer queue), suite 3457 passing
+- **v0.4.12** (2026-05-02) — Topic Probe Tier 1 + post-Tier-1 architectural hardening
+- **v0.4.11** (2026-04-28) — domain proposal hardening (`fullstack` ghost-domain finding)
+- **v0.4.10** (2026-04-28) — F3.1 persistence wiring for analysis-weighted overall score
 - **v0.4.9** (2026-04-28) — audit-prompt scoring hardening F1–F5, suite 3177 passing
 - **v0.4.8** (2026-04-27) — sub-domain dissolution hardening R1–R8, audit `sub-domain-regression-2026-04-27.md`
 - **v0.4.7** (2026-04-26) — MCP routing + TF-IDF cascade source-3 + B5/B5+ writing-about-code + C1-C5 score calibration + T1.x learning loops
