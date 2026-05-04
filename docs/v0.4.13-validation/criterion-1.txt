@@ -1,0 +1,15 @@
+=== Criterion #1 evidence ===
+
+Test: 5 sequential probes of n_prompts=5 each
+Started: 21:03:24
+Stopped: 21:14:30 (2 probes attempted, only 1 returned partial)
+
+Probe row counts:
+('audit auth flow 2', 'failed', 0, 'cancelled')
+('audit auth flow 1', 'partial', 5, None)
+
+Optimization rows per probe:
+('e490f44f-93e0-4a02-aea0-79535258a044', 'audit auth flow 1', 2)
+
+Database is locked count: 6
+Audit hook warnings count: 82

@@ -1,0 +1,191 @@
+=== Database is locked stack traces (compact) ===
+
+=== 1. probe_service.py:1065 _persist_one (probe c11a16d5) ===
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 13.16it/s]
+INFO app.services.score_blender: Score divergence on specificity: llm=9.0 heuristic=6.1 (delta=2.9)
+WARNING app.services.score_blender: Hybrid scoring divergence on 1 dimension(s): ['specificity']
+WARNING app.services.probe_service: Per-prompt persist failed for c11a16d5: (sqlite3.OperationalError) database is locked
+[SQL: INSERT INTO optimizations (id, created_at, raw_prompt, optimized_prompt, task_type, strategy_used, changes_summary, score_clarity, score_specificity, score_structure, score_faithfulness, score_conciseness, overall_score, provider, model_used, models_by_phase, scoring_mode, duration_ms, repo_full_name, codebase_context_snapshot, status, routing_tier, trace_id, tokens_total, context_sources, original_scores, score_deltas, intent_label, domain, embedding, optimized_embedding, transformation_embedding, qualifier_embedding, cluster_id, project_id, domain_raw, heuristic_flags, improvement_score, suggestions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('c11a16d5-4295-4b0b-8d5b-9cfbfae08bed', '2026-05-04 01:08:56.592852', "The `log_event` call in `github_callback` and `poll_device_code` records `action='github_login'` on success, but `_refresh_token_if_expired` silently ... (225 characters truncated) ...  from the audit log — token refresh, revocation-triggered cleanup in `github_me`, and logout — and what's the risk of that gap for a security review?", "Audit GitHub authentication against the `log_event` / `AuditLog` system to identify auth events that should produce audit entries but currently don't ... (1280 characters truncated) ...  which constitute compliance exposure (SOC 2 CC7.2 anomaly detection, GDPR Art. 32 processing integrity), and which are operational blind spots only.", 'analysis', 'structured-output', '## Changes\n\n| # | Change | Reason |\n|---|--------|--------|\n| 1 | **Specified 5-field output schema per gap** (action, current_signal, forensic_i ... (3038 characters truncated) ... e band for structured-output on a moderately-detailed analysis prompt; bullet structure is load-bearing (the schema is the deliverable), not padding.', 7.4, 8.3, 7.4, 7.3, 6.7, 7.54, 'claude_cli', 'claude-opus-4-7', '{"analyze": "claude-sonnet-4-6", "optimize": "claude-opus-4-7", "score": "claude-sonnet-4-6"}', 'hybrid', 286059, 'project-synthesis/ProjectSynthesis', None, 'completed', 'internal', '647801c2-7797-4d61-b1a0-a8650a8fc49d', None, '{"source": "batch_seed", "batch_id": "e490f44f-93e0-4a02-aea0-79535258a044", "agent": "", "codebase_context": true, "strategy_intelligence": true, "a ... (3792 characters truncated) ... tterns": false}, "combined_context_chars": 84172, "was_truncated": false, "profile_skipped_layers": ["applied_patterns"]}, "few_shot_examples": true}', '{"clarity": 3.8, "specificity": 5.0, "structure": 3.2, "faithfulness": 3.9, "conciseness": 3.5}', '{"clarity": 3.6, "specificity": 3.3, "structure": 4.2, "faithfulness": 3.4, "conciseness": 3.2}', 'Missing Auth Audit Event Gaps', 'security', <memory at 0x71e78dac4f40>, <memory at 0x71e78dac5180>, <memory at 0x71e78dac7400>, None, None, None, 'security: auth-audit', 'null', 3.57, '[{"text": "Improve conciseness by collapsing the \'Cover at minimum\' bullet list into a compact table with columns (function | failure modes) while  ... (562 characters truncated) ... \\u2264150-word risk verdict\' \\u2014 to prevent a discursive prose response that mixes catalog items with risk commentary.", "source": "strategy"}]')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 182, in execute
+    self._adapt_connection._handle_exception(error)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 342, in _handle_exception
+    raise error
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py", line 164, in execute
+    self.await_(_cursor.execute(operation, parameters))
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 40, in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/cursor.py", line 32, in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/aiosqlite/core.py", line 63, in _connection_worker_thread
+    result = function()
+             ^^^^^^^^^^
+sqlite3.OperationalError: database is locked
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/probe_service.py", line 1065, in _persist_one
+    n = await bulk_persist(
+        ^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 243, in bulk_persist
+    inserted, inserted_pendings = await write_queue.submit(
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 324, in submit
+    return await future
+           ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 368, in _run_one
+    result = await asyncio.wait_for(work(db), timeout=deadline)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 209, in _do_persist
+    await db.commit()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1000, in commit
+    await greenlet_spawn(self.sync_session.commit)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 203, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2030, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 1311, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 1286, in _prepare_impl
+    self.session.flush()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4331, in flush
+    self._flush(objects)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4466, in _flush
+    with util.safe_reraise():
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 121, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4427, in _flush
+    flush_context.execute()
+
+=== 2. batch_persistence.py:409 _do_assign (cluster f29b4fec) ===
+INFO:     127.0.0.1:48564 - "GET /api/clusters/injection-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48554 - "GET /api/clusters/activity/history?since=2026-04-28&until=2026-05-04&limit=200 HTTP/1.1" 200 OK
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.services.batch_persistence: Taxonomy assign failed for f29b4fec: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.OperationalError) database is locked
+[SQL: UPDATE prompt_cluster SET centroid_embedding=?, member_count=?, weighted_member_sum=?, scored_count=?, updated_at=? WHERE prompt_cluster.id = ?]
+[parameters: (<memory at 0x71e8a3efda80>, 2, 1.2912516764751945, 2, '2026-05-04 01:09:46.296488', 'd440555d-370c-4c57-bff2-e418340dbd60')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+WARNING app.services.batch_persistence: Taxonomy assign failed for aafa5e80: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.OperationalError) database is locked
+[SQL: UPDATE prompt_cluster SET centroid_embedding=?, member_count=?, weighted_member_sum=?, scored_count=?, updated_at=? WHERE prompt_cluster.id = ?]
+[parameters: (<memory at 0x71e8a3efda80>, 2, 1.2912516764751945, 2, '2026-05-04 01:09:46.296488', 'd440555d-370c-4c57-bff2-e418340dbd60')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.services.probe_service: probe batch_taxonomy_assign failed
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/probe_service.py", line 1340, in _run_impl
+    await batch_taxonomy_assign(
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 421, in batch_taxonomy_assign
+    summary = await write_queue.submit(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 324, in submit
+    return await future
+           ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 368, in _run_one
+    result = await asyncio.wait_for(work(db), timeout=deadline)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 409, in _do_assign
+    await db.commit()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1000, in commit
+    await greenlet_spawn(self.sync_session.commit)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 190, in greenlet_spawn
+    result = context.switch(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2030, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 101, in _go
+    self._raise_for_prerequisite_state(fn.__name__, current_state)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 971, in _raise_for_prerequisite_state
+    raise sa_exc.PendingRollbackError(
+sqlalchemy.exc.PendingRollbackError: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.OperationalError) database is locked
+[SQL: UPDATE prompt_cluster SET centroid_embedding=?, member_count=?, weighted_member_sum=?, scored_count=?, updated_at=? WHERE prompt_cluster.id = ?]
+[parameters: (<memory at 0x71e8a3efda80>, 2, 1.2912516764751945, 2, '2026-05-04 01:09:46.296488', 'd440555d-370c-4c57-bff2-e418340dbd60')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+
+=== 3. batch_persistence.py:409 _do_assign (cluster aafa5e80) ===
+[SQL: UPDATE prompt_cluster SET centroid_embedding=?, member_count=?, weighted_member_sum=?, scored_count=?, updated_at=? WHERE prompt_cluster.id = ?]
+[parameters: (<memory at 0x71e8a3efda80>, 2, 1.2912516764751945, 2, '2026-05-04 01:09:46.296488', 'd440555d-370c-4c57-bff2-e418340dbd60')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+WARNING app.services.batch_persistence: Taxonomy assign failed for aafa5e80: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.OperationalError) database is locked
+[SQL: UPDATE prompt_cluster SET centroid_embedding=?, member_count=?, weighted_member_sum=?, scored_count=?, updated_at=? WHERE prompt_cluster.id = ?]
+[parameters: (<memory at 0x71e8a3efda80>, 2, 1.2912516764751945, 2, '2026-05-04 01:09:46.296488', 'd440555d-370c-4c57-bff2-e418340dbd60')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.services.probe_service: probe batch_taxonomy_assign failed
+Traceback (most recent call last):
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/probe_service.py", line 1340, in _run_impl
+    await batch_taxonomy_assign(
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 421, in batch_taxonomy_assign
+    summary = await write_queue.submit(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 324, in submit
+    return await future
+           ^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/write_queue.py", line 368, in _run_one
+    result = await asyncio.wait_for(work(db), timeout=deadline)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app/services/batch_persistence.py", line 409, in _do_assign
+    await db.commit()
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 1000, in commit
+    await greenlet_spawn(self.sync_session.commit)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 190, in greenlet_spawn
+    result = context.switch(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2030, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 101, in _go
+    self._raise_for_prerequisite_state(fn.__name__, current_state)
+  File "/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 971, in _raise_for_prerequisite_state
+    raise sa_exc.PendingRollbackError(
+sqlalchemy.exc.PendingRollbackError: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.OperationalError) database is locked
+[SQL: UPDATE prompt_cluster SET centroid_embedding=?, member_count=?, weighted_member_sum=?, scored_count=?, updated_at=? WHERE prompt_cluster.id = ?]
+[parameters: (<memory at 0x71e8a3efda80>, 2, 1.2912516764751945, 2, '2026-05-04 01:09:46.296488', 'd440555d-370c-4c57-bff2-e418340dbd60')]
+(Background on this error at: https://sqlalche.me/e/20/e3q8) (Background on this error at: https://sqlalche.me/e/20/7s2a)
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, updated_at=? WHERE prompt_cluster.id = ?...
+WARNING app.services.probe_service: probe e490f44f-93e0-4a02-aea0-79535258a044 partial persistence: 2 of 3 rows landed
+WARNING app.database: read-engine audit: write statement on read engine outside allow-list: UPDATE prompt_cluster SET coherence=?, cluster_metadata=?, updated_at=? WHERE prompt_cluster.id = ?...
+INFO:     127.0.0.1:48542 - "GET /api/clusters/tree?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
