@@ -4,8 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
@@ -121,7 +119,6 @@ class TestSamplingPipelinePersistSourceGuard:
         # Find the post-pipeline persist block (begins with `db_opt = Optimization(`)
         idx = src.find("db_opt = Optimization(")
         assert idx > 0, "sampling persist block not found — file shape changed"
-        window = src[max(0, idx - 600):idx + 100]
         assert "_persist_sampling_optimization" in src, (
             "services/sampling_pipeline.py must define _persist_sampling_optimization "
             "work_fn for the line-846 migration"
