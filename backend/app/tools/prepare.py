@@ -134,10 +134,14 @@ async def handle_prepare(
 
     trace_id = str(uuid.uuid4())
 
-    # Store pending optimization with raw_prompt for later save_result linkage
-    async with async_session_factory() as db:
+    # Store pending optimization with raw_prompt for later save_result
+    # linkage. v0.4.13 cycle 9 — route through MCP WriteQueue.
+    from app.tools._shared import get_write_queue
+    pending_id = str(uuid.uuid4())
+
+    async def _persist_pending(db):  # type: ignore[no-untyped-def]
         pending = Optimization(
-            id=str(uuid.uuid4()),
+            id=pending_id,
             raw_prompt=prompt,
             status="pending",
             trace_id=trace_id,
@@ -154,6 +158,19 @@ async def handle_prepare(
         )
         db.add(pending)
         await db.commit()
+
+    try:
+        _wq = get_write_queue()
+    except ValueError:
+        _wq = None
+    if _wq is not None:
+        await _wq.submit(
+            _persist_pending,
+            operation_label="mcp_prepare_optimization",
+        )
+    else:
+        async with async_session_factory() as db:
+            await _persist_pending(db)
 
     logger.info(
         "synthesis_prepare_optimization completed: trace_id=%s strategy=%s tokens=%d",

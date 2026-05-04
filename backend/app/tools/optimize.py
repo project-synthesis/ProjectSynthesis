@@ -297,21 +297,36 @@ async def handle_optimize(
 async def _persist_sampling_failure(
     prompt: str, strategy: str, exc: Exception,
 ) -> str:
-    """Persist a failed sampling Optimization record and notify event bus."""
+    """Persist a failed sampling Optimization record and notify event bus.
+
+    v0.4.13 cycle 9: routes through MCP WriteQueue when available.
+    """
+    from app.tools._shared import get_write_queue
     error_msg = f"Sampling pipeline failed: {type(exc).__name__}: {exc}"
+
+    async def _persist(db):  # type: ignore[no-untyped-def]
+        db.add(Optimization(
+            id=str(uuid.uuid4()),
+            raw_prompt=prompt,
+            status="failed",
+            provider="mcp_sampling",
+            routing_tier="sampling",
+            strategy_used=strategy,
+            task_type="general",
+            changes_summary=error_msg,
+        ))
+        await db.commit()
+
     try:
-        async with async_session_factory() as db:
-            db.add(Optimization(
-                id=str(uuid.uuid4()),
-                raw_prompt=prompt,
-                status="failed",
-                provider="mcp_sampling",
-                routing_tier="sampling",
-                strategy_used=strategy,
-                task_type="general",
-                changes_summary=error_msg,
-            ))
-            await db.commit()
+        try:
+            wq = get_write_queue()
+        except ValueError:
+            wq = None
+        if wq is not None:
+            await wq.submit(_persist, operation_label="mcp_sampling_failure")
+        else:
+            async with async_session_factory() as db:
+                await _persist(db)
     except Exception:
         logger.debug("Failed to persist sampling failure record", exc_info=True)
     await notify_event_bus("optimization_failed", {
