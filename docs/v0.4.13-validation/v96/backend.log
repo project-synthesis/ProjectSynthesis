@@ -1,0 +1,585 @@
+INFO:     Will watch for changes in these directories: ['/home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/backend/app']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [1850991] using WatchFiles
+INFO:     Started server process [1851054]
+INFO:     Waiting for application startup.
+INFO app.services.routing: routing.recovery no session file — starting with defaults
+INFO app.providers.detector: Provider detected: claude_cli (CLI found on PATH)
+INFO app.services.routing: routing.provider_changed old=None new=claude_cli available_tiers=internal,passthrough
+INFO app.services.routing: routing.state_change event=provider_changed sampling_capable=None mcp_connected=False available_tiers=internal,passthrough
+INFO app.main: Routing initialized: provider=claude_cli available_tiers=['internal', 'passthrough']
+INFO app.services.prompt_loader: Template validation passed: 12 templates verified
+INFO app.services.strategy_loader: Strategy validation passed: 6 strategies, all with valid frontmatter
+INFO app.services.event_bus: Event subscriber connected (total: 1)
+INFO app.services.gc: GC: reconciled member_count on 66 clusters
+INFO app.services.gc: Startup GC: cleaned 66 records total
+INFO app.services.file_watcher: Strategy file watcher started: /home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/prompts/strategies
+INFO app.services.file_watcher: Watching seed agent files in /home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/prompts/seed-agents
+INFO app.services.domain_resolver: DomainResolver loaded 8 domain labels (1 sub-domains)
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded qualifier vocab for 7 domains
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded 9 domains with 130 total keywords (live=8, bootstrap=1, live_only=False)
+INFO app.main: Domain services initialized
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: start — 267 total samples across 5 task types
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='coding' — no discriminative keywords found (116 prompts)
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='system' bootstrap — 10 effective samples < 30 threshold
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='analysis' — extracted 1 keywords from 143 prompts [audit(0.5)]
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='writing' — extracted 15 keywords from 34 prompts [concrete(1.0), engineers(0.98), section(0.98), systems(0.93), practices(0.81)]
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='general' bootstrap — 12 effective samples < 30 threshold
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: complete — 2 dynamic, 3 static/bootstrap in 45.6ms
+INFO app.services.task_type_classifier: TaskTypeSignals: merged 6 task types, 138 total keywords (57 compound + 16 dynamic, extracted=['analysis', 'writing'])
+INFO app.services.taxonomy.embedding_index: EmbeddingIndex rebuilt: 66 centroids
+INFO app.services.taxonomy.embedding_index: EmbeddingIndex loaded from cache: 66 entries (19s old)
+INFO app.services.taxonomy.transformation_index: TransformationIndex loaded from cache: 0 entries (319s old)
+INFO app.services.taxonomy.engine: TransformationIndex warm-loaded from cache: 0 vectors
+INFO app.services.taxonomy.qualifier_index: QualifierIndex loaded from cache: 0 entries (319s old)
+INFO app.services.taxonomy.engine: QualifierIndex warm-loaded from cache: 0 vectors
+INFO app.services.taxonomy.optimized_index: OptimizedEmbeddingIndex loaded from cache: 0 entries (319s old)
+INFO app.services.taxonomy.engine: OptimizedEmbeddingIndex warm-loaded from cache: 0 vectors
+INFO app.main: Routing tier backfill complete
+INFO app.main: Legacy project_id cached: fe9bcf76
+INFO app.services.taxonomy.transformation_index: TransformationIndex rebuilt: 59 vectors
+INFO app.main: TransformationIndex loaded with 59 vectors
+INFO app.services.taxonomy.optimized_index: OptimizedEmbeddingIndex rebuilt: 63 vectors
+INFO app.main: OptimizedEmbeddingIndex loaded with 63 vectors
+INFO app.main: Backfill: 0 orphan optimizations linked
+INFO app.main: Taxonomy extraction listener started — subscribing to event bus
+INFO app.services.event_bus: Event subscriber connected (total: 2)
+INFO app.main: Read-engine audit hook installed
+INFO app.main: WriteQueue started: max_depth=256 default_timeout=300.0s
+INFO app.main: ContextEnrichmentService initialized
+INFO app.main: index_refresh_loop: started (interval=600s, concurrency=5)
+INFO app.services.taxonomy.warm_path: Warm path cycle: dirty_ids=all (first_cycle=True, boundary=20)
+INFO:     Application startup complete.
+INFO app.services.taxonomy.warm_phases: Reconciled 6 member_counts, 29 coherence, 0 scores
+INFO app.services.taxonomy.warm_path: Phase 0 (reconcile): fixed=6 coherence=29 scores=0 zombies=0 outliers_ejected=0
+INFO app.services.taxonomy.warm_path: Phase split_emerge accepted: Q 0.7736 -> 0.7736 (ops=0)
+INFO:     127.0.0.1:45084 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45090 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO app.services.taxonomy.warm_path: Phase merge accepted: Q 0.7736 -> 0.7736 (ops=0)
+INFO app.services.taxonomy.warm_path: Phase retire accepted: Q 0.7736 -> 0.7736 (ops=0)
+INFO:     127.0.0.1:45084 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO app.services.taxonomy.warm_phases: Score-correlated adaptation applied from 151 scored optimizations
+INFO app.services.taxonomy.warm_phases: Per-cluster weight adaptation applied to 24 clusters
+INFO app.services.taxonomy.warm_phases: Computed global_source_count for 758 meta-patterns
+INFO app.services.taxonomy.warm_path: Phase 4 (refresh): clusters_refreshed=0
+INFO app.services.taxonomy.embedding_index: EmbeddingIndex cache saved: 66 entries → /home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/data/embedding_index.pkl
+INFO app.services.taxonomy.warm_phases: Sub-domain pattern aggregation: 1/1 sub-domains received patterns
+INFO:     127.0.0.1:45120 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:45104 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45136 - "GET /api/providers HTTP/1.1" 200 OK
+INFO app.routers.events: New SSE event stream connection (Last-Event-ID=698)
+INFO app.routers.events: Replayed 0 missed events (since seq 698)
+INFO:     127.0.0.1:45152 - "GET /api/events?last_event_id=698 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45194 - "GET /api/clusters/similarity-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45204 - "GET /api/domains HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45198 - "GET /api/clusters/injection-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45198 - "GET /api/clusters/activity?limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45198 - "GET /api/clusters/activity/history?since=2026-04-28&until=2026-05-04&limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45182 - "GET /api/clusters/tree?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45198 - "GET /api/strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45192 - "GET /api/clusters/stats?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45206 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:45168 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45204 - "GET /api/taxonomy/pattern-density?period=7d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45194 - "GET /api/domains/readiness?fresh=true HTTP/1.1" 200 OK
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: start — 267 total samples across 5 task types
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='coding' — no discriminative keywords found (116 prompts)
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='system' bootstrap — 10 effective samples < 30 threshold
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='analysis' — extracted 1 keywords from 143 prompts [audit(0.5)]
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='writing' — extracted 15 keywords from 34 prompts [concrete(1.0), engineers(0.98), section(0.98), systems(0.93), practices(0.81)]
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: task_type='general' bootstrap — 12 effective samples < 30 threshold
+INFO app.services.task_type_signal_extractor: extract_task_type_signals: complete — 2 dynamic, 3 static/bootstrap in 32.2ms
+INFO app.services.task_type_classifier: TaskTypeSignals: merged 6 task types, 138 total keywords (57 compound + 16 dynamic, extracted=['analysis', 'writing'])
+INFO app.services.taxonomy.warm_path: Phase 4.75 (task-type signals): persisted to /home/drei/my_project/builder/claude-quickstarts/autonomous-coding/generations/PromptForge_v2/data/task_type_signals.json
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=backend groups=6 (e.g. observability, validation, concurrency)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=data groups=3 (e.g. array-arithmetic, advanced-indexing, memory-layout)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=database groups=5 (e.g. async-session-pooling, embedding-serialization, transaction-control)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=devops groups=5 (e.g. observability, operations, infrastructure)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=embeddings groups=5 (e.g. correctness, storage, latency)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=frontend groups=4 (e.g. compliance, state-management, caching)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=general groups=5 (e.g. testing, release, implementation)
+INFO:     127.0.0.1:51828 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:45222 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.services.taxonomy.engine: Re-parenting sweep: checking 13 general-parented clusters against 7 domains
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=backend groups=6 (e.g. observability, validation, concurrency)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=data groups=3 (e.g. array-arithmetic, advanced-indexing, memory-layout)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=database groups=5 (e.g. async-session-pooling, embedding-serialization, transaction-control)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=devops groups=5 (e.g. observability, operations, infrastructure)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=embeddings groups=5 (e.g. correctness, storage, latency)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=frontend groups=4 (e.g. compliance, state-management, caching)
+INFO app.services.domain_signal_loader: refresh_qualifiers: domain=general groups=5 (e.g. testing, release, implementation)
+INFO app.services.taxonomy.engine: Domain candidate detected: 'Match_prompt Threshold Cascade Tracing' (members=2/3, coherence=1.00)
+INFO app.services.taxonomy.engine: Domain candidate detected: 'Github Token Lifecycle' (members=2/3, coherence=0.54)
+INFO app.services.taxonomy.engine: Domain candidate detected: 'Release Changelog' (members=2/3, coherence=0.91)
+INFO app.services.taxonomy.engine: Domain candidate detected: 'JSON Parsing Function' (members=2/3, coherence=1.00)
+INFO app.services.taxonomy.engine: General domain health: 13 child clusters, 13 near discovery threshold, 44 total optimizations
+INFO app.services.taxonomy.engine: Domain archival suggested: 'data' (members=3, usage=0)
+INFO app.services.taxonomy.engine: Domain tree integrity check passed
+INFO app.services.taxonomy.warm_phases: Phase 5 summary: domains_created=0 sub_domains_dissolved=0 domains_dissolved=0
+INFO app.services.taxonomy.warm_path: Phase 5 (discover): domains=0 candidates=0
+INFO app.services.taxonomy.warm_path: Phase 6 (audit): snapshot=af85f202-a9bc-4933-be7c-643f4b5f4ca2 q_final=0.7736 deadlock=False
+INFO app.services.domain_resolver: DomainResolver loaded 8 domain labels (1 sub-domains)
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded qualifier vocab for 7 domains
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded 9 domains with 130 total keywords (live=8, bootstrap=1, live_only=False)
+INFO app.main: Domain caches reloaded on taxonomy_changed event
+INFO app.main: Startup warm path completed
+INFO:     127.0.0.1:45168 - "GET /api/clusters/similarity-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45198 - "GET /api/domains HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45192 - "GET /api/clusters/injection-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45198 - "GET /api/clusters/activity?limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45194 - "GET /api/clusters/tree?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45192 - "GET /api/clusters/activity/history?since=2026-04-28&until=2026-05-04&limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45204 - "GET /api/clusters/stats?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45168 - "GET /api/taxonomy/pattern-density?period=7d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45182 - "GET /api/domains/readiness?fresh=true HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-haiku-4-5 duration_ms=7796 cost=$0.0662 cache_read=208170
+INFO app.main: Startup rate limit probe completed: {'is_rate_limited': False, 'source': 'probe'}
+INFO:     127.0.0.1:51844 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51858 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:51850 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.services.routing: routing.decision caller=rest tier=internal provider=claude_cli reason='auto, using internal provider' degraded_from=None duration_us=18
+INFO app.routers.optimize: POST /api/optimize: prompt_len=135 strategy=None tier=internal
+INFO app.services.routing: routing.decision caller=rest tier=internal provider=claude_cli reason='auto, using internal provider' degraded_from=None duration_us=13
+INFO app.routers.optimize: POST /api/optimize: prompt_len=181 strategy=None tier=internal
+INFO:     127.0.0.1:60700 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60710 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60720 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60740 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60732 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60744 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60754 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60768 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60772 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60786 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60784 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60814 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60822 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60836 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60848 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60854 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60868 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60874 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60886 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60898 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60906 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60910 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60918 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60922 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60932 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60948 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:60960 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:60976 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:60980 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:60990 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:60998 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:60996 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32786 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32796 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32806 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32818 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32824 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32830 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32846 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32854 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32872 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32870 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32886 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32902 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:32914 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32918 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32932 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32942 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32952 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32968 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32976 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:32988 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:32998 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33004 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33010 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33022 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33036 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33052 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33050 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33064 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33066 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33070 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33084 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33086 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO app.services.embedding_service: Loading embedding model: all-MiniLM-L6-v2
+INFO:     127.0.0.1:33104 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33112 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO app.services.embedding_service: Loading embedding model: all-MiniLM-L6-v2
+INFO:     127.0.0.1:33116 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33132 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO sentence_transformers.SentenceTransformer: Use pytorch device_name: cpu
+INFO sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+INFO sentence_transformers.SentenceTransformer: Use pytorch device_name: cpu
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33134 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33146 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33148 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33164 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33170 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33180 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33194 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:33198 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33212 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33230 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33220 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:33234 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/modules.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/modules.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/modules.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/modules.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config_sentence_transformers.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/config_sentence_transformers.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config_sentence_transformers.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/config_sentence_transformers.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config_sentence_transformers.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/config_sentence_transformers.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config_sentence_transformers.json "HTTP/1.1 307 Temporary Redirect"
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/config_sentence_transformers.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/README.md "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/README.md "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/README.md "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/README.md "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/modules.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/modules.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/modules.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/modules.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/sentence_bert_config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/sentence_bert_config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/sentence_bert_config.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/sentence_bert_config.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/adapter_config.json "HTTP/1.1 404 Not Found"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/adapter_config.json "HTTP/1.1 404 Not Found"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/config.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/config.json "HTTP/1.1 200 OK"
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s][ALoading weights: 100%|██████████| 103/103 [00:00<00:00, 6643.19it/s]
+Loading weights: 100%|██████████| 103/103 [00:00<00:00, 4271.61it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/all-MiniLM-L6-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+[3mNotes:
+- UNEXPECTED[3m	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.[0m
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/all-MiniLM-L6-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+[3mNotes:
+- UNEXPECTED[3m	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.[0m
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/config.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/config.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/tokenizer_config.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/tokenizer_config.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+INFO httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+INFO httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/1_Pooling/config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/1_Pooling/config.json "HTTP/1.1 307 Temporary Redirect"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/1_Pooling%2Fconfig.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/1_Pooling%2Fconfig.json "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2 "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2 "HTTP/1.1 200 OK"
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s][ABatches: 100%|██████████| 1/1 [00:00<00:00, 26.92it/s]
+INFO app.services.embedding_service: Embedding model loaded: all-MiniLM-L6-v2 (384 dimensions)
+
+Batches:   0%|          | 0/1 [00:00<?, ?it/s][ABatches: 100%|██████████| 1/1 [00:00<00:00, 19.10it/s]
+INFO app.services.embedding_service: Embedding model loaded: all-MiniLM-L6-v2 (384 dimensions)
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 14.31it/s]
+
+Batches:   0%|          | 0/1 [00:00<?, ?it/s][ABatches: 100%|██████████| 1/1 [00:00<00:00, 12.15it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  3.85it/s][ABatches: 100%|██████████| 1/1 [00:00<00:00,  3.85it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  4.05it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  4.05it/s]
+INFO app.services.context_enrichment: Curated retrieval skipped: task_type=writing, no code keywords detected (repo=project-synthesis/ProjectSynthesis)
+INFO app.services.strategy_intelligence: strategy_intelligence: exact=writing+database: devops empty, fallback to writing-only (2 strategies)
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=skipped_task_type curated_files=0 curated_top=0.000 context_chars=4291 strategy_intel=yes total_assembled=4K elapsed=10172ms
+INFO:     127.0.0.1:35176 - "POST /api/optimize HTTP/1.1" 200 OK
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 32.48it/s]
+INFO app.services.repo_index_query: curated_context: repo=project-synthesis/ProjectSynthesis query_len=135 indexed=464 above_threshold=3 cross_domain_cut=13 below_base_cut=448 diversity_excluded=0 doc_deferred=0 selected=3 top=0.523 fetch=163ms search=40ms
+INFO app.services.repo_index_query: curated_import_graph: expanded 1 files (from_imports=1 from_doc_refs=0) of 2 ranked files
+INFO app.services.repo_index_query: curated_retrieval_detail: files=3 (code=3 docs=0) graph=1 (imports=1 doc_refs=0) skips=1 budget=35426/80000 (44%) stop=relevance_exhausted near_misses=1 total=210ms
+INFO app.services.context_enrichment: divergence_detected: count=1 source=codebase details=[postgresql≠sqlite(database,conflict)]
+INFO app.services.strategy_intelligence: strategy_intelligence: exact=coding+database: transaction-control empty, fallback to coding-only (3 strategies)
+INFO app.services.context_enrichment: enrichment: tier=internal profile=code_aware repo=project-synthesis/ProjectSynthesis explore=yes curated=ready curated_files=3 curated_top=0.523 context_chars=39728 strategy_intel=yes total_assembled=40K elapsed=10415ms
+INFO:     127.0.0.1:35178 - "POST /api/optimize HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33250 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=31406 effort=high cost=$0.2354 cache_read=50799
+WARNING app.services.pipeline_constants: Semantic check: task_type='coding' but no coding keywords in prompt
+INFO app.services.pipeline_phases: Domain resolution: raw='backend: concurrency' confidence=0.72 (analyzer=0.92) trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+INFO app.services.domain_resolver: Domain signal divergence: llm='backend'(0.0) vs signals='database'(1.5)
+INFO app.services.pipeline_phases: Domain resolved: 'backend: concurrency' → 'backend' trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+INFO app.services.classification_agreement: classification_disagreement: heuristic=writing+database: devops llm=coding+backend prompt=Build async coroutine pool with semaphore-based concurrency control. Handle Canc
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 46.45it/s]
+INFO app.services.pipeline_phases: Domain mapped: 'backend: concurrency' -> node 'Sqlite Pragma Pool Reapplication Audit' (database > Sqlite Pragma Pool Reapplication Audit) trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 28.20it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 29.30it/s]
+INFO app.services.pattern_injection: Cross-cluster injection: added 5 universal patterns. trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+INFO app.services.pattern_injection: Auto-injected 35 patterns from 2 clusters [Sqlite Pragma Pool Reapplication Audit (database, sim=0.52), Test Label v95 4 (backend, sim=0.61)]. trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+INFO app.services.pattern_injection: Few-shot retrieval: 2 examples (max_sim=0.97). trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+INFO app.services.pipeline_phases: optimize_inject: trace_id=dbeea3c7-a960-455d-b87e-218719636f42 input_chars=33967 (~8491 tokens) prompt=181 codebase=4291 strategy_intel=245 patterns=10075 fewshot=1853
+INFO:     127.0.0.1:36178 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:36176 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=37013 effort=high cost=$0.2365 cache_read=50785
+WARNING app.services.pipeline_constants: Semantic check: task_type='coding' but no coding keywords in prompt
+INFO app.services.pipeline_phases: Domain resolution: raw='database: concurrency' confidence=0.68 (analyzer=0.88) trace_id=388894d4-070e-4657-b208-5108262599e7
+INFO app.services.pipeline_phases: Domain resolved: 'database: concurrency' → 'database' trace_id=388894d4-070e-4657-b208-5108262599e7
+INFO app.services.classification_agreement: classification_disagreement: heuristic=coding+database: transaction-control llm=coding+database prompt=Implement Postgres advisory locks to serialize concurrent writers when table-lev
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 32.76it/s]
+INFO app.services.pipeline_phases: Domain mapped: 'database: concurrency' -> node 'Sqlite Pragma Pool Reapplication Audit' (database > Sqlite Pragma Pool Reapplication Audit) trace_id=388894d4-070e-4657-b208-5108262599e7
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 34.96it/s]
+INFO app.services.pipeline_constants: Data-recommended strategy 'meta-prompting' (evidence=7, boost=0.07) overrides low-confidence analyzer pick 'meta-prompting'. trace_id=388894d4-070e-4657-b208-5108262599e7
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 31.29it/s]
+INFO app.services.pattern_injection: Cross-cluster injection: added 5 universal patterns. trace_id=388894d4-070e-4657-b208-5108262599e7
+INFO app.services.pattern_injection: Auto-injected 104 patterns from 5 clusters [Concurrent Initialization Testing (devops, sim=0.58), Pipeline Observability Metrics (backend, sim=0.53), Sqlite Pragma Pool Reapplication Audit (database, sim=0.82), Transaction Isolation Levels Tradeoffs (database, sim=0.63), Test Label v95 4 (backend, sim=0.65)]. trace_id=388894d4-070e-4657-b208-5108262599e7
+INFO app.services.pattern_injection: Few-shot retrieval: 2 examples (max_sim=0.61). trace_id=388894d4-070e-4657-b208-5108262599e7
+INFO app.services.pipeline_phases: optimize_inject: trace_id=388894d4-070e-4657-b208-5108262599e7 input_chars=103389 (~25847 tokens) prompt=135 codebase=39728 strategy_intel=419 patterns=40205 fewshot=3927
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=46255 effort=max cost=$0.6599 cache_read=83668
+INFO app.services.pipeline_phases: Scorer presentation_order=optimized_first trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+INFO:     127.0.0.1:59832 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:59828 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-opus-4-7 duration_ms=97704 effort=max cost=$0.8844 cache_read=129780
+INFO app.services.pipeline_phases: Scorer presentation_order=original_first trace_id=388894d4-070e-4657-b208-5108262599e7
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-sonnet-4-6 duration_ms=61667 effort=max cost=$0.2712 cache_read=52323
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 20.46it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.91it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.88it/s]
+INFO app.services.score_blender: Score divergence on specificity: llm=3.0 heuristic=7.5 (delta=4.5)
+INFO app.services.score_blender: Score divergence on conciseness: llm=3.0 heuristic=8.0 (delta=5.0)
+WARNING app.services.score_blender: Hybrid scoring divergence on 2 dimension(s): ['specificity', 'conciseness']
+INFO app.services.pipeline_phases: Hybrid scoring complete: llm_opt=8.6 heur_opt={'clarity': 7.0, 'specificity': 10.0, 'structure': 6.0, 'faithfulness': 10.0, 'conciseness': 9.4} blended_opt=7.5 divergence=[] normalized=True trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 20.80it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  7.19it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  7.18it/s]
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:37130 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:37120 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-haiku-4-5 duration_ms=51534 cost=$0.1613 cache_read=177756
+INFO app.services.pipeline_phases: Suggestions generated: 3 items. trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+INFO app.services.pattern_injection: Injection provenance: 7 records for opt=e0495afb. trace_id=dbeea3c7-a960-455d-b87e-218719636f42
+INFO app.services.taxonomy.engine: Usage incremented: 'Test Label v95 4' (usage=15, domain=backend)
+INFO app.services.taxonomy.engine: Usage incremented: 'Email Address Regex Validation' (usage=4, domain=backend)
+INFO app.services.taxonomy.engine: Usage incremented: 'Sqlite Pragma Pool Reapplication Audit' (usage=5, domain=database)
+INFO app.services.taxonomy.engine: Usage incremented: 'Latency Monitoring' (usage=5, domain=devops)
+INFO app.services.taxonomy.engine: Usage incremented: 'Observability Infrastructure' (usage=17, domain=backend)
+INFO app.services.taxonomy.engine: Usage incremented: 'Embedding Batch Optimization' (usage=3, domain=backend)
+INFO app.services.taxonomy.engine: Usage incremented: 'JWT Token Validation Endpoint' (usage=4, domain=backend)
+INFO app.services.pipeline: Pipeline completed: trace_id=dbeea3c7-a960-455d-b87e-218719636f42 duration=211118ms strategy=meta-prompting overall=7.55
+INFO app.main: Dispatching taxonomy extraction for optimization e0495afb-f32f-4e5f-96fd-0313af1f6f4e
+INFO:     127.0.0.1:47732 - "OPTIONS /api/optimize/dbeea3c7-a960-455d-b87e-218719636f42 HTTP/1.1" 200 OK
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]INFO:     127.0.0.1:47736 - "GET /api/optimize/dbeea3c7-a960-455d-b87e-218719636f42 HTTP/1.1" 200 OK
+Batches: 100%|██████████| 1/1 [00:00<00:00, 15.70it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.98it/s]Batches: 100%|██████████| 1/1 [00:00<00:00,  8.95it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 25.95it/s]
+INFO app.services.taxonomy.engine: Decremented old cluster 'Sqlite Pragma Pool Reapplication Audit' member_count to 25 (reassigned to 'Async Coroutine Pool Implementation')
+INFO:     127.0.0.1:34610 - "OPTIONS /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34628 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO:     127.0.0.1:34612 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-haiku-4-5 duration_ms=28324 cost=$0.0839 cache_read=211928
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 12.40it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 17.60it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 15.35it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 23.37it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 25.88it/s]
+INFO app.services.domain_resolver: DomainResolver loaded 8 domain labels (1 sub-domains)
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded qualifier vocab for 7 domains
+INFO app.services.domain_signal_loader: DomainSignalLoader loaded 9 domains with 130 total keywords (live=8, bootstrap=1, live_only=False)
+INFO app.main: Domain caches reloaded on taxonomy_changed event
+INFO:     127.0.0.1:42024 - "GET /api/clusters/similarity-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42052 - "GET /api/domains HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42052 - "GET /api/clusters/activity?limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42036 - "GET /api/clusters/injection-edges HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42000 - "GET /api/clusters/tree?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42052 - "GET /api/clusters/activity/history?since=2026-04-28&until=2026-05-04&limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42010 - "GET /api/clusters/stats?project_id=3f0437ed-5503-41e1-9def-00c54f21f46f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42024 - "GET /api/taxonomy/pattern-density?period=7d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42062 - "GET /api/domains/readiness?fresh=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36714 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36722 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36740 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36728 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36748 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36764 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36778 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36780 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36788 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36800 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36786 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36808 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36814 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36820 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36822 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36840 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36830 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36852 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36868 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36864 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36872 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36876 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36882 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36892 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36900 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36908 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:36918 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36920 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:36930 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:36940 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:36952 - "POST /api/feedback HTTP/1.1" 422 Unprocessable Entity
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:36954 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:36972 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:36988 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:36990 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:36998 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37012 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37022 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37030 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37032 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:37046 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37058 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37066 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37072 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37088 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37090 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+WARNING app.dependencies.rate_limit: Rate limit exceeded: 30/minute for 127.0.0.1
+INFO:     127.0.0.1:37092 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:37116 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:37122 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:37126 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:37130 - "POST /api/feedback HTTP/1.1" 429 Too Many Requests
+INFO app.services.taxonomy.warm_path: Warm path cycle: dirty_ids=2 (first_cycle=False, boundary=20)
+INFO app.services.taxonomy.warm_phases: Reconciled 6 member_counts, 29 coherence, 1 scores
+INFO app.services.taxonomy.warm_path: Phase 0 (reconcile): fixed=6 coherence=29 scores=1 zombies=0 outliers_ejected=0
+INFO app.services.taxonomy.warm_path: Phase split_emerge accepted: Q 0.7777 -> 0.7777 (ops=0)
+INFO app.services.taxonomy.lifecycle: merge: reassigned 1 optimizations + 1 OP records from 'Async Coroutine Pool Implementation' to 'Test Label v95 4'
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 16.77it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 17.10it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 21.25it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 20.60it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 18.57it/s]
+INFO app.services.taxonomy.lifecycle: merge: moved 5 meta-patterns to survivor
+INFO app.services.taxonomy.lifecycle: merge: 'Test Label v95 4' (id=ab3159e9-2153-41e0-a980-dd8d4d5562e1) absorbed 'Async Coroutine Pool Implementation' (id=584ff1fb-0983-4d6c-84b6-2402a6e31105) → 11 members
+INFO app.services.taxonomy.warm_path: Phase merge accepted: Q 0.7777 -> 0.7745 (ops=1)
+INFO app.services.taxonomy.warm_path: Phase retire accepted: Q 0.7739 -> 0.7739 (ops=0)
+INFO:     127.0.0.1:34872 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34884 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:34876 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43332 - "POST /api/events/_publish HTTP/1.1" 200 OK
+INFO httpx: HTTP Request: POST http://127.0.0.1:8000/api/events/_publish "HTTP/1.1 200 OK"
+INFO httpx: HTTP Request: POST http://127.0.0.1:8001/mcp "HTTP/1.1 400 Bad Request"
+INFO httpx: HTTP Request: GET http://127.0.0.1:5199/ "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:43322 - "GET /api/health HTTP/1.1" 200 OK
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-haiku-4-5 duration_ms=9124 cost=$0.0606 cache_read=127376
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 38.29it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 44.87it/s]
+INFO app.services.taxonomy.labeling: Label drift rejected: 'Sqlite Pragma Pool Reapplication Audit' → 'Sqlite Write Contention' (cosine=0.437 < 0.50). Keeping old label.
+INFO app.providers.claude_cli: claude_cli complete_parsed model=claude-haiku-4-5 duration_ms=14597 cost=$0.0645 cache_read=127375
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 49.42it/s]
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 41.30it/s]
+INFO app.services.taxonomy.labeling: Label drift rejected: 'Test Label v95 4' → 'Async Concurrency Auditing' (cosine=-0.025 < 0.50). Keeping old label.
