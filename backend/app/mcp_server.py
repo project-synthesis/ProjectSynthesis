@@ -445,6 +445,26 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                 _lpid_exc,
             )
 
+        # v0.4.13 cycle 9 — Start a process-local WriteQueue bound to
+        # the writer engine. MCP tool handlers (feedback/prepare/optimize/
+        # refine/save_result) submit DB writes through this queue so they
+        # serialize with the backend's WriteQueue against the same
+        # SQLite WAL file.
+        try:
+            from app.database import writer_engine as _mcp_writer_engine
+            from app.services.write_queue import WriteQueue
+            from app.tools._shared import set_write_queue as _set_wq
+
+            _mcp_write_queue = WriteQueue(_mcp_writer_engine)
+            await _mcp_write_queue.start()
+            _set_wq(_mcp_write_queue)
+            logger.info("MCP lifespan: WriteQueue started")
+        except Exception as _wq_exc:
+            logger.warning(
+                "MCP lifespan: WriteQueue start failed (non-fatal): %s",
+                _wq_exc,
+            )
+
         # Subscribe to domain events for cache invalidation
         async def _reload_domain_caches() -> None:
             try:

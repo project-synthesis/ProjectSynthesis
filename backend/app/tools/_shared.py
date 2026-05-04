@@ -26,16 +26,19 @@ __all__ = [
     "get_routing",
     "get_signal_loader",
     "get_taxonomy_engine",
+    "get_write_queue",
     "set_context_service",
     "set_domain_resolver",
     "set_routing",
     "set_signal_loader",
     "set_taxonomy_engine",
+    "set_write_queue",
 ]
 
 if TYPE_CHECKING:
     from app.services.context_enrichment import ContextEnrichmentService
     from app.services.routing import RoutingManager
+    from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +49,35 @@ logger = logging.getLogger(__name__)
 _routing: RoutingManager | None = None
 _taxonomy_engine = None  # TaxonomyEngine | None (avoid import for startup speed)
 _context_service: ContextEnrichmentService | None = None
+_write_queue: "WriteQueue | None" = None
 
 
 def set_routing(routing: RoutingManager | None) -> None:
     """Set the module-level routing manager (called by lifespan)."""
     global _routing
     _routing = routing
+
+
+def set_write_queue(queue: "WriteQueue | None") -> None:
+    """Set the module-level WriteQueue (called by lifespan).
+
+    Mirrors ``set_routing`` / ``set_taxonomy_engine`` — the MCP process
+    owns its own ``WriteQueue`` instance bound to the writer engine. MCP
+    tool handlers retrieve it via :func:`get_write_queue`.
+    """
+    global _write_queue
+    _write_queue = queue
+
+
+def get_write_queue() -> "WriteQueue":
+    """Return the WriteQueue or raise if not initialized.
+
+    Used by MCP tool handlers (cycle 9+) to submit DB writes through the
+    process-wide single-writer queue.
+    """
+    if _write_queue is None:
+        raise ValueError("WriteQueue not initialized")
+    return _write_queue
 
 
 def set_taxonomy_engine(engine) -> None:
