@@ -48,3 +48,19 @@ class TestStrategiesAuditLogMigration:
             "strategies.py audit-log must thread write_queue= into log_event call"
         )
         assert '"strategy_updated"' in src, "action name preserved"
+
+
+class TestProvidersApiKeySetAuditLog:
+    def test_providers_api_key_set_audit_uses_log_event_with_write_queue(self):
+        import app.routers.providers as _prov_mod
+        src = Path(_prov_mod.__file__).read_text()
+        # Find the api_key_set block
+        idx = src.find('"api_key_set"')
+        assert idx > 0, "api_key_set block not found"
+        window = src[max(0, idx - 600):idx + 200]
+        assert 'async with async_session_factory() as audit_db:' not in window, (
+            "providers.py:124 api_key_set audit-log still uses bare session factory"
+        )
+        assert "write_queue=" in window, (
+            "providers.py api_key_set audit-log must thread write_queue= into log_event"
+        )
