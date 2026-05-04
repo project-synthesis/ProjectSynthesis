@@ -41,6 +41,23 @@ def _mock_context_service():
     svc.enrich.return_value = enrichment
     return svc
 
+
+def _make_fake_write_queue(mock_db):
+    """Build a fake WriteQueue whose submit() invokes work_fn(mock_db) directly.
+
+    v0.4.14 cycle 2a: tools/optimize.py persists the pending passthrough row via
+    ``get_write_queue().submit(_persist_pending_passthrough, ...)``. Tests that
+    mock ``async_session_factory`` must also mock the WriteQueue to route the
+    persist closure through the mocked db.
+    """
+    fake_wq = MagicMock()
+
+    async def _fake_submit(work, *, timeout=None, operation_label=None):
+        return await work(mock_db)
+
+    fake_wq.submit = AsyncMock(side_effect=_fake_submit)
+    return fake_wq
+
 # ---------------------------------------------------------------------------
 # synthesis_prepare_optimization
 # ---------------------------------------------------------------------------
@@ -232,6 +249,8 @@ async def test_optimize_returns_model(db_session) -> None:
         patch("app.tools._shared._routing", _mock_routing("passthrough")),
         patch("app.tools._shared._context_service", _mock_context_service()),
         patch("app.tools.optimize.async_session_factory") as mock_factory,
+        # v0.4.14 cycle 2a: passthrough persist routes through get_write_queue().submit()
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
     ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -297,6 +316,8 @@ async def test_optimize_passthrough_includes_strategy(db_session) -> None:
         patch("app.tools._shared._routing", _mock_routing("passthrough")),
         patch("app.tools._shared._context_service", _mock_context_service()),
         patch("app.tools.optimize.async_session_factory") as mock_factory,
+        # v0.4.14 cycle 2a: passthrough persist routes through get_write_queue().submit()
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
     ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -316,6 +337,8 @@ async def test_optimize_passthrough_then_save_full_flow(db_session) -> None:
         patch("app.tools._shared._routing", _mock_routing("passthrough")),
         patch("app.tools._shared._context_service", _mock_context_service()),
         patch("app.tools.optimize.async_session_factory") as mock_factory,
+        # v0.4.14 cycle 2a: passthrough persist routes through get_write_queue().submit()
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
     ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -364,6 +387,8 @@ async def test_optimize_passthrough_save_without_scores(db_session) -> None:
         patch("app.tools._shared._routing", _mock_routing("passthrough")),
         patch("app.tools._shared._context_service", _mock_context_service()),
         patch("app.tools.optimize.async_session_factory") as mock_factory,
+        # v0.4.14 cycle 2a: passthrough persist routes through get_write_queue().submit()
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
     ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)

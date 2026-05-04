@@ -38,6 +38,23 @@ def _mock_context_service(guidance="", **overrides):
     return svc
 
 
+def _make_fake_write_queue(mock_db):
+    """Build a fake WriteQueue whose submit() invokes work_fn(mock_db) directly.
+
+    v0.4.14 cycle 2a: tools/optimize.py persists the pending passthrough row via
+    ``get_write_queue().submit(_persist_pending_passthrough, ...)``. Tests that
+    mock ``async_session_factory`` must also mock the WriteQueue to route the
+    persist closure through the mocked db.
+    """
+    fake_wq = MagicMock()
+
+    async def _fake_submit(work, *, timeout=None, operation_label=None):
+        return await work(mock_db)
+
+    fake_wq.submit = AsyncMock(side_effect=_fake_submit)
+    return fake_wq
+
+
 async def test_synthesis_optimize_with_provider():
     """Internal pipeline path: provider present → runs PipelineOrchestrator."""
     mock_provider = AsyncMock()
@@ -97,18 +114,20 @@ async def test_synthesis_optimize_with_provider():
 
 async def test_synthesis_optimize_force_passthrough():
     """Passthrough tier: assembled prompt returned for external processing."""
+    mock_session = AsyncMock()
     with (
         patch("app.tools._shared._routing", _mock_routing("passthrough")),
         patch("app.tools._shared._context_service", _mock_context_service()),
         patch("app.tools.optimize.async_session_factory") as mock_session_factory,
         patch("app.tools.optimize.PreferencesService") as mock_prefs_service,
+        # v0.4.14 cycle 2a: passthrough persist routes through get_write_queue().submit()
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(mock_session)),
     ):
         mock_prefs = MagicMock()
         mock_prefs.get.return_value = False
         mock_prefs.load.return_value = {}
         mock_prefs_service.return_value = mock_prefs
 
-        mock_session = AsyncMock()
         mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
