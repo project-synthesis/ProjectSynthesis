@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.14 — 2026-05-04
+
 ### Added
 - `WriteQueue.submit_batch(work_fns)` helper for atomic multi-write groupings (single transaction, single session, single queue task). Used by OAuth callback + token revoke for atomic write+audit pairs.
 - `SubmitBatchError` + `SubmitBatchCommitError` diagnostic exceptions with index/fn_name context. Lambda + functools.partial fn_name fallback covered by explicit pin test.
