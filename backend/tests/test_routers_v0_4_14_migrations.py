@@ -144,3 +144,20 @@ class TestGithubAuthLogoutMigration:
             "/auth/logout must use "
             "operation_label='github_logout_token_delete'"
         )
+
+
+class TestGithubAuthDevicePollRevokeMigration:
+    def test_device_poll_revoke_uses_submit_batch(self):
+        import app.routers.github_auth as _gh_mod
+        src = Path(_gh_mod.__file__).read_text()
+        idx = src.find('@router.post("/auth/device/poll")')
+        assert idx > 0
+        window = src[idx:idx + 8000]
+        assert "submit_batch(" in window, (
+            "/auth/device/poll revoke must use submit_batch for atomic "
+            "token-delete + audit"
+        )
+        assert "github_token_revoke" in window, (
+            "/auth/device/poll revoke must use "
+            "operation_label='github_token_revoke'"
+        )
