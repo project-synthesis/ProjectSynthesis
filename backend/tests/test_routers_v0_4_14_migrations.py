@@ -90,3 +90,18 @@ class TestGithubAuthRefreshTokenMigration:
             "_refresh_token_if_expired must use operation_label='github_token_refresh'"
         )
         assert "get_write_queue()" in window
+
+
+class TestGithubAuthCallbackBatchMigration:
+    def test_callback_uses_submit_batch_for_token_and_audit(self):
+        import app.routers.github_auth as _gh_mod
+        src = Path(_gh_mod.__file__).read_text()
+        idx = src.find('@router.get("/auth/callback")')
+        assert idx > 0
+        window = src[idx:idx + 6000]
+        assert "submit_batch(" in window, (
+            "callback must use submit_batch for atomic token+audit write"
+        )
+        assert "github_oauth_callback" in window, (
+            "callback must use operation_label='github_oauth_callback'"
+        )
