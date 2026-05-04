@@ -1502,10 +1502,23 @@ async def lifespan(app: FastAPI):
             # Run one immediate warm cycle on startup to refresh stale
             # clusters (pattern_stale=True from splits while server was down).
             # Without this, clusters show "No meta-patterns" for 5+ minutes.
+            #
+            # v0.4.13 cycle 9.5: thread ``app.state.write_queue`` so every
+            # warm-path commit serializes through the single-writer queue
+            # worker (writer engine, ``pool_size=1``) instead of opening a
+            # session on the read engine. The audit hook would otherwise
+            # WARN (or RAISE in CI) on the warm-path UPDATE prompt_cluster
+            # / INSERT meta_patterns / etc. that the v0.4.12 architecture
+            # let through. Falls back to the legacy ``session_factory``
+            # path only when the queue failed to start.
             if engine:
                 try:
                     from app.database import async_session_factory
-                    await engine.run_warm_path(async_session_factory)
+                    _wq = getattr(app.state, "write_queue", None)
+                    if _wq is not None:
+                        await engine.run_warm_path(write_queue=_wq)
+                    else:
+                        await engine.run_warm_path(async_session_factory)
                     logger.info("Startup warm path completed")
                 except Exception as startup_exc:
                     logger.warning("Startup warm path failed (non-fatal): %s", startup_exc)
@@ -1537,7 +1550,26 @@ async def lifespan(app: FastAPI):
                         from app.services.prompt_lifecycle import (
                             PromptLifecycleService,
                         )
-                        result = await engine.run_warm_path(async_session_factory)
+                        # v0.4.13 cycle 9.5: thread the write queue so every
+                        # warm-path phase commit (Phase 0/4/5 cluster
+                        # updates, meta_pattern inserts, etc.) routes
+                        # through the writer engine via the queue worker.
+                        # Without this, warm-path writes fall through to
+                        # the read engine's session factory and trigger
+                        # the audit-hook WARN line. Pre-fix evidence
+                        # (cycle 10): 64 UPDATE prompt_cluster + 9 INSERT
+                        # meta_patterns + 6 UPDATE optimizations + 2
+                        # INSERT prompt_cluster + 2 INSERT
+                        # optimization_patterns over a 30-min stress run.
+                        _wq_warm = getattr(app.state, "write_queue", None)
+                        if _wq_warm is not None:
+                            result = await engine.run_warm_path(
+                                write_queue=_wq_warm,
+                            )
+                        else:
+                            result = await engine.run_warm_path(
+                                async_session_factory,
+                            )
                         if result is None:
                             logger.debug("Warm path skipped — lock held")
                         elif result.snapshot_id == "skipped":
@@ -1562,18 +1594,61 @@ async def lifespan(app: FastAPI):
                         eff = getattr(engine, "_injection_effectiveness", None)
                         if eff:
                             app.state.injection_effectiveness = eff
-                        # Lifecycle service gets its own session
-                        async with async_session_factory() as lifecycle_db:
-                            lifecycle = PromptLifecycleService()
-                            await lifecycle.curate(lifecycle_db, embedding_index=engine.embedding_index)
-                            await lifecycle.decay_usage(lifecycle_db)
-                            await lifecycle_db.commit()
+                        # Lifecycle service gets its own session.
+                        # v0.4.13 cycle 9.5: when the write queue is up,
+                        # route ``curate`` + ``decay_usage`` through it so
+                        # the cluster mutations + flush writes serialize
+                        # against every other backend writer on the
+                        # writer engine. The legacy direct-session path
+                        # is preserved for the queue-down fallback only.
+                        _wq_lc = getattr(app.state, "write_queue", None)
+                        if _wq_lc is not None:
+                            from sqlalchemy.ext.asyncio import (
+                                AsyncSession as _LCAsyncSession,
+                            )
 
-                        # Orphan recovery — piggyback on warm-path timer
+                            async def _do_lifecycle(lc_db: _LCAsyncSession) -> None:
+                                lc = PromptLifecycleService()
+                                await lc.curate(
+                                    lc_db,
+                                    embedding_index=engine.embedding_index,
+                                )
+                                await lc.decay_usage(lc_db)
+                                await lc_db.commit()
+
+                            try:
+                                await _wq_lc.submit(
+                                    _do_lifecycle,
+                                    operation_label="warm_phase_lifecycle",
+                                    timeout=300.0,
+                                )
+                            except Exception as lc_exc:
+                                logger.warning(
+                                    "Warm-path lifecycle submit failed: %s",
+                                    lc_exc,
+                                )
+                        else:
+                            async with async_session_factory() as lifecycle_db:
+                                lifecycle = PromptLifecycleService()
+                                await lifecycle.curate(
+                                    lifecycle_db,
+                                    embedding_index=engine.embedding_index,
+                                )
+                                await lifecycle.decay_usage(lifecycle_db)
+                                await lifecycle_db.commit()
+
+                        # Orphan recovery — piggyback on warm-path timer.
+                        # v0.4.13 cycle 9.5: thread ``app.state.write_queue``
+                        # so per-orphan recovery commits route through the
+                        # writer engine via the queue.
                         try:
                             from app.services.orphan_recovery import recovery_service
                             recovery_stats = await recovery_service.scan_and_recover(
-                                async_session_factory, engine,
+                                async_session_factory,
+                                engine,
+                                write_queue=getattr(
+                                    app.state, "write_queue", None,
+                                ),
                             )
                             if recovery_stats.get("recovered"):
                                 app.state.recovery_metrics = recovery_service.get_metrics()

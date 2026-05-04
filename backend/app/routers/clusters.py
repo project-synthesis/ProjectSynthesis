@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
+from app.dependencies.write_queue import get_write_queue
 from app.models import MetaPattern, Optimization, OptimizationPattern, PromptCluster
 from app.schemas.clusters import (
     ActivityHistoryResponse,
@@ -38,6 +39,7 @@ from app.services.taxonomy import TaxonomyEngine
 from app.services.taxonomy import get_engine as get_taxonomy_engine
 from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
 from app.services.taxonomy.event_logger import get_event_logger
+from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -632,8 +634,15 @@ async def update_cluster(
     body: ClusterUpdateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> UpdateClusterResponse:
-    """Update a cluster's label and/or state."""
+    """Update a cluster's label and/or state.
+
+    v0.4.13 cycle 9.5: route the UPDATE prompt_cluster commit through
+    the WriteQueue so admin-driven cluster mutations don't fall on the
+    read engine. The validation/argument-checking SELECT stays on
+    ``db`` (read engine) — only the write hop crosses the queue.
+    """
     if body.intent_label is None and body.state is None:
         raise HTTPException(422, "At least one of 'intent_label' or 'state' must be provided")
 
@@ -716,22 +725,46 @@ async def update_cluster(
         except RuntimeError:
             pass  # Event logger not initialized — non-fatal
 
+    # v0.4.13 cycle 9.5: writer hop on the queue. We pre-computed the
+    # mutated fields above against the read-side ``cluster`` object;
+    # apply those same updates inside the queue callback against a
+    # fresh writer-engine session.
+    new_label = cluster.label
+    new_state = cluster.state
+    new_promoted = cluster.promoted_at
+
+    async def _do_update(write_db: AsyncSession) -> None:
+        from sqlalchemy import update as sa_update
+
+        await write_db.execute(
+            sa_update(PromptCluster)
+            .where(PromptCluster.id == cluster_id)
+            .values(
+                label=new_label,
+                state=new_state,
+                promoted_at=new_promoted,
+            )
+        )
+        await write_db.commit()
+
     try:
-        await db.commit()
+        await write_queue.submit(
+            _do_update,
+            timeout=60.0,
+            operation_label="cluster_update_patch",
+        )
     except OperationalError as exc:
-        await db.rollback()
         logger.warning("Cluster update DB contention: %s", exc)
         raise HTTPException(503, "Database busy — retry in a moment") from exc
     except Exception as exc:
-        await db.rollback()
         logger.warning("Cluster update failed: %s", exc)
         raise HTTPException(409, "Update conflicts with existing data") from exc
 
     return UpdateClusterResponse(
         id=cluster.id,
-        intent_label=cluster.label,
+        intent_label=new_label,
         domain=cluster.domain,
-        state=cluster.state,
+        state=new_state,
     )
 
 
@@ -820,12 +853,29 @@ async def trigger_recluster(
 async def repair_integrity(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> dict:
-    """Repair orphaned join records, meta-patterns, and missing coherence."""
+    """Repair orphaned join records, meta-patterns, and missing coherence.
+
+    v0.4.13 cycle 9.5: route the entire repair body (DELETE
+    optimization_patterns + INSERT optimization_patterns + INSERT
+    meta_patterns + UPDATE prompt_cluster) through the WriteQueue so
+    every commit serializes against every other backend writer on the
+    writer engine. Pre-fix the read-engine audit hook caught 848+ WARN
+    lines on a single repair invocation.
+    """
     engine = _get_engine(request)
     try:
-        result = await engine.repair_data_integrity(db)
-        await db.commit()
+        async def _do_repair(write_db: AsyncSession) -> dict:
+            stats = await engine.repair_data_integrity(write_db)
+            await write_db.commit()
+            return stats
+
+        result = await write_queue.submit(
+            _do_repair,
+            timeout=600.0,
+            operation_label="cluster_repair_integrity",
+        )
         return {"status": "completed", **result}
     except OperationalError as exc:
         logger.warning("Data integrity repair DB contention: %s", exc)
@@ -839,6 +889,7 @@ async def repair_integrity(
 async def reset_taxonomy(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> dict:
     """Admin recovery: force-prune archived zero-member clusters + run warm path.
 
@@ -852,6 +903,10 @@ async def reset_taxonomy(
 
     Not rate-limited at the router level — call sites are admin UI /
     direct curl. The endpoint is idempotent: re-running is safe.
+
+    v0.4.13 cycle 9.5: route the prune DELETE through the WriteQueue
+    AND thread the queue into ``run_warm_path`` so every commit
+    serializes through the writer engine via the queue worker.
     """
     engine = _get_engine(request)
 
@@ -859,19 +914,26 @@ async def reset_taxonomy(
     #    Normal warm Phase 0 refuses to drop rows younger than 24h to
     #    survive transient member_count=0 windows during reconciliation.
     #    Admin-triggered reset is by definition deliberate, so the floor
-    #    doesn't apply.
-    prune_result = await db.execute(
-        delete(PromptCluster).where(
-            PromptCluster.state == "archived",
-            PromptCluster.member_count == 0,
+    #    doesn't apply. Routed through the queue so the DELETE hits
+    #    the writer engine, not the read engine.
+    async def _do_prune(write_db: AsyncSession) -> int:
+        pr = await write_db.execute(
+            delete(PromptCluster).where(
+                PromptCluster.state == "archived",
+                PromptCluster.member_count == 0,
+            )
         )
+        await write_db.commit()
+        return int(pr.rowcount or 0)
+
+    archived_pruned = await write_queue.submit(
+        _do_prune,
+        timeout=120.0,
+        operation_label="taxonomy_reset_prune",
     )
-    archived_pruned = int(prune_result.rowcount or 0)
-    await db.commit()
 
     # 2. Run warm path synchronously so the caller gets a completed
     #    reconciliation before the response returns (no 30s debounce).
-    from app.database import async_session_factory
     try:
         from app.services.taxonomy.event_logger import get_event_logger
         get_event_logger().log_decision(
@@ -887,7 +949,7 @@ async def reset_taxonomy(
         pass
 
     try:
-        await engine.run_warm_path(async_session_factory)
+        await engine.run_warm_path(write_queue=write_queue)
     except OperationalError as exc:
         logger.warning("Taxonomy reset DB contention: %s", exc)
         raise HTTPException(503, "Database busy — retry in a moment") from exc
@@ -909,17 +971,29 @@ async def reset_taxonomy(
 async def reassign_clusters(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> dict:
     """Replay hot-path cluster assignment for all optimizations.
 
     Archives existing active clusters and rebuilds them from scratch using
     the current adaptive merge threshold.  Use this after changing threshold
     constants to apply the new logic to existing data.
+
+    v0.4.13 cycle 9.5: route through the WriteQueue so the cluster
+    archival + recreation commits land on the writer engine.
     """
     engine = _get_engine(request)
     try:
-        result = await engine.reassign_all_clusters(db)
-        await db.commit()
+        async def _do_reassign(write_db: AsyncSession) -> dict:
+            res = await engine.reassign_all_clusters(write_db)
+            await write_db.commit()
+            return res
+
+        result = await write_queue.submit(
+            _do_reassign,
+            timeout=600.0,
+            operation_label="cluster_reassign",
+        )
         return {"status": "completed", **result}
     except OperationalError as exc:
         logger.warning("Cluster reassignment DB contention: %s", exc)
@@ -933,50 +1007,63 @@ async def reassign_clusters(
 async def backfill_scores(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ) -> dict:
     """Recompute avg_score and scored_count for all clusters from member data.
 
     One-time fix for clusters whose running mean drifted due to the
     member_count/scored_count mismatch or warm-path score clearing.
+
+    v0.4.13 cycle 9.5: route the cluster UPDATE writes through the
+    WriteQueue.
     """
     _get_engine(request)  # validate engine is available
     try:
         # Reuse the same grouped-query pattern as warm path reconciliation
         from sqlalchemy import func as sa_func
 
-        from app.models import Optimization
+        from app.models import Optimization, PromptCluster
 
-        score_q = await db.execute(
-            select(
-                Optimization.cluster_id,
-                sa_func.avg(Optimization.overall_score),
-                sa_func.count(Optimization.overall_score),
-            ).where(
-                Optimization.cluster_id.isnot(None),
-                Optimization.overall_score.isnot(None),
-            ).group_by(Optimization.cluster_id)
-        )
-        score_map = {
-            row[0]: (round(row[1], 2), row[2])
-            for row in score_q.all()
-        }
-
-        from app.models import PromptCluster
-
-        cluster_q = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state.in_(["active", "candidate", "mature"])
+        async def _do_backfill(write_db: AsyncSession) -> int:
+            score_q = await write_db.execute(
+                select(
+                    Optimization.cluster_id,
+                    sa_func.avg(Optimization.overall_score),
+                    sa_func.count(Optimization.overall_score),
+                ).where(
+                    Optimization.cluster_id.isnot(None),
+                    Optimization.overall_score.isnot(None),
+                ).group_by(Optimization.cluster_id)
             )
-        )
-        updated = 0
-        for cluster in cluster_q.scalars().all():
-            avg, scored = score_map.get(cluster.id, (None, 0))
-            if cluster.avg_score != avg or (cluster.scored_count or 0) != scored:
-                cluster.avg_score = avg
-                cluster.scored_count = scored
-                updated += 1
+            score_map = {
+                row[0]: (round(row[1], 2), row[2])
+                for row in score_q.all()
+            }
 
-        await db.commit()
+            cluster_q = await write_db.execute(
+                select(PromptCluster).where(
+                    PromptCluster.state.in_(["active", "candidate", "mature"])
+                )
+            )
+            up = 0
+            for cluster in cluster_q.scalars().all():
+                avg, scored = score_map.get(cluster.id, (None, 0))
+                if (
+                    cluster.avg_score != avg
+                    or (cluster.scored_count or 0) != scored
+                ):
+                    cluster.avg_score = avg
+                    cluster.scored_count = scored
+                    up += 1
+
+            await write_db.commit()
+            return up
+
+        updated = await write_queue.submit(
+            _do_backfill,
+            timeout=300.0,
+            operation_label="cluster_backfill_scores",
+        )
         logger.info("Score backfill completed: %d clusters updated", updated)
         return {"status": "completed", "clusters_updated": updated}
     except OperationalError as exc:
