@@ -105,3 +105,16 @@ class TestGithubAuthCallbackBatchMigration:
         assert "github_oauth_callback" in window, (
             "callback must use operation_label='github_oauth_callback'"
         )
+
+
+class TestGithubAuthMeRevokeCleanupMigration:
+    def test_me_revoke_cleanup_uses_submit(self):
+        import app.routers.github_auth as _gh_mod
+        src = Path(_gh_mod.__file__).read_text()
+        idx = src.find('@router.get("/auth/me")')
+        assert idx > 0
+        window = src[idx:idx + 4000]
+        assert "github_auth_me_revoke_cleanup" in window, (
+            "/auth/me cleanup-on-revoke must use "
+            "operation_label='github_auth_me_revoke_cleanup'"
+        )
