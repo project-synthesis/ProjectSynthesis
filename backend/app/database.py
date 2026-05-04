@@ -356,15 +356,16 @@ def install_read_engine_audit_hook(target_engine) -> None:  # noqa: ANN001
             return
 
         # Cycle 9.6 diagnostic: capture call site so each WARN line tells you
-        # the exact source path. We FILTER OUT framework internals
-        # (sqlalchemy, sqlite3, _aexit_, dialects, async wrappers) so the
-        # printed frames are the application call chain that actually
-        # triggered the write. Single-block warning (one log call) keeps
-        # grep -A 12 'read-engine audit:' parsing trivial.
+        # the exact source path. We retain BOTH a wider framework-filtered
+        # tail (for the "expected" stack — the application code that called
+        # SQLAlchemy) AND the raw deepest 5 frames (for cases where the
+        # write originates inside SQLAlchemy code generation, e.g. the
+        # ``<string>:2 commit`` autoflush path that has no application
+        # frame above the ORM internals). Single-block warning (one log
+        # call) keeps grep -A 12 'read-engine audit:' parsing trivial.
         stack = traceback.extract_stack(limit=64)
         framework_markers = (
             "sqlalchemy/",
-            "asyncio/",
             "_aexit_",
             "/aiosqlite/",
             "alembic/",
@@ -373,15 +374,22 @@ def install_read_engine_audit_hook(target_engine) -> None:  # noqa: ANN001
             f for f in stack[:-1]  # skip our own _audit frame
             if not any(m in f.filename for m in framework_markers)
         ]
-        # Take the deepest 10 application frames so the chain shows
+        # Take the deepest 8 application frames so the chain shows
         # router → service → ORM call site.
-        site_frames = app_frames[-10:] if len(app_frames) > 10 else app_frames
-        site = "\n".join(
+        site_frames = app_frames[-8:] if len(app_frames) > 8 else app_frames
+        site_app = "\n".join(
             f"  {f.filename}:{f.lineno} {f.name}" for f in site_frames
+        )
+        # Also include raw deepest 5 frames so we never lose the ORM
+        # call-site info. Useful for diagnosing autoflush leaks where
+        # the application frame is several layers above SQLAlchemy.
+        raw_frames = stack[-6:-1] if len(stack) > 6 else stack[:-1]
+        site_raw = "\n".join(
+            f"  RAW {f.filename}:{f.lineno} {f.name}" for f in raw_frames
         )
         err_msg = (
             f"write statement on read engine outside allow-list: "
-            f"{statement[:120]}...\n{site}"
+            f"{statement[:120]}...\n{site_app}\n{site_raw}"
         )
         err = WriteOnReadEngineError(err_msg)
         if settings.WRITE_QUEUE_AUDIT_HOOK_RAISE:
