@@ -131,3 +131,16 @@ class TestGithubAuthMeUserInfoUpdateMigration:
             "/auth/me user-info update must use "
             "operation_label='github_auth_me_user_info_update'"
         )
+
+
+class TestGithubAuthLogoutMigration:
+    def test_logout_uses_submit(self):
+        import app.routers.github_auth as _gh_mod
+        src = Path(_gh_mod.__file__).read_text()
+        idx = src.find('@router.post("/auth/logout")')
+        assert idx > 0
+        window = src[idx:idx + 4000]
+        assert "github_logout_token_delete" in window, (
+            "/auth/logout must use "
+            "operation_label='github_logout_token_delete'"
+        )
