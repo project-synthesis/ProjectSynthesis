@@ -456,13 +456,28 @@ async def github_logout(
     """Delete token from DB and clear session cookie."""
     session_id = request.cookies.get("session_id")
     if session_id:
-        result = await db.execute(
-            select(GitHubToken).where(GitHubToken.session_id == session_id)
+        # v0.4.14 cycle 3e.5: route the GitHubToken delete through the
+        # WriteQueue. We snapshot session_id before declaring the
+        # closure so the work_fn references no outer state, then
+        # re-fetch + delete inside the writer session.
+        captured_session_id = session_id
+
+        async def _do_logout(write_db: AsyncSession) -> None:
+            res = await write_db.execute(
+                select(GitHubToken).where(
+                    GitHubToken.session_id == captured_session_id
+                )
+            )
+            row = res.scalar_one_or_none()
+            if row:
+                await write_db.delete(row)
+                await write_db.commit()
+
+        from app.tools._shared import get_write_queue
+        await get_write_queue().submit(
+            _do_logout,
+            operation_label="github_logout_token_delete",
         )
-        token_row = result.scalar_one_or_none()
-        if token_row:
-            await db.delete(token_row)
-            await db.commit()
     response.delete_cookie("session_id", path="/api")
 
     # Audit log
