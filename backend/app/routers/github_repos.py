@@ -67,6 +67,7 @@ async def _update_synthesis_status(
     status: str,
     synthesis_text: str | None = None,
     error: str | None = None,
+    write_queue: "WriteQueue | None" = None,
 ) -> None:
     """Update synthesis_status (and optionally explore_synthesis/error) on RepoIndexMeta.
 
@@ -80,10 +81,19 @@ async def _update_synthesis_status(
         ready     → index_phase="ready"
         error     → index_phase="error"
         skipped   → index_phase="ready" (file index usable, no synthesis)
+
+    v0.4.14 (cycle 4): when ``write_queue`` is supplied, the SELECT + field
+    mutations route through the single-writer queue under
+    ``operation_label="repo_synthesis_status_update"``. ``WriteQueueStoppedError``
+    is caught + logged so a long-running parent ``_run_explore_synthesis``
+    background task survives a lifespan-teardown race. Legacy fallback
+    (``write_queue=None``) preserves the prior ``async_session_factory`` path
+    for callers that haven't been updated.
     """
     from app.database import async_session_factory
     from app.models import RepoIndexMeta
     from app.services.repo_index_service import _publish_phase_change
+    from app.services.write_queue import WriteQueueStoppedError
 
     # Map synthesis status → index_phase (UI state machine).
     _phase_by_status = {
@@ -94,32 +104,61 @@ async def _update_synthesis_status(
     }
     new_phase = _phase_by_status.get(status)
 
-    try:
-        async with async_session_factory() as db:
-            meta_q = await db.execute(
-                select(RepoIndexMeta).where(
-                    RepoIndexMeta.repo_full_name == repo_full_name,
-                    RepoIndexMeta.branch == branch,
-                )
+    async def _do_update(db: AsyncSession) -> tuple[bool, str | None, int, int]:
+        """Mutate RepoIndexMeta and commit. Returns (meta_present, status, files_seen, files_total)."""
+        meta_q = await db.execute(
+            select(RepoIndexMeta).where(
+                RepoIndexMeta.repo_full_name == repo_full_name,
+                RepoIndexMeta.branch == branch,
             )
-            meta = meta_q.scalars().first()
-            if meta:
-                meta.synthesis_status = status
-                meta.synthesis_error = error
-                if synthesis_text is not None:
-                    meta.explore_synthesis = synthesis_text
-                if new_phase is not None:
-                    meta.index_phase = new_phase
-                await db.commit()
+        )
+        meta = meta_q.scalars().first()
+        if meta is None:
+            return (False, None, 0, 0)
+        meta.synthesis_status = status
+        meta.synthesis_error = error
+        if synthesis_text is not None:
+            meta.explore_synthesis = synthesis_text
+        if new_phase is not None:
+            meta.index_phase = new_phase
+        await db.commit()
+        return (
+            True,
+            getattr(meta, "status", None),
+            meta.files_seen or 0,
+            meta.files_total or 0,
+        )
 
-                if new_phase is not None:
-                    await _publish_phase_change(
-                        repo_full_name, branch,
-                        phase=new_phase, status=meta.status,
-                        files_seen=meta.files_seen or 0,
-                        files_total=meta.files_total or 0,
-                        error=error,
-                    )
+    try:
+        if write_queue is None:
+            # No queue threaded — keep legacy fallback for safety on call paths
+            # that haven't been updated. This preserves audit-hook WARN behavior
+            # rather than crashing.
+            async with async_session_factory() as db:
+                meta_present, meta_status, files_seen, files_total = await _do_update(db)
+        else:
+            try:
+                meta_present, meta_status, files_seen, files_total = await write_queue.submit(
+                    _do_update,
+                    operation_label="repo_synthesis_status_update",
+                )
+            except WriteQueueStoppedError:
+                # Lifespan teardown race during long-running _run_explore_synthesis.
+                # Drop silently — telemetry is best-effort, status not critical.
+                logger.warning(
+                    "_update_synthesis_status: queue stopped before update for %s@%s -> %s",
+                    repo_full_name, branch, status,
+                )
+                return
+
+        if meta_present and new_phase is not None:
+            await _publish_phase_change(
+                repo_full_name, branch,
+                phase=new_phase, status=meta_status,
+                files_seen=files_seen,
+                files_total=files_total,
+                error=error,
+            )
     except Exception:
         logger.debug("_update_synthesis_status failed for %s@%s", repo_full_name, branch, exc_info=True)
 
@@ -129,12 +168,18 @@ async def _run_explore_synthesis(
     branch: str,
     token: str,
     provider: object | None,
+    *,
+    write_queue: "WriteQueue | None" = None,
 ) -> None:
     """Run explore synthesis and persist result to RepoIndexMeta.
 
     Synthesis runs on Sonnet (long-context reading comprehension). Handles
     all status transitions (running/ready/error/skipped) and never raises —
     all failures are logged and persisted as ``synthesis_status="error"``.
+
+    v0.4.14 (cycle 4): ``write_queue`` is forwarded to every inline
+    ``_update_synthesis_status`` call so status transitions persist through
+    the single-writer queue. ``None`` preserves the legacy fallback path.
     """
     try:
         if provider:
@@ -144,7 +189,9 @@ async def _run_explore_synthesis(
             from app.services.prompt_loader import PromptLoader
             from app.services.repo_index_service import RepoIndexService
 
-            await _update_synthesis_status(repo_full_name, branch, status="running")
+            await _update_synthesis_status(
+                repo_full_name, branch, status="running", write_queue=write_queue,
+            )
 
             es = EmbeddingService()
             gc = GitHubClient()
@@ -165,7 +212,7 @@ async def _run_explore_synthesis(
             if synthesis:
                 await _update_synthesis_status(
                     repo_full_name, branch, status="ready",
-                    synthesis_text=synthesis,
+                    synthesis_text=synthesis, write_queue=write_queue,
                 )
                 logger.info(
                     "Explore synthesis stored for %s@%s (%d chars)",
@@ -174,7 +221,7 @@ async def _run_explore_synthesis(
             else:
                 await _update_synthesis_status(
                     repo_full_name, branch, status="error",
-                    error="Explore returned empty result",
+                    error="Explore returned empty result", write_queue=write_queue,
                 )
                 logger.warning(
                     "Explore synthesis returned None for %s@%s",
@@ -184,6 +231,7 @@ async def _run_explore_synthesis(
             await _update_synthesis_status(
                 repo_full_name, branch, status="skipped",
                 error="No LLM provider available at indexing time",
+                write_queue=write_queue,
             )
             logger.info(
                 "No LLM provider — skipping explore synthesis for %s@%s",
@@ -194,7 +242,7 @@ async def _run_explore_synthesis(
         try:
             await _update_synthesis_status(
                 repo_full_name, branch, status="error",
-                error=str(exc)[:500],
+                error=str(exc)[:500], write_queue=write_queue,
             )
         except Exception:
             logger.debug("Failed to persist synthesis error status", exc_info=True)
@@ -372,8 +420,10 @@ async def link_repo(
                 )
                 await svc.build_index(_idx_repo, _idx_branch, _idx_token)
 
+            bg_write_queue = getattr(request.app.state, "write_queue", None)
             await _run_explore_synthesis(
                 _idx_repo, _idx_branch, _idx_token, _idx_provider,
+                write_queue=bg_write_queue,
             )
 
         _spawn_bg_task(_bg_index())
@@ -701,8 +751,10 @@ async def reindex_repo(
             )
             await svc.build_index(_reindex_repo, branch, token)
 
+        bg_write_queue = getattr(request.app.state, "write_queue", None)
         await _run_explore_synthesis(
             _reindex_repo, branch, token, _reindex_provider,
+            write_queue=bg_write_queue,
         )
 
     _spawn_bg_task(_bg_index())
