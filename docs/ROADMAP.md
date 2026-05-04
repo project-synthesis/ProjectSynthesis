@@ -118,7 +118,7 @@ This violates the design intent. Domain emergence should be **signal concentrati
 ---
 
 ### Topic Probe — agentic targeted exploration of a user-specified concern against the linked codebase
-**Status:** **Tier 1 SHIPPED** (v0.4.12, 2026-04-29). Tier 2 / Tier 3 / Tier 4 remain **Planned** within the 0.4.x line: T2=v0.4.14, T3=v0.4.15, T4=v0.4.16. (Tier 2 was originally scheduled for v0.4.13 but bumped after that release was reallocated to the SQLite writer-slot contention architectural fix; see SHIPPED.md v0.4.13 entry.)
+**Status:** **Tier 1 SHIPPED** (v0.4.12, 2026-04-29). Tier 2 / Tier 3 / Tier 4 remain **Planned** within the 0.4.x line: T2=v0.4.15, T3=v0.4.16, T4=v0.4.17. (Tier 2 was originally scheduled for v0.4.13 but bumped repeatedly — v0.4.13 was reallocated to the SQLite writer-slot contention architectural fix, and v0.4.14 was reallocated to the SQLite migration finalization; see SHIPPED.md v0.4.13 + v0.4.14 entries.)
 
 **Tier 1 deliverables (SHIPPED):**
 - `POST /api/probes` (SSE), `GET /api/probes`, `GET /api/probes/{id}`
@@ -134,7 +134,7 @@ This violates the design intent. Domain emergence should be **signal concentrati
 - Spec: `docs/specs/topic-probe-2026-04-29.md` (gitignored)
 - Plan: `docs/plans/topic-probe-tier-1-2026-04-29.md` (gitignored)
 
-**Tier 2 (v0.4.13) — Planned. PREREQUISITE: SQLite writer-slot contention fix (see "SQLite writer-slot contention — architectural fix" entry below). Tier 2 features depend on reliable persistence for save-as-suite + replay regression detection to produce trustworthy results. Same v0.4.13 release; contention fix lands first.**
+**Tier 2 (v0.4.15) — Planned. PREREQUISITE (now satisfied): SQLite writer-slot contention fix shipped in v0.4.13 + finalization in v0.4.14. Tier 2 features depend on reliable persistence for save-as-suite + replay regression detection to produce trustworthy results.**
 - `POST /api/probes/{id}/save-as-suite` — fork a probe run into a `ValidationSuite` (frozen prompt fixture + assertions captured from the run's actual scores)
 - `POST /api/probes/{id}/replay` — re-run a saved suite against current code state (regression detection)
 - UI Navigator panel: "Topic Probe" tab in SeedModal + live taxonomy mini-view + final report card with copy-as-markdown
@@ -142,13 +142,13 @@ This violates the design intent. Domain emergence should be **signal concentrati
 - Topic-only mode (no codebase grounding) for non-developer verticals — drops Phase 1, generates from topic alone (ADR-006 follow-up)
 - Replace blocking SSE with 202 Accepted + `GET /api/probes/{id}` polling for client-timeout decoupling on long probes (>10 prompts)
 
-**Tier 3 (v0.4.14) — Planned:**
+**Tier 3 (v0.4.16) — Planned:**
 - `release.sh` CI hook: register critical probe topics as pre-release gates (fail = block release)
 - Probe → seed-agent promotion flow: a saved probe with consistently high scores can be promoted to `prompts/seed-agents/<topic-slug>.md`
 - "Drill into cluster" action on seed runs auto-launches a probe scoped to the cluster's intent_label
 - Cross-tier composition: probe-discovered prompts feed seed-agent few-shot context
 
-**Tier 4 (v0.4.15) — Planned:**
+**Tier 4 (v0.4.17) — Planned:**
 - Substrate unification: migrate `Optimization.source="batch_seed"` semantics into a `SeedRun` model that's effectively a `ProbeRun` with `template=True`. Single history surface. SeedModal becomes one tab with two modes (template-driven / topic-driven) sharing the same form scaffold.
 
 **Vision:** A user-driven, codebase-aware seed mode where the user specifies a topic, concern, or feature and the agentic seed system organically populates the taxonomy with focused prompts anchored in the user's actual code. The system reads the linked GitHub repo, generates 10–20 prompts targeted at the topic with real code references (`engine.py:_compute_centroid`, `services/taxonomy/matching.py`, etc.), runs them through the optimization pipeline, watches the taxonomy emerge new domains/sub-domains organically as signal concentrates, and delivers a final report of what shipped — taxonomy changes, top-scoring outputs, extracted patterns, recommended follow-ups.
