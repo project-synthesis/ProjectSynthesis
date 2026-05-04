@@ -134,18 +134,46 @@ async def _refresh_token_if_expired(
         logger.warning("GitHub token refresh returned no access_token: %s", data.get("error", "unknown"))
         return False
 
-    # Update stored tokens
-    token_row.token_encrypted = github_svc.encrypt_token(new_access_token)
-    if data.get("refresh_token"):
-        token_row.refresh_token_encrypted = github_svc.encrypt_token(data["refresh_token"])
-    if data.get("expires_in"):
-        token_row.expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(data["expires_in"]))
-    if data.get("refresh_token_expires_in"):
-        refresh_exp = int(data["refresh_token_expires_in"])
-        token_row.refresh_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=refresh_exp)
-    await db.commit()
-    logger.info("GitHub token refreshed (session=%s)", token_row.session_id[:8])
-    return True
+    # v0.4.14 cycle 3e.1: route the token-row update through the WriteQueue.
+    # The caller's ``db`` is bound to the read engine and cannot be shared
+    # with the writer session, so we re-fetch the row inside the queue
+    # callback and apply the same field updates there. After the queued
+    # work commits, we ``db.refresh()`` the caller-side row so any
+    # downstream reads see the new state.
+    new_refresh_token = data.get("refresh_token")
+    new_expires_in = data.get("expires_in")
+    new_refresh_expires_in = data.get("refresh_token_expires_in")
+    captured_session_id = token_row.session_id
+
+    async def _do_refresh(write_db: AsyncSession) -> bool:
+        result = await write_db.execute(
+            select(GitHubToken).where(GitHubToken.session_id == captured_session_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return False
+        row.token_encrypted = github_svc.encrypt_token(new_access_token)
+        if new_refresh_token:
+            row.refresh_token_encrypted = github_svc.encrypt_token(new_refresh_token)
+        if new_expires_in:
+            row.expires_at = datetime.now(timezone.utc) + timedelta(
+                seconds=int(new_expires_in)
+            )
+        if new_refresh_expires_in:
+            row.refresh_token_expires_at = datetime.now(timezone.utc) + timedelta(
+                seconds=int(new_refresh_expires_in)
+            )
+        await write_db.commit()
+        return True
+
+    from app.tools._shared import get_write_queue
+    refreshed = await get_write_queue().submit(
+        _do_refresh, operation_label="github_token_refresh",
+    )
+    if refreshed:
+        await db.refresh(token_row)
+        logger.info("GitHub token refreshed (session=%s)", token_row.session_id[:8])
+    return refreshed
 
 
 async def _get_session_token(request: Request, db: AsyncSession) -> tuple[str, str]:
