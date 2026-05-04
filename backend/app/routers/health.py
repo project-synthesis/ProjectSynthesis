@@ -128,6 +128,17 @@ class HealthResponse(BaseModel):
         default=None, description="Domain dissolution lifecycle stats.",
     )
     global_patterns: dict[str, int] = Field(default_factory=dict)
+    write_queue: dict | None = Field(
+        default=None,
+        description=(
+            "WriteQueue metrics snapshot — depth, in_flight counts, "
+            "p95/p99 latency over the rolling reservoir window, "
+            "worker_alive flag, and totals (submitted/completed/failed/"
+            "timeout/overload). Null when the queue has not been "
+            "initialised on app.state (e.g. tests without a live "
+            "lifespan)."
+        ),
+    )
     legacy_state_observed: int = Field(
         default=0,
         description=(
@@ -520,6 +531,33 @@ async def health_check(
     from app.services.rate_limit_state import get_rate_limit_store
     rate_limit_state = get_rate_limit_store().get_active()
 
+    # v0.4.13 cycle 9 — write_queue metrics (spec §6.1, 13 fields).
+    # ``request.app.state.write_queue`` is populated during lifespan
+    # startup; tests that bypass lifespan see ``None`` here.
+    write_queue_metrics: dict | None = None
+    try:
+        wq = getattr(request.app.state, "write_queue", None)
+        if wq is not None:
+            snap = wq.metrics_snapshot()
+            # Surface as plain JSON-friendly dict (dataclass.__dict__).
+            write_queue_metrics = {
+                "depth": snap.depth,
+                "in_flight": snap.in_flight,
+                "total_submitted": snap.total_submitted,
+                "total_completed": snap.total_completed,
+                "total_failed": snap.total_failed,
+                "total_timeout": snap.total_timeout,
+                "total_overload": snap.total_overload,
+                "p95_latency_ms": snap.p95_latency_ms,
+                "p99_latency_ms": snap.p99_latency_ms,
+                "max_observed_depth": snap.max_observed_depth,
+                "worker_alive": snap.worker_alive,
+                "metrics_window_seconds": snap.metrics_window_seconds,
+                "metrics_sample_count": snap.metrics_sample_count,
+            }
+    except Exception:
+        logger.debug("Health check write_queue metrics failed", exc_info=True)
+
     return HealthResponse(
         status=overall_status,
         version=__version__,
@@ -549,6 +587,7 @@ async def health_check(
             "retired": gp_retired,
             "total": gp_active + gp_demoted + gp_retired,
         },
+        write_queue=write_queue_metrics,
         legacy_state_observed=legacy_state_observed,
         services=services_result,
         cross_service=cross_service_result,
