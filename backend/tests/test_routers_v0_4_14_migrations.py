@@ -118,3 +118,16 @@ class TestGithubAuthMeRevokeCleanupMigration:
             "/auth/me cleanup-on-revoke must use "
             "operation_label='github_auth_me_revoke_cleanup'"
         )
+
+
+class TestGithubAuthMeUserInfoUpdateMigration:
+    def test_me_user_info_update_uses_submit(self):
+        import app.routers.github_auth as _gh_mod
+        src = Path(_gh_mod.__file__).read_text()
+        idx = src.find('@router.get("/auth/me")')
+        assert idx > 0
+        window = src[idx:idx + 6000]
+        assert "github_auth_me_user_info_update" in window, (
+            "/auth/me user-info update must use "
+            "operation_label='github_auth_me_user_info_update'"
+        )
