@@ -51,6 +51,23 @@ def _make_tool_use_result(tool_input: dict, model: str = "claude-sonnet-4-6"):
     return SimpleNamespace(content=[block], model=model)
 
 
+def _make_fake_write_queue(mock_db):
+    """Build a fake WriteQueue whose submit() invokes work_fn(mock_db) directly.
+
+    v0.4.14 cycle 2b: sampling_pipeline persists via
+    ``get_write_queue().submit(_persist_sampling_optimization, ...)``. Tests
+    that mock ``async_session_factory`` must also mock the WriteQueue to
+    route the persist closure through the mocked db.
+    """
+    fake_wq = MagicMock()
+
+    async def _fake_submit(work, *, timeout=None, operation_label=None):
+        return await work(mock_db)
+
+    fake_wq.submit = AsyncMock(side_effect=_fake_submit)
+    return fake_wq
+
+
 def _make_ctx(create_message_return=None, side_effect=None):
     """Build a mock MCP Context with a create_message mock."""
     ctx = MagicMock()
@@ -277,10 +294,12 @@ async def test_run_sampling_pipeline_full():
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await run_sampling_pipeline(
-            ctx, "Write a Python function that validates email addresses using regex patterns.",
-            None,  # strategy_override
-        )
+        # v0.4.14 cycle 2b: persist routes through get_write_queue().submit()
+        with patch("app.tools._shared.get_write_queue", return_value=_make_fake_write_queue(mock_db)):
+            result = await run_sampling_pipeline(
+                ctx, "Write a Python function that validates email addresses using regex patterns.",
+                None,  # strategy_override
+            )
 
     assert result["pipeline_mode"] == "sampling"
     assert result["optimization_id"]
@@ -429,11 +448,13 @@ async def test_confidence_gate_overrides_strategy():
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await run_sampling_pipeline(
-            ctx,
-            "Write a comprehensive essay about the history of philosophy and ethics.",
-            None,  # strategy_override
-        )
+        # v0.4.14 cycle 2b: persist routes through get_write_queue().submit()
+        with patch("app.tools._shared.get_write_queue", return_value=_make_fake_write_queue(mock_db)):
+            result = await run_sampling_pipeline(
+                ctx,
+                "Write a comprehensive essay about the history of philosophy and ethics.",
+                None,  # strategy_override
+            )
 
     # Confidence 0.5 < CONFIDENCE_GATE 0.7 → strategy overridden from analyzer pick.
     # "auto" resolves to a task-type-appropriate strategy (writing → role-playing).
@@ -497,12 +518,14 @@ async def test_semantic_check_reduces_confidence():
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await run_sampling_pipeline(
-            ctx,
-            # Prompt has NO coding keywords — only general language
-            "Help me think about how to better organize my daily tasks and routines.",
-            None,  # strategy_override
-        )
+        # v0.4.14 cycle 2b: persist routes through get_write_queue().submit()
+        with patch("app.tools._shared.get_write_queue", return_value=_make_fake_write_queue(mock_db)):
+            result = await run_sampling_pipeline(
+                ctx,
+                # Prompt has NO coding keywords — only general language
+                "Help me think about how to better organize my daily tasks and routines.",
+                None,  # strategy_override
+            )
 
     # Semantic check drops 0.8 → 0.6, below CONFIDENCE_GATE 0.7 → overrides
     # analyzer's "chain-of-thought" pick. Auto resolves to task-type default.
@@ -565,11 +588,13 @@ async def test_strategy_override_bypasses_confidence_gate():
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await run_sampling_pipeline(
-            ctx,
-            "Write a comprehensive essay about the history of philosophy and ethics.",
-            "few-shot",  # Explicit strategy override
-        )
+        # v0.4.14 cycle 2b: persist routes through get_write_queue().submit()
+        with patch("app.tools._shared.get_write_queue", return_value=_make_fake_write_queue(mock_db)):
+            result = await run_sampling_pipeline(
+                ctx,
+                "Write a comprehensive essay about the history of philosophy and ethics.",
+                "few-shot",  # Explicit strategy override
+            )
 
     # Even with confidence 0.3, explicit override wins
     assert result["strategy_used"] == "few-shot"

@@ -34,6 +34,7 @@ from typing import Any
 
 from mcp.server.fastmcp import Context
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import DATA_DIR, PROMPTS_DIR
 from app.database import async_session_factory
@@ -843,7 +844,12 @@ async def run_sampling_pipeline(
     else:
         _, _project_id = await resolve_repo_project(repo_full_name)
 
-    async with async_session_factory() as db:
+    async def _persist_sampling_optimization(db: AsyncSession) -> None:
+        """Persist sampling-pipeline Optimization row + applied-pattern tracking + injection-provenance flush.
+
+        v0.4.14: replaces the legacy async_session_factory + commit at line 846.
+        Body is the verbatim port of the OLD block, MINUS the trailing db.commit().
+        """
         db_opt = Optimization(
             id=opt_id,
             raw_prompt=prompt,
@@ -930,8 +936,13 @@ async def run_sampling_pipeline(
                     "Injection provenance failed (sampling, non-fatal, expunged): %s trace_id=%s",
                     _inj_exc, trace_id,
                 )
+        # NO db.commit() — submit() handles it
 
-        await db.commit()
+    from app.tools._shared import get_write_queue
+    await get_write_queue().submit(
+        _persist_sampling_optimization,
+        operation_label="sampling_pipeline_persist",
+    )
 
     # Increment usage counts AFTER successful commit (Spec 7.8)
     # v0.4.13 cycle 7.5: increment_pattern_usage now requires a
