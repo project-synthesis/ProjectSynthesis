@@ -35,7 +35,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - **v0.4.13 — Probe service `self.db` is now read-only** (cycle 7.5) — every probe write is funnelled through `submit()`. Closes the v0.4.12 probe persistence loss audit (`docs/audits/probe-v22-v29-2026-04-29.md`).
 - **v0.4.13 — Polymorphic signatures collapsed to canonical `WriteQueue`** (cycle 7.5) — 4 functions previously accepted `WriteQueue | SessionFactory` (Option C dispatch during the migration). Migration completion lets the dual signature retire.
 - **v0.4.13 — Writer engine separation** — `writer_engine` is its own SQLAlchemy engine with `pool_size=1, max_overflow=0`. Owned exclusively by the queue worker. The original read-side engine retains the production read pool so WAL read concurrency is preserved.
-- **v0.4.13 — Cold path acknowledged exception** — taxonomy cold-path full-refit kept on `WriterLockedAsyncSession` + `cold_path_mode` audit-hook bypass. Refit's transaction span (multi-second commits across thousands of cluster rows) does not fit the queue's per-task timeout model. v0.4.14 chunks each refit phase into smaller `submit()` calls with `await asyncio.sleep(0)` between.
+- **v0.4.13 — Cold path acknowledged exception** — taxonomy cold-path full-refit kept on `WriterLockedAsyncSession` + `cold_path_mode` audit-hook bypass. Refit's transaction span (multi-second commits across thousands of cluster rows) does not fit the queue's per-task timeout model. v0.4.15 chunks each refit phase into smaller `submit()` calls with `await asyncio.sleep(0)` between.
 
 ### Fixed
 
@@ -144,7 +144,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
   **38 ACs total / 39 tests across 8 test files.** Full backend suite: 3232 passed + 1 skipped (was 3191 + 1, +41 net new tests). ruff + mypy clean. Spec: `docs/specs/topic-probe-2026-04-29.md` (gitignored). Plan: `docs/plans/topic-probe-tier-1-2026-04-29.md` (gitignored).
 
-  **All 4 Topic Probe tiers will ship within the 0.4.x line:** Tier 1 = v0.4.12 (this release), Tier 2 = v0.4.13 (save-as-suite + replay + UI navigator), Tier 3 = v0.4.14 (cross-tier composition: probe → seed-agent promotion, drill-into-cluster from seed run), Tier 4 = v0.4.15 (substrate unification: SeedRun and ProbeRun collapse to one model).
+  **All 4 Topic Probe tiers will ship within the 0.4.x line:** Tier 1 = v0.4.12 (this release), Tier 2 = v0.4.15 (save-as-suite + replay + UI navigator — bumped repeatedly: v0.4.13 → v0.4.14 → v0.4.15 as each prior release was reallocated to ship architectural fixes), Tier 3 = v0.4.16 (cross-tier composition: probe → seed-agent promotion, drill-into-cluster from seed run), Tier 4 = v0.4.17 (substrate unification: SeedRun and ProbeRun collapse to one model).
 
 ## v0.4.11 — 2026-04-28
 
