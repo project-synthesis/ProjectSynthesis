@@ -184,11 +184,22 @@ async def app_client(mock_provider, db_session, tmp_path):
     app.state.write_queue = test_write_queue
     app.dependency_overrides[get_write_queue] = lambda: test_write_queue
 
+    # v0.4.14 cycle 3e follow-up: cycle-3 router migrations import
+    # ``get_write_queue`` from ``app.tools._shared`` (canonical for MCP-process
+    # tools). Backend tests exercise those router code paths via the same
+    # ASGI app, so we must seed the module-level singleton in addition to the
+    # FastAPI dependency override above. Without this, real handlers raise
+    # ``ValueError: WriteQueue not initialized`` when calling
+    # ``tools._shared.get_write_queue()``.
+    from app.tools import _shared as _tools_shared
+    _tools_shared.set_write_queue(test_write_queue)
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
     app.dependency_overrides.clear()
+    _tools_shared.set_write_queue(None)
     if hasattr(app.state, "write_queue"):
         del app.state.write_queue
     _cfg.DATA_DIR = original_data_dir

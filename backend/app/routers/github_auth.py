@@ -658,14 +658,10 @@ async def poll_device_code(
         write_db.add(entry)
         # NO commit — submit_batch owns the transaction.
 
-    # Plan-prescribed label per cycle 3e.6 (`github_token_revoke`); kept
-    # as the spec-required telemetry tag even though semantically this
-    # site is a device-flow login (token upsert), not a revoke. See
-    # report for plan-vs-source label discrepancy callout.
     from app.tools._shared import get_write_queue
     await get_write_queue().submit_batch(
         [_persist_token, _record_audit],
-        operation_label="github_token_revoke",
+        operation_label="github_device_flow_login",
     )
 
     response.set_cookie(

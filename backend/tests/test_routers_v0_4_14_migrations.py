@@ -154,10 +154,11 @@ class TestGithubAuthDevicePollRevokeMigration:
         assert idx > 0
         window = src[idx:idx + 8000]
         assert "submit_batch(" in window, (
-            "/auth/device/poll revoke must use submit_batch for atomic "
-            "token-delete + audit"
+            "/auth/device/poll must use submit_batch for atomic "
+            "token-upsert + audit"
         )
-        assert "github_token_revoke" in window, (
-            "/auth/device/poll revoke must use "
-            "operation_label='github_token_revoke'"
+        assert "github_device_flow_login" in window, (
+            "/auth/device/poll must use "
+            "operation_label='github_device_flow_login' "
+            "(device-flow login = token upsert, not revoke)"
         )
