@@ -153,16 +153,16 @@ async def delete_api_key(request: Request) -> ApiKeyStatus:
 
     # Audit log
     try:
-        from app.database import async_session_factory
         from app.services.audit_logger import log_event
+        from app.tools._shared import get_write_queue
 
-        async with async_session_factory() as audit_db:
-            await log_event(
-                db=audit_db,
-                action="api_key_deleted",
-                actor_ip=request.client.host if request.client else None,
-                outcome="success",
-            )
+        await log_event(
+            db=None,
+            action="api_key_deleted",
+            actor_ip=request.client.host if request.client else None,
+            outcome="success",
+            write_queue=get_write_queue(),
+        )
     except Exception:
         logger.debug("Audit log write failed", exc_info=True)
 
