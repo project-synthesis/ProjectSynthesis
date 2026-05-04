@@ -412,16 +412,34 @@ async def github_me(
         )
         response.delete_cookie("session_id", path="/api")
         raise HTTPException(401, "GitHub token expired or revoked. Please reconnect.")
-    # Update cached user info if it changed
-    result = await db.execute(
-        select(GitHubToken).where(GitHubToken.session_id == session_id)
+    # Update cached user info if it changed.
+    # v0.4.14 cycle 3e.4: route the GitHubToken field updates through the
+    # WriteQueue. We snapshot session_id + the new login/avatar/user_id
+    # before declaring the closure so the work_fn touches no outer state.
+    captured_session_id = session_id
+    captured_login = user.get("login")
+    captured_avatar = user.get("avatar_url")
+    captured_user_id = str(user.get("id", ""))
+
+    async def _do_user_update(write_db: AsyncSession) -> None:
+        res = await write_db.execute(
+            select(GitHubToken).where(
+                GitHubToken.session_id == captured_session_id
+            )
+        )
+        row = res.scalar_one_or_none()
+        if row:
+            # Preserve existing values when source is None/empty.
+            row.github_login = captured_login or row.github_login
+            row.avatar_url = captured_avatar or row.avatar_url
+            row.github_user_id = captured_user_id or row.github_user_id
+            await write_db.commit()
+
+    from app.tools._shared import get_write_queue
+    await get_write_queue().submit(
+        _do_user_update,
+        operation_label="github_auth_me_user_info_update",
     )
-    token_row = result.scalar_one_or_none()
-    if token_row:
-        token_row.github_login = user.get("login", token_row.github_login)
-        token_row.avatar_url = user.get("avatar_url", token_row.avatar_url)
-        token_row.github_user_id = str(user.get("id", token_row.github_user_id))
-        await db.commit()
     return GitHubUserResponse(
         login=user.get("login", ""),
         avatar_url=user.get("avatar_url"),
