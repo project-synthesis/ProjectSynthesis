@@ -847,18 +847,60 @@ async def classify_with_llm(
             task_type, domain,
         )
 
+        # v0.4.13 cycle 9.6 (Group B): route the telemetry write through
+        # the process-wide WriteQueue. The previous ``db.add(telemetry)``
+        # against the read-engine session was the single biggest source
+        # of read-engine writes (19 of 122 audit hits in cycle 10). The
+        # write is fire-and-forget — losing a telemetry row is preferable
+        # to crashing the analyze phase, so any queue/submit error logs
+        # at WARNING and returns the classification.
         try:
+            from app.dependencies.write_queue import get_process_write_queue
             from app.models import TaskTypeTelemetry
-            telemetry = TaskTypeTelemetry(
-                raw_prompt=raw_prompt,
-                task_type=task_type,
-                domain=domain,
-                source="haiku_fallback",
-            )
-            db.add(telemetry)
-            logger.debug("Persisted Haiku fallback to TaskTypeTelemetry")
+
+            _wq = get_process_write_queue()
+            if _wq is not None:
+                _raw = raw_prompt
+                _tt = task_type
+                _dom = domain
+
+                async def _do_telemetry(write_db: AsyncSession) -> None:
+                    write_db.add(TaskTypeTelemetry(
+                        raw_prompt=_raw,
+                        task_type=_tt,
+                        domain=_dom,
+                        source="haiku_fallback",
+                    ))
+                    await write_db.commit()
+
+                # Spawn — do NOT await. The classification result must
+                # not block on a queue submit.
+                import asyncio as _asyncio
+
+                async def _submit_and_log() -> None:
+                    try:
+                        await _wq.submit(
+                            _do_telemetry,
+                            operation_label="task_type_telemetry_insert",
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "TaskTypeTelemetry queue submit failed: %s", exc,
+                        )
+
+                _asyncio.create_task(_submit_and_log())
+                logger.debug(
+                    "Queued Haiku fallback to TaskTypeTelemetry (async)",
+                )
+            else:
+                # No queue available (cold start, migration window,
+                # tests). Skip silently — the heuristic classification
+                # still works without telemetry.
+                logger.debug(
+                    "TaskTypeTelemetry write skipped — no process write_queue",
+                )
         except Exception as tel_exc:
-            logger.warning("Failed to persist TaskTypeTelemetry: %s", tel_exc)
+            logger.warning("Failed to queue TaskTypeTelemetry: %s", tel_exc)
 
         return task_type, domain
 
