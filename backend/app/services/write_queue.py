@@ -26,6 +26,27 @@ class WriteQueueDeadError(RuntimeError): ...
 class WriteQueueReentrancyError(RuntimeError): ...
 
 
+class SubmitBatchError(RuntimeError):
+    """A work_fn within submit_batch raised. Wraps original + index + name.
+
+    The transaction has already rolled back when this is raised; no
+    further work_fns in the batch ran.
+    """
+
+    def __init__(self, index: int, fn_name: str, original: BaseException) -> None:
+        self.index = index
+        self.fn_name = fn_name
+        self.original = original
+        super().__init__(
+            f"submit_batch[{index}] ({fn_name}) raised "
+            f"{type(original).__name__}: {original}"
+        )
+
+
+class SubmitBatchCommitError(RuntimeError):
+    """A work_fn called db.commit() — submit_batch owns transaction boundaries."""
+
+
 def _emit_worker_event(decision: str, context: dict[str, Any]) -> None:
     try:
         from app.services.taxonomy.event_logger import get_event_logger
@@ -322,6 +343,76 @@ class WriteQueue:
                 f"queue at max depth {self._max_depth}; degrade or retry later"
             ) from None
         return await future
+
+    async def submit_batch(
+        self,
+        work_fns: list[Callable[[AsyncSession], Awaitable[Any]]],
+        *,
+        timeout: float | None = None,
+        operation_label: str | None = None,
+    ) -> list[Any]:
+        """Run multiple writes in ONE queued task, ONE transaction, ONE writer session.
+
+        See spec § 3.1. Contract:
+        - All work_fns share the same AsyncSession.
+        - Single transaction via ``async with db.begin():``.
+        - Work_fns MUST NOT call ``db.commit()`` — raises
+          :class:`SubmitBatchCommitError` if attempted.
+        - Any work_fn failure rolls back ALL prior writes; the helper
+          re-raises as :class:`SubmitBatchError(index, fn_name, original)`.
+        - Work_fns run serially in caller order; not concurrently.
+        - Inherits :func:`submit` reentrancy at outer-submit level.
+
+        Returns
+        -------
+        list[Any]
+            One return value per work_fn, in caller-supplied order. Empty
+            list for an empty input list.
+        """
+        if not work_fns:
+            return []
+
+        async def _do_batch(db: AsyncSession) -> list[Any]:
+            results: list[Any] = []
+            async with db.begin():
+                for idx, fn in enumerate(work_fns):
+                    fn_name = self._fn_name(fn)
+                    pre_committed = db.in_transaction()
+                    try:
+                        result = await fn(db)
+                    except BaseException as exc:
+                        raise SubmitBatchError(idx, fn_name, exc) from exc
+                    if not db.in_transaction() and pre_committed:
+                        raise SubmitBatchError(
+                            idx,
+                            fn_name,
+                            SubmitBatchCommitError(
+                                f"work_fn[{idx}] ({fn_name}) called db.commit() — "
+                                "submit_batch owns transaction boundaries; "
+                                "do not commit inside work_fns"
+                            ),
+                        )
+                    results.append(result)
+            return results
+
+        return await self.submit(
+            _do_batch,
+            timeout=timeout,
+            operation_label=operation_label or "submit_batch",
+        )
+
+    @staticmethod
+    def _fn_name(fn: Callable[..., Any]) -> str:
+        """Best-effort name extraction for diagnostic context.
+
+        Plain async def → ``__name__``. Lambdas → ``"<lambda>"``.
+        :class:`functools.partial` → ``repr(partial(...))`` (opaque but
+        identifies wrapped callable).
+        """
+        name = getattr(fn, "__name__", None)
+        if name:
+            return name
+        return repr(fn)
 
     def _record_success(self, label: str | None, latency_s: float) -> None:
         self._metrics.record_success(label, latency_s)
