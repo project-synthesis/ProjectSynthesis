@@ -356,15 +356,26 @@ def install_read_engine_audit_hook(target_engine) -> None:  # noqa: ANN001
             return
 
         # Cycle 9.6 diagnostic: capture call site so each WARN line tells you
-        # the exact source path. Sliced to skip SQLAlchemy + sqlite3 cursor
-        # frames so the top of the printed stack is usually the application
-        # site that triggered the write. Single-block warning (one log
-        # call) keeps grep -A 7 'read-engine audit:' parsing trivial.
-        stack = traceback.extract_stack(limit=24)
-        # Drop the top 2 frames (this _audit + sqlalchemy event dispatch);
-        # take the last 8 application-side frames in oldest-first order so
-        # a triage reader sees the orchestrator → service → DB call chain.
-        site_frames = stack[-10:-2] if len(stack) > 10 else stack[:-2]
+        # the exact source path. We FILTER OUT framework internals
+        # (sqlalchemy, sqlite3, _aexit_, dialects, async wrappers) so the
+        # printed frames are the application call chain that actually
+        # triggered the write. Single-block warning (one log call) keeps
+        # grep -A 12 'read-engine audit:' parsing trivial.
+        stack = traceback.extract_stack(limit=64)
+        framework_markers = (
+            "sqlalchemy/",
+            "asyncio/",
+            "_aexit_",
+            "/aiosqlite/",
+            "alembic/",
+        )
+        app_frames = [
+            f for f in stack[:-1]  # skip our own _audit frame
+            if not any(m in f.filename for m in framework_markers)
+        ]
+        # Take the deepest 10 application frames so the chain shows
+        # router → service → ORM call site.
+        site_frames = app_frames[-10:] if len(app_frames) > 10 else app_frames
         site = "\n".join(
             f"  {f.filename}:{f.lineno} {f.name}" for f in site_frames
         )

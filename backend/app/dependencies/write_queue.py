@@ -10,15 +10,59 @@ The queue itself is a process-level singleton constructed in the FastAPI
 ``lifespan`` (cycle 9 wires this; until then the dependency raises a
 ``RuntimeError`` if reached on a process where the queue has not been
 initialized -- a strong signal of a lifespan ordering bug).
+
+# Process-level access (cycle 9.6)
+
+Background tasks, services without ``Request`` access, and event-bus
+listeners need to reach the queue without a FastAPI request scope.  The
+module-level ``_process_write_queue`` getter/setter pair mirrors the
+``app.tools._shared.get_write_queue`` pattern but lives in the backend
+process.  ``register_process_write_queue`` is called once from the
+backend lifespan after ``app.state.write_queue`` is set;
+``get_process_write_queue`` returns the registered queue or ``None`` if
+unavailable (during migrations, before lifespan, or in tests without
+the queue installed) so callers can no-op gracefully instead of
+raising.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import Request
 
-from app.services.write_queue import WriteQueue
+if TYPE_CHECKING:
+    from app.services.write_queue import WriteQueue
 
 
-def get_write_queue(request: Request) -> WriteQueue:
+_process_write_queue: "WriteQueue | None" = None
+
+
+def register_process_write_queue(queue: "WriteQueue | None") -> None:
+    """Register (or clear) the process-wide WriteQueue handle.
+
+    Called from the backend ``lifespan`` after ``app.state.write_queue``
+    is set, and again on shutdown to clear the handle. Idempotent.
+    """
+    global _process_write_queue
+    _process_write_queue = queue
+
+
+def get_process_write_queue() -> "WriteQueue | None":
+    """Return the process-wide WriteQueue or ``None`` when unavailable.
+
+    Used by services that need to submit writes outside a FastAPI
+    request scope (background event listeners, telemetry side-effects,
+    warm-path inner helpers when the engine wasn't given a queue).
+    Returns ``None`` during migration windows / test setups without the
+    queue installed so callers can degrade to skipping the write
+    instead of raising — particularly important for fire-and-forget
+    telemetry where losing the row is preferable to crashing the
+    request that triggered it.
+    """
+    return _process_write_queue
+
+
+def get_write_queue(request: Request) -> "WriteQueue":
     """Return the singleton ``WriteQueue`` from ``app.state``.
 
     Used by routers (cycle 7+) and any FastAPI dependency that needs to
@@ -46,4 +90,8 @@ def get_write_queue(request: Request) -> WriteQueue:
     return queue
 
 
-__all__ = ["get_write_queue"]
+__all__ = [
+    "get_process_write_queue",
+    "get_write_queue",
+    "register_process_write_queue",
+]

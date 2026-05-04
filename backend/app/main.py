@@ -1122,32 +1122,72 @@ async def lifespan(app: FastAPI):
                         )
 
                         async def _run_extraction(oid: str) -> None:
+                            # v0.4.13 cycle 9.6 (HIGH-9): migrate the
+                            # optimization_created listener to thread the
+                            # WriteQueue. process_optimization detects
+                            # ``write_queue is not None`` and runs the
+                            # entire extraction body inside a single
+                            # ``submit()`` callback, so the embed +
+                            # cluster assignment + OptimizationPattern
+                            # writes serialize against every other
+                            # backend writer instead of racing on the
+                            # read engine. Promotion + strategy
+                            # affinity follow-up writes route through
+                            # the same queue.
                             try:
-                                async with async_session_factory() as db:
-                                    await engine.process_optimization(oid, db)
-                                    # Hot path: check cluster promotion after
-                                    # process_optimization writes OptimizationPattern
-                                    from sqlalchemy import select as _sel
+                                _wq = getattr(app.state, "write_queue", None)
+                                if _wq is None:
+                                    # Cold path / queue not yet started — fall
+                                    # back to the legacy session path so we
+                                    # don't lose the event entirely.
+                                    async with async_session_factory() as db:
+                                        await engine.process_optimization(oid, db)
+                                    return
+                                # Route the cluster-extraction body through
+                                # the queue.
+                                await engine.process_optimization(
+                                    oid, write_queue=_wq,
+                                )
+                                # Promotion + strategy affinity: read the
+                                # source row from the read engine (no
+                                # writes), then route the writes through
+                                # the queue when needed.
+                                from sqlalchemy import select as _sel
 
-                                    from app.models import OptimizationPattern as _OptPat
-                                    from app.services.prompt_lifecycle import (
-                                        PromptLifecycleService,
-                                    )
-                                    _row = (await db.execute(
+                                from app.models import OptimizationPattern as _OptPat
+                                from app.services.prompt_lifecycle import (
+                                    PromptLifecycleService,
+                                )
+                                async with async_session_factory() as _read_db:
+                                    _row = (await _read_db.execute(
                                         _sel(_OptPat).where(
                                             _OptPat.optimization_id == oid,
                                             _OptPat.relationship == "source",
                                         )
                                     )).scalar_one_or_none()
-                                    if _row is not None and _row.cluster_id:
+                                    _row_cluster_id = (
+                                        _row.cluster_id if _row else None
+                                    )
+                                if _row_cluster_id:
+                                    from sqlalchemy.ext.asyncio import (
+                                        AsyncSession as _ExtAsyncSession,
+                                    )
+                                    async def _do_followup(
+                                        write_db: _ExtAsyncSession,
+                                    ) -> None:
                                         lifecycle = PromptLifecycleService()
                                         await lifecycle.check_promotion(
-                                            db, _row.cluster_id
+                                            write_db, _row_cluster_id,
                                         )
                                         await lifecycle.update_strategy_affinity(
-                                            db, _row.cluster_id
+                                            write_db, _row_cluster_id,
                                         )
-                                        await db.commit()
+                                        await write_db.commit()
+
+                                    await _wq.submit(
+                                        _do_followup,
+                                        operation_label="hot_path_promotion_followup",
+                                    )
                             except Exception as task_exc:
                                 logger.error(
                                     "Background taxonomy extraction failed for %s: %s",
@@ -1261,11 +1301,18 @@ async def lifespan(app: FastAPI):
     # Start the WriteQueue worker bound to the writer engine.
     try:
         from app.database import writer_engine as _writer_engine
+        from app.dependencies.write_queue import register_process_write_queue
         from app.services.write_queue import WriteQueue
 
         write_queue = WriteQueue(_writer_engine)
         await write_queue.start()
         app.state.write_queue = write_queue
+        # v0.4.13 cycle 9.6: also register the queue in the
+        # ``dependencies.write_queue`` module-level slot so background
+        # services without ``Request`` access (event-bus listeners,
+        # fire-and-forget telemetry from inside heuristic analysis)
+        # can reach the queue via ``get_process_write_queue()``.
+        register_process_write_queue(write_queue)
         app.state.lifespan_order.append("write_queue_started")
         logger.info(
             "WriteQueue started: max_depth=%d default_timeout=%.1fs",
@@ -1275,6 +1322,11 @@ async def lifespan(app: FastAPI):
     except Exception as _wq_exc:
         logger.error("Failed to start WriteQueue: %s", _wq_exc, exc_info=True)
         app.state.write_queue = None
+        try:
+            from app.dependencies.write_queue import register_process_write_queue
+            register_process_write_queue(None)
+        except Exception:
+            pass
 
     # Initialize unified context enrichment service
     try:
@@ -1865,6 +1917,13 @@ async def lifespan(app: FastAPI):
             logger.error("WriteQueue stop failed: %s", exc, exc_info=True)
         finally:
             app.state.write_queue = None
+            try:
+                from app.dependencies.write_queue import (
+                    register_process_write_queue,
+                )
+                register_process_write_queue(None)
+            except Exception:
+                pass
 
     # v0.4.13 cycle 9 — Phase 5b: uninstall the audit hook so subsequent
     # disposal (which may issue PRAGMA wal_checkpoint) does not race
