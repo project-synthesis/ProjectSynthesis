@@ -6,6 +6,33 @@ For active work, see [`ROADMAP.md`](ROADMAP.md). For per-change detail with file
 
 ---
 
+### v0.4.13 — 2026-05-04
+
+**SQLite writer-slot contention — architectural fix (P0).** The hardest cycle of the v0.4.x line. Closes the cycle-19→22 v2 + probe v22-v29 audit chain (`docs/audits/probe-v22-v29-2026-04-29.md`) where 11 of 26 historical probe runs silently lost their optimization rows under realistic concurrent-writer load. The v0.4.12 hardening (verify-after-persist gate, per-prompt streaming, early-abort, warm-path Groundhog Day fix) made failures loud and structured but did NOT fix the root cause — confirmed when v27 ran with MCP server stopped (only backend) and still went catastrophic, proving contention was purely within-backend, not cross-process.
+
+**Goal:** eliminate SQLite WAL writer-slot contention architecturally — replace the per-call-site retry/mutex stack with a single ordered writer.
+
+**Architecture:**
+
+- **Two engines** — read pool (production-config, all reads) + writer-only pool (`pool_size=1, max_overflow=0`, owned exclusively by the queue worker). Read concurrency under WAL is preserved; writer is now a single connection in monotonic order.
+- **Single async worker** — `WriteQueue` (`backend/app/services/write_queue.py`) drains an `asyncio.Queue` of work functions; each work function runs against a queue-owned `AsyncSession` on the writer engine.
+- **`submit(work_fn, *, timeout=300, operation_label)` API** — the canonical entry point. Returns the work function's return value. Caller cancellation does NOT cancel in-flight work (shielded `__aexit__`); per-task timeout DOES (default 300s).
+- **Audit hook** — `install_read_engine_audit_hook()` fires on every read-engine `flush` containing pending writes outside the allow-list flag set (`migration_mode` for lifespan ALTER TABLE migrations + `cold_path_mode` for taxonomy cold-path full-refit). Captures the offending stack frame; structured WARNING in dev/prod, RAISE in CI via `WRITE_QUEUE_AUDIT_HOOK_RAISE`. Catches drift writes at the source instead of forcing forensic reconstruction from "database is locked" symptoms.
+- **Reentrancy guard** — hard-fails via `WriteQueueReentrancyError` if `submit()` is invoked from within the worker task itself (would deadlock the queue forever).
+- **Rolling p95/p99 reservoir** — submit-to-completion latency exposed on `/api/health` queue block alongside `depth`, `in_flight`, `total_submitted` / `total_completed` / `total_failed` / `total_timeout` / `total_overload`, `max_observed_depth`, `worker_alive`.
+
+**Migration:** ~80 callsites across 11 cycles, ~11000 LOC. Hot-path: `bulk_persist`, `batch_taxonomy_assign`, `pipeline_phases.persist_and_propagate`, sampling persistence path. Warm-path: 12 phase commits in the taxonomy engine, hot-path engine 3 sites, snapshot writer, global pattern lifecycle (promote/validate/retire). Probe service: 17 sites + read-only `self.db`. Service layer: `feedback_service`, `optimization_service`, `audit_logger`, startup/recurring `gc`, `orphan_recovery`. REST routers: `optimize` / `domains` / `templates` / `github_repos` / `projects` / `clusters` / `feedback` / `history`. MCP tools: 3 of 7 migrated (rest deferred to v0.4.14). Telemetry: `task_type_telemetry` cycle 9.6 fire-and-forget submit.
+
+**Acceptance:** cycle 10 regression bar (probe + 30 seeds + 100 feedbacks **fully concurrent**) — **122 locks → 0 locks**, **54 audit warns → 0 warns**. Backend `pytest` 3457 passing / 1 skipped / 0 failed. Validation evidence: `docs/v0.4.13-validation/` (criterion-1 backend log, db-lock-traces, health snapshots, probe-runs summary).
+
+**Acknowledged exception — cold path:** taxonomy cold-path full-refit retained on `WriterLockedAsyncSession` + `cold_path_mode` audit-hook bypass. Refit's transaction span (multi-second commits across thousands of cluster rows) does not fit the queue's per-task timeout model. v0.4.14 chunks each refit phase into smaller `submit()` calls with `await asyncio.sleep(0)` between.
+
+**TDD discipline:** 5-phase RED → GREEN → REFACTOR → INTEGRATE → OPERATE per cycle, gated by independent 2-stage code review (spec verification + code-quality). Spec went through 6 review rounds before APPROVED; plan went through 3 before APPROVED. The combined review surface caught 4 polymorphic-signature regressions, the lifespan teardown ordering bug, the test fixture PRAGMA divergence, and the extraction-listener `worker_alive` defensive check.
+
+**Subsumes:** ROADMAP entry "SQLite writer-slot contention — architectural fix (v0.4.13 P0)" — shipped.
+
+**Spec:** `docs/specs/sqlite-writer-queue-2026-05-02.md` (v6 APPROVED). **Plan:** `docs/superpowers/plans/2026-05-02-sqlite-writer-queue.md` (v3 APPROVED). **Branch:** `release/v0.4.13` (76 commits, all pushed). **Stats:** 76 commits, 11 TDD cycles, ~11000 LOC. **Topic Probe Tier 2** (originally targeted for v0.4.13) deferred to v0.4.13.x or v0.4.14 to keep the release scoped on the architectural fix that all subsequent tiers depend on.
+
 ### v0.4.12 — 2026-05-02
 
 **Topic Probe Tier 1 + post-Tier-1 architectural hardening.** Agentic targeted exploration of a user-specified topic against the linked GitHub codebase. Productizes the manual cycle-15→22 workflow that emerged the `embeddings` sub-domain and `data` / `frontend` top-level domains organically. Topic Probe is a peer of seed agents — same execution primitive (`batch_pipeline`), different generation strategy (LLM-agentic-from-topic-and-codebase vs pre-authored agent template).

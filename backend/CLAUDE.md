@@ -8,6 +8,19 @@ Everything backend developers need. For project overview, see root `CLAUDE.md`. 
 - `PromptLoader.load()` for static templates (no variables). `PromptLoader.render()` for templates with `{{variables}}`.
 - `AnalysisResult.task_type` is a `Literal`: `coding`, `writing`, `analysis`, `creative`, `data`, `system`, `general`. `selected_strategy` is a plain `str` validated at runtime against `prompts/strategies/`. `intent_label` (3-6 words) and `domain` (resolved via `DomainResolver`) default to `"general"`.
 
+## Write queue contract (v0.4.13)
+
+All writes route through `app.state.write_queue.submit(work_fn, *, timeout, operation_label)`. Read paths use `async_session_factory()` against the main read engine.
+
+- The writer engine (`writer_engine` in `database.py`) has `pool_size=1, max_overflow=0` and is owned exclusively by the queue worker.
+- Caller cancellation does NOT cancel in-flight work (shielded `__aexit__`); per-task timeout DOES (default 300s).
+- Audit hook fires on read-engine writes outside `migration_mode` (lifespan migrations) or `cold_path_mode` (taxonomy cold-path full-refit). RAISE in CI; WARN in dev/prod.
+- Reentrancy: hard-fail via `WriteQueueReentrancyError` if `submit()` called from within the worker task.
+- Migration completeness: 100% of hot+warm writers route through queue. Cold path is the sole exception (kept on `WriterLockedAsyncSession`; v0.4.14 chunks).
+- Telemetry writes (e.g., `task_type_telemetry`) use fire-and-forget `submit()` — failure does NOT block the caller.
+
+See `docs/specs/sqlite-writer-queue-2026-05-02.md` for full design rationale.
+
 ## Key services (`app/services/`)
 
 **Pipeline**: `pipeline.py` (3-phase orchestrator) + `pipeline_phases.py` (Phase 3D — 12 pure helpers extracted: `resolve_blocked_strategies`, `resolve_post_analyze_state`, `build_optimize_context`, `run_hybrid_scoring`, `run_suggestion_phase`, `persist_and_propagate`, `build_pipeline_result`, `persist_failed_optimization` + typed dataclasses `PostAnalyzeState`/`OptimizeContextBundle`/`ScoringOutput`/`PersistenceInputs`. SSE yields stay in orchestrator; pure computation moves here). `sampling/` subpackage (Phase 3B — MCP sampling with full parity): `sampling/primitives.py` (MCP request primitives + text/JSON extraction + fallback parsers), `sampling/persistence.py` (DB helpers: applied-pattern resolution, usage counters, drift check), `sampling/analyze.py` (standalone `run_sampling_analyze` two-phase entry point). `sampling_pipeline.py` (969 lines) retains the primary `run_sampling_pipeline` orchestrator and re-exports the `sampling/` helpers so the public API stays stable. `passthrough.py` (shared passthrough assembly), `pipeline_constants.py` (shared constants: `CONFIDENCE_GATE=0.7`, `FALLBACK_STRATEGY="auto"` resolves to task-type-appropriate named strategy at runtime, `semantic_upgrade_general()` post-LLM classification gate)
