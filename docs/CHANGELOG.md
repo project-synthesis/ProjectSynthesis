@@ -4,6 +4,18 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- **v0.4.16 P1a — Cold-path commit chunking with cumulative Q-gates** — replaces whole-refit atomicity with 4-phase SAVEPOINT-bounded execution (`cp_pre_reembed` outer + 4 inner per-phase nested SAVEPOINTs). Q-checks fire after Phase 1 (re-embed) + Phase 2 (reassign); Q regression rolls back to `cp_pre_reembed` (full revert preserves "Q never drops" invariant). New `ColdPathPhaseFailure` + `ColdPathQCheckEvalFailure` typed exceptions. Module-level `_COLD_PATH_LOCK` (asyncio.Lock) serializes concurrent invocations. New `_COLD_PATH_RUN_ID` ContextVar propagates correlation IDs through phase calls. `_restore_silhouette_from_snapshot()` defensively recovers in-memory state if process crashed mid-cold-path.
+- **Peer-writer-aware quiescing** — `cluster_metadata["refit_in_progress_until"]` flag (timestamp-expiration is authoritative recovery primitive) lets peer writers (hot/warm/seed/feedback) cooperatively SKIP clusters mid-refit. 4 peer paths integrated: `engine.process_optimization` (hot path), `batch_persistence.bulk_persist`, `feedback_service.create_feedback`, seed (inherits via `bulk_persist`). Defensive `_parse_quiesce_flag()` handles 4 corruption paths (missing/non_string/iso_parse_fail/expired) with `flag_corrupt` decision events.
+- **Cold-path observability** — 8 new decision-event types: `lock_acquired`, `cold_path_started`, `cold_path_phase_started`, `cold_path_phase_committed`, `cold_path_q_check`, `cold_path_phase_rolled_back`, `cold_path_completed`, `silhouette_restored_from_snapshot`. Plus per-batch `batch_progress` events at `COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL=10` threshold. `cold_path_q_check` event payload includes per-dimension breakdown (`q_coherence`, `q_separation`, `q_coverage`, `q_dbcv`, `q_stability`).
+- **Health endpoint `cold_path` block** — exposes `last_run_at`, `last_run_duration_ms`, `last_run_q_delta`, `last_run_phases_committed`, `last_run_status`, `peer_skip_count_24h`, `rejection_count_24h`, `phase_failure_count_24h`, `p95_phase_duration_ms` per phase.
+
+### Changed
+- **`is_cold_path_non_regressive()` signature** — added optional keyword-only `phase: int | None = None` kwarg (Cycle 2 wires phase context into Q-check events). Backward-compat: legacy callers omit phase.
+
+### Configuration
+- 7 new constants in `taxonomy/_constants.py`: `COLD_PATH_REEMBED_BATCH_SIZE=50`, `COLD_PATH_REASSIGN_BATCH_SIZE=200`, `COLD_PATH_LABEL_BATCH_SIZE=20`, `COLD_PATH_REPAIR_BATCH_SIZE=100`, `COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN=5`, `COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL=10`, `COLD_PATH_LATENCY_RESERVOIR_SIZE=1000`. `_validate_cold_path_constants()` invariant assertion fires at module import.
+
 ### Fixed
 - **HistoryPanel pagination correctness (v0.4.15 P0)** — backend now accepts `project_id` Query param on `GET /history` + `OptimizationService.list_optimizations()` accepts the matching kwarg. Frontend `getHistory()` + HistoryPanel call sites push `project_id: projectStore.currentProjectId` + `status: 'completed'` to the server, eliminating the ~9-row-per-page regression that surfaced post-ADR-005 multi-project rollout. New `$effect` re-fetches on project switch with `untrack()` race guard + capture-and-bail pattern at both fetch sites. Defensive client-side filters preserved as belt-and-suspenders.
 
