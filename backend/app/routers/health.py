@@ -9,6 +9,7 @@ import asyncio
 import logging
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -139,7 +140,7 @@ class HealthResponse(BaseModel):
             "lifespan)."
         ),
     )
-    cold_path: dict | None = Field(
+    cold_path: dict[str, Any] | None = Field(
         default=None,
         description=(
             "v0.4.16 P1a Cycle 2 (spec § 5.5): cold-path lifecycle + "
@@ -307,17 +308,20 @@ _CRITICAL_SERVICES = frozenset({"backend", "frontend"})
 # ---------------------------------------------------------------------------
 
 
-def _get_cold_path_metrics() -> dict | None:
-    """Aggregate the /api/health cold_path block from the event ring buffer
-    + the per-phase latency reservoir.
+def _get_cold_path_metrics() -> dict[str, Any]:
+    """Aggregate the ``/api/health`` cold_path block.
 
-    Spec § 5.5. Returns a dict with the 9 fields required by Cycle 2 tests
-    even when the ring buffer is empty (last_run_* fields are None,
-    counters are 0, p95 dict has 4 phase keys with None values).
+    v0.4.16: per spec § 5.5, builds a 9-field summary block from
+    (a) the per-phase latency reservoir (p95 dict for the 4 phase keys)
+    and (b) the cold-path event ring buffer (most-recent run's metadata
+    plus 24h rolling counters for peer-skip / rejection / phase-failure
+    rates). Returns the full block even when the ring buffer is empty —
+    last_run_* fields are None, counters are 0, p95 dict has 4 phase
+    keys with None values — so the JSON contract is stable.
     """
     from datetime import timedelta
 
-    cold_path_block: dict = {
+    cold_path_block: dict[str, Any] = {
         "last_run_at": None,
         "last_run_duration_ms": None,
         "last_run_q_delta": None,
@@ -335,11 +339,7 @@ def _get_cold_path_metrics() -> dict | None:
     }
 
     try:
-        from app.services.taxonomy.cold_path import (
-            _COLD_PATH_LATENCY_RESERVOIR,
-            _get_phase_p95,
-            _PHASE_KEYS,
-        )
+        from app.services.taxonomy.cold_path import _PHASE_KEYS, _get_phase_p95
         for phase_key in _PHASE_KEYS:
             cold_path_block["p95_phase_duration_ms"][phase_key] = _get_phase_p95(phase_key)
     except Exception:

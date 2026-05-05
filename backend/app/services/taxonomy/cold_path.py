@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -49,7 +48,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from sqlalchemy import func as sa_func
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import DATA_DIR, settings
@@ -165,15 +164,20 @@ class ColdPathQCheckEvalFailure(RuntimeError):  # noqa: N818
 
 
 def _parse_quiesce_flag(meta: dict | None) -> datetime | None:
-    """v0.4.16 Cycle 2: defensive parser for cluster_metadata['refit_in_progress_until'].
+    """Defensive parser for ``cluster_metadata['refit_in_progress_until']``.
 
-    Returns None on missing/non_string/iso_parse_fail/expired. Each corruption
-    path emits a 'flag_corrupt' decision event for forensic visibility.
-    Authoritative recovery primitive: timestamp-expiration check inside this
-    helper means orphan flags from a crashed cold-path process self-heal at
-    ``COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN`` minutes after the crash.
+    v0.4.16: handles all 4 corruption paths from spec § 4.3 — returns
+    ``None`` on ``missing`` / ``non_string`` / ``iso_parse_fail`` /
+    ``expired``. Each path emits a ``flag_corrupt`` decision event for
+    forensic visibility (reason set to one of the 4 codes; extra fields
+    document the actual offending value).
 
-    Spec: § 3.3 + § 4.3.
+    Authoritative recovery primitive: the timestamp-expiration check in
+    this helper means orphan flags from a crashed cold-path process
+    self-heal at ``COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN`` minutes after
+    the crash, even before the warm-path orphan sweep runs.
+
+    Spec: § 3.3 (peer-writer quiescing) + § 4.3 (flag corruption matrix).
     """
     def _emit_corrupt(reason: str, **extra: Any) -> None:
         try:
@@ -222,7 +226,11 @@ _COLD_PATH_LATENCY_RESERVOIR: dict[str, list[float]] = {}
 
 
 def _record_phase_batch_latency(phase: str, latency_ms: float) -> None:
-    """Append a batch latency sample for a phase, trimming to reservoir size."""
+    """Append a batch latency sample, trimming to reservoir size.
+
+    v0.4.16: drops the oldest samples when the bucket exceeds
+    ``COLD_PATH_LATENCY_RESERVOIR_SIZE`` (1000) per spec § 5.6.
+    """
     bucket = _COLD_PATH_LATENCY_RESERVOIR.setdefault(phase, [])
     bucket.append(float(latency_ms))
     if len(bucket) > COLD_PATH_LATENCY_RESERVOIR_SIZE:
@@ -230,6 +238,7 @@ def _record_phase_batch_latency(phase: str, latency_ms: float) -> None:
 
 
 def _get_phase_p50(phase: str) -> int | None:
+    """v0.4.16: rounded-int p50 latency for a phase, or None if no samples."""
     bucket = _COLD_PATH_LATENCY_RESERVOIR.get(phase, [])
     if not bucket:
         return None
@@ -237,6 +246,7 @@ def _get_phase_p50(phase: str) -> int | None:
 
 
 def _get_phase_p95(phase: str) -> int | None:
+    """v0.4.16: rounded-int p95 latency for a phase, or None if no samples."""
     bucket = _COLD_PATH_LATENCY_RESERVOIR.get(phase, [])
     if not bucket:
         return None
@@ -253,9 +263,12 @@ def _emit_cold_event(
     context: dict[str, Any],
     op: str = "refit",
 ) -> None:
-    """Emit a cold-path decision event with try/except RuntimeError swallowed.
+    """Emit a cold-path decision event with ``RuntimeError`` swallowed.
 
-    Spec § 5.1 — every cold-path decision event uses path='cold'.
+    v0.4.16: per spec § 5.1, every cold-path decision event MUST use
+    ``path='cold'`` (canonical event tagging) and ``op='refit'`` for
+    lifecycle events (or ``op='refit_quiesce_check'`` for peer-writer
+    SKIP / flag-corrupt). Default is ``refit``.
 
     NOTE: Resolves ``get_event_logger`` via the module path (not the
     locally-imported name) so unit-test ``patch.object`` targeted at
@@ -273,7 +286,10 @@ def _emit_cold_event(
 def cold_path_metrics_snapshot() -> dict[str, Any]:
     """Return a snapshot of the cold-path latency reservoir.
 
-    Used by ``routers/health.py::_get_cold_path_metrics()`` and ad-hoc tests.
+    v0.4.16: spec § 5.6 — per-phase batch latency reservoir (rolling
+    1000 samples, p50/p95 computed lazily) exposed via this helper for
+    tests + ad-hoc inspection. Schema: ``{phase: {p50_ms, p95_ms,
+    samples}}`` for each of ``_PHASE_KEYS``.
     """
     return {
         phase: {
@@ -290,9 +306,12 @@ def _compute_dimension_breakdown(
 ) -> dict[str, float | None]:
     """Per-dimension Q breakdown for cold_path_q_check event payload.
 
-    Returns coherence/separation/coverage/dbcv/stability scalars; values
-    are aggregated from ``nodes`` so the event payload includes the
-    structural detail demanded by spec § 5.4 + test 10.
+    v0.4.16: per spec § 5.4, the cold_path_q_check event payload MUST
+    include `q_coherence`, `q_separation`, `q_coverage`, `q_dbcv`,
+    `q_stability` so a Q-regression failure can be reproduced from the
+    event log alone (which dimension regressed). Values are aggregated
+    from ``nodes`` (mean across non-None scalars). Returns all-None
+    breakdown when ``nodes`` is empty.
     """
     if not nodes:
         return {
@@ -302,8 +321,13 @@ def _compute_dimension_breakdown(
             "q_dbcv": None,
             "q_stability": None,
         }
-    coh = [n.coherence for n in nodes if n.coherence is not None]
-    sep = [n.separation for n in nodes if getattr(n, "separation", None) is not None]
+    # Explicit float-typed lists so mypy can prove np.mean's input is
+    # non-None (the comprehension filter narrows None out, but the column
+    # type ``float | None`` keeps the element type wider in mypy's eyes).
+    coh: list[float] = [n.coherence for n in nodes if n.coherence is not None]
+    sep: list[float] = [
+        s for s in (getattr(n, "separation", None) for n in nodes) if s is not None
+    ]
     return {
         "q_coherence": float(np.mean(coh)) if coh else None,
         "q_separation": float(np.mean(sep)) if sep else None,
@@ -322,11 +346,19 @@ def _emit_q_check_event(
     decision_label: str,
     nodes: list[PromptCluster],
 ) -> None:
-    """Emit cold_path_q_check decision event (per spec § 5.1 row 4 + § 5.4).
+    """Emit a ``cold_path_q_check`` decision event after a Q-gate runs.
 
-    Resolves ``get_event_logger`` via the module path so unit-test patches
-    targeted at ``app.services.taxonomy.event_logger.get_event_logger`` are
-    honored (see _emit_cold_event note).
+    v0.4.16: per spec § 5.1 row 4 + § 5.4, the payload MUST carry
+    ``cold_path_run_id``, ``phase`` (1 or 2), ``q_before``, ``q_after``,
+    ``delta``, ``epsilon``, ``decision`` (``pass`` | ``fail``), and the
+    per-dimension breakdown (``q_coherence``, ``q_separation``,
+    ``q_coverage``, ``q_dbcv``, ``q_stability``) so a Q-regression can
+    be reproduced from the event log alone.
+
+    Resolves ``get_event_logger`` via the module path so unit-test
+    patches targeted at
+    ``app.services.taxonomy.event_logger.get_event_logger`` are honored
+    (mirrors :func:`_emit_cold_event`).
     """
     try:
         delta: float | None
@@ -352,6 +384,61 @@ def _emit_q_check_event(
         )
     except RuntimeError:
         pass
+
+
+async def _set_quiesce_flags(
+    db: AsyncSession,
+    *,
+    expires_at_iso: str,
+) -> int:
+    """Set ``refit_in_progress_until`` on every active cluster.
+
+    v0.4.16: per spec § 3.3, this is the FIRST operation inside the
+    ``cp_pre_reembed`` SAVEPOINT — peer writers (hot/warm/seed/feedback)
+    consult this flag and SKIP while the cold path holds it. Returns the
+    number of clusters quiesced. Caller is expected to log + emit
+    `quiesced_cluster_count` in subsequent decision events.
+
+    Design choice: spec § 3.3 narrative suggests ``submit_batch()`` for
+    atomicity, but inside the cold path's outer SAVEPOINT we already have
+    transaction discipline and direct ``db.execute()`` keeps the writes
+    inside the SAVEPOINT scope without WriteQueue worker reentrancy.
+    """
+    set_q = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
+        )
+    )
+    quiesced_nodes = list(set_q.scalars().all())
+    for node in quiesced_nodes:
+        node.cluster_metadata = write_meta(
+            node.cluster_metadata,
+            refit_in_progress_until=expires_at_iso,
+        )
+    await db.flush()
+    return len(quiesced_nodes)
+
+
+async def _clear_quiesce_flags_success(db: AsyncSession) -> None:
+    """Clear ``refit_in_progress_until`` from every active cluster on success.
+
+    v0.4.16: success-path counterpart to :func:`_set_quiesce_flags`. Runs
+    inside the ``cp_pre_reembed`` SAVEPOINT after Phase 4 commits cleanly.
+    Failure paths rely on SAVEPOINT rollback + the timestamp-expiration
+    self-heal in :func:`_parse_quiesce_flag` plus the warm-path orphan
+    sweep in ``warm_phases.phase_reconcile`` (spec § 3.5).
+    """
+    clear_q = await db.execute(
+        select(PromptCluster).where(
+            PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
+        )
+    )
+    for node in clear_q.scalars().all():
+        if node.cluster_metadata and "refit_in_progress_until" in node.cluster_metadata:
+            new_meta = dict(node.cluster_metadata)
+            new_meta.pop("refit_in_progress_until", None)
+            node.cluster_metadata = new_meta
+    await db.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -618,37 +705,18 @@ async def _execute_cold_path_inner(
     # ------------------------------------------------------------------
     try:
         async with db.begin_nested() as cp_pre_reembed:
-            # v0.4.16 P1a Cycle 2: set ``refit_in_progress_until`` quiesce
-            # flag on every active cluster as the FIRST operation inside
-            # the SAVEPOINT scope.  Peer writers consult this flag and SKIP.
-            #
-            # Design choice (deviation from spec § 3.3 narrative):
-            # spec says ``submit_batch()`` for atomicity, but inside the
-            # cold-path's outer SAVEPOINT we already have transaction
-            # discipline.  Direct ``db.execute()`` keeps writes inside the
-            # SAVEPOINT scope and avoids reentrancy with the WriteQueue
-            # worker (which would block on cold-path holding the writer).
+            # v0.4.16 P1a Cycle 2: set the quiesce flag on every active
+            # cluster as the FIRST operation inside the SAVEPOINT scope so
+            # peer writers consult it and SKIP. Spec § 3.3.
             try:
                 expires_at_iso = (
                     datetime.now(timezone.utc)
                     + timedelta(minutes=COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN)
                 ).isoformat()
-                # Bulk-set quiesce flag via per-row UPDATE so cluster_metadata
-                # JSON merges cleanly (existing keys preserved).
-                set_q = await db.execute(
-                    select(PromptCluster).where(
-                        PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
-                    )
+                quiesced_cluster_count = await _set_quiesce_flags(
+                    db, expires_at_iso=expires_at_iso,
                 )
-                _quiesced_nodes = list(set_q.scalars().all())
-                for _qn in _quiesced_nodes:
-                    _qn.cluster_metadata = write_meta(
-                        _qn.cluster_metadata,
-                        refit_in_progress_until=expires_at_iso,
-                    )
-                quiesced_cluster_count = len(_quiesced_nodes)
                 phase_ctx["quiesced_cluster_count"] = quiesced_cluster_count
-                await db.flush()
             except Exception as _set_exc:
                 logger.warning(
                     "Cold path: failed to set refit_in_progress_until flag (non-fatal) "
@@ -1028,22 +1096,13 @@ async def _execute_cold_path_inner(
 
             # ----------------------------------------------------------
             # End-of-SAVEPOINT cleanup: clear quiesce flag on every active
-            # cluster (success path). Failure paths clear in the outer
-            # ``finally`` after the rollback.
+            # cluster (success path). Failure paths rely on SAVEPOINT
+            # rollback + the timestamp-expiration self-heal in
+            # _parse_quiesce_flag plus warm-path orphan sweep.
             # ----------------------------------------------------------
             if not rejected_result_holder:
                 try:
-                    clear_q = await db.execute(
-                        select(PromptCluster).where(
-                            PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
-                        )
-                    )
-                    for _cn in clear_q.scalars().all():
-                        if _cn.cluster_metadata and "refit_in_progress_until" in _cn.cluster_metadata:
-                            new_meta = dict(_cn.cluster_metadata)
-                            new_meta.pop("refit_in_progress_until", None)
-                            _cn.cluster_metadata = new_meta
-                    await db.flush()
+                    await _clear_quiesce_flags_success(db)
                 except Exception as _clear_exc:
                     logger.warning(
                         "Cold path: failed to clear refit_in_progress_until flag "
