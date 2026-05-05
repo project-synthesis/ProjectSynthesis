@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.16 — 2026-05-05
+
 ### Added
 - **v0.4.16 P1a — Cold-path commit chunking with cumulative Q-gates** — replaces whole-refit atomicity with 4-phase SAVEPOINT-bounded execution (`cp_pre_reembed` outer + 4 inner per-phase nested SAVEPOINTs). Q-checks fire after Phase 1 (re-embed) + Phase 2 (reassign); Q regression rolls back to `cp_pre_reembed` (full revert preserves "Q never drops" invariant). New `ColdPathPhaseFailure` + `ColdPathQCheckEvalFailure` typed exceptions. Module-level `_COLD_PATH_LOCK` (asyncio.Lock) serializes concurrent invocations. New `_COLD_PATH_RUN_ID` ContextVar propagates correlation IDs through phase calls. `_restore_silhouette_from_snapshot()` defensively recovers in-memory state if process crashed mid-cold-path.
 - **Peer-writer-aware quiescing** — `cluster_metadata["refit_in_progress_until"]` flag (timestamp-expiration is authoritative recovery primitive) lets peer writers (hot/warm/seed/feedback) cooperatively SKIP clusters mid-refit. 4 peer paths integrated: `engine.process_optimization` (hot path), `batch_persistence.bulk_persist`, `feedback_service.create_feedback`, seed (inherits via `bulk_persist`). Defensive `_parse_quiesce_flag()` handles 4 corruption paths (missing/non_string/iso_parse_fail/expired) with `flag_corrupt` decision events.
