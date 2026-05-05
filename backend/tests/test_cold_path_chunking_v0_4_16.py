@@ -204,8 +204,9 @@ async def test_cold_path_q_regression_phase_2_rolls_back_to_pre_refit(db_session
     commonly, the assertion that DB is unchanged fails because pre-Cycle-1
     code does whole-refit rollback differently).
     """
-    from app.services.taxonomy.cold_path import execute_cold_path
     from sqlalchemy import select
+
+    from app.services.taxonomy.cold_path import execute_cold_path
 
     await _seed_taxonomy(db_session, n_clusters=10)
     engine = _make_engine()
@@ -300,15 +301,16 @@ async def test_cold_path_phase_batch_exception_rolls_back_to_pre_refit(db_sessio
     Pre-Cycle-1: ``ColdPathPhaseFailure`` doesn't exist → ImportError →
     test fails with documented signal.
     """
-    from sqlalchemy.exc import SQLAlchemyError
     from sqlalchemy import select
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.services.taxonomy import cold_path as cp_mod
 
     # Lazy import of new exception type
     from app.services.taxonomy.cold_path import (
         ColdPathPhaseFailure,
         execute_cold_path,
     )
-    from app.services.taxonomy import cold_path as cp_mod
 
     await _seed_taxonomy(db_session, n_clusters=10)
     engine = _make_engine()
@@ -352,8 +354,8 @@ async def test_cold_path_concurrent_invocations_serialize_via_lock(db_session) -
     tasks, both stamp t_start, both sleep concurrently, both stamp t_end →
     intervals overlap → assertion fails with "got overlapping intervals".
     """
-    from app.services.taxonomy.cold_path import execute_cold_path
     from app.services.taxonomy import cold_path as cp_mod
+    from app.services.taxonomy.cold_path import execute_cold_path
 
     engine_a = _make_engine()
     engine_b = _make_engine()
@@ -450,8 +452,8 @@ async def test_cold_path_mode_flag_still_set_during_refit_in_v0_4_16(
     on a 7-day quiet period AFTER v0.4.16 ships).
     """
     from app.database import read_engine_meta
-    from app.services.taxonomy.cold_path import execute_cold_path
     from app.services.taxonomy import cold_path as cp_mod
+    from app.services.taxonomy.cold_path import execute_cold_path
 
     await _seed_taxonomy(db_session, n_clusters=4)
     engine = _make_engine()
