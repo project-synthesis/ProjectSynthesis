@@ -24,16 +24,19 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Optimization, OptimizationPattern
+from app.models import Optimization, OptimizationPattern, PromptCluster
 from app.services.event_bus import event_bus
 from app.services.taxonomy import get_engine
+from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
 from app.services.taxonomy.cluster_meta import write_meta
+from app.services.taxonomy.cold_path import _parse_quiesce_flag
 from app.services.taxonomy.event_logger import get_event_logger
 from app.services.taxonomy.family_ops import assign_cluster
 from app.services.write_queue import WriteQueue
@@ -360,18 +363,17 @@ async def batch_taxonomy_assign(
         domains_touched: set[str] = set()
         assigned = 0
 
-        # v0.4.16 P1a Cycle 2: peer-writer SKIP pre-check — query the
-        # quiesce flag once at batch entry. If any active cluster is
-        # mid-refit, drop the entire batch and re-mark the quiesced
-        # clusters in the engine's dirty_set so the next warm cycle
-        # retries.  Matches engine hot-path SKIP semantics (spec § 3.3).
-        from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
-        from app.services.taxonomy.cold_path import _parse_quiesce_flag
-        from app.models import PromptCluster as _PC
+        # v0.4.16 P1a Cycle 2: peer-writer SKIP pre-check.
+        # Spec § 3.3 — query the quiesce flag once at batch entry. If any
+        # active cluster is mid-refit, drop the entire batch and re-mark
+        # the quiesced clusters in the engine's dirty_set so the next warm
+        # cycle retries. Matches engine hot-path SKIP semantics.
         _quiesce_q = await db.execute(
-            sa_select(_PC).where(_PC.state.notin_(EXCLUDED_STRUCTURAL_STATES))
+            sa_select(PromptCluster).where(
+                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
+            )
         )
-        _quiesced_active = []
+        _quiesced_active: list[tuple[PromptCluster, datetime]] = []
         for _qn in _quiesce_q.scalars().all():
             _qexp = _parse_quiesce_flag(_qn.cluster_metadata)
             if _qexp is not None:

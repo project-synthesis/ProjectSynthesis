@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Feedback, Optimization
+from app.models import Feedback, Optimization, PromptCluster
 from app.services.adaptation_tracker import AdaptationTracker
+from app.services.taxonomy.cold_path import _parse_quiesce_flag
+from app.services.taxonomy.event_logger import get_event_logger
 
 if TYPE_CHECKING:
     from app.services.write_queue import WriteQueue
@@ -131,19 +133,18 @@ class FeedbackService:
                             optimization_id,
                         )
 
-                # v0.4.16 P1a Cycle 2: peer-writer SKIP — if the host
-                # optimization's cluster is quiesced (cold path mid-refit),
-                # skip the MetaPattern upsert.  Warm-path Phase 4 catches
-                # up via existing reconciliation (spec § 3.3).
+                # v0.4.16 P1a Cycle 2: peer-writer SKIP for feedback path.
+                # Spec § 3.3 — if the host optimization's cluster is
+                # quiesced (cold path mid-refit), skip the MetaPattern
+                # upsert. Warm-path Phase 4 catches up via existing
+                # reconciliation. Wrapped in try/except so any unexpected
+                # query/log failure degrades gracefully (the original
+                # contract is "feedback write succeeds even if the boost
+                # phase misfires").
                 try:
-                    from app.models import PromptCluster as _PC
-                    from app.services.taxonomy.cold_path import _parse_quiesce_flag
-                    from app.services.taxonomy.event_logger import (
-                        get_event_logger as _gel,
-                    )
                     cluster_q = await write_db.execute(
-                        select(_PC).join(
-                            Optimization, Optimization.cluster_id == _PC.id
+                        select(PromptCluster).join(
+                            Optimization, Optimization.cluster_id == PromptCluster.id
                         ).where(Optimization.id == optimization_id)
                     )
                     _host_cluster = cluster_q.scalar_one_or_none()
@@ -151,7 +152,7 @@ class FeedbackService:
                         _qexp = _parse_quiesce_flag(_host_cluster.cluster_metadata)
                         if _qexp is not None:
                             try:
-                                _gel().log_decision(
+                                get_event_logger().log_decision(
                                     path="cold", op="refit_quiesce_check",
                                     decision="peer_skipped",
                                     context={
