@@ -21,7 +21,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 - 6 new constants in `taxonomy/_constants.py` (P1b): `REPO_INDEX_PERSIST_BATCH_SIZE=50`, `REPO_INDEX_DELETE_BATCH_SIZE=200`, `REPO_INDEX_LOCK_TTL_MIN=30`, `REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL=5`, `REPO_INDEX_LATENCY_RESERVOIR_SIZE=1000`, `REPO_INDEX_LOCK_IDLE_EVICTION_SECONDS=3600`. `_validate_repo_index_constants()` invariant assertion fires at module import.
 
 ### Fixed
-- **HistoryPanel pagination correctness (v0.4.15 P0)** — backend now accepts `project_id` Query param on `GET /history` + `OptimizationService.list_optimizations()` accepts the matching kwarg. Frontend `getHistory()` + HistoryPanel call sites push `project_id: projectStore.currentProjectId` + `status: 'completed'` to the server, eliminating the ~9-row-per-page regression that surfaced post-ADR-005 multi-project rollout. New `$effect` re-fetches on project switch with `untrack()` race guard + capture-and-bail pattern at both fetch sites. Defensive client-side filters preserved as belt-and-suspenders.
+- **HistoryPanel pagination correctness (P0)** — backend now accepts `project_id` Query param on `GET /history` + `OptimizationService.list_optimizations()` accepts the matching kwarg. Frontend `getHistory()` + HistoryPanel call sites push `project_id: projectStore.currentProjectId` + `status: 'completed'` to the server, eliminating the ~9-row-per-page regression that surfaced post-ADR-005 multi-project rollout. New `$effect` re-fetches on project switch with `untrack()` race guard + capture-and-bail pattern at both fetch sites. Defensive client-side filters preserved as belt-and-suspenders.
 
 ## v0.4.14 — 2026-05-04
 
