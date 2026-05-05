@@ -20,8 +20,10 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 from sqlalchemy import delete, select
@@ -82,6 +84,45 @@ if TYPE_CHECKING:
     from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
+
+# Generic TypeVar for the work_fn closures threaded through
+# ``_submit_or_legacy``. Each work_fn takes a single :class:`AsyncSession`
+# and returns ``T`` (which the helper passes through unchanged).
+T = TypeVar("T")
+
+
+# ---------------------------------------------------------------------------
+# Per-build run-id correlation (v0.4.16 P1b § 12 REFACTOR item 5)
+# ---------------------------------------------------------------------------
+# A fresh hex UUID is set at the start of every ``build_index`` /
+# ``incremental_update`` invocation and reset in the matching ``finally``.
+# Cycle 1 wires it into ``logger.info`` lines so a multi-phase build can be
+# traced through stdout filtering on a single run-id. Cycle 2 will plumb the
+# same ContextVar into ``_emit_decision_event`` so SSE-side correlation lines
+# up with log-side correlation by construction.
+_REPO_INDEX_RUN_ID: ContextVar[str | None] = ContextVar(
+    "repo_index_run_id", default=None,
+)
+
+
+# ---------------------------------------------------------------------------
+# Reason-code enums (v0.4.16 P1b § 4.2 — declared but not enforced in C1)
+# ---------------------------------------------------------------------------
+# Cycle 1 lifts these to module-level frozensets so the enum surface is
+# auditable in one place; ``_emit_decision_event`` will gain an
+# ``_assert_reason_in_set`` runtime guard in Cycle 2 (per spec § 12 Cycle 2
+# REFACTOR item 3).  Until then these are documentation + a forward-compat
+# anchor — touching them now keeps Cycle 2's diff focused on the enforcement
+# helper rather than enum bookkeeping.
+_BATCH_ROLLBACK_REASONS: frozenset[str] = frozenset({
+    "phase_exception", "flush_exception",
+})
+_SKIPPED_REASONS: frozenset[str] = frozenset({
+    "lock_held", "peer_indexing", "tree_unchanged_304", "head_unchanged",
+})
+_RECOVERED_REASONS: frozenset[str] = frozenset({
+    "orphan_recovery",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +342,9 @@ class RepoIndexService:
     # Write-routing helper (v0.4.16 P1b)
     # ------------------------------------------------------------------
 
-    async def _submit_or_legacy(self, work_fn):
+    async def _submit_or_legacy(
+        self, work_fn: Callable[[AsyncSession], Awaitable[T]],
+    ) -> T:
         """Route a write through the WriteQueue when available; fall back to
         running the work_fn against ``self._db`` for backward compat.
 
@@ -383,20 +426,23 @@ class RepoIndexService:
     ) -> None:
         """Fetch repo tree, read files, embed, and store in DB.
 
-        v0.4.16 P1b — restructured into 5 phases (Phase 0 status flip,
-        Phase 1 tree fetch + chunked DELETE, Phase 2 read+embed, Phase 3
-        chunked INSERT, Phase 4 finalize meta). Each phase emits one or
-        more :meth:`WriteQueue.submit` calls when ``write_queue`` was
-        threaded into ``__init__``; the legacy single-session direct-commit
-        path is preserved when ``write_queue`` is ``None`` for backward
-        compatibility.
+        v0.4.16 P1b: routes through ``WriteQueue.submit()`` chunked at
+        ``REPO_INDEX_PERSIST_BATCH_SIZE`` (50 rows / submit) and
+        ``REPO_INDEX_DELETE_BATCH_SIZE`` (200 paths / submit); per-(repo,
+        branch) ``asyncio.Lock`` serializes concurrent invocations;
+        refit-fatal failure model — any phase exception flips
+        ``meta.status='error'`` via a final submit() and re-raises.
+        Previously-committed batches stay in the DB; the next
+        ``build_index`` Phase 1 DELETEs them. Restructured into 5 phases
+        (Phase 0 status flip, Phase 1 tree fetch + chunked DELETE, Phase 2
+        read+embed, Phase 3 chunked INSERT, Phase 4 finalize meta). The
+        legacy single-session direct-commit path is preserved when
+        ``write_queue`` is ``None`` for backward compatibility.
 
-        Concurrent invocations on the same ``(repo, branch)`` pair are
-        serialized by a per-key ``asyncio.Lock``; if the lock is already
-        held the call returns early without touching meta state. Failures
-        are refit-fatal: any phase exception flips ``meta.status='error'``
-        via a final submit() and re-raises. Previously-committed batches
-        stay in the DB; the next ``build_index`` Phase 1 DELETEs them.
+        If the per-(repo, branch) ``asyncio.Lock`` is already held the call
+        returns early without touching meta state (Cycle 1 behaviour;
+        Cycle 2 wires the ``repo_index_skipped`` decision event with
+        ``reason='lock_held'``).
         """
         # v0.4.16 P1b § 3.3 — non-blocking lock acquisition. If another
         # caller is already inside the critical section for this
@@ -406,333 +452,412 @@ class RepoIndexService:
         if lock.locked():
             return None
 
-        async with lock:
-            _REPO_INDEX_LOCK_LAST_ACQUIRED[(repo_full_name, branch)] = time.time()
+        # v0.4.16 P1b § 12 REFACTOR item 5 — fresh hex run-id per build.
+        # Threaded through ``logger.info`` lines so a multi-phase build can
+        # be traced via stdout filtering. Cycle 2 wires the same ContextVar
+        # into ``_emit_decision_event`` for SSE-side correlation.
+        run_id_token = _REPO_INDEX_RUN_ID.set(uuid.uuid4().hex)
+        try:
+            async with lock:
+                _REPO_INDEX_LOCK_LAST_ACQUIRED[(repo_full_name, branch)] = time.time()
+                await self._build_index_locked(repo_full_name, branch, token)
+        finally:
+            _REPO_INDEX_RUN_ID.reset(run_id_token)
 
-            t_start = time.monotonic()
-            logger.info("build_index started for %s@%s", repo_full_name, branch)
+    async def _build_index_locked(
+        self,
+        repo_full_name: str,
+        branch: str,
+        token: str,
+    ) -> None:
+        """Body of :meth:`build_index` after the per-(repo, branch) lock has
+        been acquired and the run-id ContextVar set. Extracted so the lock /
+        ContextVar setup stays linear in the public entry point.
+        """
+        t_start = time.monotonic()
+        logger.info(
+            "build_index started for %s@%s run_id=%s",
+            repo_full_name, branch,
+            _REPO_INDEX_RUN_ID.get(),
+        )
 
-            # Phase 0 — status='indexing' flip (one submit).
-            #
-            # Bootstrap meta against ``self._db`` (read engine) so the row
-            # exists before Phase 0's writer-routed status flip. The atomic
-            # upsert is idempotent + commit-only-on-no-row, so this read-side
-            # write does not collide with the writer engine.
-            meta = await self._get_or_create_meta(repo_full_name, branch)
-            meta_id = meta.id
+        # Phase 0 — status='indexing' flip (one submit).
+        #
+        # Bootstrap meta against ``self._db`` (read engine) so the row
+        # exists before Phase 0's writer-routed status flip. The atomic
+        # upsert is idempotent + commit-only-on-no-row, so this read-side
+        # write does not collide with the writer engine.
+        meta = await self._get_or_create_meta(repo_full_name, branch)
+        meta_id = meta.id
 
-            async def _phase0_status_flip(db: AsyncSession) -> None:
-                m = (await db.execute(
-                    select(RepoIndexMeta).where(RepoIndexMeta.id == meta_id)
-                )).scalars().first()
-                if m is None:
-                    return None
-                m.status = "indexing"
-                m.index_phase = "fetching_tree"
-                m.files_seen = 0
-                m.files_total = 0
-                m.error_message = None
+        async def _phase0_status_flip(db: AsyncSession) -> None:
+            m = (await db.execute(
+                select(RepoIndexMeta).where(RepoIndexMeta.id == meta_id)
+            )).scalars().first()
+            if m is None:
+                # Meta row vanished mid-flight (e.g. operator manually
+                # deleted it). Commit the empty txn for ``submit()``
+                # contract compliance — see ``_submit_or_legacy``.
                 await db.commit()
                 return None
+            m.status = "indexing"
+            m.index_phase = "fetching_tree"
+            m.files_seen = 0
+            m.files_total = 0
+            m.error_message = None
+            await db.commit()
+            return None
 
-            await self._submit_or_legacy(_phase0_status_flip)
-            await _publish_phase_change(
-                repo_full_name, branch,
-                phase="fetching_tree", status="indexing",
-                files_seen=0, files_total=0,
+        await self._submit_or_legacy(_phase0_status_flip)
+        await _publish_phase_change(
+            repo_full_name, branch,
+            phase="fetching_tree", status="indexing",
+            files_seen=0, files_total=0,
+        )
+
+        try:
+            head_sha = await self._gc.get_branch_head_sha(
+                token, repo_full_name, branch,
             )
 
-            try:
-                head_sha = await self._gc.get_branch_head_sha(
-                    token, repo_full_name, branch,
-                )
+            # ETag-conditioned tree fetch. If the stored etag is still
+            # valid we get a 304 and can short-circuit the whole
+            # rebuild. We only send the etag when we actually have
+            # cached rows to trust.
+            etag_to_send: str | None = None
+            if meta.tree_etag and (meta.file_count or 0) > 0:
+                etag_to_send = meta.tree_etag
+            tree, new_tree_etag = await self._gc.get_tree_with_cache(
+                token, repo_full_name, branch, etag=etag_to_send,
+            )
 
-                # ETag-conditioned tree fetch. If the stored etag is still
-                # valid we get a 304 and can short-circuit the whole
-                # rebuild. We only send the etag when we actually have
-                # cached rows to trust.
-                etag_to_send: str | None = None
-                if meta.tree_etag and (meta.file_count or 0) > 0:
-                    etag_to_send = meta.tree_etag
-                tree, new_tree_etag = await self._gc.get_tree_with_cache(
-                    token, repo_full_name, branch, etag=etag_to_send,
-                )
-
-                if tree is None:
-                    # 304 Not Modified — reuse existing file rows; advance
-                    # head_sha and mark ready (one submit).
-                    prior_count = meta.file_count or 0
-                    logger.info(
-                        "build_index: %s@%s tree unchanged (304) — "
-                        "reusing %d existing rows",
-                        repo_full_name, branch, prior_count,
-                    )
-
-                    indexed_now = datetime.now(timezone.utc)
-
-                    async def _phase4_304_short_circuit(db: AsyncSession) -> None:
-                        m = (await db.execute(
-                            select(RepoIndexMeta).where(
-                                RepoIndexMeta.id == meta_id,
-                            )
-                        )).scalars().first()
-                        if m is None:
-                            return None
-                        m.status = "ready"
-                        m.index_phase = "embedding"
-                        m.head_sha = head_sha
-                        m.files_seen = prior_count
-                        m.files_total = prior_count
-                        m.error_message = None
-                        m.indexed_at = indexed_now
-                        # tree_etag intentionally unchanged (304 echoed it).
-                        await db.commit()
-                        return None
-
-                    await self._submit_or_legacy(_phase4_304_short_circuit)
-                    await _publish_phase_change(
-                        repo_full_name, branch,
-                        phase="embedding", status="ready",
-                        files_seen=prior_count,
-                        files_total=prior_count,
-                    )
-                    return None
-
-                # Phase 1 — filter + chunked DELETE existing rows.
-                code_ext = [
-                    item for item in tree
-                    if item["path"].rfind(".") != -1
-                    and item["path"][item["path"].rfind("."):].lower()
-                    in _INDEXABLE_EXTENSIONS
-                ]
-                test_excluded = [
-                    item for item in code_ext if _is_test_file(item["path"])
-                ]
-                size_excluded = [
-                    item for item in code_ext
-                    if item.get("size") is not None
-                    and item["size"] > _MAX_FILE_SIZE
-                ]
-                indexable = [
-                    item for item in tree
-                    if _is_indexable(item["path"], item.get("size"))
-                ]
+            if tree is None:
+                # 304 Not Modified — reuse existing file rows; advance
+                # head_sha and mark ready (one submit).
+                prior_count = meta.file_count or 0
                 logger.info(
-                    "build_index filter: repo=%s tree=%d code=%d "
-                    "tests_excluded=%d size_excluded=%d indexable=%d",
-                    repo_full_name, len(tree), len(code_ext),
-                    len(test_excluded), len(size_excluded), len(indexable),
+                    "build_index: %s@%s tree unchanged (304) — "
+                    "reusing %d existing rows",
+                    repo_full_name, branch, prior_count,
                 )
 
-                # Count existing rows for chunked DELETE in Phase 1.
-                existing_paths = (await self._db.execute(
-                    select(RepoFileIndex.file_path).where(
-                        RepoFileIndex.repo_full_name == repo_full_name,
-                        RepoFileIndex.branch == branch,
-                    )
-                )).scalars().all()
-                existing_count = len(existing_paths)
-
-                if existing_count > 0:
-                    # Chunk DELETEs at REPO_INDEX_DELETE_BATCH_SIZE so a
-                    # large existing-table refit doesn't single-shot a
-                    # huge transaction.
-                    for chunk_start in range(0, existing_count, REPO_INDEX_DELETE_BATCH_SIZE):
-                        chunk = existing_paths[
-                            chunk_start:chunk_start + REPO_INDEX_DELETE_BATCH_SIZE
-                        ]
-
-                        def _make_delete_chunk_work_fn(paths: list[str]):
-                            async def _work(db: AsyncSession) -> int:
-                                await db.execute(
-                                    delete(RepoFileIndex).where(
-                                        RepoFileIndex.repo_full_name == repo_full_name,
-                                        RepoFileIndex.branch == branch,
-                                        RepoFileIndex.file_path.in_(paths),
-                                    )
-                                )
-                                await db.commit()
-                                return len(paths)
-                            return _work
-
-                        await self._submit_or_legacy(
-                            _make_delete_chunk_work_fn(list(chunk)),
-                        )
-
-                    # One submit to update the meta row's transitional fields.
-                    indexable_count = len(indexable)
-
-                    async def _phase1_meta_update(db: AsyncSession) -> None:
-                        m = (await db.execute(
-                            select(RepoIndexMeta).where(
-                                RepoIndexMeta.id == meta_id,
-                            )
-                        )).scalars().first()
-                        if m is None:
-                            return None
-                        m.index_phase = "embedding"
-                        m.files_total = indexable_count
-                        await db.commit()
-                        return None
-
-                    await self._submit_or_legacy(_phase1_meta_update)
-                else:
-                    # No existing rows — skip the DELETE chunks but still
-                    # transition phase + total to keep UI honest. We avoid
-                    # a no-op submit so the empty-table N-row build matches
-                    # the documented submit count of ⌈N/50⌉ + 2.
-                    meta.index_phase = "embedding"
-                    meta.files_total = len(indexable)
-
-                await _publish_phase_change(
-                    repo_full_name, branch,
-                    phase="embedding", status="indexing",
-                    files_seen=0, files_total=len(indexable),
-                )
-
-                # Phase 2 — read + embed (no DB writes).
-                t_read = time.monotonic()
-                processed, read_failures, embed_failures = await read_and_embed_files(
-                    db=self._db,
-                    embedding_service=self._es,
-                    github_client=self._gc,
-                    items=indexable,
-                    token=token,
-                    repo_full_name=repo_full_name,
-                    branch=branch,
-                    concurrency=10,
-                )
-                process_ms = (time.monotonic() - t_read) * 1000
-                total_content_chars = sum(len(pf.content) for pf in processed)
-
-                if read_failures:
-                    logger.warning(
-                        "build_index: %s@%s %d/%d file reads failed",
-                        repo_full_name, branch,
-                        read_failures, len(indexable),
-                    )
-
-                # Phase 3 — persist file rows in batches.
-                t_persist = time.monotonic()
-                file_count = 0
-                processed_count = len(processed)
-                for batch_start in range(0, processed_count, REPO_INDEX_PERSIST_BATCH_SIZE):
-                    batch = processed[
-                        batch_start:batch_start + REPO_INDEX_PERSIST_BATCH_SIZE
-                    ]
-
-                    def _make_persist_batch_work_fn(
-                        rows: list[ProcessedFile],
-                    ):
-                        async def _work(db: AsyncSession) -> int:
-                            for pf in rows:
-                                row = RepoFileIndex(
-                                    repo_full_name=repo_full_name,
-                                    branch=branch,
-                                    file_path=pf.item["path"],
-                                    file_sha=pf.item.get("sha"),
-                                    file_size_bytes=pf.item.get("size"),
-                                    content=pf.content,
-                                    outline=pf.outline.structural_summary,
-                                    content_sha=pf.content_sha,
-                                    embedding=pf.embedding.tobytes(),
-                                )
-                                db.add(row)
-                            await db.commit()
-                            return len(rows)
-                        return _work
-
-                    await self._submit_or_legacy(
-                        _make_persist_batch_work_fn(list(batch)),
-                    )
-                    file_count += len(batch)
-
-                # Phase 4 — finalize meta (one submit).
-                indexable_total = len(indexable)
                 indexed_now = datetime.now(timezone.utc)
 
-                async def _phase4_finalize(db: AsyncSession) -> None:
+                async def _phase4_304_short_circuit(db: AsyncSession) -> None:
                     m = (await db.execute(
                         select(RepoIndexMeta).where(
                             RepoIndexMeta.id == meta_id,
                         )
                     )).scalars().first()
                     if m is None:
+                        # Meta row vanished mid-flight; commit empty txn for
+                        # submit() contract compliance.
+                        await db.commit()
                         return None
                     m.status = "ready"
+                    m.index_phase = "embedding"
                     m.head_sha = head_sha
-                    m.file_count = file_count
-                    m.files_seen = file_count
-                    m.files_total = indexable_total
+                    m.files_seen = prior_count
+                    m.files_total = prior_count
                     m.error_message = None
                     m.indexed_at = indexed_now
-                    if new_tree_etag:
-                        m.tree_etag = new_tree_etag
+                    # tree_etag intentionally unchanged (304 echoed it).
                     await db.commit()
                     return None
 
-                await self._submit_or_legacy(_phase4_finalize)
-                # Cache safety: a full rebuild replaced every
-                # RepoFileIndex row, so any cached curated retrieval
-                # keyed on (repo, branch, query, …) is now stale.
-                invalidate_curated_cache()
+                await self._submit_or_legacy(_phase4_304_short_circuit)
                 await _publish_phase_change(
                     repo_full_name, branch,
                     phase="embedding", status="ready",
-                    files_seen=file_count, files_total=indexable_total,
+                    files_seen=prior_count,
+                    files_total=prior_count,
                 )
-                persist_ms = (time.monotonic() - t_persist) * 1000
-                total_ms = (time.monotonic() - t_start) * 1000
+                return None
 
-                logger.info(
-                    "build_index complete: repo=%s files=%d content=%dK "
-                    "read_failures=%d embed_failures=%d "
-                    "process=%.0fms persist=%.0fms total=%.0fms",
-                    repo_full_name, file_count, total_content_chars // 1000,
-                    read_failures, embed_failures,
-                    process_ms, persist_ms, total_ms,
+            # Phase 1 — filter + chunked DELETE existing rows.
+            code_ext = [
+                item for item in tree
+                if item["path"].rfind(".") != -1
+                and item["path"][item["path"].rfind("."):].lower()
+                in _INDEXABLE_EXTENSIONS
+            ]
+            test_excluded = [
+                item for item in code_ext if _is_test_file(item["path"])
+            ]
+            size_excluded = [
+                item for item in code_ext
+                if item.get("size") is not None
+                and item["size"] > _MAX_FILE_SIZE
+            ]
+            indexable = [
+                item for item in tree
+                if _is_indexable(item["path"], item.get("size"))
+            ]
+            logger.info(
+                "build_index filter: repo=%s tree=%d code=%d "
+                "tests_excluded=%d size_excluded=%d indexable=%d",
+                repo_full_name, len(tree), len(code_ext),
+                len(test_excluded), len(size_excluded), len(indexable),
+            )
+
+            # Count existing rows for chunked DELETE in Phase 1.
+            existing_paths = (await self._db.execute(
+                select(RepoFileIndex.file_path).where(
+                    RepoFileIndex.repo_full_name == repo_full_name,
+                    RepoFileIndex.branch == branch,
                 )
+            )).scalars().all()
+            existing_count = len(existing_paths)
 
-            except Exception as exc:
-                logger.exception(
-                    "build_index failed for %s@%s",
-                    repo_full_name, branch,
-                )
-                # Refit-fatal: mark meta='error' via a final error-flip
-                # submit, then re-raise. Previously-committed batches stay
-                # in the DB; the next build_index Phase 1 DELETEs them.
-                err_msg = str(exc)
-                files_seen_snapshot = meta.files_seen or 0
-                files_total_snapshot = meta.files_total or 0
+            if existing_count > 0:
+                # Chunk DELETEs at REPO_INDEX_DELETE_BATCH_SIZE so a
+                # large existing-table refit doesn't single-shot a
+                # huge transaction.
+                for chunk_start in range(0, existing_count, REPO_INDEX_DELETE_BATCH_SIZE):
+                    chunk = existing_paths[
+                        chunk_start:chunk_start + REPO_INDEX_DELETE_BATCH_SIZE
+                    ]
 
-                async def _phase_error_flip(db: AsyncSession) -> None:
+                    def _make_delete_chunk_work_fn(
+                        paths: list[str],
+                    ) -> Callable[[AsyncSession], Awaitable[int]]:
+                        async def _work(db: AsyncSession) -> int:
+                            await db.execute(
+                                delete(RepoFileIndex).where(
+                                    RepoFileIndex.repo_full_name == repo_full_name,
+                                    RepoFileIndex.branch == branch,
+                                    RepoFileIndex.file_path.in_(paths),
+                                )
+                            )
+                            await db.commit()
+                            return len(paths)
+                        return _work
+
+                    await self._submit_or_legacy(
+                        _make_delete_chunk_work_fn(list(chunk)),
+                    )
+
+                # One submit to update the meta row's transitional fields.
+                indexable_count = len(indexable)
+
+                async def _phase1_meta_update(db: AsyncSession) -> None:
                     m = (await db.execute(
                         select(RepoIndexMeta).where(
                             RepoIndexMeta.id == meta_id,
                         )
                     )).scalars().first()
                     if m is None:
+                        # Meta row vanished mid-flight; commit empty txn for
+                        # submit() contract compliance.
+                        await db.commit()
                         return None
-                    m.status = "error"
-                    m.index_phase = "error"
-                    m.error_message = err_msg
+                    m.index_phase = "embedding"
+                    m.files_total = indexable_count
                     await db.commit()
                     return None
 
-                try:
-                    await self._submit_or_legacy(_phase_error_flip)
-                except Exception:
-                    logger.debug(
-                        "build_index error-flip submit failed", exc_info=True,
-                    )
-                await _publish_phase_change(
+                await self._submit_or_legacy(_phase1_meta_update)
+            else:
+                # No existing rows — skip the DELETE chunks but still
+                # transition phase + total to keep UI honest. We avoid
+                # a no-op submit so the empty-table N-row build matches
+                # the documented submit count of ⌈N/50⌉ + 2.
+                meta.index_phase = "embedding"
+                meta.files_total = len(indexable)
+
+            await _publish_phase_change(
+                repo_full_name, branch,
+                phase="embedding", status="indexing",
+                files_seen=0, files_total=len(indexable),
+            )
+
+            # Phase 2 — read + embed (no DB writes).
+            t_read = time.monotonic()
+            processed, read_failures, embed_failures = await read_and_embed_files(
+                db=self._db,
+                embedding_service=self._es,
+                github_client=self._gc,
+                items=indexable,
+                token=token,
+                repo_full_name=repo_full_name,
+                branch=branch,
+                concurrency=10,
+            )
+            process_ms = (time.monotonic() - t_read) * 1000
+            total_content_chars = sum(len(pf.content) for pf in processed)
+
+            if read_failures:
+                logger.warning(
+                    "build_index: %s@%s %d/%d file reads failed",
                     repo_full_name, branch,
-                    phase="error", status="error",
-                    files_seen=files_seen_snapshot,
-                    files_total=files_total_snapshot,
-                    error=err_msg,
+                    read_failures, len(indexable),
                 )
-                raise
+
+            # Phase 3 — persist file rows in batches.
+            t_persist = time.monotonic()
+            file_count = 0
+            processed_count = len(processed)
+            for batch_start in range(0, processed_count, REPO_INDEX_PERSIST_BATCH_SIZE):
+                batch = processed[
+                    batch_start:batch_start + REPO_INDEX_PERSIST_BATCH_SIZE
+                ]
+
+                def _make_persist_batch_work_fn(
+                    rows: list[ProcessedFile],
+                ) -> Callable[[AsyncSession], Awaitable[int]]:
+                    async def _work(db: AsyncSession) -> int:
+                        for pf in rows:
+                            row = RepoFileIndex(
+                                repo_full_name=repo_full_name,
+                                branch=branch,
+                                file_path=pf.item["path"],
+                                file_sha=pf.item.get("sha"),
+                                file_size_bytes=pf.item.get("size"),
+                                content=pf.content,
+                                outline=pf.outline.structural_summary,
+                                content_sha=pf.content_sha,
+                                embedding=pf.embedding.tobytes(),
+                            )
+                            db.add(row)
+                        await db.commit()
+                        return len(rows)
+                    return _work
+
+                await self._submit_or_legacy(
+                    _make_persist_batch_work_fn(list(batch)),
+                )
+                file_count += len(batch)
+
+            # Phase 4 — finalize meta (one submit).
+            indexable_total = len(indexable)
+            indexed_now = datetime.now(timezone.utc)
+
+            async def _phase4_finalize(db: AsyncSession) -> None:
+                m = (await db.execute(
+                    select(RepoIndexMeta).where(
+                        RepoIndexMeta.id == meta_id,
+                    )
+                )).scalars().first()
+                if m is None:
+                    # Meta row vanished mid-flight; commit empty txn for
+                    # submit() contract compliance.
+                    await db.commit()
+                    return None
+                m.status = "ready"
+                m.head_sha = head_sha
+                m.file_count = file_count
+                m.files_seen = file_count
+                m.files_total = indexable_total
+                m.error_message = None
+                m.indexed_at = indexed_now
+                if new_tree_etag:
+                    m.tree_etag = new_tree_etag
+                await db.commit()
+                return None
+
+            await self._submit_or_legacy(_phase4_finalize)
+            # Cache safety: a full rebuild replaced every
+            # RepoFileIndex row, so any cached curated retrieval
+            # keyed on (repo, branch, query, …) is now stale.
+            invalidate_curated_cache()
+            await _publish_phase_change(
+                repo_full_name, branch,
+                phase="embedding", status="ready",
+                files_seen=file_count, files_total=indexable_total,
+            )
+            persist_ms = (time.monotonic() - t_persist) * 1000
+            total_ms = (time.monotonic() - t_start) * 1000
+
+            logger.info(
+                "build_index complete: repo=%s files=%d content=%dK "
+                "read_failures=%d embed_failures=%d "
+                "process=%.0fms persist=%.0fms total=%.0fms",
+                repo_full_name, file_count, total_content_chars // 1000,
+                read_failures, embed_failures,
+                process_ms, persist_ms, total_ms,
+            )
+
+        except GitHubApiError as exc:
+            # Transient network / auth failure from the GitHub API.
+            # Refit-fatal flip is the same as the generic-Exception path —
+            # the next build_index call DELETEs partial batches and starts
+            # clean.  Logged at WARNING (not exception) because this is a
+            # known transient class and the stack trace adds no signal.
+            # Cycle 2 wires ``reason='github_api_error'`` into the
+            # ``repo_index_failed`` decision event.
+            logger.warning(
+                "build_index failed for %s@%s — GitHubApiError: %s",
+                repo_full_name, branch, exc,
+            )
+            await self._mark_meta_error(
+                meta=meta, meta_id=meta_id,
+                repo_full_name=repo_full_name, branch=branch,
+                err_msg=str(exc),
+            )
+            raise
+        except Exception as exc:
+            # Other failure (DB IntegrityError, ForeignKey violation,
+            # filesystem read error, runtime bug). Logged at exception so
+            # the operator gets the full traceback. Same refit-fatal flip.
+            # Cycle 2 records ``reason='unknown'`` on the failure event.
+            logger.exception(
+                "build_index failed for %s@%s",
+                repo_full_name, branch,
+            )
+            await self._mark_meta_error(
+                meta=meta, meta_id=meta_id,
+                repo_full_name=repo_full_name, branch=branch,
+                err_msg=str(exc),
+            )
+            raise
+
+    async def _mark_meta_error(
+        self,
+        *,
+        meta: RepoIndexMeta,
+        meta_id: str,
+        repo_full_name: str,
+        branch: str,
+        err_msg: str,
+    ) -> None:
+        """Refit-fatal error finalize: flip meta to ``status='error'`` via
+        one ``submit()`` and publish the matching ``index_phase_changed``
+        SSE event.  Extracted so the two split except clauses in
+        :meth:`_build_index_locked` share one error-finalize path.
+        """
+        files_seen_snapshot = meta.files_seen or 0
+        files_total_snapshot = meta.files_total or 0
+
+        async def _phase_error_flip(db: AsyncSession) -> None:
+            m = (await db.execute(
+                select(RepoIndexMeta).where(
+                    RepoIndexMeta.id == meta_id,
+                )
+            )).scalars().first()
+            if m is None:
+                # Meta row vanished mid-flight; commit empty txn for
+                # submit() contract compliance.
+                await db.commit()
+                return None
+            m.status = "error"
+            m.index_phase = "error"
+            m.error_message = err_msg
+            await db.commit()
+            return None
+
+        try:
+            await self._submit_or_legacy(_phase_error_flip)
+        except Exception:
+            logger.debug(
+                "build_index error-flip submit failed", exc_info=True,
+            )
+        await _publish_phase_change(
+            repo_full_name, branch,
+            phase="error", status="error",
+            files_seen=files_seen_snapshot,
+            files_total=files_total_snapshot,
+            error=err_msg,
+        )
 
     async def get_index_status(
         self, repo_full_name: str, branch: str
@@ -760,9 +885,16 @@ class RepoIndexService:
     async def invalidate_index(self, repo_full_name: str, branch: str) -> None:
         """Delete all index entries and the meta row for this repo/branch.
 
-        v0.4.16 P1b § 3.6 — chunks file-row deletions at
-        ``REPO_INDEX_DELETE_BATCH_SIZE`` per submit, then deletes the meta
-        row in one final submit. Each submit is its own transaction.
+        v0.4.16 P1b: routes through ``WriteQueue.submit()`` chunked at
+        ``REPO_INDEX_DELETE_BATCH_SIZE`` (200 paths / submit) for file-row
+        deletions, then issues one final submit() to delete the meta row.
+        Each submit is its own transaction; an exception in any chunk
+        leaves prior chunks committed (refit-fatal failure model — the
+        next caller's chunked DELETE wipes whatever survived).  Unlike
+        ``build_index`` / ``incremental_update``, ``invalidate_index``
+        does NOT acquire the per-(repo, branch) ``asyncio.Lock`` because
+        it is called from cleanup paths (unlink, reindex) that must
+        always proceed even when a build is mid-flight.
         """
         existing_paths = (await self._db.execute(
             select(RepoFileIndex.file_path).where(
@@ -778,7 +910,9 @@ class RepoIndexService:
                 chunk_start:chunk_start + REPO_INDEX_DELETE_BATCH_SIZE
             ]
 
-            def _make_invalidate_chunk_work_fn(paths: list[str]):
+            def _make_invalidate_chunk_work_fn(
+                paths: list[str],
+            ) -> Callable[[AsyncSession], Awaitable[int]]:
                 async def _work(db: AsyncSession) -> int:
                     await db.execute(
                         delete(RepoFileIndex).where(
@@ -822,14 +956,19 @@ class RepoIndexService:
         """Incrementally update the index by diffing the current HEAD tree
         against stored ``file_sha`` values.
 
-        v0.4.16 P1b — restructured into 6 phases (A-F) per spec § 3.1.
-        Phase D chunks DELETEs at ``REPO_INDEX_DELETE_BATCH_SIZE``;
-        Phase F chunks per-row upserts at ``REPO_INDEX_PERSIST_BATCH_SIZE``
-        + 1 final meta-finalize submit. Each submit is its own
-        transaction. Concurrent invocations on the same ``(repo, branch)``
-        pair are serialized by a per-key ``asyncio.Lock``; if held the
-        call returns the existing skipped-reason result without touching
-        meta state.
+        v0.4.16 P1b: routes through ``WriteQueue.submit()`` chunked at
+        ``REPO_INDEX_PERSIST_BATCH_SIZE`` (50 upserts / submit) and
+        ``REPO_INDEX_DELETE_BATCH_SIZE`` (200 paths / submit); per-(repo,
+        branch) ``asyncio.Lock`` serializes concurrent invocations;
+        refit-fatal failure model — any exception inside a phase aborts
+        the run and re-raises after marking meta='error'. Restructured
+        into 6 phases (A-F) per spec § 3.1: Phase A status guards (read
+        only), Phase B HEAD SHA check, Phase C tree fetch + diff, Phase
+        D chunked DELETE, Phase E read + embed (no DB writes), Phase F
+        chunked upsert + finalize meta. If the per-key lock is already
+        held the call returns ``{"skipped_reason": "lock_held"}`` without
+        touching meta state (Cycle 1 behaviour; Cycle 2 wires the matching
+        ``repo_index_skipped`` decision event).
 
         Returns a summary dict::
 
@@ -841,7 +980,6 @@ class RepoIndexService:
             }
         """
         t_start = time.monotonic()
-        repo_tag = f"{repo_full_name}@{branch}"
 
         def _result(
             changed: int = 0, added: int = 0, removed: int = 0,
@@ -860,324 +998,368 @@ class RepoIndexService:
         if lock.locked():
             return _result(skipped_reason="lock_held")
 
-        async with lock:
-            _REPO_INDEX_LOCK_LAST_ACQUIRED[(repo_full_name, branch)] = time.time()
-
-            # Phase A — Status guards (read-only).
-            meta = await self.get_index_status(repo_full_name, branch)
-            if meta is None:
-                logger.info(
-                    "incremental_update: %s no meta — skipping (needs build_index)",
-                    repo_tag,
+        # v0.4.16 P1b § 12 REFACTOR item 5 — fresh hex run-id per refresh.
+        run_id_token = _REPO_INDEX_RUN_ID.set(uuid.uuid4().hex)
+        try:
+            async with lock:
+                _REPO_INDEX_LOCK_LAST_ACQUIRED[(repo_full_name, branch)] = time.time()
+                return await self._incremental_update_locked(
+                    repo_full_name, branch, token, concurrency,
+                    t_start, _result,
                 )
-                return _result(skipped_reason="no_index")
+        finally:
+            _REPO_INDEX_RUN_ID.reset(run_id_token)
 
-            if meta.status == "indexing":
-                logger.info(
-                    "incremental_update: %s currently indexing — skipping",
-                    repo_tag,
-                )
-                return _result(skipped_reason="indexing")
+    async def _incremental_update_locked(
+        self,
+        repo_full_name: str,
+        branch: str,
+        token: str,
+        concurrency: int,
+        t_start: float,
+        _result: Callable[..., dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Body of :meth:`incremental_update` after the per-(repo, branch)
+        lock has been acquired and the run-id ContextVar set. Extracted so
+        the lock / ContextVar setup stays linear in the public entry point.
+        ``_result`` is the closure-captured summary builder from
+        :meth:`incremental_update` (preserves the in-method ``elapsed_ms``
+        derivation).
+        """
+        repo_tag = f"{repo_full_name}@{branch}"
+        logger.info(
+            "incremental_update started for %s run_id=%s",
+            repo_tag, _REPO_INDEX_RUN_ID.get(),
+        )
 
-            meta_id = meta.id
-            prior_meta_etag = meta.tree_etag
-
-            # Phase B — HEAD SHA check + skip path.
-            t_sha = time.monotonic()
-            try:
-                current_sha = await self._gc.get_branch_head_sha(
-                    token, repo_full_name, branch,
-                )
-            except GitHubApiError as exc:
-                reason = _classify_github_error(exc)
-                _log_refresh_warning(
-                    repo_tag, reason,
-                    f"{repo_tag} HEAD check failed: {exc} ({reason})",
-                )
-                return _result(skipped_reason=reason)
-            except Exception as exc:
-                _log_refresh_warning(
-                    repo_tag, "network_error",
-                    f"{repo_tag} HEAD check failed: {exc}",
-                )
-                return _result(skipped_reason="network_error")
-            else:
-                _mark_refresh_recovered(repo_tag)
-            sha_ms = (time.monotonic() - t_sha) * 1000
-
-            if current_sha and meta.head_sha == current_sha:
-                logger.debug(
-                    "incremental_update: %s HEAD unchanged (%s) sha_check=%.0fms",
-                    repo_tag, current_sha[:8], sha_ms,
-                )
-                return _result(skipped_reason="head_unchanged")
-
-            # Phase C — Tree fetch + diff (in-memory).
-            t_tree = time.monotonic()
-            try:
-                tree, new_tree_etag = await self._gc.get_tree_with_cache(
-                    token, repo_full_name, branch, etag=prior_meta_etag,
-                )
-            except GitHubApiError as exc:
-                reason = _classify_github_error(exc)
-                logger.warning(
-                    "incremental_update: %s tree fetch failed: %s (%s)",
-                    repo_tag, exc, reason,
-                )
-                return _result(skipped_reason=reason)
-            except Exception as exc:
-                logger.warning(
-                    "incremental_update: %s tree fetch failed: %s",
-                    repo_tag, exc,
-                )
-                return _result(skipped_reason="network_error")
-            tree_ms = (time.monotonic() - t_tree) * 1000
-
-            # 304: tree unchanged — advance head_sha via one submit.
-            if tree is None:
-                async def _advance_head_sha_only(db: AsyncSession) -> None:
-                    m = (await db.execute(
-                        select(RepoIndexMeta).where(
-                            RepoIndexMeta.id == meta_id,
-                        )
-                    )).scalars().first()
-                    if m is None:
-                        return None
-                    m.head_sha = current_sha
-                    await db.commit()
-                    return None
-
-                await self._submit_or_legacy(_advance_head_sha_only)
-                logger.info(
-                    "incremental_update: %s tree unchanged (304) head→%s "
-                    "sha=%.0fms tree=%.0fms",
-                    repo_tag, (current_sha or "?")[:8],
-                    sha_ms, tree_ms,
-                )
-                return _result(skipped_reason="tree_unchanged")
-
-            # Build lookup from current tree (only indexable files).
-            tree_map: dict[str, dict] = {}
-            for item in tree:
-                if _is_indexable(item["path"], item.get("size")):
-                    tree_map[item["path"]] = item
-
-            # Load indexed file paths and SHAs.
-            db_result = await self._db.execute(
-                select(
-                    RepoFileIndex.file_path,
-                    RepoFileIndex.file_sha,
-                ).where(
-                    RepoFileIndex.repo_full_name == repo_full_name,
-                    RepoFileIndex.branch == branch,
-                )
-            )
-            indexed_map: dict[str, str | None] = {
-                row.file_path: row.file_sha for row in db_result.all()
-            }
-
-            # Classify into changed / added / removed.
-            t_diff = time.monotonic()
-            changed_items: list[dict] = []
-            added_items: list[dict] = []
-            removed_paths: list[str] = []
-
-            for path, item in tree_map.items():
-                if path not in indexed_map:
-                    added_items.append(item)
-                elif item.get("sha") and indexed_map[path] != item["sha"]:
-                    changed_items.append(item)
-
-            for path in indexed_map:
-                if path not in tree_map:
-                    removed_paths.append(path)
-            diff_ms = (time.monotonic() - t_diff) * 1000
-
-            total_delta = (
-                len(changed_items) + len(added_items) + len(removed_paths)
-            )
-            if total_delta == 0:
-                # SHA differs but no file-level changes (e.g. merge commit).
-                async def _advance_head_sha_no_diff(db: AsyncSession) -> None:
-                    m = (await db.execute(
-                        select(RepoIndexMeta).where(
-                            RepoIndexMeta.id == meta_id,
-                        )
-                    )).scalars().first()
-                    if m is None:
-                        return None
-                    m.head_sha = current_sha
-                    await db.commit()
-                    return None
-
-                await self._submit_or_legacy(_advance_head_sha_no_diff)
-                logger.info(
-                    "incremental_update: %s HEAD changed (→%s) but no file diffs "
-                    "sha=%.0fms tree=%.0fms",
-                    repo_tag, (current_sha or "?")[:8],
-                    sha_ms, tree_ms,
-                )
-                return _result()
-
+        # Phase A — Status guards (read-only).
+        meta = await self.get_index_status(repo_full_name, branch)
+        if meta is None:
             logger.info(
-                "incremental_diff: repo=%s changed=%d added=%d removed=%d "
-                "tree=%d indexed=%d sha=%.0fms tree=%.0fms diff=%.0fms",
+                "incremental_update: %s no meta — skipping (needs build_index)",
                 repo_tag,
-                len(changed_items), len(added_items), len(removed_paths),
-                len(tree_map), len(indexed_map),
-                sha_ms, tree_ms, diff_ms,
             )
+            return _result(skipped_reason="no_index")
 
-            # Phase D — Delete removed file rows in chunks.
-            t_delete = time.monotonic()
-            removed_count = len(removed_paths)
-            for chunk_start in range(0, removed_count, REPO_INDEX_DELETE_BATCH_SIZE):
-                chunk = removed_paths[
-                    chunk_start:chunk_start + REPO_INDEX_DELETE_BATCH_SIZE
-                ]
-
-                def _make_remove_chunk_work_fn(paths: list[str]):
-                    async def _work(db: AsyncSession) -> int:
-                        await db.execute(
-                            delete(RepoFileIndex).where(
-                                RepoFileIndex.repo_full_name == repo_full_name,
-                                RepoFileIndex.branch == branch,
-                                RepoFileIndex.file_path.in_(paths),
-                            )
-                        )
-                        await db.commit()
-                        return len(paths)
-                    return _work
-
-                await self._submit_or_legacy(
-                    _make_remove_chunk_work_fn(list(chunk)),
-                )
-            delete_ms = (time.monotonic() - t_delete) * 1000
-
-            # Phase E — Read, embed (no DB writes).
-            t_process = time.monotonic()
-            to_process = changed_items + added_items
-            processed, read_failures, embed_failures = await read_and_embed_files(
-                db=self._db,
-                embedding_service=self._es,
-                github_client=self._gc,
-                items=to_process,
-                token=token,
-                repo_full_name=repo_full_name,
-                branch=branch,
-                concurrency=concurrency,
+        if meta.status == "indexing":
+            logger.info(
+                "incremental_update: %s currently indexing — skipping",
+                repo_tag,
             )
-            process_ms = (time.monotonic() - t_process) * 1000
+            return _result(skipped_reason="indexing")
 
-            if read_failures:
-                logger.warning(
-                    "incremental_update: %s %d/%d file reads failed",
-                    repo_tag, read_failures, len(to_process),
-                )
+        meta_id = meta.id
+        prior_meta_etag = meta.tree_etag
 
-            # Phase F — Upsert changed+added in batches + finalize meta.
-            t_persist = time.monotonic()
-            upserted = 0
-            processed_count = len(processed)
-            for batch_start in range(0, processed_count, REPO_INDEX_PERSIST_BATCH_SIZE):
-                batch = processed[
-                    batch_start:batch_start + REPO_INDEX_PERSIST_BATCH_SIZE
-                ]
-
-                def _make_upsert_batch_work_fn(rows: list[ProcessedFile]):
-                    async def _work(db: AsyncSession) -> int:
-                        local_upserted = 0
-                        for pf in rows:
-                            try:
-                                stmt = sqlite_insert(RepoFileIndex).values(
-                                    id=str(uuid.uuid4()),
-                                    repo_full_name=repo_full_name,
-                                    branch=branch,
-                                    file_path=pf.item["path"],
-                                    file_sha=pf.item.get("sha"),
-                                    file_size_bytes=pf.item.get("size"),
-                                    content=pf.content,
-                                    outline=pf.outline.structural_summary,
-                                    content_sha=pf.content_sha,
-                                    embedding=pf.embedding.tobytes(),
-                                    updated_at=datetime.now(timezone.utc),
-                                ).on_conflict_do_update(
-                                    index_elements=[
-                                        "repo_full_name", "branch", "file_path",
-                                    ],
-                                    set_={
-                                        "file_sha": pf.item.get("sha"),
-                                        "file_size_bytes": pf.item.get("size"),
-                                        "content": pf.content,
-                                        "outline": pf.outline.structural_summary,
-                                        "content_sha": pf.content_sha,
-                                        "embedding": pf.embedding.tobytes(),
-                                        "updated_at": datetime.now(timezone.utc),
-                                    },
-                                )
-                                await db.execute(stmt)
-                                local_upserted += 1
-                            except Exception as db_exc:
-                                logger.warning(
-                                    "incremental_update: %s upsert failed "
-                                    "for %s: %s",
-                                    repo_tag, pf.item["path"], db_exc,
-                                )
-                        await db.commit()
-                        return local_upserted
-                    return _work
-
-                upserted += await self._submit_or_legacy(
-                    _make_upsert_batch_work_fn(list(batch)),
-                )
-            persist_ms = (time.monotonic() - t_persist) * 1000
-
-            # Phase F finale — update meta in one submit.
-            prior_count = meta.file_count or 0
-            new_count = max(
-                0, prior_count + len(added_items) - len(removed_paths),
+        # Phase B — HEAD SHA check + skip path.
+        t_sha = time.monotonic()
+        try:
+            current_sha = await self._gc.get_branch_head_sha(
+                token, repo_full_name, branch,
             )
-            indexed_now = datetime.now(timezone.utc)
+        except GitHubApiError as exc:
+            reason = _classify_github_error(exc)
+            _log_refresh_warning(
+                repo_tag, reason,
+                f"{repo_tag} HEAD check failed: {exc} ({reason})",
+            )
+            return _result(skipped_reason=reason)
+        except Exception as exc:
+            _log_refresh_warning(
+                repo_tag, "network_error",
+                f"{repo_tag} HEAD check failed: {exc}",
+            )
+            return _result(skipped_reason="network_error")
+        else:
+            _mark_refresh_recovered(repo_tag)
+        sha_ms = (time.monotonic() - t_sha) * 1000
 
-            async def _phase_f_finalize(db: AsyncSession) -> None:
+        if current_sha and meta.head_sha == current_sha:
+            logger.debug(
+                "incremental_update: %s HEAD unchanged (%s) sha_check=%.0fms",
+                repo_tag, current_sha[:8], sha_ms,
+            )
+            return _result(skipped_reason="head_unchanged")
+
+        # Phase C — Tree fetch + diff (in-memory).
+        t_tree = time.monotonic()
+        try:
+            tree, new_tree_etag = await self._gc.get_tree_with_cache(
+                token, repo_full_name, branch, etag=prior_meta_etag,
+            )
+        except GitHubApiError as exc:
+            reason = _classify_github_error(exc)
+            logger.warning(
+                "incremental_update: %s tree fetch failed: %s (%s)",
+                repo_tag, exc, reason,
+            )
+            return _result(skipped_reason=reason)
+        except Exception as exc:
+            logger.warning(
+                "incremental_update: %s tree fetch failed: %s",
+                repo_tag, exc,
+            )
+            return _result(skipped_reason="network_error")
+        tree_ms = (time.monotonic() - t_tree) * 1000
+
+        # 304: tree unchanged — advance head_sha via one submit.
+        if tree is None:
+            async def _advance_head_sha_only(db: AsyncSession) -> None:
                 m = (await db.execute(
                     select(RepoIndexMeta).where(
                         RepoIndexMeta.id == meta_id,
                     )
                 )).scalars().first()
                 if m is None:
+                    # Meta row vanished mid-flight; commit empty txn for
+                    # submit() contract compliance.
+                    await db.commit()
                     return None
                 m.head_sha = current_sha
-                m.file_count = new_count
-                m.indexed_at = indexed_now
-                if new_tree_etag:
-                    m.tree_etag = new_tree_etag
                 await db.commit()
                 return None
 
-            await self._submit_or_legacy(_phase_f_finalize)
-            invalidate_curated_cache()
-
-            total_ms = (time.monotonic() - t_start) * 1000
+            await self._submit_or_legacy(_advance_head_sha_only)
             logger.info(
-                "incremental_update_complete: repo=%s changed=%d added=%d "
-                "removed=%d upserted=%d read_fail=%d embed_fail=%d "
-                "sha=%.0fms tree=%.0fms diff=%.0fms delete=%.0fms "
-                "process=%.0fms persist=%.0fms total=%.0fms",
-                repo_tag,
-                len(changed_items), len(added_items), len(removed_paths),
-                upserted, read_failures, embed_failures,
-                sha_ms, tree_ms, diff_ms, delete_ms,
-                process_ms, persist_ms, total_ms,
+                "incremental_update: %s tree unchanged (304) head→%s "
+                "sha=%.0fms tree=%.0fms",
+                repo_tag, (current_sha or "?")[:8],
+                sha_ms, tree_ms,
+            )
+            return _result(skipped_reason="tree_unchanged")
+
+        # Build lookup from current tree (only indexable files).
+        tree_map: dict[str, dict] = {}
+        for item in tree:
+            if _is_indexable(item["path"], item.get("size")):
+                tree_map[item["path"]] = item
+
+        # Load indexed file paths and SHAs.
+        db_result = await self._db.execute(
+            select(
+                RepoFileIndex.file_path,
+                RepoFileIndex.file_sha,
+            ).where(
+                RepoFileIndex.repo_full_name == repo_full_name,
+                RepoFileIndex.branch == branch,
+            )
+        )
+        indexed_map: dict[str, str | None] = {
+            row.file_path: row.file_sha for row in db_result.all()
+        }
+
+        # Classify into changed / added / removed.
+        t_diff = time.monotonic()
+        changed_items: list[dict] = []
+        added_items: list[dict] = []
+        removed_paths: list[str] = []
+
+        for path, item in tree_map.items():
+            if path not in indexed_map:
+                added_items.append(item)
+            elif item.get("sha") and indexed_map[path] != item["sha"]:
+                changed_items.append(item)
+
+        for path in indexed_map:
+            if path not in tree_map:
+                removed_paths.append(path)
+        diff_ms = (time.monotonic() - t_diff) * 1000
+
+        total_delta = (
+            len(changed_items) + len(added_items) + len(removed_paths)
+        )
+        if total_delta == 0:
+            # SHA differs but no file-level changes (e.g. merge commit).
+            async def _advance_head_sha_no_diff(db: AsyncSession) -> None:
+                m = (await db.execute(
+                    select(RepoIndexMeta).where(
+                        RepoIndexMeta.id == meta_id,
+                    )
+                )).scalars().first()
+                if m is None:
+                    # Meta row vanished mid-flight; commit empty txn for
+                    # submit() contract compliance.
+                    await db.commit()
+                    return None
+                m.head_sha = current_sha
+                await db.commit()
+                return None
+
+            await self._submit_or_legacy(_advance_head_sha_no_diff)
+            logger.info(
+                "incremental_update: %s HEAD changed (→%s) but no file diffs "
+                "sha=%.0fms tree=%.0fms",
+                repo_tag, (current_sha or "?")[:8],
+                sha_ms, tree_ms,
+            )
+            return _result()
+
+        logger.info(
+            "incremental_diff: repo=%s changed=%d added=%d removed=%d "
+            "tree=%d indexed=%d sha=%.0fms tree=%.0fms diff=%.0fms",
+            repo_tag,
+            len(changed_items), len(added_items), len(removed_paths),
+            len(tree_map), len(indexed_map),
+            sha_ms, tree_ms, diff_ms,
+        )
+
+        # Phase D — Delete removed file rows in chunks.
+        t_delete = time.monotonic()
+        removed_count = len(removed_paths)
+        for chunk_start in range(0, removed_count, REPO_INDEX_DELETE_BATCH_SIZE):
+            chunk = removed_paths[
+                chunk_start:chunk_start + REPO_INDEX_DELETE_BATCH_SIZE
+            ]
+
+            def _make_remove_chunk_work_fn(
+                paths: list[str],
+            ) -> Callable[[AsyncSession], Awaitable[int]]:
+                async def _work(db: AsyncSession) -> int:
+                    await db.execute(
+                        delete(RepoFileIndex).where(
+                            RepoFileIndex.repo_full_name == repo_full_name,
+                            RepoFileIndex.branch == branch,
+                            RepoFileIndex.file_path.in_(paths),
+                        )
+                    )
+                    await db.commit()
+                    return len(paths)
+                return _work
+
+            await self._submit_or_legacy(
+                _make_remove_chunk_work_fn(list(chunk)),
+            )
+        delete_ms = (time.monotonic() - t_delete) * 1000
+
+        # Phase E — Read, embed (no DB writes).
+        t_process = time.monotonic()
+        to_process = changed_items + added_items
+        processed, read_failures, embed_failures = await read_and_embed_files(
+            db=self._db,
+            embedding_service=self._es,
+            github_client=self._gc,
+            items=to_process,
+            token=token,
+            repo_full_name=repo_full_name,
+            branch=branch,
+            concurrency=concurrency,
+        )
+        process_ms = (time.monotonic() - t_process) * 1000
+
+        if read_failures:
+            logger.warning(
+                "incremental_update: %s %d/%d file reads failed",
+                repo_tag, read_failures, len(to_process),
             )
 
-            return _result(
-                changed=len(changed_items),
-                added=len(added_items),
-                removed=len(removed_paths),
-                read_failures=read_failures,
-                embed_failures=embed_failures,
+        # Phase F — Upsert changed+added in batches + finalize meta.
+        t_persist = time.monotonic()
+        upserted = 0
+        processed_count = len(processed)
+        for batch_start in range(0, processed_count, REPO_INDEX_PERSIST_BATCH_SIZE):
+            batch = processed[
+                batch_start:batch_start + REPO_INDEX_PERSIST_BATCH_SIZE
+            ]
+
+            def _make_upsert_batch_work_fn(
+                rows: list[ProcessedFile],
+            ) -> Callable[[AsyncSession], Awaitable[int]]:
+                async def _work(db: AsyncSession) -> int:
+                    local_upserted = 0
+                    for pf in rows:
+                        try:
+                            stmt = sqlite_insert(RepoFileIndex).values(
+                                id=str(uuid.uuid4()),
+                                repo_full_name=repo_full_name,
+                                branch=branch,
+                                file_path=pf.item["path"],
+                                file_sha=pf.item.get("sha"),
+                                file_size_bytes=pf.item.get("size"),
+                                content=pf.content,
+                                outline=pf.outline.structural_summary,
+                                content_sha=pf.content_sha,
+                                embedding=pf.embedding.tobytes(),
+                                updated_at=datetime.now(timezone.utc),
+                            ).on_conflict_do_update(
+                                index_elements=[
+                                    "repo_full_name", "branch", "file_path",
+                                ],
+                                set_={
+                                    "file_sha": pf.item.get("sha"),
+                                    "file_size_bytes": pf.item.get("size"),
+                                    "content": pf.content,
+                                    "outline": pf.outline.structural_summary,
+                                    "content_sha": pf.content_sha,
+                                    "embedding": pf.embedding.tobytes(),
+                                    "updated_at": datetime.now(timezone.utc),
+                                },
+                            )
+                            await db.execute(stmt)
+                            local_upserted += 1
+                        except Exception as db_exc:
+                            logger.warning(
+                                "incremental_update: %s upsert failed "
+                                "for %s: %s",
+                                repo_tag, pf.item["path"], db_exc,
+                            )
+                    await db.commit()
+                    return local_upserted
+                return _work
+
+            upserted += await self._submit_or_legacy(
+                _make_upsert_batch_work_fn(list(batch)),
             )
+        persist_ms = (time.monotonic() - t_persist) * 1000
+
+        # Phase F finale — update meta in one submit.
+        prior_count = meta.file_count or 0
+        new_count = max(
+            0, prior_count + len(added_items) - len(removed_paths),
+        )
+        indexed_now = datetime.now(timezone.utc)
+
+        async def _phase_f_finalize(db: AsyncSession) -> None:
+            m = (await db.execute(
+                select(RepoIndexMeta).where(
+                    RepoIndexMeta.id == meta_id,
+                )
+            )).scalars().first()
+            if m is None:
+                # Meta row vanished mid-flight; commit empty txn for
+                # submit() contract compliance.
+                await db.commit()
+                return None
+            m.head_sha = current_sha
+            m.file_count = new_count
+            m.indexed_at = indexed_now
+            if new_tree_etag:
+                m.tree_etag = new_tree_etag
+            await db.commit()
+            return None
+
+        await self._submit_or_legacy(_phase_f_finalize)
+        invalidate_curated_cache()
+
+        total_ms = (time.monotonic() - t_start) * 1000
+        logger.info(
+            "incremental_update_complete: repo=%s changed=%d added=%d "
+            "removed=%d upserted=%d read_fail=%d embed_fail=%d "
+            "sha=%.0fms tree=%.0fms diff=%.0fms delete=%.0fms "
+            "process=%.0fms persist=%.0fms total=%.0fms",
+            repo_tag,
+            len(changed_items), len(added_items), len(removed_paths),
+            upserted, read_failures, embed_failures,
+            sha_ms, tree_ms, diff_ms, delete_ms,
+            process_ms, persist_ms, total_ms,
+        )
+
+        return _result(
+            changed=len(changed_items),
+            added=len(added_items),
+            removed=len(removed_paths),
+            read_failures=read_failures,
+            embed_failures=embed_failures,
+        )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1186,7 +1368,16 @@ class RepoIndexService:
     async def _get_or_create_meta(
         self, repo_full_name: str, branch: str
     ) -> RepoIndexMeta:
-        # Atomic upsert — prevents duplicate rows from concurrent calls
+        # Atomic upsert — prevents duplicate rows from concurrent calls.
+        #
+        # v0.4.16 P1b § 12 REFACTOR item 11 — known-retained read-engine
+        # flush. The atomic ``ON CONFLICT DO NOTHING`` upsert is idempotent
+        # and the subsequent ``self._db.flush()`` is the only read-engine
+        # write left in the lifecycle path; it is required because Phase 0
+        # (writer-routed status flip) depends on the row existing in the
+        # canonical DB. The audit-hook tolerates this single retained call
+        # site (1 of 1, not "0 new sources"); future work could push it
+        # behind a writer-routed upsert if the audit policy tightens.
         stmt = sqlite_insert(RepoIndexMeta).values(
             id=str(uuid.uuid4()),
             repo_full_name=repo_full_name,
