@@ -286,6 +286,33 @@ async def _execute_cold_path_inner(
     """Chunked cold-path body — 4 phases inside the ``cp_pre_reembed``
     outer SAVEPOINT, with per-phase Q-checks at Phase 1 and Phase 2.
 
+    v0.4.16 P1a Cycle 1: replaces the pre-Cycle-1 monolithic body with a
+    structured 4-phase decomposition.  Each phase runs inside its own
+    ``begin_nested()`` SAVEPOINT, all of which nest inside the outer
+    ``cp_pre_reembed`` anchor.  Q-gates fire at the Phase 1 and Phase 2
+    boundaries (Phases 3-4 are housekeeping with no Q-impact).
+
+    The ``phase_ctx: dict[str, Any]`` shared context carries intermediate
+    state between phases:
+
+      * ``engine`` — TaxonomyEngine instance (input)
+      * ``db`` — AsyncSession (input)
+      * ``run_id`` — UUID hex from ``_COLD_PATH_RUN_ID``
+      * ``q_before`` — pre-refit Q baseline
+      * ``saved_silhouette`` — pre-refit ``engine._last_silhouette``
+      * ``short_circuit`` — Phase 1 sets True if < 3 valid centroids
+      * ``valid_families``, ``embeddings``, ``all_nodes``, ... — Phase 1 outputs
+      * ``cluster_result`` — HDBSCAN result from Phase 1
+      * ``phase_silhouette`` — Phase 1's HDBSCAN silhouette
+      * ``q_post_phase_N`` — per-phase Q after gate
+      * ``q_after`` — canonical end-of-refit Q (set in Phase 2 gate)
+      * ``mean_coherence``, ``separation``, ``q_health_value`` — Phase 4
+        outputs feeding the post-savepoint snapshot
+      * ``snapshot_id``, ``nodes_created``, ``nodes_updated``,
+        ``umap_fitted`` — final result fields
+
+    Cycle 2 will replace this dict with a frozen TypedDict-or-dataclass.
+
     Failure modes:
       * Q regression at Phase 1 or 2 boundary: rollback to cp_pre_reembed,
         return ``ColdPathResult(accepted=False)``.
@@ -343,7 +370,15 @@ async def _execute_cold_path_inner(
         "t0": _cold_t0,
     }
 
-    rejected_result_holder: list[ColdPathResult] = []
+    # ``rejected_result_holder`` is a 1-element list used as a sentinel
+    # marker — a non-empty list means "rejection detected, build the
+    # result post-savepoint".  Typed as ``list[object]`` because the
+    # element is the module-level ``_REJECTION_SENTINEL`` (an
+    # ``object()``) — the actual ``ColdPathResult(accepted=False)`` is
+    # materialized OUTSIDE the savepoint in ``_build_rejected_result``
+    # (snapshot creation issues a commit, which would tear down the
+    # parent context manager mid-flight).
+    rejected_result_holder: list[object] = []
     rejection_pending: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -573,6 +608,11 @@ async def _run_q_gate(phase_ctx: dict[str, Any], *, phase: int) -> bool:
     regression detected. Raises ``ColdPathQCheckEvalFailure`` if
     ``_compute_q_from_nodes`` itself raises (conservative rollback target).
 
+    v0.4.16 P1a Cycle 1: introduced as the per-phase variant of the
+    pre-Cycle-1 single end-of-refit Q-gate.  Threads ``phase=N`` to
+    ``is_cold_path_non_regressive`` so observability + test injection
+    can distinguish the post-re-embed gate from the post-reassign gate.
+
     The active-set Q is recomputed from a live DB query (not relying on a
     phase_ctx-cached value) so a Q-gate fires even when phase functions
     are mocked in unit tests — the test sees ``is_cold_path_non_regressive``
@@ -654,7 +694,7 @@ async def _phase_1_reembed(phase_ctx: dict[str, Any]) -> None:
     family_by_id: dict[str, PromptCluster] = {}
     for f in families:
         try:
-            emb = np.frombuffer(f.centroid_embedding, dtype=np.float32)  # type: ignore[arg-type]
+            emb = np.frombuffer(f.centroid_embedding, dtype=np.float32)
             embeddings.append(emb)
             valid_families.append(f)
             family_by_id[f.id] = f
@@ -808,7 +848,7 @@ async def _phase_1_reembed(phase_ctx: dict[str, Any]) -> None:
             for nid, existing in existing_nodes.items():
                 try:
                     ex_emb = np.frombuffer(
-                        existing.centroid_embedding, dtype=np.float32  # type: ignore[arg-type]
+                        existing.centroid_embedding, dtype=np.float32,
                     )
                     sim = cosine_similarity(centroid, ex_emb)
                     if sim > best_sim:
@@ -1013,7 +1053,7 @@ async def _phase_2_reassign(phase_ctx: dict[str, Any]) -> None:
         .where(Optimization.cluster_id.isnot(None))
         .group_by(Optimization.cluster_id)
     )
-    actual_counts: dict[str, int] = dict(count_q.all())  # type: ignore[arg-type]
+    actual_counts: dict[str, int] = dict(count_q.all())
 
     # Step 14: Reconcile avg_score and scored_count
     score_q = await db.execute(
@@ -1342,7 +1382,7 @@ async def _phase_4_repair(phase_ctx: dict[str, Any]) -> None:
     index_centroids: dict[str, np.ndarray] = {}
     for n in active_after:
         try:
-            emb = np.frombuffer(n.centroid_embedding, dtype=np.float32)  # type: ignore[arg-type]
+            emb = np.frombuffer(n.centroid_embedding, dtype=np.float32)
             if emb.shape[0] == 384:
                 index_centroids[n.id] = emb
         except (ValueError, TypeError) as _idx_exc:
@@ -1676,6 +1716,12 @@ async def _build_rejected_result(
 ) -> ColdPathResult:
     """Write rejection snapshot + emit decision event + publish
     taxonomy_changed SSE so the frontend refreshes even on rejection.
+
+    v0.4.16 P1a Cycle 1: extracted from the inline rejection path of the
+    pre-Cycle-1 monolithic body.  Called from ``_execute_cold_path_inner``
+    AFTER the outer ``cp_pre_reembed`` SAVEPOINT exits, because
+    ``create_snapshot`` issues a ``db.commit()`` that would otherwise
+    close the parent context manager mid-flight.
 
     Mirrors the pre-Cycle-1 rejection path (lines 858-940 of the original
     cold_path.py) so existing observability hooks are preserved.
