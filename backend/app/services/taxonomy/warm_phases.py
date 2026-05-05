@@ -2115,6 +2115,54 @@ async def phase_reconcile(
     await reconcile_template_counts(db)
     await auto_retire_templates(db, result)
 
+    # --- v0.4.16 P1a Cycle 2: orphan refit_in_progress_until cleanup ---
+    # Defense-in-depth secondary recovery: primary recovery is timestamp-
+    # expiration in ``_parse_quiesce_flag`` (peer writers see the expired
+    # flag and proceed normally).  This step DELETES the metadata key
+    # entirely once the flag is stale by >5 minutes — purely cosmetic
+    # post-expiration tidying, does not affect peer-writer correctness.
+    # Spec § 3.5 + § 8 acceptance criterion 6.
+    try:
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+        from datetime import timezone as _tz
+        orphan_q = await db.execute(
+            select(PromptCluster).where(
+                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
+            )
+        )
+        _now_utc = _dt.now(_tz.utc)
+        _stale_window = _td(minutes=5)
+        orphans_cleaned = 0
+        for orphan_node in orphan_q.scalars().all():
+            meta = orphan_node.cluster_metadata or {}
+            raw = meta.get("refit_in_progress_until")
+            if not isinstance(raw, str):
+                continue
+            try:
+                parsed = _dt.fromisoformat(raw)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=_tz.utc)
+            except (ValueError, TypeError):
+                continue
+            # Only delete if the flag is stale by > 5 minutes past expiration.
+            if _now_utc > parsed + _stale_window:
+                new_meta = dict(meta)
+                new_meta.pop("refit_in_progress_until", None)
+                orphan_node.cluster_metadata = new_meta
+                orphans_cleaned += 1
+        if orphans_cleaned:
+            logger.info(
+                "phase_reconcile: cleaned %d orphan refit_in_progress_until "
+                "flag(s) (>5min past expiration)",
+                orphans_cleaned,
+            )
+            await db.flush()
+    except Exception as orphan_exc:
+        logger.debug(
+            "Orphan refit flag cleanup failed (non-fatal): %s", orphan_exc,
+        )
+
     return result
 
 

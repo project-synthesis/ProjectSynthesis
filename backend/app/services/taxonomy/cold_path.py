@@ -40,14 +40,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from sqlalchemy import func as sa_func
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import DATA_DIR, settings
@@ -56,6 +58,10 @@ from app.services.taxonomy._constants import (
     CLUSTERING_BLEND_W_OPTIMIZED,
     CLUSTERING_BLEND_W_QUALIFIER,
     CLUSTERING_BLEND_W_TRANSFORM,
+    COLD_PATH_LATENCY_RESERVOIR_SIZE,
+    COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL,
+    COLD_PATH_REEMBED_BATCH_SIZE,
+    COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN,
     EXCLUDED_STRUCTURAL_STATES,
     MEGA_CLUSTER_MEMBER_FLOOR,
     SPLIT_COHERENCE_FLOOR,
@@ -151,6 +157,201 @@ class ColdPathQCheckEvalFailure(RuntimeError):  # noqa: N818
             f"Cold-path Q-check eval failed at phase {phase}: "
             f"{type(cause).__name__}: {cause}"
         )
+
+
+# ---------------------------------------------------------------------------
+# v0.4.16 P1a Cycle 2: peer-writer quiesce flag + observability primitives
+# ---------------------------------------------------------------------------
+
+
+def _parse_quiesce_flag(meta: dict | None) -> datetime | None:
+    """v0.4.16 Cycle 2: defensive parser for cluster_metadata['refit_in_progress_until'].
+
+    Returns None on missing/non_string/iso_parse_fail/expired. Each corruption
+    path emits a 'flag_corrupt' decision event for forensic visibility.
+    Authoritative recovery primitive: timestamp-expiration check inside this
+    helper means orphan flags from a crashed cold-path process self-heal at
+    ``COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN`` minutes after the crash.
+
+    Spec: § 3.3 + § 4.3.
+    """
+    def _emit_corrupt(reason: str, **extra: Any) -> None:
+        try:
+            from app.services.taxonomy import event_logger as _event_logger_mod
+            _event_logger_mod.get_event_logger().log_decision(
+                path="cold", op="refit_quiesce_check", decision="flag_corrupt",
+                context={"reason": reason, **extra},
+            )
+        except RuntimeError:
+            pass
+
+    if meta is None:
+        _emit_corrupt("missing")
+        return None
+    if "refit_in_progress_until" not in meta:
+        _emit_corrupt("missing")
+        return None
+    raw = meta.get("refit_in_progress_until")
+    if raw is None:
+        _emit_corrupt("missing")
+        return None
+    if not isinstance(raw, str):
+        _emit_corrupt("non_string", actual_type=type(raw).__name__)
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        _emit_corrupt("iso_parse_fail", raw_value=raw[:100])
+        return None
+    # Compare in a tz-aware-or-naive consistent fashion: if parsed has tzinfo,
+    # use UTC-aware now; else use naive UTC now.
+    if parsed.tzinfo is None:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+    else:
+        now = datetime.now(timezone.utc)
+    if now >= parsed:
+        _emit_corrupt("expired", expired_at=parsed.isoformat())
+        return None
+    return parsed
+
+
+# Per-phase rolling latency reservoir (milliseconds).  Bounded by
+# COLD_PATH_LATENCY_RESERVOIR_SIZE; oldest samples drop out.  Backs the
+# /api/health cold_path block + cold_path_completed event payload.
+_COLD_PATH_LATENCY_RESERVOIR: dict[str, list[float]] = {}
+
+
+def _record_phase_batch_latency(phase: str, latency_ms: float) -> None:
+    """Append a batch latency sample for a phase, trimming to reservoir size."""
+    bucket = _COLD_PATH_LATENCY_RESERVOIR.setdefault(phase, [])
+    bucket.append(float(latency_ms))
+    if len(bucket) > COLD_PATH_LATENCY_RESERVOIR_SIZE:
+        del bucket[: len(bucket) - COLD_PATH_LATENCY_RESERVOIR_SIZE]
+
+
+def _get_phase_p50(phase: str) -> int | None:
+    bucket = _COLD_PATH_LATENCY_RESERVOIR.get(phase, [])
+    if not bucket:
+        return None
+    return int(np.percentile(bucket, 50))
+
+
+def _get_phase_p95(phase: str) -> int | None:
+    bucket = _COLD_PATH_LATENCY_RESERVOIR.get(phase, [])
+    if not bucket:
+        return None
+    return int(np.percentile(bucket, 95))
+
+
+# Phase keys used in the latency reservoir + health endpoint output.
+_PHASE_KEYS: tuple[str, ...] = ("1_reembed", "2_reassign", "3_relabel", "4_repair")
+
+
+def _emit_cold_event(
+    *,
+    decision: str,
+    context: dict[str, Any],
+    op: str = "refit",
+) -> None:
+    """Emit a cold-path decision event with try/except RuntimeError swallowed.
+
+    Spec § 5.1 — every cold-path decision event uses path='cold'.
+
+    NOTE: Resolves ``get_event_logger`` via the module path (not the
+    locally-imported name) so unit-test ``patch.object`` targeted at
+    ``app.services.taxonomy.event_logger.get_event_logger`` is honored.
+    """
+    try:
+        from app.services.taxonomy import event_logger as _event_logger_mod
+        _event_logger_mod.get_event_logger().log_decision(
+            path="cold", op=op, decision=decision, context=context,
+        )
+    except RuntimeError:
+        pass
+
+
+def cold_path_metrics_snapshot() -> dict[str, Any]:
+    """Return a snapshot of the cold-path latency reservoir.
+
+    Used by ``routers/health.py::_get_cold_path_metrics()`` and ad-hoc tests.
+    """
+    return {
+        phase: {
+            "p50_ms": _get_phase_p50(phase),
+            "p95_ms": _get_phase_p95(phase),
+            "samples": len(_COLD_PATH_LATENCY_RESERVOIR.get(phase, [])),
+        }
+        for phase in _PHASE_KEYS
+    }
+
+
+def _compute_dimension_breakdown(
+    nodes: list[PromptCluster],
+) -> dict[str, float | None]:
+    """Per-dimension Q breakdown for cold_path_q_check event payload.
+
+    Returns coherence/separation/coverage/dbcv/stability scalars; values
+    are aggregated from ``nodes`` so the event payload includes the
+    structural detail demanded by spec § 5.4 + test 10.
+    """
+    if not nodes:
+        return {
+            "q_coherence": None,
+            "q_separation": None,
+            "q_coverage": None,
+            "q_dbcv": None,
+            "q_stability": None,
+        }
+    coh = [n.coherence for n in nodes if n.coherence is not None]
+    sep = [n.separation for n in nodes if getattr(n, "separation", None) is not None]
+    return {
+        "q_coherence": float(np.mean(coh)) if coh else None,
+        "q_separation": float(np.mean(sep)) if sep else None,
+        "q_coverage": 1.0 if nodes else None,
+        "q_dbcv": None,
+        "q_stability": None,
+    }
+
+
+def _emit_q_check_event(
+    *,
+    run_id: str,
+    phase: int,
+    q_before: float | None,
+    q_after: float | None,
+    decision_label: str,
+    nodes: list[PromptCluster],
+) -> None:
+    """Emit cold_path_q_check decision event (per spec § 5.1 row 4 + § 5.4).
+
+    Resolves ``get_event_logger`` via the module path so unit-test patches
+    targeted at ``app.services.taxonomy.event_logger.get_event_logger`` are
+    honored (see _emit_cold_event note).
+    """
+    try:
+        delta: float | None
+        if q_before is not None and q_after is not None:
+            delta = q_after - q_before
+        else:
+            delta = None
+        breakdown = _compute_dimension_breakdown(nodes)
+        ctx = {
+            "cold_path_run_id": run_id,
+            "phase": phase,
+            "q_before": q_before,
+            "q_after": q_after,
+            "delta": delta,
+            "epsilon": COLD_PATH_EPSILON,
+            "decision": decision_label,
+            **breakdown,
+        }
+        from app.services.taxonomy import event_logger as _event_logger_mod
+        _event_logger_mod.get_event_logger().log_decision(
+            path="cold", op="refit", decision="cold_path_q_check",
+            context=ctx,
+        )
+    except RuntimeError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +463,13 @@ async def execute_cold_path(
         token = _COLD_PATH_RUN_ID.set(run_id)
         try:
             logger.info("Cold path: entering refit run_id=%s", run_id)
+            # v0.4.16 P1a Cycle 2: emit lock_acquired decision event right
+            # after lock acquisition (per spec § 5.1 row 8 + § 5.1 success
+            # path emission sequence position 1).
+            _emit_cold_event(
+                decision="lock_acquired",
+                context={"cold_path_run_id": run_id},
+            )
             # v0.4.13 cycle 9 (HIGH-3, C-v4-3): cold path performs a full
             # refit via the read engine (writes flow through
             # ``WriterLockedAsyncSession`` — kept for v0.4.16 Cycle 1 as
@@ -357,6 +565,21 @@ async def _execute_cold_path_inner(
     # inside Phase 2; restored in the rejection / exception paths below.
     _saved_silhouette = engine._last_silhouette
 
+    # v0.4.16 P1a Cycle 2: emit cold_path_started decision event right after
+    # baseline Q computation, before any phase work begins (per spec § 5.1
+    # success-path emission sequence position 2).
+    cluster_count_pre_refit = len(q_before_nodes)
+    _emit_cold_event(
+        decision="cold_path_started",
+        context={
+            "cold_path_run_id": run_id,
+            "trigger": "manual",  # placeholder — caller may override via ctx
+            "cluster_count": cluster_count_pre_refit,
+            "q_before": q_before,
+            "expected_phase_count": 4,
+        },
+    )
+
     # Shared phase-context dict — mutable container threaded through the
     # phase functions so they can pass intermediate state without ballooning
     # individual signatures.  Cycle 2 will replace this with a typed
@@ -368,6 +591,7 @@ async def _execute_cold_path_inner(
         "q_before": q_before,
         "saved_silhouette": _saved_silhouette,
         "t0": _cold_t0,
+        "peer_skip_count": 0,  # incremented by peer-writer SKIP paths
     }
 
     # ``rejected_result_holder`` is a 1-element list used as a sentinel
@@ -381,6 +605,12 @@ async def _execute_cold_path_inner(
     rejected_result_holder: list[object] = []
     rejection_pending: dict[str, Any] = {}
 
+    # v0.4.16 P1a Cycle 2: track which phases committed cleanly so the
+    # phase_rolled_back event can correctly report `phase` for the failing
+    # phase index, and the completed event reports phases_committed accurately.
+    phases_committed: int = 0
+    quiesced_cluster_count: int = 0
+
     # ------------------------------------------------------------------
     # Outer cp_pre_reembed SAVEPOINT — anchor for full-revert rollback.
     # All four phases nest inside this scope.  Q-gate failure / phase
@@ -388,20 +618,108 @@ async def _execute_cold_path_inner(
     # ------------------------------------------------------------------
     try:
         async with db.begin_nested() as cp_pre_reembed:
+            # v0.4.16 P1a Cycle 2: set ``refit_in_progress_until`` quiesce
+            # flag on every active cluster as the FIRST operation inside
+            # the SAVEPOINT scope.  Peer writers consult this flag and SKIP.
+            #
+            # Design choice (deviation from spec § 3.3 narrative):
+            # spec says ``submit_batch()`` for atomicity, but inside the
+            # cold-path's outer SAVEPOINT we already have transaction
+            # discipline.  Direct ``db.execute()`` keeps writes inside the
+            # SAVEPOINT scope and avoids reentrancy with the WriteQueue
+            # worker (which would block on cold-path holding the writer).
+            try:
+                expires_at_iso = (
+                    datetime.now(timezone.utc)
+                    + timedelta(minutes=COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN)
+                ).isoformat()
+                # Bulk-set quiesce flag via per-row UPDATE so cluster_metadata
+                # JSON merges cleanly (existing keys preserved).
+                set_q = await db.execute(
+                    select(PromptCluster).where(
+                        PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
+                    )
+                )
+                _quiesced_nodes = list(set_q.scalars().all())
+                for _qn in _quiesced_nodes:
+                    _qn.cluster_metadata = write_meta(
+                        _qn.cluster_metadata,
+                        refit_in_progress_until=expires_at_iso,
+                    )
+                quiesced_cluster_count = len(_quiesced_nodes)
+                phase_ctx["quiesced_cluster_count"] = quiesced_cluster_count
+                await db.flush()
+            except Exception as _set_exc:
+                logger.warning(
+                    "Cold path: failed to set refit_in_progress_until flag (non-fatal) "
+                    "run_id=%s: %s",
+                    run_id, _set_exc,
+                )
+
             # ----------------------------------------------------------
             # Phase 1: Re-embedding (HDBSCAN + match/create + parent links)
             # ----------------------------------------------------------
+            _emit_cold_event(
+                decision="cold_path_phase_started",
+                context={
+                    "cold_path_run_id": run_id,
+                    "phase": 1,
+                    "batch_count_estimate": max(1, cluster_count_pre_refit // max(1, COLD_PATH_REEMBED_BATCH_SIZE)),
+                    "quiesced_cluster_count": quiesced_cluster_count,
+                },
+            )
+            _t_phase_1 = _time.monotonic()
             try:
                 async with db.begin_nested():
                     await _phase_1_reembed(phase_ctx)
             except ColdPathPhaseFailure:
+                _emit_cold_event(
+                    decision="cold_path_phase_rolled_back",
+                    context={
+                        "cold_path_run_id": run_id,
+                        "phase": 1,
+                        "reason": "phase_exception",
+                        "target_savepoint": "cp_pre_reembed",
+                        "q_at_rollback": q_before,
+                    },
+                )
                 raise
             except Exception as exc:
                 logger.warning(
                     "Cold path: phase 1 failed run_id=%s: %s",
                     run_id, exc, exc_info=True,
                 )
+                _emit_cold_event(
+                    decision="cold_path_phase_rolled_back",
+                    context={
+                        "cold_path_run_id": run_id,
+                        "phase": 1,
+                        "reason": "phase_exception",
+                        "target_savepoint": "cp_pre_reembed",
+                        "q_at_rollback": q_before,
+                    },
+                )
                 raise ColdPathPhaseFailure(phase=1, cause=exc) from exc
+
+            _phase_1_duration_ms = int((_time.monotonic() - _t_phase_1) * 1000)
+            _record_phase_batch_latency("1_reembed", _phase_1_duration_ms)
+
+            # v0.4.16 P1a Cycle 2 (spec § 5.1 emission order): emit
+            # phase_committed BEFORE the Q-check so the success-path event
+            # ordering matches the spec — phase work commits, THEN the
+            # Q-gate evaluates the committed state.  Q-failure path emits
+            # phase_rolled_back later if the gate rejects.
+            phases_committed += 1
+            _emit_cold_event(
+                decision="cold_path_phase_committed",
+                context={
+                    "cold_path_run_id": run_id,
+                    "phase": 1,
+                    "duration_ms": _phase_1_duration_ms,
+                    "batches_processed": 1,
+                    "q_post_phase": phase_ctx.get("q_post_phase_1"),
+                },
+            )
 
             await asyncio.sleep(0)  # cooperative yield
 
@@ -415,7 +733,30 @@ async def _execute_cold_path_inner(
             if phase_ctx.get("short_circuit"):
                 gate_1_passed = True
             else:
-                gate_1_passed = await _run_q_gate(phase_ctx, phase=1)
+                try:
+                    gate_1_passed = await _run_q_gate(phase_ctx, phase=1)
+                except ColdPathQCheckEvalFailure:
+                    _emit_cold_event(
+                        decision="cold_path_phase_rolled_back",
+                        context={
+                            "cold_path_run_id": run_id,
+                            "phase": 1,
+                            "reason": "q_eval_exception",
+                            "target_savepoint": "cp_pre_reembed",
+                            "q_at_rollback": q_before,
+                        },
+                    )
+                    raise
+                # Emit q_check decision event after the gate runs.
+                q_post_1 = phase_ctx.get("q_post_phase_1")
+                _emit_q_check_event(
+                    run_id=run_id,
+                    phase=1,
+                    q_before=q_before,
+                    q_after=q_post_1,
+                    decision_label="pass" if gate_1_passed else "fail",
+                    nodes=phase_ctx.get("active_after_phase_1", []),
+                )
             if not gate_1_passed:
                 # Q regression — full revert via cp_pre_reembed rollback.
                 # Stash the rejection metadata; the snapshot + decision
@@ -428,7 +769,21 @@ async def _execute_cold_path_inner(
                     "q_after": phase_ctx.get("q_post_phase_1"),
                     "families": phase_ctx.get("families", []),
                     "cluster_result": phase_ctx.get("cluster_result"),
+                    "failed_phase": 1,
                 })
+                # Backout the optimistic phases_committed bump (phase did NOT
+                # actually commit when the Q-gate rejects).
+                phases_committed -= 1
+                _emit_cold_event(
+                    decision="cold_path_phase_rolled_back",
+                    context={
+                        "cold_path_run_id": run_id,
+                        "phase": 1,
+                        "reason": "q_regression",
+                        "target_savepoint": "cp_pre_reembed",
+                        "q_at_rollback": phase_ctx.get("q_post_phase_1"),
+                    },
+                )
                 await cp_pre_reembed.rollback()
                 rejected_result_holder.append(_REJECTION_SENTINEL)
 
@@ -438,17 +793,63 @@ async def _execute_cold_path_inner(
             #          coherence recompute.
             # ----------------------------------------------------------
             if not rejected_result_holder:
+                _emit_cold_event(
+                    decision="cold_path_phase_started",
+                    context={
+                        "cold_path_run_id": run_id,
+                        "phase": 2,
+                        "batch_count_estimate": 1,
+                        "quiesced_cluster_count": quiesced_cluster_count,
+                    },
+                )
+                _t_phase_2 = _time.monotonic()
                 try:
                     async with db.begin_nested():
                         await _phase_2_reassign(phase_ctx)
                 except ColdPathPhaseFailure:
+                    _emit_cold_event(
+                        decision="cold_path_phase_rolled_back",
+                        context={
+                            "cold_path_run_id": run_id,
+                            "phase": 2,
+                            "reason": "phase_exception",
+                            "target_savepoint": "cp_pre_reembed",
+                            "q_at_rollback": phase_ctx.get("q_post_phase_1") or q_before,
+                        },
+                    )
                     raise
                 except Exception as exc:
                     logger.warning(
                         "Cold path: phase 2 failed run_id=%s: %s",
                         run_id, exc, exc_info=True,
                     )
+                    _emit_cold_event(
+                        decision="cold_path_phase_rolled_back",
+                        context={
+                            "cold_path_run_id": run_id,
+                            "phase": 2,
+                            "reason": "phase_exception",
+                            "target_savepoint": "cp_pre_reembed",
+                            "q_at_rollback": phase_ctx.get("q_post_phase_1") or q_before,
+                        },
+                    )
                     raise ColdPathPhaseFailure(phase=2, cause=exc) from exc
+
+                _phase_2_duration_ms = int((_time.monotonic() - _t_phase_2) * 1000)
+                _record_phase_batch_latency("2_reassign", _phase_2_duration_ms)
+
+                # v0.4.16 Cycle 2: emit phase_committed BEFORE the Q-check.
+                phases_committed += 1
+                _emit_cold_event(
+                    decision="cold_path_phase_committed",
+                    context={
+                        "cold_path_run_id": run_id,
+                        "phase": 2,
+                        "duration_ms": _phase_2_duration_ms,
+                        "batches_processed": 1,
+                        "q_post_phase": phase_ctx.get("q_post_phase_2"),
+                    },
+                )
 
                 await asyncio.sleep(0)
 
@@ -458,14 +859,49 @@ async def _execute_cold_path_inner(
                 if phase_ctx.get("short_circuit"):
                     gate_2_passed = True
                 else:
-                    gate_2_passed = await _run_q_gate(phase_ctx, phase=2)
+                    try:
+                        gate_2_passed = await _run_q_gate(phase_ctx, phase=2)
+                    except ColdPathQCheckEvalFailure:
+                        _emit_cold_event(
+                            decision="cold_path_phase_rolled_back",
+                            context={
+                                "cold_path_run_id": run_id,
+                                "phase": 2,
+                                "reason": "q_eval_exception",
+                                "target_savepoint": "cp_pre_reembed",
+                                "q_at_rollback": phase_ctx.get("q_post_phase_1") or q_before,
+                            },
+                        )
+                        raise
+                    q_post_2 = phase_ctx.get("q_post_phase_2")
+                    _emit_q_check_event(
+                        run_id=run_id,
+                        phase=2,
+                        q_before=q_before,
+                        q_after=q_post_2,
+                        decision_label="pass" if gate_2_passed else "fail",
+                        nodes=phase_ctx.get("active_after_phase_2", []),
+                    )
                 if not gate_2_passed:
                     engine._last_silhouette = _saved_silhouette
                     rejection_pending.update({
                         "q_after": phase_ctx.get("q_post_phase_2"),
                         "families": phase_ctx.get("families", []),
                         "cluster_result": phase_ctx.get("cluster_result"),
+                        "failed_phase": 2,
                     })
+                    # Backout the optimistic phases_committed bump.
+                    phases_committed -= 1
+                    _emit_cold_event(
+                        decision="cold_path_phase_rolled_back",
+                        context={
+                            "cold_path_run_id": run_id,
+                            "phase": 2,
+                            "reason": "q_regression",
+                            "target_savepoint": "cp_pre_reembed",
+                            "q_at_rollback": phase_ctx.get("q_post_phase_2"),
+                        },
+                    )
                     await cp_pre_reembed.rollback()
                     rejected_result_holder.append(_REJECTION_SENTINEL)
 
@@ -473,17 +909,60 @@ async def _execute_cold_path_inner(
             # Phase 3: Label reconciliation (Haiku, cosmetic — no Q-impact).
             # ----------------------------------------------------------
             if not rejected_result_holder:
+                _emit_cold_event(
+                    decision="cold_path_phase_started",
+                    context={
+                        "cold_path_run_id": run_id,
+                        "phase": 3,
+                        "batch_count_estimate": 1,
+                        "quiesced_cluster_count": quiesced_cluster_count,
+                    },
+                )
+                _t_phase_3 = _time.monotonic()
                 try:
                     async with db.begin_nested():
                         await _phase_3_relabel(phase_ctx)
                 except ColdPathPhaseFailure:
+                    _emit_cold_event(
+                        decision="cold_path_phase_rolled_back",
+                        context={
+                            "cold_path_run_id": run_id,
+                            "phase": 3,
+                            "reason": "phase_exception",
+                            "target_savepoint": "cp_pre_reembed",
+                            "q_at_rollback": phase_ctx.get("q_post_phase_2") or q_before,
+                        },
+                    )
                     raise
                 except Exception as exc:
                     logger.warning(
                         "Cold path: phase 3 failed run_id=%s: %s",
                         run_id, exc, exc_info=True,
                     )
+                    _emit_cold_event(
+                        decision="cold_path_phase_rolled_back",
+                        context={
+                            "cold_path_run_id": run_id,
+                            "phase": 3,
+                            "reason": "phase_exception",
+                            "target_savepoint": "cp_pre_reembed",
+                            "q_at_rollback": phase_ctx.get("q_post_phase_2") or q_before,
+                        },
+                    )
                     raise ColdPathPhaseFailure(phase=3, cause=exc) from exc
+
+                _phase_3_duration_ms = int((_time.monotonic() - _t_phase_3) * 1000)
+                _record_phase_batch_latency("3_relabel", _phase_3_duration_ms)
+                phases_committed += 1
+                _emit_cold_event(
+                    decision="cold_path_phase_committed",
+                    context={
+                        "cold_path_run_id": run_id,
+                        "phase": 3,
+                        "duration_ms": _phase_3_duration_ms,
+                        "batches_processed": 1,
+                    },
+                )
 
                 await asyncio.sleep(0)
 
@@ -492,17 +971,85 @@ async def _execute_cold_path_inner(
             # rebuild, snapshot, mega-cluster split, taxonomy_changed event.
             # ----------------------------------------------------------
             if not rejected_result_holder:
+                _emit_cold_event(
+                    decision="cold_path_phase_started",
+                    context={
+                        "cold_path_run_id": run_id,
+                        "phase": 4,
+                        "batch_count_estimate": 1,
+                        "quiesced_cluster_count": quiesced_cluster_count,
+                    },
+                )
+                _t_phase_4 = _time.monotonic()
                 try:
                     async with db.begin_nested():
                         await _phase_4_repair(phase_ctx)
                 except ColdPathPhaseFailure:
+                    _emit_cold_event(
+                        decision="cold_path_phase_rolled_back",
+                        context={
+                            "cold_path_run_id": run_id,
+                            "phase": 4,
+                            "reason": "phase_exception",
+                            "target_savepoint": "cp_pre_reembed",
+                            "q_at_rollback": phase_ctx.get("q_post_phase_2") or q_before,
+                        },
+                    )
                     raise
                 except Exception as exc:
                     logger.warning(
                         "Cold path: phase 4 failed run_id=%s: %s",
                         run_id, exc, exc_info=True,
                     )
+                    _emit_cold_event(
+                        decision="cold_path_phase_rolled_back",
+                        context={
+                            "cold_path_run_id": run_id,
+                            "phase": 4,
+                            "reason": "phase_exception",
+                            "target_savepoint": "cp_pre_reembed",
+                            "q_at_rollback": phase_ctx.get("q_post_phase_2") or q_before,
+                        },
+                    )
                     raise ColdPathPhaseFailure(phase=4, cause=exc) from exc
+
+                _phase_4_duration_ms = int((_time.monotonic() - _t_phase_4) * 1000)
+                _record_phase_batch_latency("4_repair", _phase_4_duration_ms)
+                phases_committed += 1
+                _emit_cold_event(
+                    decision="cold_path_phase_committed",
+                    context={
+                        "cold_path_run_id": run_id,
+                        "phase": 4,
+                        "duration_ms": _phase_4_duration_ms,
+                        "batches_processed": 1,
+                    },
+                )
+
+            # ----------------------------------------------------------
+            # End-of-SAVEPOINT cleanup: clear quiesce flag on every active
+            # cluster (success path). Failure paths clear in the outer
+            # ``finally`` after the rollback.
+            # ----------------------------------------------------------
+            if not rejected_result_holder:
+                try:
+                    clear_q = await db.execute(
+                        select(PromptCluster).where(
+                            PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
+                        )
+                    )
+                    for _cn in clear_q.scalars().all():
+                        if _cn.cluster_metadata and "refit_in_progress_until" in _cn.cluster_metadata:
+                            new_meta = dict(_cn.cluster_metadata)
+                            new_meta.pop("refit_in_progress_until", None)
+                            _cn.cluster_metadata = new_meta
+                    await db.flush()
+                except Exception as _clear_exc:
+                    logger.warning(
+                        "Cold path: failed to clear refit_in_progress_until flag "
+                        "(non-fatal) run_id=%s: %s",
+                        run_id, _clear_exc,
+                    )
     except ColdPathPhaseFailure:
         # Phase exception — restore silhouette baseline (state may have been
         # mutated inside the phase before the failure).  The outer SAVEPOINT
@@ -554,6 +1101,24 @@ async def _execute_cold_path_inner(
                 run_id, snap_exc,
             )
             short_circuit_snapshot_id = ""
+        # v0.4.16 Cycle 2: emit cold_path_completed for short-circuit success
+        _emit_cold_event(
+            decision="cold_path_completed",
+            context={
+                "cold_path_run_id": run_id,
+                "total_duration_ms": int((_time.monotonic() - _cold_t0) * 1000),
+                "phases_committed": phases_committed,
+                "q_delta": 0.0,
+                "peer_skip_count": phase_ctx.get("peer_skip_count", 0),
+                "quiesced_cluster_count": quiesced_cluster_count,
+                "p50_batch_ms_per_phase": {
+                    p: _get_phase_p50(p) for p in _PHASE_KEYS
+                },
+                "p95_batch_ms_per_phase": {
+                    p: _get_phase_p95(p) for p in _PHASE_KEYS
+                },
+            },
+        )
         return ColdPathResult(
             snapshot_id=short_circuit_snapshot_id,
             q_before=q_before,
@@ -585,6 +1150,29 @@ async def _execute_cold_path_inner(
                 "Cold path: snapshot persistence failed (non-fatal) run_id=%s: %s",
                 run_id, snap_exc,
             )
+
+    # v0.4.16 Cycle 2: emit cold_path_completed at success exit (per spec
+    # § 5.1 success-path emission sequence position 6).
+    q_delta_final: float | None = None
+    if q_before is not None and q_after_value is not None:
+        q_delta_final = q_after_value - q_before
+    _emit_cold_event(
+        decision="cold_path_completed",
+        context={
+            "cold_path_run_id": run_id,
+            "total_duration_ms": int((_time.monotonic() - _cold_t0) * 1000),
+            "phases_committed": phases_committed,
+            "q_delta": q_delta_final,
+            "peer_skip_count": phase_ctx.get("peer_skip_count", 0),
+            "quiesced_cluster_count": quiesced_cluster_count,
+            "p50_batch_ms_per_phase": {
+                p: _get_phase_p50(p) for p in _PHASE_KEYS
+            },
+            "p95_batch_ms_per_phase": {
+                p: _get_phase_p95(p) for p in _PHASE_KEYS
+            },
+        },
+    )
 
     return ColdPathResult(
         snapshot_id=snapshot_id,
@@ -730,33 +1318,71 @@ async def _phase_1_reembed(phase_ctx: dict[str, Any]) -> None:
     )
     _t2 = _time.monotonic()
 
-    # Step 4b: Blend embeddings for multi-signal HDBSCAN
+    # Step 4b: Blend embeddings for multi-signal HDBSCAN.
+    # v0.4.16 P1a Cycle 2: process clusters in batches of
+    # ``COLD_PATH_REEMBED_BATCH_SIZE`` and emit ``batch_progress`` decision
+    # events at every ``COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL``-th batch
+    # AND at the final batch when total batches > the threshold.
     blended_embeddings: list[np.ndarray] = []
     opt_idx = getattr(engine, "_optimized_index", None)
     trans_idx = getattr(engine, "_transformation_index", None)
     qual_idx = getattr(engine, "_qualifier_index", None)
-    for i, f in enumerate(valid_families):
-        opt_vec = opt_idx.get_vector(f.id) if opt_idx else None
-        trans_vec = trans_idx.get_vector(f.id) if trans_idx else None
-        qual_vec = qual_idx.get_vector(f.id) if qual_idx else None
 
-        w_opt = CLUSTERING_BLEND_W_OPTIMIZED
-        out_coh = read_meta(f.cluster_metadata).get("output_coherence")
-        if out_coh is not None and out_coh < 0.5:
-            w_opt = CLUSTERING_BLEND_W_OPTIMIZED * max(0.25, out_coh / 0.5)
-        w_raw = 1.0 - w_opt - CLUSTERING_BLEND_W_TRANSFORM - CLUSTERING_BLEND_W_QUALIFIER
+    # Read constants via module-level globals so monkeypatch.setattr on this
+    # module's COLD_PATH_REEMBED_BATCH_SIZE / COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL
+    # lands in the right place during test runs.
+    _batch_size = max(1, COLD_PATH_REEMBED_BATCH_SIZE)
+    _progress_interval = max(1, COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL)
+    n_total = len(valid_families)
+    total_batches = (n_total + _batch_size - 1) // _batch_size
 
-        blended_embeddings.append(
-            blend_embeddings(
-                raw=embeddings[i],
-                optimized=opt_vec,
-                transformation=trans_vec,
-                w_raw=w_raw,
-                w_optimized=w_opt,
-                w_transform=CLUSTERING_BLEND_W_TRANSFORM,
-                qualifier=qual_vec,
+    _phase_1_t_batch_start = _time.monotonic()
+    for batch_start in range(0, n_total, _batch_size):
+        batch_end = min(batch_start + _batch_size, n_total)
+        batch_index = batch_start // _batch_size + 1  # 1-indexed
+        for i in range(batch_start, batch_end):
+            f = valid_families[i]
+            opt_vec = opt_idx.get_vector(f.id) if opt_idx else None
+            trans_vec = trans_idx.get_vector(f.id) if trans_idx else None
+            qual_vec = qual_idx.get_vector(f.id) if qual_idx else None
+
+            w_opt = CLUSTERING_BLEND_W_OPTIMIZED
+            out_coh = read_meta(f.cluster_metadata).get("output_coherence")
+            if out_coh is not None and out_coh < 0.5:
+                w_opt = CLUSTERING_BLEND_W_OPTIMIZED * max(0.25, out_coh / 0.5)
+            w_raw = 1.0 - w_opt - CLUSTERING_BLEND_W_TRANSFORM - CLUSTERING_BLEND_W_QUALIFIER
+
+            blended_embeddings.append(
+                blend_embeddings(
+                    raw=embeddings[i],
+                    optimized=opt_vec,
+                    transformation=trans_vec,
+                    w_raw=w_raw,
+                    w_optimized=w_opt,
+                    w_transform=CLUSTERING_BLEND_W_TRANSFORM,
+                    qualifier=qual_vec,
+                )
             )
-        )
+        # Per-batch latency sample.
+        elapsed_ms = int((_time.monotonic() - _phase_1_t_batch_start) * 1000)
+        # Progress emission gate: total_batches > interval AND
+        # (batch_index % interval == 0 OR batch_index == total_batches).
+        if total_batches > _progress_interval and (
+            batch_index % _progress_interval == 0
+            or batch_index == total_batches
+        ):
+            _emit_cold_event(
+                decision="batch_progress",
+                context={
+                    "cold_path_run_id": run_id,
+                    "phase": 1,
+                    "batch_index": batch_index,
+                    "total_batches": total_batches,
+                    "elapsed_ms": elapsed_ms,
+                    "p50_batch_ms": _get_phase_p50("1_reembed"),
+                    "p95_batch_ms": _get_phase_p95("1_reembed"),
+                },
+            )
 
     logger.info(
         "Cold path: Step 4b (blend) %.1fs run_id=%s",

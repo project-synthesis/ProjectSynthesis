@@ -131,6 +131,49 @@ class FeedbackService:
                             optimization_id,
                         )
 
+                # v0.4.16 P1a Cycle 2: peer-writer SKIP — if the host
+                # optimization's cluster is quiesced (cold path mid-refit),
+                # skip the MetaPattern upsert.  Warm-path Phase 4 catches
+                # up via existing reconciliation (spec § 3.3).
+                try:
+                    from app.models import PromptCluster as _PC
+                    from app.services.taxonomy.cold_path import _parse_quiesce_flag
+                    from app.services.taxonomy.event_logger import (
+                        get_event_logger as _gel,
+                    )
+                    cluster_q = await write_db.execute(
+                        select(_PC).join(
+                            Optimization, Optimization.cluster_id == _PC.id
+                        ).where(Optimization.id == optimization_id)
+                    )
+                    _host_cluster = cluster_q.scalar_one_or_none()
+                    if _host_cluster is not None:
+                        _qexp = _parse_quiesce_flag(_host_cluster.cluster_metadata)
+                        if _qexp is not None:
+                            try:
+                                _gel().log_decision(
+                                    path="cold", op="refit_quiesce_check",
+                                    decision="peer_skipped",
+                                    context={
+                                        "writer_path": "feedback",
+                                        "cluster_id": _host_cluster.id,
+                                        "expires_at_iso": _qexp.isoformat(),
+                                    },
+                                )
+                            except RuntimeError:
+                                pass
+                            logger.info(
+                                "Peer-writer SKIP (feedback): cluster '%s' is "
+                                "quiesced — pattern boost deferred to warm cycle",
+                                _host_cluster.label,
+                            )
+                            return _fb
+                except Exception:
+                    logger.debug(
+                        "Peer-writer SKIP check (feedback) failed (non-fatal)",
+                        exc_info=True,
+                    )
+
                 # Pattern feedback loop on the same writer session.
                 try:
                     pat_q = await write_db.execute(
