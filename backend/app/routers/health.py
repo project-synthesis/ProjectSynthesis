@@ -158,7 +158,7 @@ class HealthResponse(BaseModel):
             "v0.4.16 P1b Cycle 2 (spec § 7): repo-index observability "
             "metrics. 10 fields: last_run_at, last_run_duration_ms, "
             "last_run_files_persisted, last_run_status, last_run_op, "
-            "batches_committed_24h, batches_rolled_back_24h, "
+            "batches_committed_total, batches_rolled_back_total, "
             "p95_batch_duration_ms, p99_batch_duration_ms, active_locks. "
             "Defaults populated even when no build has run."
         ),
