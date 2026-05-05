@@ -75,6 +75,7 @@ async def run_startup_gc(
             total += await _gc_archived_zero_member_clusters(write_db)
             total += await _gc_orphan_meta_patterns(write_db)
             total += await _gc_orphan_probe_runs(write_db)
+            total += await _gc_orphan_repo_index_runs(write_db)
             total += await _gc_test_leak_optimizations(write_db)
             total += await _gc_reconcile_member_counts(write_db)
             if total > 0:
@@ -97,6 +98,7 @@ async def run_startup_gc(
     total_cleaned += await _gc_archived_zero_member_clusters(db)
     total_cleaned += await _gc_orphan_meta_patterns(db)
     total_cleaned += await _gc_orphan_probe_runs(db)
+    total_cleaned += await _gc_orphan_repo_index_runs(db)
     # v0.4.12: defense-in-depth against test-leak (Optimization rows
     # with non-uuid IDs). Production code uses uuid4() exclusively;
     # any other shape is a test fixture leak (typically `opt-NN-XX` or
@@ -292,6 +294,51 @@ async def _gc_orphan_probe_runs(db: AsyncSession) -> int:
             "(coroutine died with previous process)", cleaned,
         )
     return cleaned
+
+
+async def _gc_orphan_repo_index_runs(db: AsyncSession) -> int:
+    """Sweep stuck status='indexing' rows older than REPO_INDEX_LOCK_TTL_MIN.
+
+    v0.4.16 P1b § 3.4 — flips ``RepoIndexMeta.status='indexing'`` rows
+    whose ``indexed_at`` predates ``REPO_INDEX_LOCK_TTL_MIN`` minutes ago
+    to ``status='error'`` with the documented orphan-recovery error
+    message. Runs only at lifespan startup (before user requests can
+    trigger ``_bg_index``), so there is no race window with concurrent
+    builds.
+
+    Outer caller (``run_startup_gc``) commits at the end of the sweep —
+    this helper does NOT commit internally, matching the
+    ``_gc_orphan_probe_runs`` convention.
+
+    Cycle 2 will additionally:
+      * publish ``index_phase_changed`` SSE per stuck row,
+      * emit ``repo_index_recovered`` decision event per stuck row.
+
+    Returns the count of rows flipped to ``status='error'``.
+    """
+    from app.models import RepoIndexMeta
+    from app.services.taxonomy._constants import REPO_INDEX_LOCK_TTL_MIN
+
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=REPO_INDEX_LOCK_TTL_MIN,
+    )
+    q = await db.execute(
+        select(RepoIndexMeta).where(
+            RepoIndexMeta.status == "indexing",
+            RepoIndexMeta.indexed_at < cutoff,
+        )
+    )
+    stuck = q.scalars().all()
+    for meta in stuck:
+        meta.status = "error"
+        meta.index_phase = "error"
+        meta.error_message = "orphan_recovery: crashed mid-build"
+    if stuck:
+        logger.info(
+            "GC: flipped %d orphan repo_index_meta rows to status='error' "
+            "(crashed mid-build)", len(stuck),
+        )
+    return len(stuck)
 
 
 async def _gc_test_leak_optimizations(db: AsyncSession) -> int:
