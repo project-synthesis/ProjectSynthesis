@@ -44,7 +44,7 @@ BACKEND_TESTS_DIR = Path(__file__).resolve().parent
 # Autouse cleanup — module-level state hygiene
 # ---------------------------------------------------------------------------
 # v0.4.16 P1b GREEN follow-up: the chunking tests acquire per-(repo, branch)
-# locks + populate `_REPO_INDEX_LAST_ACQUIRED` + `_REPO_INDEX_QUEUE_SUBMIT_LOCKS`
+# locks + populate `_REPO_INDEX_LOCK_LAST_ACQUIRED` + `_REPO_INDEX_QUEUE_SUBMIT_LOCKS`
 # in module-level dicts on `app.services.repo_index_service`. They also use
 # `with patch("app.services.repo_index_service.read_and_embed_files", ...)`
 # concurrently in OPERATE test #16, which races on `patch()`'s internal "store
@@ -54,8 +54,8 @@ BACKEND_TESTS_DIR = Path(__file__).resolve().parent
 # holds.
 @pytest.fixture(autouse=True)
 def _reset_repo_index_module_state():
-    from app.services import repo_index_service as _ris
     from app.services import repo_index_file_reader as _rifr
+    from app.services import repo_index_service as _ris
 
     # Snapshot the canonical reference so we can restore even if a leaky
     # patch left a stub in `_ris.read_and_embed_files`.
@@ -274,7 +274,7 @@ async def test_build_index_submit_count_matches_phase_decomposition(db_session) 
             db=db_session,
             github_client=gc,
             embedding_service=es,
-            write_queue=queue,
+            write_queue=queue,  # type: ignore[arg-type]
         )
         await svc.build_index("owner/repo-A", "main", "ghp_token")
 
@@ -304,7 +304,7 @@ async def test_build_index_submit_count_matches_phase_decomposition(db_session) 
             db=db_session,
             github_client=gc_b,
             embedding_service=es,
-            write_queue=queue_b,
+            write_queue=queue_b,  # type: ignore[arg-type]
         )
         await svc_b.build_index("owner/repo-B", "main", "ghp_token")
 
@@ -367,7 +367,7 @@ async def test_incremental_update_phase_f_emits_ceil_m_div_50_plus_one_submits(
             db=db_session,
             github_client=gc,
             embedding_service=es,
-            write_queue=queue,
+            write_queue=queue,  # type: ignore[arg-type]
         )
         await svc.incremental_update(repo, branch, "ghp_token")
 
@@ -414,7 +414,7 @@ async def test_failing_batch_marks_meta_error_and_reraises_no_completed_event(
                 db=db_session,
                 github_client=gc,
                 embedding_service=es,
-                write_queue=queue,
+                write_queue=queue,  # type: ignore[arg-type]
             )
             with pytest.raises(Exception):
                 await svc.build_index("owner/repo-fail", "main", "ghp_token")
@@ -478,11 +478,11 @@ async def test_concurrent_same_key_serializes_via_lock(db_session) -> None:
 
         svc1 = RepoIndexService(
             db=db_session, github_client=gc1, embedding_service=es,
-            write_queue=queue,
+            write_queue=queue,  # type: ignore[arg-type]
         )
         svc2 = RepoIndexService(
             db=db_session, github_client=gc2, embedding_service=es,
-            write_queue=queue,
+            write_queue=queue,  # type: ignore[arg-type]
         )
 
         t1 = asyncio.create_task(svc1.build_index(repo, branch, "tok1"))
@@ -558,11 +558,11 @@ async def test_concurrent_different_keys_proceed_in_parallel(db_session) -> None
 
     svc_a = RepoIndexService(
         db=db_session, github_client=gc_a, embedding_service=es,
-        write_queue=queue,
+        write_queue=queue,  # type: ignore[arg-type]
     )
     svc_b = RepoIndexService(
         db=db_session, github_client=gc_b, embedding_service=es,
-        write_queue=queue,
+        write_queue=queue,  # type: ignore[arg-type]
     )
 
     # Different patches for the two repos.
@@ -723,7 +723,7 @@ async def test_audit_hook_emits_zero_warnings_during_100_file_rebuild(
             db=db_session,
             github_client=gc,
             embedding_service=es,
-            write_queue=queue,
+            write_queue=queue,  # type: ignore[arg-type]
         )
         await svc.build_index("owner/audit-100", "main", "ghp_token")
 
@@ -765,7 +765,7 @@ async def test_zero_file_repo_completes_build_with_two_submits(db_session) -> No
             db=db_session,
             github_client=gc,
             embedding_service=es,
-            write_queue=queue,
+            write_queue=queue,  # type: ignore[arg-type]
         )
         await svc.build_index("owner/empty-repo", "main", "ghp_token")
 
@@ -895,7 +895,7 @@ async def test_invalidate_index_routes_through_write_queue(db_session) -> None:
         db=db_session,
         github_client=gc,
         embedding_service=es,
-        write_queue=queue,
+        write_queue=queue,  # type: ignore[arg-type]
     )
     await svc.invalidate_index(repo, branch)
 
@@ -947,11 +947,11 @@ async def test_each_batch_commits_independently_via_separate_submit_calls(
                 local_count["n"] += 1
                 return await orig_commit()
 
-            self._db.commit = _counting_commit  # type: ignore[method-assign]
+            self._db.commit = _counting_commit
             try:
                 result = await work(self._db)
             finally:
-                self._db.commit = orig_commit  # type: ignore[method-assign]
+                self._db.commit = orig_commit
             commit_counts.append(local_count["n"])
             return result
 
@@ -971,7 +971,7 @@ async def test_each_batch_commits_independently_via_separate_submit_calls(
             db=db_session,
             github_client=gc,
             embedding_service=es,
-            write_queue=queue,
+            write_queue=queue,  # type: ignore[arg-type]
         )
         await svc.build_index("owner/independent-repo", "main", "ghp_token")
 
@@ -1031,11 +1031,11 @@ async def test_lock_held_during_concurrent_call_skips_second_invocation(
                 db=db_session,
                 github_client=gc,
                 embedding_service=es,
-                write_queue=queue,
+                write_queue=queue,  # type: ignore[arg-type]
             )
 
             t_start = time.monotonic()
-            result = await svc.build_index(repo, branch, "tok")
+            result = await svc.build_index(repo, branch, "tok")  # type: ignore[func-returns-value]
             elapsed_ms = (time.monotonic() - t_start) * 1000
 
             assert elapsed_ms < 200, (
@@ -1170,7 +1170,7 @@ async def test_concurrent_persist_under_load_no_audit_warns(
         gc = _gc_for(paths_a)
         svc = RepoIndexService(
             db=db_session, github_client=gc, embedding_service=es,
-            write_queue=queue,
+            write_queue=queue,  # type: ignore[arg-type]
         )
         with patch(
             "app.services.repo_index_service.read_and_embed_files",

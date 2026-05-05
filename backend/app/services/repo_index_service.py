@@ -324,6 +324,11 @@ class RepoIndexService:
         embedding_service: EmbeddingService,
         write_queue: "WriteQueue | None" = None,
     ) -> None:
+        """Construct a service instance bound to a read-engine ``db`` session,
+        a ``github_client`` for tree/file fetches, an ``embedding_service``
+        for content vectorization, and an optional ``write_queue`` that
+        routes DB writes off the read engine when supplied.
+        """
         self._db = db
         self._gc = github_client
         self._es = embedding_service
@@ -537,8 +542,9 @@ class RepoIndexService:
                 prior_count = meta.file_count or 0
                 logger.info(
                     "build_index: %s@%s tree unchanged (304) — "
-                    "reusing %d existing rows",
+                    "reusing %d existing rows run_id=%s",
                     repo_full_name, branch, prior_count,
+                    _REPO_INDEX_RUN_ID.get(),
                 )
 
                 indexed_now = datetime.now(timezone.utc)
@@ -595,9 +601,10 @@ class RepoIndexService:
             ]
             logger.info(
                 "build_index filter: repo=%s tree=%d code=%d "
-                "tests_excluded=%d size_excluded=%d indexable=%d",
+                "tests_excluded=%d size_excluded=%d indexable=%d run_id=%s",
                 repo_full_name, len(tree), len(code_ext),
                 len(test_excluded), len(size_excluded), len(indexable),
+                _REPO_INDEX_RUN_ID.get(),
             )
 
             # Count existing rows for chunked DELETE in Phase 1.
@@ -657,13 +664,16 @@ class RepoIndexService:
                     return None
 
                 await self._submit_or_legacy(_phase1_meta_update)
-            else:
-                # No existing rows — skip the DELETE chunks but still
-                # transition phase + total to keep UI honest. We avoid
-                # a no-op submit so the empty-table N-row build matches
-                # the documented submit count of ⌈N/50⌉ + 2.
-                meta.index_phase = "embedding"
-                meta.files_total = len(indexable)
+            # else: no existing rows — skip the DELETE chunks AND skip the
+            # meta-update submit so the empty-table N-row build matches the
+            # documented submit count of ⌈N/50⌉ + 2. The previous version
+            # mutated ``meta.index_phase`` + ``meta.files_total`` directly on
+            # the read-engine ORM object here to "keep the UI honest", but
+            # those mutations were dead-on-arrival: the SSE phase-change
+            # publish below already passes ``len(indexable)`` directly via
+            # ``files_total=``, and SQLAlchemy autoflush would have generated
+            # an UPDATE on the read engine the next time we executed a SELECT,
+            # tripping the read-engine audit hook in production.
 
             await _publish_phase_change(
                 repo_full_name, branch,
@@ -744,6 +754,11 @@ class RepoIndexService:
                     await db.commit()
                     return None
                 m.status = "ready"
+                # Empty-existing-rows path skips Phase 1's meta-update submit,
+                # so Phase 4 must also pin ``index_phase='embedding'`` to keep
+                # the canonical writer-engine row's terminal state consistent
+                # across both paths (existing-rows & empty-table).
+                m.index_phase = "embedding"
                 m.head_sha = head_sha
                 m.file_count = file_count
                 m.files_seen = file_count
@@ -771,10 +786,11 @@ class RepoIndexService:
             logger.info(
                 "build_index complete: repo=%s files=%d content=%dK "
                 "read_failures=%d embed_failures=%d "
-                "process=%.0fms persist=%.0fms total=%.0fms",
+                "process=%.0fms persist=%.0fms total=%.0fms run_id=%s",
                 repo_full_name, file_count, total_content_chars // 1000,
                 read_failures, embed_failures,
                 process_ms, persist_ms, total_ms,
+                _REPO_INDEX_RUN_ID.get(),
             )
 
         except GitHubApiError as exc:
@@ -825,6 +841,11 @@ class RepoIndexService:
         SSE event.  Extracted so the two split except clauses in
         :meth:`_build_index_locked` share one error-finalize path.
         """
+        # Best-effort snapshot from the read-engine ORM object — values may
+        # be stale relative to writer-engine state (e.g. an in-flight Phase 3
+        # batch may have advanced ``files_seen`` since the failure point).
+        # The SSE event payload is informational; the canonical state lives
+        # on the writer-engine row that ``_phase_error_flip`` updates below.
         files_seen_snapshot = meta.files_seen or 0
         files_total_snapshot = meta.files_total or 0
 
@@ -952,7 +973,7 @@ class RepoIndexService:
         branch: str,
         token: str,
         concurrency: int = 5,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Incrementally update the index by diffing the current HEAD tree
         against stored ``file_sha`` values.
 
@@ -985,7 +1006,7 @@ class RepoIndexService:
             changed: int = 0, added: int = 0, removed: int = 0,
             read_failures: int = 0, embed_failures: int = 0,
             skipped_reason: str | None = None,
-        ) -> dict:
+        ) -> dict[str, Any]:
             return {
                 "changed": changed, "added": added, "removed": removed,
                 "read_failures": read_failures, "embed_failures": embed_failures,
@@ -1036,15 +1057,17 @@ class RepoIndexService:
         meta = await self.get_index_status(repo_full_name, branch)
         if meta is None:
             logger.info(
-                "incremental_update: %s no meta — skipping (needs build_index)",
-                repo_tag,
+                "incremental_update: %s no meta — skipping (needs build_index) "
+                "run_id=%s",
+                repo_tag, _REPO_INDEX_RUN_ID.get(),
             )
             return _result(skipped_reason="no_index")
 
         if meta.status == "indexing":
             logger.info(
-                "incremental_update: %s currently indexing — skipping",
-                repo_tag,
+                "incremental_update: %s currently indexing — skipping "
+                "run_id=%s",
+                repo_tag, _REPO_INDEX_RUN_ID.get(),
             )
             return _result(skipped_reason="indexing")
 
@@ -1122,9 +1145,10 @@ class RepoIndexService:
             await self._submit_or_legacy(_advance_head_sha_only)
             logger.info(
                 "incremental_update: %s tree unchanged (304) head→%s "
-                "sha=%.0fms tree=%.0fms",
+                "sha=%.0fms tree=%.0fms run_id=%s",
                 repo_tag, (current_sha or "?")[:8],
                 sha_ms, tree_ms,
+                _REPO_INDEX_RUN_ID.get(),
             )
             return _result(skipped_reason="tree_unchanged")
 
@@ -1188,19 +1212,21 @@ class RepoIndexService:
             await self._submit_or_legacy(_advance_head_sha_no_diff)
             logger.info(
                 "incremental_update: %s HEAD changed (→%s) but no file diffs "
-                "sha=%.0fms tree=%.0fms",
+                "sha=%.0fms tree=%.0fms run_id=%s",
                 repo_tag, (current_sha or "?")[:8],
                 sha_ms, tree_ms,
+                _REPO_INDEX_RUN_ID.get(),
             )
             return _result()
 
         logger.info(
             "incremental_diff: repo=%s changed=%d added=%d removed=%d "
-            "tree=%d indexed=%d sha=%.0fms tree=%.0fms diff=%.0fms",
+            "tree=%d indexed=%d sha=%.0fms tree=%.0fms diff=%.0fms run_id=%s",
             repo_tag,
             len(changed_items), len(added_items), len(removed_paths),
             len(tree_map), len(indexed_map),
             sha_ms, tree_ms, diff_ms,
+            _REPO_INDEX_RUN_ID.get(),
         )
 
         # Phase D — Delete removed file rows in chunks.
@@ -1345,12 +1371,13 @@ class RepoIndexService:
             "incremental_update_complete: repo=%s changed=%d added=%d "
             "removed=%d upserted=%d read_fail=%d embed_fail=%d "
             "sha=%.0fms tree=%.0fms diff=%.0fms delete=%.0fms "
-            "process=%.0fms persist=%.0fms total=%.0fms",
+            "process=%.0fms persist=%.0fms total=%.0fms run_id=%s",
             repo_tag,
             len(changed_items), len(added_items), len(removed_paths),
             upserted, read_failures, embed_failures,
             sha_ms, tree_ms, diff_ms, delete_ms,
             process_ms, persist_ms, total_ms,
+            _REPO_INDEX_RUN_ID.get(),
         )
 
         return _result(
@@ -1368,16 +1395,18 @@ class RepoIndexService:
     async def _get_or_create_meta(
         self, repo_full_name: str, branch: str
     ) -> RepoIndexMeta:
-        # Atomic upsert — prevents duplicate rows from concurrent calls.
-        #
-        # v0.4.16 P1b § 12 REFACTOR item 11 — known-retained read-engine
-        # flush. The atomic ``ON CONFLICT DO NOTHING`` upsert is idempotent
-        # and the subsequent ``self._db.flush()`` is the only read-engine
-        # write left in the lifecycle path; it is required because Phase 0
-        # (writer-routed status flip) depends on the row existing in the
-        # canonical DB. The audit-hook tolerates this single retained call
-        # site (1 of 1, not "0 new sources"); future work could push it
-        # behind a writer-routed upsert if the audit policy tightens.
+        """Idempotent atomic upsert of the ``RepoIndexMeta`` row for
+        ``(repo_full_name, branch)``, returning the live row.
+
+        Uses ``INSERT ... ON CONFLICT DO NOTHING`` so concurrent callers
+        cannot create duplicate rows. The subsequent ``self._db.flush()``
+        is the one known-retained read-engine write in the lifecycle path;
+        Phase 0's writer-routed status flip depends on the row already
+        existing in the canonical DB before it issues its UPDATE. The
+        audit-hook tolerates this single retained call site (1 of 1, not
+        "0 new sources"); future work could push it behind a writer-routed
+        upsert if the audit policy tightens.
+        """
         stmt = sqlite_insert(RepoIndexMeta).values(
             id=str(uuid.uuid4()),
             repo_full_name=repo_full_name,
