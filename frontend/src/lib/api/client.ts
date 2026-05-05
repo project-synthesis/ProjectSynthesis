@@ -378,6 +378,17 @@ export const savePassthrough = (traceId: string, optimizedPrompt: string, change
 
 // ---- History ----
 
+/**
+ * GET /api/history — paginated, sorted, filtered optimization list.
+ *
+ * v0.4.15: ``project_id`` (nullable) is pushed to the server so the
+ * sidebar's "completed in this project" view paginates against the
+ * project-scoped row count instead of fetching the global top-50 and
+ * filtering client-side. ``null``/``undefined`` are both omitted from
+ * the query string — the backend's ``project_id=None`` default
+ * preserves the legacy cross-project behaviour. See
+ * ``docs/specs/v0.4.15-history-pagination-fix-2026-05-04.md``.
+ */
 export const getHistory = (params?: {
   offset?: number; limit?: number; sort_by?: string;
   sort_order?: string; task_type?: string; status?: string;
