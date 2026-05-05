@@ -8,6 +8,7 @@
    *
    * Extracted from Navigator.svelte; keeps every visible interaction identical.
    */
+  import { untrack } from 'svelte';
   import type { HistoryItem } from '$lib/api/client';
   import { getHistory, getOptimization, updateOptimization } from '$lib/api/client';
   import { forgeStore } from '$lib/stores/forge.svelte';
@@ -70,11 +71,19 @@
     ),
   );
 
-  // Lazy load when panel becomes active
+  // Lazy load when panel becomes active — project + status filters pushed to backend (v0.4.15).
   $effect(() => {
     if (active && !historyLoaded) {
-      getHistory({ limit: 50, sort_by: 'created_at', sort_order: 'desc' })
+      const capturedProjectId = projectStore.currentProjectId;
+      getHistory({
+        limit: 50,
+        project_id: capturedProjectId,
+        status: 'completed',
+        sort_by: 'created_at',
+        sort_order: 'desc',
+      })
         .then((resp) => {
+          if (projectStore.currentProjectId !== capturedProjectId) return;
           historyItems = resp.items;
           historyHasMore = resp.has_more;
           historyNextOffset = resp.next_offset ?? null;
@@ -82,10 +91,23 @@
           historyLoaded = true;
         })
         .catch((err: unknown) => {
+          if (projectStore.currentProjectId !== capturedProjectId) return;
           historyError = err instanceof Error ? err.message : 'Failed to load history';
           historyLoaded = true;
         });
     }
+  });
+
+  // Re-fetch on project switch (v0.4.15).
+  $effect(() => {
+    // Read the dependency so Svelte tracks it.
+    const _ = projectStore.currentProjectId;
+    // Wrap state writes in untrack() to prevent reactive-loop edge cases.
+    untrack(() => {
+      historyLoaded = false;
+      historyHasMore = false;
+      historyNextOffset = null;
+    });
   });
 
   // Reset loaded state on new optimizations (drives re-fetch on next activation)
@@ -167,13 +189,17 @@
   async function loadMoreHistory(): Promise<void> {
     if (!historyHasMore || historyNextOffset == null || historyLoadingMore) return;
     historyLoadingMore = true;
+    const capturedProjectId = projectStore.currentProjectId;
     try {
       const resp = await getHistory({
         limit: 50,
         offset: historyNextOffset,
+        project_id: capturedProjectId,
+        status: 'completed',
         sort_by: 'created_at',
         sort_order: 'desc',
       });
+      if (projectStore.currentProjectId !== capturedProjectId) return;
       historyItems = [...historyItems, ...resp.items];
       historyHasMore = resp.has_more;
       historyNextOffset = resp.next_offset ?? null;

@@ -111,12 +111,13 @@ async def get_history(
     sort_order: str = Query("desc", pattern="^(asc|desc)$", description="Sort direction: 'asc' or 'desc'."),
     task_type: str | None = Query(None, description="Filter by task type (optional)."),
     status: str | None = Query(None, description="Filter by status (optional)."),
+    project_id: str | None = Query(None, description="Filter by project_id (v0.4.15, optional)."),
     db: AsyncSession = Depends(get_db),
 ) -> HistoryResponse:
     svc = OptimizationService(db)
     result = await svc.list_optimizations(
         offset=offset, limit=limit, sort_by=sort_by, sort_order=sort_order,
-        task_type=task_type, status=status,
+        task_type=task_type, status=status, project_id=project_id,
     )
 
     # Batch-fetch family IDs for all returned items in a single query (not N+1).
