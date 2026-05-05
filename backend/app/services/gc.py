@@ -319,9 +319,15 @@ async def _gc_orphan_repo_index_runs(db: AsyncSession) -> int:
     from app.models import RepoIndexMeta
     from app.services.taxonomy._constants import REPO_INDEX_LOCK_TTL_MIN
 
+    from app.services.repo_index_service import (
+        _emit_decision_event,
+        _publish_phase_change,
+    )
+
     cutoff = datetime.now(timezone.utc) - timedelta(
         minutes=REPO_INDEX_LOCK_TTL_MIN,
     )
+    now = datetime.now(timezone.utc)
     q = await db.execute(
         select(RepoIndexMeta).where(
             RepoIndexMeta.status == "indexing",
@@ -333,6 +339,39 @@ async def _gc_orphan_repo_index_runs(db: AsyncSession) -> int:
         meta.status = "error"
         meta.index_phase = "error"
         meta.error_message = "orphan_recovery: crashed mid-build"
+        # v0.4.16 P1b § 4.1 row 8 — publish SSE phase change + emit
+        # repo_index_recovered decision event per stuck row.
+        # Compute age relative to the row's stored indexed_at; if missing
+        # (defensive — should not happen for status='indexing' rows), use 0.
+        prev_iso: str | None = None
+        age_minutes = 0
+        if meta.indexed_at is not None:
+            # Models store naive UTC; normalise so the diff is consistent.
+            prev_iso = meta.indexed_at.isoformat()
+            indexed_at_aware = meta.indexed_at
+            if indexed_at_aware.tzinfo is None:
+                indexed_at_aware = indexed_at_aware.replace(tzinfo=timezone.utc)
+            age_minutes = int(
+                (now - indexed_at_aware).total_seconds() / 60
+            )
+        try:
+            await _publish_phase_change(
+                meta.repo_full_name, meta.branch,
+                phase="error", status="error",
+                files_seen=meta.files_seen or 0,
+                files_total=meta.files_total or 0,
+            )
+        except Exception:
+            logger.debug(
+                "orphan recovery SSE publish failed", exc_info=True,
+            )
+        _emit_decision_event("repo_index_recovered", {
+            "repo_full_name": meta.repo_full_name,
+            "branch": meta.branch,
+            "previous_indexed_at_iso": prev_iso,
+            "age_minutes": age_minutes,
+            "reason": "orphan_recovery",
+        })
     if stuck:
         logger.info(
             "GC: flipped %d orphan repo_index_meta rows to status='error' "
