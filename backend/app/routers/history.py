@@ -114,6 +114,16 @@ async def get_history(
     project_id: str | None = Query(None, description="Filter by project_id (v0.4.15, optional)."),
     db: AsyncSession = Depends(get_db),
 ) -> HistoryResponse:
+    """Paginated, sorted, filtered list of optimizations.
+
+    v0.4.15: ``project_id`` and ``status`` filters are pushed down to the
+    SQL layer so the sidebar's "completed in this project" view paginates
+    against the project-scoped row count instead of fetching the global
+    top-50 and filtering client-side. The defensive client-side
+    ``status === 'completed'`` filter is retained as a belt-and-braces
+    guard against legacy callers omitting the query param. See
+    ``docs/specs/v0.4.15-history-pagination-fix-2026-05-04.md``.
+    """
     svc = OptimizationService(db)
     result = await svc.list_optimizations(
         offset=offset, limit=limit, sort_by=sort_by, sort_order=sort_order,

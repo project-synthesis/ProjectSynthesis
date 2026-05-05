@@ -136,6 +136,15 @@ class OptimizationService:
             items        — list of Optimization ORM objects
             has_more     — whether there are rows beyond this page
             next_offset  — offset to use for the next page, or None
+
+        v0.4.15: ``project_id`` is an additive server-side filter that scopes
+        the result set to a single project at the SQL layer. Pre-fix the
+        sidebar pulled the first 50 rows globally and filtered client-side,
+        so projects beyond that window appeared empty until the user clicked
+        "Load more". Threaded through the existing ``filters`` list so the
+        count + data queries stay in lock-step. ``None`` preserves the legacy
+        cross-project behaviour. See
+        ``docs/specs/v0.4.15-history-pagination-fix-2026-05-04.md``.
         """
         if sort_by not in VALID_SORT_COLUMNS:
             raise ValueError(
@@ -174,8 +183,8 @@ class OptimizationService:
         next_offset: int | None = (offset + count) if has_more else None
 
         logger.debug(
-            "list_optimizations: total=%d count=%d offset=%d sort=%s/%s",
-            total, count, offset, sort_by, sort_order,
+            "list_optimizations: total=%d count=%d offset=%d sort=%s/%s project_id=%s status=%s",
+            total, count, offset, sort_by, sort_order, project_id, status,
         )
 
         return {
