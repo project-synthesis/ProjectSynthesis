@@ -381,6 +381,7 @@ export const savePassthrough = (traceId: string, optimizedPrompt: string, change
 export const getHistory = (params?: {
   offset?: number; limit?: number; sort_by?: string;
   sort_order?: string; task_type?: string; status?: string;
+  project_id?: string | null;
 }) => {
   const search = new URLSearchParams();
   if (params) {

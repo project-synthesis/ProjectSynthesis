@@ -125,6 +125,7 @@ class OptimizationService:
         sort_order: str = "desc",
         task_type: str | None = None,
         status: str | None = None,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         """Return a paginated, filtered, sorted list of optimizations.
 
@@ -148,6 +149,8 @@ class OptimizationService:
             filters.append(Optimization.task_type == task_type)
         if status is not None:
             filters.append(Optimization.status == status)
+        if project_id is not None:
+            filters.append(Optimization.project_id == project_id)
 
         # Count query
         count_stmt = select(func.count()).select_from(Optimization)
