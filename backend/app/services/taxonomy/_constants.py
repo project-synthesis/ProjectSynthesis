@@ -342,3 +342,72 @@ def _utcnow() -> datetime:
     and offset-aware datetimes``.
     """
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+# ---------------------------------------------------------------------------
+# Cold-path commit chunking (v0.4.16 P1a)
+# ---------------------------------------------------------------------------
+# Each phase of the chunked cold-path decomposes into batches sized to fit
+# the WriteQueue's per-task ``timeout=300s`` envelope.  See
+# ``docs/specs/v0.4.16-cold-path-chunking-2026-05-04.md`` § 6 for the
+# canonical defaults.  ``_validate_cold_path_constants()`` (below) asserts
+# the invariants at module import so degenerate configurations cannot
+# boot the FastAPI app.
+COLD_PATH_REEMBED_BATCH_SIZE = 50          # clusters re-embedded per submit
+COLD_PATH_REASSIGN_BATCH_SIZE = 200        # optimizations reassigned per submit
+COLD_PATH_LABEL_BATCH_SIZE = 20            # clusters relabeled per submit (Haiku roundtrip)
+COLD_PATH_REPAIR_BATCH_SIZE = 100          # member-count rows repaired per submit
+COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN = 5    # peer-writer SKIP window per cluster (minutes)
+COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL = 10  # emit progress every N batches in long phases
+COLD_PATH_LATENCY_RESERVOIR_SIZE = 1000    # rolling per-phase batch latency samples
+
+
+def _validate_cold_path_constants() -> None:
+    """v0.4.16 P1a: fail-fast invariant guard for cold-path chunking constants.
+
+    Mirrors the v0.4.8 R8 pattern (``_validate_threshold_invariants``) — a
+    zero or negative batch size, or a sub-minute quiesce timeout, would
+    silently break the chunked cold-path's batching loop.  Asserting at
+    import time ensures the FastAPI app cannot boot with a degenerate
+    configuration.
+
+    Tests can monkeypatch any of the seven constants and call this helper
+    directly to verify the assertion logic (which is what
+    ``test_validate_cold_path_constants_runs_at_import`` does).
+    """
+    assert COLD_PATH_REEMBED_BATCH_SIZE > 0, (
+        f"COLD_PATH_REEMBED_BATCH_SIZE must be positive, "
+        f"got {COLD_PATH_REEMBED_BATCH_SIZE}"
+    )
+    assert COLD_PATH_REASSIGN_BATCH_SIZE > 0, (
+        f"COLD_PATH_REASSIGN_BATCH_SIZE must be positive, "
+        f"got {COLD_PATH_REASSIGN_BATCH_SIZE}"
+    )
+    assert COLD_PATH_LABEL_BATCH_SIZE > 0, (
+        f"COLD_PATH_LABEL_BATCH_SIZE must be positive, "
+        f"got {COLD_PATH_LABEL_BATCH_SIZE}"
+    )
+    assert COLD_PATH_REPAIR_BATCH_SIZE > 0, (
+        f"COLD_PATH_REPAIR_BATCH_SIZE must be positive, "
+        f"got {COLD_PATH_REPAIR_BATCH_SIZE}"
+    )
+    assert COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN >= 1, (
+        f"COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN must be >= 1 minute, "
+        f"got {COLD_PATH_REFIT_QUIESCE_TIMEOUT_MIN}"
+    )
+    assert COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL > 0, (
+        f"COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL must be positive, "
+        f"got {COLD_PATH_LOG_PROGRESS_BATCH_INTERVAL}"
+    )
+    assert COLD_PATH_LATENCY_RESERVOIR_SIZE > 0, (
+        f"COLD_PATH_LATENCY_RESERVOIR_SIZE must be positive, "
+        f"got {COLD_PATH_LATENCY_RESERVOIR_SIZE}"
+    )
+    # Per-batch budget should fit within WriteQueue's 300s timeout with
+    # comfortable headroom.  Empirically: ~100 ms per cluster re-embed
+    # × 50 clusters = 5 s; well within 300 s.
+
+
+# Run the invariant at module import so degenerate configurations
+# fail fast (cannot boot the FastAPI app).
+_validate_cold_path_constants()

@@ -1452,6 +1452,67 @@ class TaxonomyEngine:
     # Warm/cold path helpers
     # ------------------------------------------------------------------
 
+    async def _restore_silhouette_from_snapshot(
+        self, db: AsyncSession,
+    ) -> None:
+        """v0.4.16 P1a Cycle 1: defensive recovery for engine bootstrap.
+
+        If a prior process crashed mid-cold-path AFTER Phase 1 committed
+        (in-memory ``_last_silhouette`` updated) but BEFORE the outer
+        commit landed, the in-memory state is lost on restart while the
+        DB rolled back the SAVEPOINT.  On next process startup, hydrate
+        ``_last_silhouette`` from the most recent accepted snapshot so
+        the warm path's DBCV ramp doesn't reset to zero unnecessarily.
+
+        Called from the FastAPI lifespan after ``set_engine()``.  Idempotent;
+        no-op if no snapshot exists or if ``_last_silhouette`` is already
+        non-zero (defensive against double-call).
+        """
+        from app.services.taxonomy.snapshot import get_latest_snapshot
+
+        if self._last_silhouette and self._last_silhouette > 0.0:
+            # Already populated (warm path may have set it from a prior
+            # cold-path's q_system).  Nothing to restore.
+            return
+        try:
+            snap = await get_latest_snapshot(db)
+        except Exception as exc:
+            logger.warning(
+                "Silhouette restore: snapshot lookup failed (non-fatal): %s",
+                exc,
+            )
+            return
+        if snap is None:
+            return
+        # ``q_system`` on the snapshot acts as a proxy for the silhouette
+        # baseline — both are bounded in [0, 1] and serve to seed the DBCV
+        # ramp.  A dedicated silhouette column is a Cycle 2 concern; for
+        # Cycle 1 we use whatever non-zero scalar is available.
+        candidate: float | None = None
+        for attr in ("silhouette", "q_dbcv", "q_system"):
+            value = getattr(snap, attr, None)
+            if value is not None and value > 0.0:
+                candidate = float(value)
+                break
+        if candidate is not None:
+            self._last_silhouette = candidate
+            logger.info(
+                "Restored _last_silhouette=%.4f from snapshot %s",
+                candidate, snap.id,
+            )
+            try:
+                from app.services.taxonomy.event_logger import get_event_logger
+                get_event_logger().log_decision(
+                    path="cold", op="bootstrap",
+                    decision="silhouette_restored_from_snapshot",
+                    context={
+                        "silhouette_value": candidate,
+                        "snapshot_id": snap.id,
+                    },
+                )
+            except RuntimeError:
+                pass
+
     def _compute_q_from_nodes(
         self, nodes: list[PromptCluster], silhouette: float = 0.0
     ) -> float | None:
