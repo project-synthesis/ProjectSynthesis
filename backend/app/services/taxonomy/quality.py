@@ -363,6 +363,8 @@ def is_non_regressive(
 def is_cold_path_non_regressive(
     q_before: float | None,
     q_after: float | None,
+    *,
+    phase: int | None = None,
 ) -> bool:
     """Check if a cold-path quality transition passes the non-regression gate.
 
@@ -382,10 +384,20 @@ def is_cold_path_non_regressive(
     Args:
         q_before: Q_system score before the cold-path refit (or None).
         q_after: Q_system score after the cold-path refit (or None).
+        phase: v0.4.16 P1a — optional phase index (1 or 2) used by the
+            chunked cold path's per-phase Q-gate to distinguish the post-
+            re-embed gate from the post-reassign gate in observability +
+            test injection.  ``None`` for callers that don't track phases
+            (e.g. legacy single-shot end-of-refit gate).
 
     Returns:
         True if the transition is within the allowed regression window.
     """
+    # ``phase`` kwarg is for caller observability + per-phase test injection
+    # (see test_cold_path_q_check_fires_only_after_phases_1_and_2).  The
+    # tolerance itself is identical for every phase — both gates use
+    # COLD_PATH_EPSILON.
+    del phase  # unused at the math level; visible to spy patches
     if q_after is None:
         return False
     if q_before is None:

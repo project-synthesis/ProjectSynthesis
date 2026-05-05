@@ -433,6 +433,19 @@ async def lifespan(app: FastAPI):
             app.state.taxonomy_engine = engine
             set_engine(engine)
 
+            # v0.4.16 P1a Cycle 1: defensive recovery for engine bootstrap.
+            # If a prior process crashed mid-cold-path, hydrate
+            # ``_last_silhouette`` from the most recent accepted snapshot
+            # so the warm path's DBCV ramp doesn't reset to zero.
+            try:
+                async with async_session_factory() as _silhouette_db:
+                    await engine._restore_silhouette_from_snapshot(_silhouette_db)
+            except Exception as _silhouette_exc:
+                logger.warning(
+                    "Silhouette bootstrap restore failed (non-fatal): %s",
+                    _silhouette_exc,
+                )
+
             # Initialize taxonomy event logger
             from app.services.taxonomy.event_logger import TaxonomyEventLogger, set_event_logger
             taxonomy_event_logger = TaxonomyEventLogger(
