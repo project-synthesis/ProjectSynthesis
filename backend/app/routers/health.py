@@ -152,6 +152,17 @@ class HealthResponse(BaseModel):
             "uninitialised."
         ),
     )
+    repo_index: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "v0.4.16 P1b Cycle 2 (spec § 7): repo-index observability "
+            "metrics. 10 fields: last_run_at, last_run_duration_ms, "
+            "last_run_files_persisted, last_run_status, last_run_op, "
+            "batches_committed_24h, batches_rolled_back_24h, "
+            "p95_batch_duration_ms, p99_batch_duration_ms, active_locks. "
+            "Defaults populated even when no build has run."
+        ),
+    )
     legacy_state_observed: int = Field(
         default=0,
         description=(
@@ -683,6 +694,14 @@ async def health_check(
     # v0.4.16 P1a Cycle 2 (spec § 5.5): cold-path metrics block.
     cold_path_metrics = _get_cold_path_metrics()
 
+    # v0.4.16 P1b Cycle 2 (spec § 7): repo-index metrics block.
+    repo_index_metrics: dict[str, Any] | None = None
+    try:
+        from app.services.repo_index_service import _get_repo_index_metrics
+        repo_index_metrics = _get_repo_index_metrics()
+    except Exception:
+        logger.debug("Health check repo_index metrics failed", exc_info=True)
+
     return HealthResponse(
         status=overall_status,
         version=__version__,
@@ -714,6 +733,7 @@ async def health_check(
         },
         write_queue=write_queue_metrics,
         cold_path=cold_path_metrics,
+        repo_index=repo_index_metrics,
         legacy_state_observed=legacy_state_observed,
         services=services_result,
         cross_service=cross_service_result,

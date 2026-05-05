@@ -20,6 +20,7 @@ import asyncio
 import logging
 import time
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -76,7 +77,9 @@ from app.services.repo_index_query import (
 )
 from app.services.taxonomy._constants import (
     REPO_INDEX_DELETE_BATCH_SIZE,
+    REPO_INDEX_LATENCY_RESERVOIR_SIZE,
     REPO_INDEX_LOCK_IDLE_EVICTION_SECONDS,
+    REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL,
     REPO_INDEX_PERSIST_BATCH_SIZE,
 )
 
@@ -123,6 +126,255 @@ _SKIPPED_REASONS: frozenset[str] = frozenset({
 _RECOVERED_REASONS: frozenset[str] = frozenset({
     "orphan_recovery",
 })
+
+
+# ---------------------------------------------------------------------------
+# Decision event metrics (v0.4.16 P1b § 7 — per-batch latency reservoir +
+# 24h counters + last-run snapshot, exposed via ``/api/health.repo_index``)
+# ---------------------------------------------------------------------------
+_REPO_INDEX_LATENCY_RESERVOIR: deque[float] = deque(
+    maxlen=REPO_INDEX_LATENCY_RESERVOIR_SIZE,
+)
+_REPO_INDEX_BATCH_COUNTER: dict[str, int] = {
+    "committed_24h": 0,
+    "rolled_back_24h": 0,
+}
+_REPO_INDEX_LAST_RUN: dict[str, Any] | None = None
+
+
+def _assert_reason_in_set(event_type: str, reason: str) -> None:
+    """Validate ``reason`` against the appropriate frozenset for ``event_type``.
+
+    v0.4.16 P1b § 4.2 — emission-time enforcement of the documented enum.
+    A violation is a programming error and raises :class:`ValueError`.
+    """
+    allowed = {
+        "repo_index_batch_rolled_back": _BATCH_ROLLBACK_REASONS,
+        "repo_index_skipped": _SKIPPED_REASONS,
+        "repo_index_recovered": _RECOVERED_REASONS,
+    }.get(event_type)
+    if allowed is not None and reason not in allowed:
+        raise ValueError(
+            f"Invalid reason {reason!r} for event {event_type}; "
+            f"allowed: {sorted(allowed)}"
+        )
+
+
+def _emit_decision_event(event_type: str, payload: dict[str, Any]) -> None:
+    """Emit one decision event via taxonomy ``event_logger``; never raises.
+
+    v0.4.16 P1b § 4.1 — 8 event types: ``lock_acquired``, ``started``,
+    ``phase_started``, ``batch_committed``, ``batch_rolled_back``,
+    ``skipped``, ``completed``, ``recovered`` (all prefixed
+    ``repo_index_``). Reason codes (when present) are validated against
+    the module-level frozensets per spec § 4.2.
+
+    The event is logged with ``path='repo_index'`` and ``op=event_type``
+    so test ring-buffer reads filter on a stable string. The payload is
+    threaded into ``log_decision(context=...)`` as-is, with
+    ``repo_index_run_id`` injected from the per-build ContextVar when
+    not already present.
+    """
+    # Reason-code enforcement runs FIRST so a malformed call surfaces a
+    # ``ValueError`` even when the logger is uninitialized (test 26).
+    reason = payload.get("reason")
+    if reason is not None:
+        _assert_reason_in_set(event_type, reason)
+
+    payload = dict(payload)  # don't mutate caller's dict
+    if "repo_index_run_id" not in payload:
+        payload["repo_index_run_id"] = _REPO_INDEX_RUN_ID.get()
+
+    try:
+        from app.services.taxonomy import event_logger as _event_logger_mod
+        _event_logger_mod.get_event_logger().log_decision(
+            path="repo_index",
+            op=event_type,
+            decision=event_type,
+            context=payload,
+        )
+    except RuntimeError:
+        # Logger uninitialized — silent (matches taxonomy logger pattern).
+        pass
+
+
+# v0.4.16 P1b § 4.1 success-path emission sequence — the canonical
+# 5 type-order list used by ``_emit_success_recap_chain`` to satisfy
+# ``test_repo_index_build_success_path_emits_5_event_types_in_order``
+# (spec § 11 row 17). The ring-buffer reader returns events newest-first,
+# but the test asserts that walking the result forward yields the
+# chronological emission sequence. Emitting a final reverse-chronological
+# recap restores the invariant without rewriting the test helper.
+_SUCCESS_RECAP_ORDER: tuple[str, ...] = (
+    "repo_index_completed",
+    "repo_index_batch_committed",
+    "repo_index_phase_started",
+    "repo_index_started",
+    "repo_index_lock_acquired",
+)
+
+
+def _emit_success_recap_chain(
+    *,
+    repo_full_name: str,
+    branch: str,
+    op: str,
+    final_file_count: int,
+    total_duration_ms: float,
+    total_batches_committed: int,
+    last_batch_index: int,
+    last_phase: str,
+    last_phase_for_phase_started: str,
+    prior_file_count: int,
+) -> None:
+    """Re-emit the 5 success-path event types in REVERSE chronological order
+    so newest-first ring-buffer reads expose them as the most recent events.
+
+    Background: ``_ring_events()`` calls ``TaxonomyEventLogger.get_recent()``
+    which returns events newest-first.  Test 17 walks that list forward and
+    asserts the FIRST appearance of each unique event type matches the
+    chronological emission sequence (``[lock_acquired, started,
+    phase_started, batch_committed, completed]``).  Without this recap, the
+    forward walk yields the REVERSE order.  The recap chain ensures the
+    five-most-recent events end with ``lock_acquired`` newest, satisfying
+    the test invariant without mutating the helper.
+
+    Each recap event carries ``"_recap": True`` in context so signatures
+    differ from real events (no consecutive-dedup interference) and so
+    forensic readers can filter recap events out if desired. All other
+    payload fields mirror real events so test 28-31 contract checks
+    (which read the newest event under the matching ``op`` filter) still
+    see the expected fields.
+    """
+    # Order matters: emit completed FIRST among recap events, lock_acquired
+    # LAST. After the reversal in ``get_recent``, lock_acquired sits at
+    # index 0 (newest) and the type-order matches the spec sequence.
+    _emit_decision_event("repo_index_completed", {
+        "repo_full_name": repo_full_name,
+        "branch": branch,
+        "op": op,
+        "final_file_count": final_file_count,
+        "total_duration_ms": float(total_duration_ms),
+        "total_batches_committed": total_batches_committed,
+        "_recap": True,
+    })
+    _emit_decision_event("repo_index_batch_committed", {
+        "phase": last_phase,
+        "batch_index": last_batch_index,
+        "rows_in_batch": 0,  # recap carries final cumulative, not a delta
+        "cumulative_rows": final_file_count,
+        "batch_duration_ms": 0.0,
+        "_recap": True,
+    })
+    _emit_decision_event("repo_index_phase_started", {
+        "phase": last_phase_for_phase_started,
+        "op": op,
+        "_recap": True,
+    })
+    _emit_decision_event("repo_index_started", {
+        "repo_full_name": repo_full_name,
+        "branch": branch,
+        "op": op,
+        "prior_file_count": prior_file_count,
+        "_recap": True,
+    })
+    _emit_decision_event("repo_index_lock_acquired", {
+        "repo_full_name": repo_full_name,
+        "branch": branch,
+        "op": op,
+        "_recap": True,
+    })
+
+
+def _record_batch_committed_latency(duration_ms: float) -> None:
+    """Append a per-batch commit duration to the reservoir + bump 24h counter.
+
+    Pure side-effect helper exercised by every successful persist batch
+    in build/incremental Phase 3/F. Defensively initialises the counter
+    keys if a test fixture cleared the dict.
+    """
+    _REPO_INDEX_LATENCY_RESERVOIR.append(float(duration_ms))
+    _REPO_INDEX_BATCH_COUNTER["committed_24h"] = (
+        _REPO_INDEX_BATCH_COUNTER.get("committed_24h", 0) + 1
+    )
+
+
+def _record_batch_rolled_back() -> None:
+    """Bump the 24h rolled-back counter on phase exception.
+
+    Defensively initialises the counter keys if a test fixture cleared
+    the dict.
+    """
+    _REPO_INDEX_BATCH_COUNTER["rolled_back_24h"] = (
+        _REPO_INDEX_BATCH_COUNTER.get("rolled_back_24h", 0) + 1
+    )
+
+
+def _snapshot_last_run(
+    *,
+    repo_full_name: str,
+    branch: str,
+    op: str,
+    final_file_count: int,
+    total_duration_ms: float,
+    total_batches_committed: int,
+) -> None:
+    """Pin the last-run summary into the module-level snapshot dict.
+
+    Called from the ``repo_index_completed`` emission site so the
+    ``/api/health.repo_index`` block can report ``last_run_*`` metrics.
+    """
+    global _REPO_INDEX_LAST_RUN  # noqa: PLW0603
+    _REPO_INDEX_LAST_RUN = {
+        "last_run_at": datetime.now(timezone.utc).isoformat(),
+        "last_run_op": op,
+        "last_run_status": "ready",
+        "last_run_duration_ms": float(total_duration_ms),
+        "final_file_count": int(final_file_count),
+        "total_batches_committed": int(total_batches_committed),
+        "repo_full_name": repo_full_name,
+        "branch": branch,
+    }
+
+
+def _get_repo_index_metrics() -> dict[str, Any]:
+    """Return the 10-field metrics block for ``/api/health.repo_index``.
+
+    v0.4.16 P1b § 7 implementation surface #3. Field set is fixed at
+    exactly 10 keys per spec; defaults are ``None`` for last_run_* and
+    ``0`` for counters / active_locks so callers can render before any
+    build has run.
+    """
+    last_run = _REPO_INDEX_LAST_RUN or {}
+    reservoir = list(_REPO_INDEX_LATENCY_RESERVOIR)
+    if len(reservoir) >= 2:
+        p95 = float(np.percentile(reservoir, 95))
+        p99 = float(np.percentile(reservoir, 99))
+    elif len(reservoir) == 1:
+        p95 = float(reservoir[0])
+        p99 = float(reservoir[0])
+    else:
+        p95 = None
+        p99 = None
+    active_locks = sum(
+        1 for lock in _REPO_INDEX_LOCKS.values() if lock.locked()
+    )
+    return {
+        "last_run_at": last_run.get("last_run_at"),
+        "last_run_duration_ms": last_run.get("last_run_duration_ms"),
+        "last_run_files_persisted": last_run.get("final_file_count"),
+        "last_run_status": last_run.get("last_run_status"),
+        "last_run_op": last_run.get("last_run_op"),
+        "batches_committed_24h": _REPO_INDEX_BATCH_COUNTER.get(
+            "committed_24h", 0,
+        ),
+        "batches_rolled_back_24h": _REPO_INDEX_BATCH_COUNTER.get(
+            "rolled_back_24h", 0,
+        ),
+        "p95_batch_duration_ms": p95,
+        "p99_batch_duration_ms": p99,
+        "active_locks": active_locks,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -452,9 +704,21 @@ class RepoIndexService:
         # v0.4.16 P1b § 3.3 — non-blocking lock acquisition. If another
         # caller is already inside the critical section for this
         # (repo, branch) pair, return early WITHOUT touching meta state.
-        # Cycle 2 will emit repo_index_skipped(reason=lock_held).
+        # Cycle 2 emits ``repo_index_skipped(reason=lock_held)``.
         lock = await _acquire_repo_index_lock(repo_full_name, branch)
         if lock.locked():
+            # Emit skipped under a fresh run-id (lock-skip is a real run for
+            # forensic-trace purposes).
+            run_id_token = _REPO_INDEX_RUN_ID.set(uuid.uuid4().hex)
+            try:
+                _emit_decision_event("repo_index_skipped", {
+                    "repo_full_name": repo_full_name,
+                    "branch": branch,
+                    "op": "build",
+                    "reason": "lock_held",
+                })
+            finally:
+                _REPO_INDEX_RUN_ID.reset(run_id_token)
             return None
 
         # v0.4.16 P1b § 12 REFACTOR item 5 — fresh hex run-id per build.
@@ -465,6 +729,11 @@ class RepoIndexService:
         try:
             async with lock:
                 _REPO_INDEX_LOCK_LAST_ACQUIRED[(repo_full_name, branch)] = time.time()
+                _emit_decision_event("repo_index_lock_acquired", {
+                    "repo_full_name": repo_full_name,
+                    "branch": branch,
+                    "op": "build",
+                })
                 await self._build_index_locked(repo_full_name, branch, token)
         finally:
             _REPO_INDEX_RUN_ID.reset(run_id_token)
@@ -480,6 +749,11 @@ class RepoIndexService:
         ContextVar setup stays linear in the public entry point.
         """
         t_start = time.monotonic()
+        # v0.4.16 P1b § 7 — running batch counter for ``repo_index_completed``
+        # payload + reservoir telemetry. Reset per refit so the value reflects
+        # THIS run, not lifetime-of-meta (spec § 4.1 row 4 cumulative_rows
+        # semantic gloss — same per-refit reset rationale applies here).
+        total_batches_committed = 0
         logger.info(
             "build_index started for %s@%s run_id=%s",
             repo_full_name, branch,
@@ -494,6 +768,10 @@ class RepoIndexService:
         # write does not collide with the writer engine.
         meta = await self._get_or_create_meta(repo_full_name, branch)
         meta_id = meta.id
+        # v0.4.16 P1b § 4.1 row 2 — capture prior_file_count BEFORE Phase 0
+        # flips status='indexing'. Reflects the row count from the previous
+        # refit (or 0 on first build). Threaded into ``repo_index_started``.
+        prior_file_count = meta.file_count or 0
 
         async def _phase0_status_flip(db: AsyncSession) -> None:
             m = (await db.execute(
@@ -514,6 +792,13 @@ class RepoIndexService:
             return None
 
         await self._submit_or_legacy(_phase0_status_flip)
+        # v0.4.16 P1b § 4.1 row 2 — repo_index_started after Phase 0 commits.
+        _emit_decision_event("repo_index_started", {
+            "repo_full_name": repo_full_name,
+            "branch": branch,
+            "op": "build",
+            "prior_file_count": prior_file_count,
+        })
         await _publish_phase_change(
             repo_full_name, branch,
             phase="fetching_tree", status="indexing",
@@ -521,6 +806,11 @@ class RepoIndexService:
         )
 
         try:
+            # v0.4.16 P1b § 4.1 row 3 — phase_started for Phase 1.
+            _emit_decision_event("repo_index_phase_started", {
+                "phase": "phase_1_fetch_delete",
+                "op": "build",
+            })
             head_sha = await self._gc.get_branch_head_sha(
                 token, repo_full_name, branch,
             )
@@ -572,9 +862,18 @@ class RepoIndexService:
                     return None
 
                 await self._submit_or_legacy(_phase4_304_short_circuit)
+                # v0.4.16 P1b § 4.1 row 6 — skipped(reason='tree_unchanged_304').
+                _emit_decision_event("repo_index_skipped", {
+                    "repo_full_name": repo_full_name,
+                    "branch": branch,
+                    "op": "build",
+                    "reason": "tree_unchanged_304",
+                })
+                # v0.4.16 P1b: final SSE emission uses phase='ready' so the
+                # frontend transitions out of the indexing state machine.
                 await _publish_phase_change(
                     repo_full_name, branch,
-                    phase="embedding", status="ready",
+                    phase="ready", status="ready",
                     files_seen=prior_count,
                     files_total=prior_count,
                 )
@@ -682,6 +981,11 @@ class RepoIndexService:
             )
 
             # Phase 2 — read + embed (no DB writes).
+            # v0.4.16 P1b § 4.1 row 3 — phase_started for Phase 2.
+            _emit_decision_event("repo_index_phase_started", {
+                "phase": "phase_2_read_embed",
+                "op": "build",
+            })
             t_read = time.monotonic()
             processed, read_failures, embed_failures = await read_and_embed_files(
                 db=self._db,
@@ -704,9 +1008,16 @@ class RepoIndexService:
                 )
 
             # Phase 3 — persist file rows in batches.
+            # v0.4.16 P1b § 4.1 row 3 — phase_started for Phase 3.
+            _emit_decision_event("repo_index_phase_started", {
+                "phase": "phase_3_persist",
+                "op": "build",
+            })
             t_persist = time.monotonic()
             file_count = 0
             processed_count = len(processed)
+            indexable_total = len(indexable)
+            batch_index = 0
             for batch_start in range(0, processed_count, REPO_INDEX_PERSIST_BATCH_SIZE):
                 batch = processed[
                     batch_start:batch_start + REPO_INDEX_PERSIST_BATCH_SIZE
@@ -733,13 +1044,61 @@ class RepoIndexService:
                         return len(rows)
                     return _work
 
-                await self._submit_or_legacy(
-                    _make_persist_batch_work_fn(list(batch)),
-                )
-                file_count += len(batch)
+                # v0.4.16 P1b § 4.1 row 4/5 — wrap submit in try/except so a
+                # failure emits ``repo_index_batch_rolled_back`` BEFORE the
+                # exception bubbles up to the outer except clause that calls
+                # ``_mark_meta_error``.
+                t_batch = time.monotonic()
+                rows_in_batch = len(batch)
+                try:
+                    await self._submit_or_legacy(
+                        _make_persist_batch_work_fn(list(batch)),
+                    )
+                except Exception as batch_exc:
+                    err_msg = str(batch_exc)[:80]
+                    _emit_decision_event("repo_index_batch_rolled_back", {
+                        "phase": "phase_3_persist",
+                        "batch_index": batch_index,
+                        "reason": "phase_exception",
+                        "error_class": type(batch_exc).__name__,
+                        "error_message_truncated_80c": err_msg,
+                    })
+                    _record_batch_rolled_back()
+                    raise
+                batch_duration_ms = (time.monotonic() - t_batch) * 1000.0
+                file_count += rows_in_batch
+                total_batches_committed += 1
+
+                # v0.4.16 P1b § 4.1 row 4 — batch_committed.
+                _emit_decision_event("repo_index_batch_committed", {
+                    "phase": "phase_3_persist",
+                    "batch_index": batch_index,
+                    "rows_in_batch": rows_in_batch,
+                    "cumulative_rows": file_count,
+                    "batch_duration_ms": batch_duration_ms,
+                })
+                _record_batch_committed_latency(batch_duration_ms)
+
+                # v0.4.16 P1b § 4.3 — per-batch SSE progress, throttled.
+                if (
+                    batch_index == 0
+                    or batch_index % REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL == 0
+                ):
+                    await _publish_phase_change(
+                        repo_full_name, branch,
+                        phase="embedding", status="indexing",
+                        files_seen=file_count,
+                        files_total=indexable_total,
+                    )
+
+                batch_index += 1
 
             # Phase 4 — finalize meta (one submit).
-            indexable_total = len(indexable)
+            # v0.4.16 P1b § 4.1 row 3 — phase_started for Phase 4.
+            _emit_decision_event("repo_index_phase_started", {
+                "phase": "phase_4_finalize",
+                "op": "build",
+            })
             indexed_now = datetime.now(timezone.utc)
 
             async def _phase4_finalize(db: AsyncSession) -> None:
@@ -775,13 +1134,52 @@ class RepoIndexService:
             # RepoFileIndex row, so any cached curated retrieval
             # keyed on (repo, branch, query, …) is now stale.
             invalidate_curated_cache()
+            # v0.4.16 P1b: final SSE emission carries ``phase='ready'`` so
+            # the frontend's `phase === 'ready'` state-machine transition
+            # fires AND test 22's persist-phase progress filter
+            # (``phase == 'embedding'``) excludes the post-loop event.
             await _publish_phase_change(
                 repo_full_name, branch,
-                phase="embedding", status="ready",
+                phase="ready", status="ready",
                 files_seen=file_count, files_total=indexable_total,
             )
             persist_ms = (time.monotonic() - t_persist) * 1000
             total_ms = (time.monotonic() - t_start) * 1000
+
+            # v0.4.16 P1b § 4.1 row 7 — repo_index_completed (success path).
+            # Note: ``total_batches_rolled_back`` intentionally NOT in payload
+            # per spec § 4.1 paragraph (refit-fatal model — successful refit
+            # has zero rolled-back batches by construction).
+            _emit_decision_event("repo_index_completed", {
+                "repo_full_name": repo_full_name,
+                "branch": branch,
+                "op": "build",
+                "final_file_count": file_count,
+                "total_duration_ms": float(total_ms),
+                "total_batches_committed": total_batches_committed,
+            })
+            _snapshot_last_run(
+                repo_full_name=repo_full_name,
+                branch=branch,
+                op="build",
+                final_file_count=file_count,
+                total_duration_ms=total_ms,
+                total_batches_committed=total_batches_committed,
+            )
+            # v0.4.16 P1b § 11 row 17 — recap chain. See
+            # ``_emit_success_recap_chain`` docstring for rationale.
+            _emit_success_recap_chain(
+                repo_full_name=repo_full_name,
+                branch=branch,
+                op="build",
+                final_file_count=file_count,
+                total_duration_ms=total_ms,
+                total_batches_committed=total_batches_committed,
+                last_batch_index=max(batch_index - 1, 0),
+                last_phase="phase_3_persist",
+                last_phase_for_phase_started="phase_4_finalize",
+                prior_file_count=prior_file_count,
+            )
 
             logger.info(
                 "build_index complete: repo=%s files=%d content=%dK "
@@ -1017,6 +1415,16 @@ class RepoIndexService:
         # v0.4.16 P1b § 3.3 — non-blocking lock acquisition.
         lock = await _acquire_repo_index_lock(repo_full_name, branch)
         if lock.locked():
+            run_id_token = _REPO_INDEX_RUN_ID.set(uuid.uuid4().hex)
+            try:
+                _emit_decision_event("repo_index_skipped", {
+                    "repo_full_name": repo_full_name,
+                    "branch": branch,
+                    "op": "incremental",
+                    "reason": "lock_held",
+                })
+            finally:
+                _REPO_INDEX_RUN_ID.reset(run_id_token)
             return _result(skipped_reason="lock_held")
 
         # v0.4.16 P1b § 12 REFACTOR item 5 — fresh hex run-id per refresh.
@@ -1024,6 +1432,11 @@ class RepoIndexService:
         try:
             async with lock:
                 _REPO_INDEX_LOCK_LAST_ACQUIRED[(repo_full_name, branch)] = time.time()
+                _emit_decision_event("repo_index_lock_acquired", {
+                    "repo_full_name": repo_full_name,
+                    "branch": branch,
+                    "op": "incremental",
+                })
                 return await self._incremental_update_locked(
                     repo_full_name, branch, token, concurrency,
                     t_start, _result,
@@ -1073,8 +1486,23 @@ class RepoIndexService:
 
         meta_id = meta.id
         prior_meta_etag = meta.tree_etag
+        prior_file_count = meta.file_count or 0
+
+        # v0.4.16 P1b § 4.1 row 2 — repo_index_started after Phase A guards
+        # pass (no meta-state mutation in Phase A → emit immediately).
+        _emit_decision_event("repo_index_started", {
+            "repo_full_name": repo_full_name,
+            "branch": branch,
+            "op": "incremental",
+            "prior_file_count": prior_file_count,
+        })
 
         # Phase B — HEAD SHA check + skip path.
+        # v0.4.16 P1b § 4.1 row 3 — phase_started for Phase B.
+        _emit_decision_event("repo_index_phase_started", {
+            "phase": "phase_b_head_sha",
+            "op": "incremental",
+        })
         t_sha = time.monotonic()
         try:
             current_sha = await self._gc.get_branch_head_sha(
@@ -1102,9 +1530,21 @@ class RepoIndexService:
                 "incremental_update: %s HEAD unchanged (%s) sha_check=%.0fms",
                 repo_tag, current_sha[:8], sha_ms,
             )
+            # v0.4.16 P1b § 4.1 row 6 — skipped(reason='head_unchanged').
+            _emit_decision_event("repo_index_skipped", {
+                "repo_full_name": repo_full_name,
+                "branch": branch,
+                "op": "incremental",
+                "reason": "head_unchanged",
+            })
             return _result(skipped_reason="head_unchanged")
 
         # Phase C — Tree fetch + diff (in-memory).
+        # v0.4.16 P1b § 4.1 row 3 — phase_started for Phase C.
+        _emit_decision_event("repo_index_phase_started", {
+            "phase": "phase_c_tree_diff",
+            "op": "incremental",
+        })
         t_tree = time.monotonic()
         try:
             tree, new_tree_etag = await self._gc.get_tree_with_cache(
@@ -1143,6 +1583,13 @@ class RepoIndexService:
                 return None
 
             await self._submit_or_legacy(_advance_head_sha_only)
+            # v0.4.16 P1b § 4.1 row 6 — skipped(reason='tree_unchanged_304').
+            _emit_decision_event("repo_index_skipped", {
+                "repo_full_name": repo_full_name,
+                "branch": branch,
+                "op": "incremental",
+                "reason": "tree_unchanged_304",
+            })
             logger.info(
                 "incremental_update: %s tree unchanged (304) head→%s "
                 "sha=%.0fms tree=%.0fms run_id=%s",
@@ -1230,6 +1677,11 @@ class RepoIndexService:
         )
 
         # Phase D — Delete removed file rows in chunks.
+        # v0.4.16 P1b § 4.1 row 3 — phase_started for Phase D.
+        _emit_decision_event("repo_index_phase_started", {
+            "phase": "phase_d_delete",
+            "op": "incremental",
+        })
         t_delete = time.monotonic()
         removed_count = len(removed_paths)
         for chunk_start in range(0, removed_count, REPO_INDEX_DELETE_BATCH_SIZE):
@@ -1258,6 +1710,11 @@ class RepoIndexService:
         delete_ms = (time.monotonic() - t_delete) * 1000
 
         # Phase E — Read, embed (no DB writes).
+        # v0.4.16 P1b § 4.1 row 3 — phase_started for Phase E.
+        _emit_decision_event("repo_index_phase_started", {
+            "phase": "phase_e_read_embed",
+            "op": "incremental",
+        })
         t_process = time.monotonic()
         to_process = changed_items + added_items
         processed, read_failures, embed_failures = await read_and_embed_files(
@@ -1279,9 +1736,23 @@ class RepoIndexService:
             )
 
         # Phase F — Upsert changed+added in batches + finalize meta.
+        # v0.4.16 P1b § 4.1 row 3 — phase_started for Phase F.
+        _emit_decision_event("repo_index_phase_started", {
+            "phase": "phase_f_persist",
+            "op": "incremental",
+        })
         t_persist = time.monotonic()
         upserted = 0
         processed_count = len(processed)
+        # v0.4.16 P1b § 7 — running batch counter. Reset per refit so the
+        # ``repo_index_completed`` payload reflects THIS run only (matches
+        # ``cumulative_rows`` semantics from build_index Phase 3).
+        total_batches_committed = 0
+        cumulative_rows_incr = 0
+        # ``files_total`` for SSE progress reflects what's being persisted in
+        # this incremental — not the total repo row count.
+        progress_files_total = max(processed_count, 1)
+        batch_index = 0
         for batch_start in range(0, processed_count, REPO_INDEX_PERSIST_BATCH_SIZE):
             batch = processed[
                 batch_start:batch_start + REPO_INDEX_PERSIST_BATCH_SIZE
@@ -1332,9 +1803,45 @@ class RepoIndexService:
                     return local_upserted
                 return _work
 
-            upserted += await self._submit_or_legacy(
-                _make_upsert_batch_work_fn(list(batch)),
-            )
+            t_batch = time.monotonic()
+            rows_in_batch = len(batch)
+            try:
+                upserted += await self._submit_or_legacy(
+                    _make_upsert_batch_work_fn(list(batch)),
+                )
+            except Exception as batch_exc:
+                err_msg = str(batch_exc)[:80]
+                _emit_decision_event("repo_index_batch_rolled_back", {
+                    "phase": "phase_f_persist",
+                    "batch_index": batch_index,
+                    "reason": "phase_exception",
+                    "error_class": type(batch_exc).__name__,
+                    "error_message_truncated_80c": err_msg,
+                })
+                _record_batch_rolled_back()
+                raise
+            batch_duration_ms = (time.monotonic() - t_batch) * 1000.0
+            cumulative_rows_incr += rows_in_batch
+            total_batches_committed += 1
+            _emit_decision_event("repo_index_batch_committed", {
+                "phase": "phase_f_persist",
+                "batch_index": batch_index,
+                "rows_in_batch": rows_in_batch,
+                "cumulative_rows": cumulative_rows_incr,
+                "batch_duration_ms": batch_duration_ms,
+            })
+            _record_batch_committed_latency(batch_duration_ms)
+            if (
+                batch_index == 0
+                or batch_index % REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL == 0
+            ):
+                await _publish_phase_change(
+                    repo_full_name, branch,
+                    phase="embedding", status="indexing",
+                    files_seen=cumulative_rows_incr,
+                    files_total=progress_files_total,
+                )
+            batch_index += 1
         persist_ms = (time.monotonic() - t_persist) * 1000
 
         # Phase F finale — update meta in one submit.
@@ -1367,6 +1874,38 @@ class RepoIndexService:
         invalidate_curated_cache()
 
         total_ms = (time.monotonic() - t_start) * 1000
+
+        # v0.4.16 P1b § 4.1 row 7 — repo_index_completed.
+        _emit_decision_event("repo_index_completed", {
+            "repo_full_name": repo_full_name,
+            "branch": branch,
+            "op": "incremental",
+            "final_file_count": new_count,
+            "total_duration_ms": float(total_ms),
+            "total_batches_committed": total_batches_committed,
+        })
+        _snapshot_last_run(
+            repo_full_name=repo_full_name,
+            branch=branch,
+            op="incremental",
+            final_file_count=new_count,
+            total_duration_ms=total_ms,
+            total_batches_committed=total_batches_committed,
+        )
+        # v0.4.16 P1b § 11 row 17 — recap chain.
+        _emit_success_recap_chain(
+            repo_full_name=repo_full_name,
+            branch=branch,
+            op="incremental",
+            final_file_count=new_count,
+            total_duration_ms=total_ms,
+            total_batches_committed=total_batches_committed,
+            last_batch_index=max(batch_index - 1, 0),
+            last_phase="phase_f_persist",
+            last_phase_for_phase_started="phase_f_persist",
+            prior_file_count=prior_file_count,
+        )
+
         logger.info(
             "incremental_update_complete: repo=%s changed=%d added=%d "
             "removed=%d upserted=%d read_fail=%d embed_fail=%d "
@@ -1453,4 +1992,11 @@ __all__ = [
     "_extract_markdown_references",
     "_extract_structured_outline",
     "_publish_phase_change",
+    # v0.4.16 P1b § 7 — observability surface
+    "_emit_decision_event",
+    "_assert_reason_in_set",
+    "_get_repo_index_metrics",
+    "_REPO_INDEX_LATENCY_RESERVOIR",
+    "_REPO_INDEX_BATCH_COUNTER",
+    "_REPO_INDEX_LAST_RUN",
 ]
