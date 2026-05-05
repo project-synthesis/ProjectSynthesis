@@ -118,7 +118,6 @@ class TestColdPathChunkingUnderPeerLoad:
     ):
         from app.services.taxonomy import cold_path as cp_mod
         from app.services.taxonomy import (
-            get_engine,
             reset_engine,
             set_engine,
         )
