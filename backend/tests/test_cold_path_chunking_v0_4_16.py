@@ -663,3 +663,106 @@ async def test_cold_path_run_id_propagates_through_phases(
         f"Expected at least one cold_path log line to reference run_id={run_id!r}; "
         f"got messages: {[r.getMessage() for r in cold_path_records]!r}"
     )
+
+
+# ===========================================================================
+# Cycle 1 OPERATE — concurrent cold-path serialization (real DB)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+class TestCycle1ColdPathSerialization:
+    """v0.4.16 P1a Cycle 1 OPERATE — concurrent cold-path serialization.
+
+    Spec § 4.4 + § 8 acceptance criterion 7. Two concurrent execute_cold_path()
+    invocations must serialize via _COLD_PATH_LOCK (asyncio.Lock module-level).
+    Each call gets its own _COLD_PATH_RUN_ID; the second waits for the first
+    to release the lock.
+    """
+
+    async def test_two_concurrent_cold_paths_serialize_via_lock(
+        self, db_session
+    ):
+        """Two execute_cold_path() calls fire via asyncio.gather; both complete
+        without deadlock; ordering is preserved (second observes lock blocking)."""
+        import asyncio
+        import time
+
+        # Use the same helpers used by the RED tests (defined inline in this file)
+        await _seed_taxonomy(db_session, n_clusters=10)
+
+        from app.services.taxonomy import cold_path as cp_mod
+        from app.services.taxonomy.cold_path import execute_cold_path
+
+        # Surface regression early if the GREEN-phase ContextVar is missing.
+        assert hasattr(cp_mod, "_COLD_PATH_RUN_ID"), (
+            "GREEN-phase regression: _COLD_PATH_RUN_ID ContextVar must exist on cold_path module"
+        )
+        assert hasattr(cp_mod, "_COLD_PATH_LOCK"), (
+            "GREEN-phase regression: _COLD_PATH_LOCK must exist on cold_path module"
+        )
+
+        # The module-level asyncio.Lock binds to the first event loop that
+        # touches it (test 6 typically). pytest-asyncio gives each test a
+        # fresh loop, so reset the lock onto THIS test's loop before use —
+        # otherwise asyncio raises "bound to a different event loop".
+        original_lock = cp_mod._COLD_PATH_LOCK
+        cp_mod._COLD_PATH_LOCK = asyncio.Lock()
+
+        # Instrument to capture per-call entry/exit timestamps
+        original_inner = cp_mod._execute_cold_path_inner
+        timeline: list[tuple[str, float, str]] = []  # (event, ts_monotonic, run_id)
+
+        async def instrumented(engine, db, *args, **kwargs):
+            run_id = cp_mod._COLD_PATH_RUN_ID.get()
+            timeline.append(("enter", time.monotonic(), run_id or "unknown"))
+            await asyncio.sleep(0.05)  # ensure overlap window if lock fails
+            result = await original_inner(engine, db, *args, **kwargs)
+            timeline.append(("exit", time.monotonic(), run_id or "unknown"))
+            return result
+
+        # Patch via monkeypatch-equivalent (the test must restore on teardown)
+        cp_mod._execute_cold_path_inner = instrumented
+        try:
+            engine = _make_engine()
+            results = await asyncio.gather(
+                execute_cold_path(engine, db_session),
+                execute_cold_path(engine, db_session),
+                return_exceptions=True,
+            )
+        finally:
+            cp_mod._execute_cold_path_inner = original_inner
+            cp_mod._COLD_PATH_LOCK = original_lock
+
+        # Both must complete without exception
+        assert all(not isinstance(r, BaseException) for r in results), (
+            f"both runs must complete without exception: {results}"
+        )
+
+        # Distinct run_ids
+        run_ids = {entry[2] for entry in timeline if entry[2] != "unknown"}
+        assert len(run_ids) == 2, f"expected 2 distinct run_ids, got {run_ids}"
+
+        # Serialization check: events must be in interleaving order
+        # [enter_A, exit_A, enter_B, exit_B] — if lock works correctly, second
+        # 'enter' fires AFTER first 'exit'. The instrumented sleep ensures any
+        # lock-failure produces overlapping timestamps. Identify runs by
+        # timeline order (NOT set iteration, which is non-deterministic).
+        # The timeline records (event, ts, run_id) in monotonic order because
+        # appends happen under the GIL inside the same coroutine awaits.
+        first_run_id = next(rid for e, _ts, rid in timeline if e == "enter")
+        first_run_exit = next(
+            ts for e, ts, rid in timeline if e == "exit" and rid == first_run_id
+        )
+        second_run_enter = next(
+            (ts for e, ts, rid in timeline if e == "enter" and rid != first_run_id),
+            None,
+        )
+        assert second_run_enter is not None, (
+            "second run must have entered the inner during the test window"
+        )
+        # second_run_enter MUST be >= first_run_exit (serialized via _COLD_PATH_LOCK)
+        assert second_run_enter >= first_run_exit, (
+            f"concurrent invocation must serialize: second enter ({second_run_enter:.3f}) "
+            f"must be >= first exit ({first_run_exit:.3f})"
+        )
