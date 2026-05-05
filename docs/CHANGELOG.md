@@ -4,6 +4,9 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+- **HistoryPanel pagination correctness (v0.4.15 P0)** — backend now accepts `project_id` Query param on `GET /history` + `OptimizationService.list_optimizations()` accepts the matching kwarg. Frontend `getHistory()` + HistoryPanel call sites push `project_id: projectStore.currentProjectId` + `status: 'completed'` to the server, eliminating the ~9-row-per-page regression that surfaced post-ADR-005 multi-project rollout. New `$effect` re-fetches on project switch with `untrack()` race guard + capture-and-bail pattern at both fetch sites. Defensive client-side filters preserved as belt-and-suspenders.
+
 ## v0.4.14 — 2026-05-04
 
 ### Added
