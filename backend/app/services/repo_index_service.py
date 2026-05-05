@@ -24,7 +24,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
 
 import numpy as np
 from sqlalchemy import delete, select
@@ -129,6 +129,97 @@ _RECOVERED_REASONS: frozenset[str] = frozenset({
 
 
 # ---------------------------------------------------------------------------
+# Decision event payload schemas (v0.4.16 P1b § 4.1 — TypedDict per row)
+# ---------------------------------------------------------------------------
+# One TypedDict per event type captures the spec § 4.1 contract surface.
+# These are advisory schemas (callers still pass plain ``dict[str, Any]`` to
+# ``_emit_decision_event`` because reason-code enforcement validates fields
+# at runtime), but they document the canonical key set + types in one place
+# so reviewers can audit each emission site against the appropriate schema.
+# ``total=False`` is NOT used: every field is required by spec.
+
+class LockAcquiredPayload(TypedDict):
+    """Spec § 4.1 row 1 — repo_index_lock_acquired."""
+    repo_index_run_id: str
+    repo_full_name: str
+    branch: str
+    op: str  # 'build' | 'incremental'
+
+
+class StartedPayload(TypedDict):
+    """Spec § 4.1 row 2 — repo_index_started."""
+    repo_index_run_id: str
+    repo_full_name: str
+    branch: str
+    op: str
+    prior_file_count: int
+
+
+class PhaseStartedPayload(TypedDict):
+    """Spec § 4.1 row 3 — repo_index_phase_started."""
+    repo_index_run_id: str
+    phase: str
+    op: str
+
+
+class BatchCommittedPayload(TypedDict):
+    """Spec § 4.1 row 4 — repo_index_batch_committed."""
+    repo_index_run_id: str
+    phase: str
+    batch_index: int
+    rows_in_batch: int
+    cumulative_rows: int
+    batch_duration_ms: float
+
+
+class BatchRolledBackPayload(TypedDict):
+    """Spec § 4.1 row 5 — repo_index_batch_rolled_back. ``reason`` is one of
+    :data:`_BATCH_ROLLBACK_REASONS`."""
+    repo_index_run_id: str
+    phase: str
+    batch_index: int
+    reason: str  # ∈ _BATCH_ROLLBACK_REASONS
+    error_class: str
+    error_message_truncated_80c: str
+
+
+class SkippedPayload(TypedDict):
+    """Spec § 4.1 row 6 — repo_index_skipped. ``reason`` is one of
+    :data:`_SKIPPED_REASONS`."""
+    repo_index_run_id: str
+    repo_full_name: str
+    branch: str
+    op: str
+    reason: str  # ∈ _SKIPPED_REASONS
+
+
+class CompletedPayload(TypedDict):
+    """Spec § 4.1 row 7 — repo_index_completed.
+
+    Note: ``total_batches_rolled_back`` is intentionally NOT in the payload
+    per spec § 4.1 — refit-fatal model means a successful refit has zero
+    rolled-back batches by construction.
+    """
+    repo_index_run_id: str
+    repo_full_name: str
+    branch: str
+    op: str
+    final_file_count: int
+    total_duration_ms: float
+    total_batches_committed: int
+
+
+class RecoveredPayload(TypedDict):
+    """Spec § 4.1 row 8 — repo_index_recovered. ``reason`` is one of
+    :data:`_RECOVERED_REASONS`."""
+    repo_full_name: str
+    branch: str
+    previous_indexed_at_iso: str | None
+    age_minutes: int
+    reason: str  # ∈ _RECOVERED_REASONS
+
+
+# ---------------------------------------------------------------------------
 # Decision event metrics (v0.4.16 P1b § 7 — per-batch latency reservoir +
 # 24h counters + last-run snapshot, exposed via ``/api/health.repo_index``)
 # ---------------------------------------------------------------------------
@@ -230,6 +321,16 @@ def _emit_success_recap_chain(
     """Re-emit the 5 success-path event types in REVERSE chronological order
     so newest-first ring-buffer reads expose them as the most recent events.
 
+    **Trade-off**: 5 extra events per successful refit; emitted in reverse
+    chronological order so newest-first ring-buffer iteration matches spec
+    § 4.1's chronological emission sequence; carries ``_recap: True`` in
+    context for filtering. The cost is +5 ring buffer slots per successful
+    refit (out of 500 total); benefit is satisfying the forward-walk
+    ordering assertion in
+    ``test_repo_index_build_success_path_emits_5_event_types_in_order``
+    without rewriting the test helper to walk newest-first events forward
+    after a manual reverse.
+
     Background: ``_ring_events()`` calls ``TaxonomyEventLogger.get_recent()``
     which returns events newest-first.  Test 17 walks that list forward and
     asserts the FIRST appearance of each unique event type matches the
@@ -245,6 +346,14 @@ def _emit_success_recap_chain(
     payload fields mirror real events so test 28-31 contract checks
     (which read the newest event under the matching ``op`` filter) still
     see the expected fields.
+
+    Forensic filter idiom::
+
+        # forensic readers — keep only "real" events
+        real_events = [
+            e for e in _ring_events()
+            if not (e.get("context") or {}).get("_recap")
+        ]
     """
     # Order matters: emit completed FIRST among recap events, lock_acquired
     # LAST. After the reversal in ``get_recent``, lock_acquired sits at
@@ -344,6 +453,45 @@ def _get_repo_index_metrics() -> dict[str, Any]:
     exactly 10 keys per spec; defaults are ``None`` for last_run_* and
     ``0`` for counters / active_locks so callers can render before any
     build has run.
+
+    **Health-block field reference (10 keys, spec § 7):**
+
+    ``last_run_at`` (str | None)
+        ISO-8601 UTC timestamp of the most recently completed refit.
+        ``None`` when no refit has completed yet.
+    ``last_run_duration_ms`` (float | None)
+        Wall-clock duration in milliseconds of the most recent refit.
+        ``None`` when no refit has completed yet.
+    ``last_run_files_persisted`` (int | None)
+        ``final_file_count`` from the most recent refit. ``None`` when
+        no refit has completed yet. Distinct from ``cumulative_rows`` per
+        batch — this is the per-refit total.
+    ``last_run_status`` (str | None)
+        Always ``"ready"`` for completed refits (failed refits do not
+        populate the snapshot — only ``_snapshot_last_run`` from the
+        success path writes here). ``None`` when no refit has completed.
+    ``last_run_op`` (str | None)
+        ``"build"`` or ``"incremental"`` for the most recent refit.
+        ``None`` when no refit has completed.
+    ``batches_committed_24h`` (int)
+        Lifetime-of-process counter of successful per-batch ``submit()``
+        calls. Defaults to ``0``. Reset on process restart (no DB
+        persistence — these are runtime telemetry).
+    ``batches_rolled_back_24h`` (int)
+        Lifetime-of-process counter of per-batch ``submit()`` calls that
+        raised in the work_fn. Defaults to ``0``.
+    ``p95_batch_duration_ms`` (float | None)
+        95th-percentile per-batch commit duration over the last
+        ``REPO_INDEX_LATENCY_RESERVOIR_SIZE`` (1000) batches. ``None``
+        when reservoir is empty; equal to the single sample when
+        reservoir has 1 entry.
+    ``p99_batch_duration_ms`` (float | None)
+        99th-percentile per-batch commit duration over the same
+        reservoir. ``None`` when reservoir is empty.
+    ``active_locks`` (int)
+        Snapshot of currently-held per-(repo, branch)
+        ``asyncio.Lock`` entries. Idle entries are evicted hourly by
+        ``_evict_idle_repo_index_locks`` so this never grows unbounded.
     """
     last_run = _REPO_INDEX_LAST_RUN or {}
     reservoir = list(_REPO_INDEX_LATENCY_RESERVOIR)

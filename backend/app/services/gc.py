@@ -317,12 +317,11 @@ async def _gc_orphan_repo_index_runs(db: AsyncSession) -> int:
     Returns the count of rows flipped to ``status='error'``.
     """
     from app.models import RepoIndexMeta
-    from app.services.taxonomy._constants import REPO_INDEX_LOCK_TTL_MIN
-
     from app.services.repo_index_service import (
         _emit_decision_event,
         _publish_phase_change,
     )
+    from app.services.taxonomy._constants import REPO_INDEX_LOCK_TTL_MIN
 
     cutoff = datetime.now(timezone.utc) - timedelta(
         minutes=REPO_INDEX_LOCK_TTL_MIN,
