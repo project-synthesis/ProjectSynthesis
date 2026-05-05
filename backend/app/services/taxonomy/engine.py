@@ -683,6 +683,48 @@ class TaxonomyEngine:
             except Exception as qe:
                 logger.warning("Qualifier embedding failed (non-fatal): %s", qe)
 
+            # v0.4.16 P1a Cycle 2: peer-writer SKIP pre-check — if ANY
+            # active cluster has a non-expired ``refit_in_progress_until``
+            # flag, the cold path is mid-refit. Defer the assignment by
+            # marking every quiesced cluster in ``_dirty_set`` so the
+            # warm path retries on the next cycle (existing primitive — no
+            # schema change). This runs BEFORE ``assign_cluster()`` so we
+            # never write opt.cluster_id while the cold path holds the flag.
+            # Spec § 3.3.
+            from app.services.taxonomy.cold_path import _parse_quiesce_flag
+            _q_check = await db.execute(
+                select(PromptCluster).where(
+                    PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
+                )
+            )
+            _quiesced_active = []
+            for _qn in _q_check.scalars().all():
+                _qexp = _parse_quiesce_flag(_qn.cluster_metadata)
+                if _qexp is not None:
+                    _quiesced_active.append((_qn, _qexp))
+            if _quiesced_active:
+                for _qn, _qexp in _quiesced_active:
+                    self.mark_dirty(_qn.id, project_id=project_id)
+                    try:
+                        from app.services.taxonomy import event_logger as _event_logger_mod
+                        _event_logger_mod.get_event_logger().log_decision(
+                            path="cold", op="refit_quiesce_check",
+                            decision="peer_skipped",
+                            context={
+                                "writer_path": "hot",
+                                "cluster_id": _qn.id,
+                                "expires_at_iso": _qexp.isoformat(),
+                            },
+                        )
+                    except RuntimeError:
+                        pass
+                logger.info(
+                    "Peer-writer SKIP (hot): %d quiesced cluster(s) — "
+                    "opt %s deferred to next warm cycle",
+                    len(_quiesced_active), optimization_id[:8],
+                )
+                return
+
             # 2. Find or create PromptCluster
             # Use the RESOLVED domain (opt.domain) for cluster assignment — this
             # maps to a known domain node label. The raw analyzer output (domain_raw)
@@ -1500,14 +1542,31 @@ class TaxonomyEngine:
                 "Restored _last_silhouette=%.4f from snapshot %s",
                 candidate, snap.id,
             )
+            # v0.4.16 P1a Cycle 2: include snapshot_age_seconds in the
+            # event payload (per spec § 5.1 row 7 + § 3.6 row 11).
             try:
-                from app.services.taxonomy.event_logger import get_event_logger
-                get_event_logger().log_decision(
+                from datetime import datetime as _dt
+                from datetime import timezone as _tz
+                snap_created = getattr(snap, "created_at", None)
+                if snap_created is not None:
+                    if snap_created.tzinfo is None:
+                        snap_created = snap_created.replace(tzinfo=_tz.utc)
+                    age_seconds = (
+                        _dt.now(_tz.utc) - snap_created
+                    ).total_seconds()
+                else:
+                    age_seconds = None
+            except Exception:
+                age_seconds = None
+            try:
+                from app.services.taxonomy import event_logger as _event_logger_mod
+                _event_logger_mod.get_event_logger().log_decision(
                     path="cold", op="bootstrap",
                     decision="silhouette_restored_from_snapshot",
                     context={
                         "silhouette_value": candidate,
                         "snapshot_id": snap.id,
+                        "snapshot_age_seconds": age_seconds,
                     },
                 )
             except RuntimeError:

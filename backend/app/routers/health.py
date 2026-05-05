@@ -139,6 +139,18 @@ class HealthResponse(BaseModel):
             "lifespan)."
         ),
     )
+    cold_path: dict | None = Field(
+        default=None,
+        description=(
+            "v0.4.16 P1a Cycle 2 (spec § 5.5): cold-path lifecycle + "
+            "performance metrics. Fields: last_run_at, last_run_duration_ms, "
+            "last_run_q_delta, last_run_phases_committed, last_run_status, "
+            "peer_skip_count_24h, rejection_count_24h, "
+            "phase_failure_count_24h, p95_phase_duration_ms (per-phase "
+            "dict). Null when the event ring buffer is empty or "
+            "uninitialised."
+        ),
+    )
     legacy_state_observed: int = Field(
         default=0,
         description=(
@@ -288,6 +300,116 @@ async def _probe_all_services(
 
 
 _CRITICAL_SERVICES = frozenset({"backend", "frontend"})
+
+
+# ---------------------------------------------------------------------------
+# v0.4.16 P1a Cycle 2: cold-path metrics aggregator
+# ---------------------------------------------------------------------------
+
+
+def _get_cold_path_metrics() -> dict | None:
+    """Aggregate the /api/health cold_path block from the event ring buffer
+    + the per-phase latency reservoir.
+
+    Spec § 5.5. Returns a dict with the 9 fields required by Cycle 2 tests
+    even when the ring buffer is empty (last_run_* fields are None,
+    counters are 0, p95 dict has 4 phase keys with None values).
+    """
+    from datetime import timedelta
+
+    cold_path_block: dict = {
+        "last_run_at": None,
+        "last_run_duration_ms": None,
+        "last_run_q_delta": None,
+        "last_run_phases_committed": None,
+        "last_run_status": None,
+        "peer_skip_count_24h": 0,
+        "rejection_count_24h": 0,
+        "phase_failure_count_24h": 0,
+        "p95_phase_duration_ms": {
+            "1_reembed": None,
+            "2_reassign": None,
+            "3_relabel": None,
+            "4_repair": None,
+        },
+    }
+
+    try:
+        from app.services.taxonomy.cold_path import (
+            _COLD_PATH_LATENCY_RESERVOIR,
+            _get_phase_p95,
+            _PHASE_KEYS,
+        )
+        for phase_key in _PHASE_KEYS:
+            cold_path_block["p95_phase_duration_ms"][phase_key] = _get_phase_p95(phase_key)
+    except Exception:
+        logger.debug("cold_path latency reservoir read failed", exc_info=True)
+
+    try:
+        from app.services.taxonomy.event_logger import get_event_logger
+        ring = get_event_logger().get_recent(limit=500, path="cold")
+    except RuntimeError:
+        return cold_path_block
+    except Exception:
+        logger.debug("cold_path metrics ring buffer read failed", exc_info=True)
+        return cold_path_block
+
+    if not ring:
+        return cold_path_block
+
+    # Find the most recent cold_path_completed / cold_path_phase_rolled_back
+    # to summarize the last run.
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    last_completed: dict | None = None
+    last_rolled_back: dict | None = None
+    peer_skipped = 0
+    rejection_count = 0
+    phase_failure_count = 0
+    for ev in ring:
+        decision = ev.get("decision")
+        try:
+            ev_ts_str = ev.get("ts")
+            ev_ts = (
+                datetime.fromisoformat(ev_ts_str.replace("Z", "+00:00"))
+                if ev_ts_str else None
+            )
+        except (TypeError, ValueError):
+            ev_ts = None
+        if decision == "cold_path_completed" and last_completed is None:
+            last_completed = ev
+        if decision == "cold_path_phase_rolled_back" and last_rolled_back is None:
+            last_rolled_back = ev
+        if ev_ts and ev_ts >= cutoff:
+            if decision == "peer_skipped":
+                peer_skipped += 1
+            elif decision == "cold_path_phase_rolled_back":
+                ctx = ev.get("context") or {}
+                if ctx.get("reason") == "q_regression":
+                    rejection_count += 1
+                else:
+                    phase_failure_count += 1
+
+    cold_path_block["peer_skip_count_24h"] = peer_skipped
+    cold_path_block["rejection_count_24h"] = rejection_count
+    cold_path_block["phase_failure_count_24h"] = phase_failure_count
+
+    last_run = last_completed or last_rolled_back
+    if last_run:
+        ctx = last_run.get("context") or {}
+        cold_path_block["last_run_at"] = last_run.get("ts")
+        cold_path_block["last_run_duration_ms"] = ctx.get("total_duration_ms")
+        cold_path_block["last_run_q_delta"] = ctx.get("q_delta")
+        cold_path_block["last_run_phases_committed"] = ctx.get("phases_committed")
+        if last_run.get("decision") == "cold_path_completed":
+            cold_path_block["last_run_status"] = "accepted"
+        else:
+            ctx_reason = ctx.get("reason")
+            if ctx_reason == "q_regression":
+                cold_path_block["last_run_status"] = "rejected"
+            else:
+                cold_path_block["last_run_status"] = "failed"
+
+    return cold_path_block
 
 
 def _compute_overall_status(
@@ -558,6 +680,9 @@ async def health_check(
     except Exception:
         logger.debug("Health check write_queue metrics failed", exc_info=True)
 
+    # v0.4.16 P1a Cycle 2 (spec § 5.5): cold-path metrics block.
+    cold_path_metrics = _get_cold_path_metrics()
+
     return HealthResponse(
         status=overall_status,
         version=__version__,
@@ -588,6 +713,7 @@ async def health_check(
             "total": gp_active + gp_demoted + gp_retired,
         },
         write_queue=write_queue_metrics,
+        cold_path=cold_path_metrics,
         legacy_state_observed=legacy_state_observed,
         services=services_result,
         cross_service=cross_service_result,

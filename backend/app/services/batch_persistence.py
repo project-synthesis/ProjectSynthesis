@@ -359,6 +359,50 @@ async def batch_taxonomy_assign(
         clusters_created = 0
         domains_touched: set[str] = set()
         assigned = 0
+
+        # v0.4.16 P1a Cycle 2: peer-writer SKIP pre-check — query the
+        # quiesce flag once at batch entry. If any active cluster is
+        # mid-refit, drop the entire batch and re-mark the quiesced
+        # clusters in the engine's dirty_set so the next warm cycle
+        # retries.  Matches engine hot-path SKIP semantics (spec § 3.3).
+        from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
+        from app.services.taxonomy.cold_path import _parse_quiesce_flag
+        from app.models import PromptCluster as _PC
+        _quiesce_q = await db.execute(
+            sa_select(_PC).where(_PC.state.notin_(EXCLUDED_STRUCTURAL_STATES))
+        )
+        _quiesced_active = []
+        for _qn in _quiesce_q.scalars().all():
+            _qexp = _parse_quiesce_flag(_qn.cluster_metadata)
+            if _qexp is not None:
+                _quiesced_active.append((_qn, _qexp))
+        if _quiesced_active:
+            for _qn, _qexp in _quiesced_active:
+                engine.mark_dirty(_qn.id, project_id=None)
+                try:
+                    get_event_logger().log_decision(
+                        path="cold", op="refit_quiesce_check",
+                        decision="peer_skipped",
+                        context={
+                            "writer_path": "batch_persistence",
+                            "cluster_id": _qn.id,
+                            "expires_at_iso": _qexp.isoformat(),
+                            "batch_size": len(completed),
+                        },
+                    )
+                except RuntimeError:
+                    pass
+            logger.info(
+                "Peer-writer SKIP (batch_persistence): %d quiesced cluster(s) — "
+                "skipping batch of %d optimizations",
+                len(_quiesced_active), len(completed),
+            )
+            return TaxonomyAssignSummary(
+                clusters_assigned=0,
+                clusters_created=0,
+                domains_touched=[],
+            )
+
         for pending in completed:
             try:
                 embedding = np.frombuffer(pending.embedding, dtype=np.float32)  # type: ignore[arg-type]
