@@ -41,6 +41,45 @@ BACKEND_TESTS_DIR = Path(__file__).resolve().parent
 
 
 # ---------------------------------------------------------------------------
+# Autouse cleanup — module-level state hygiene
+# ---------------------------------------------------------------------------
+# v0.4.16 P1b GREEN follow-up: the chunking tests acquire per-(repo, branch)
+# locks + populate `_REPO_INDEX_LAST_ACQUIRED` + `_REPO_INDEX_QUEUE_SUBMIT_LOCKS`
+# in module-level dicts on `app.services.repo_index_service`. They also use
+# `with patch("app.services.repo_index_service.read_and_embed_files", ...)`
+# concurrently in OPERATE test #16, which races on `patch()`'s internal "store
+# original" + "restore" cycle and can leak a stub patch into subsequent test
+# files. This autouse fixture wipes the module-level state before AND restores
+# `read_and_embed_files` after every test in this file, so cross-file isolation
+# holds.
+@pytest.fixture(autouse=True)
+def _reset_repo_index_module_state():
+    from app.services import repo_index_service as _ris
+    from app.services import repo_index_file_reader as _rifr
+
+    # Snapshot the canonical reference so we can restore even if a leaky
+    # patch left a stub in `_ris.read_and_embed_files`.
+    _original_read_and_embed = _rifr.read_and_embed_files
+
+    # Wipe module-level lock + counter dicts (cheap; nothing else owns them).
+    _ris._REPO_INDEX_LOCKS.clear()
+    _ris._REPO_INDEX_LOCK_LAST_ACQUIRED.clear()
+    _ris._REPO_INDEX_QUEUE_SUBMIT_LOCKS.clear()
+
+    # Force the canonical implementation back into `repo_index_service`'s
+    # namespace before the test runs (defends against a prior leak).
+    _ris.read_and_embed_files = _original_read_and_embed
+
+    yield
+
+    # Post-test cleanup: same wipe + restore.
+    _ris._REPO_INDEX_LOCKS.clear()
+    _ris._REPO_INDEX_LOCK_LAST_ACQUIRED.clear()
+    _ris._REPO_INDEX_QUEUE_SUBMIT_LOCKS.clear()
+    _ris.read_and_embed_files = _original_read_and_embed
+
+
+# ---------------------------------------------------------------------------
 # Inline helpers
 # ---------------------------------------------------------------------------
 

@@ -416,15 +416,16 @@ async def link_repo(
         _idx_provider = _idx_provider.provider if _idx_provider else None
 
         async def _bg_index():
+            bg_write_queue = getattr(request.app.state, "write_queue", None)
             async with async_session_factory() as bg_db:
                 svc = RepoIndexService(
                     db=bg_db,
                     github_client=GitHubClient(),
                     embedding_service=EmbeddingService(),
+                    write_queue=bg_write_queue,
                 )
                 await svc.build_index(_idx_repo, _idx_branch, _idx_token)
 
-            bg_write_queue = getattr(request.app.state, "write_queue", None)
             await _run_explore_synthesis(
                 _idx_repo, _idx_branch, _idx_token, _idx_provider,
                 write_queue=bg_write_queue,
@@ -747,15 +748,16 @@ async def reindex_repo(
     _reindex_repo = linked.full_name
 
     async def _bg_index():
+        bg_write_queue = getattr(request.app.state, "write_queue", None)
         async with async_session_factory() as bg_db:
             svc = RepoIndexService(
                 db=bg_db,
                 github_client=GitHubClient(),
                 embedding_service=EmbeddingService(),
+                write_queue=bg_write_queue,
             )
             await svc.build_index(_reindex_repo, branch, token)
 
-        bg_write_queue = getattr(request.app.state, "write_queue", None)
         await _run_explore_synthesis(
             _reindex_repo, branch, token, _reindex_provider,
             write_queue=bg_write_queue,

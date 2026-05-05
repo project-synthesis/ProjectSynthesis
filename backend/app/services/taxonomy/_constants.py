@@ -411,3 +411,82 @@ def _validate_cold_path_constants() -> None:
 # Run the invariant at module import so degenerate configurations
 # fail fast (cannot boot the FastAPI app).
 _validate_cold_path_constants()
+
+
+# ---------------------------------------------------------------------------
+# Repo-index chunking (v0.4.16 P1b)
+# ---------------------------------------------------------------------------
+# Tunes the per-batch decomposition of `RepoIndexService.build_index()` and
+# `incremental_update()` so every write routes through `WriteQueue.submit()`
+# under the queue's per-task ``timeout=300s`` envelope.  See
+# ``docs/specs/v0.4.16-repo-index-chunking-2026-05-04.md`` § 5 for the
+# canonical defaults and ``_validate_repo_index_constants()`` (below) for
+# the import-time invariant guard.
+REPO_INDEX_PERSIST_BATCH_SIZE: int = 50
+"""Number of RepoFileIndex rows committed per submit() call in build_index Phase 3
+and incremental_update Phase F. Tuned: 50 rows × ~10ms per insert = ~500ms per
+batch, comfortably under WriteQueue.submit() default timeout=300s."""
+
+REPO_INDEX_DELETE_BATCH_SIZE: int = 200
+"""Number of file_paths per chunked DELETE in build_index Phase 1 (existing-row
+cleanup) and incremental_update Phase D (removed-files cleanup). DELETEs are
+cheaper than INSERTs so larger batch is OK."""
+
+REPO_INDEX_LOCK_TTL_MIN: int = 30
+"""Grace period before lifespan orphan sweep flips a stuck status='indexing'
+row to status='error'. Doubled from worst-case 1000-file repo build duration
+of ~15 min to absorb slow-disk and slow-network outliers."""
+
+REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL: int = 5
+"""Emit index_phase_changed SSE event every Nth persist batch. At 50 rows/batch,
+every-5 = every 250 rows (acceptable UI cadence for repos up to ~5000 files)."""
+
+REPO_INDEX_LATENCY_RESERVOIR_SIZE: int = 1000
+"""Bounded reservoir for per-batch latency histogram in /api/health repo_index block.
+Mirrors WriteQueue's reservoir sizing."""
+
+REPO_INDEX_LOCK_IDLE_EVICTION_SECONDS: int = 3600
+"""Idle-time threshold for evicting entries from _REPO_INDEX_LOCKS dict in the
+hourly recurring GC sweep. Entries that are unlocked AND have not been acquired
+in this many seconds are eligible for eviction. Default 1 hour balances dict
+size growth against re-instantiation cost on warm repos."""
+
+
+def _validate_repo_index_constants() -> None:
+    """v0.4.16 P1b: fail-fast invariant guard for repo-index chunking constants.
+
+    Mirrors the v0.4.16 P1a pattern (``_validate_cold_path_constants``). A
+    zero or negative batch size, sub-minute eviction window, or sub-five-min
+    TTL would silently break the chunked build/refresh loops or produce
+    spurious orphan sweeps.  Asserting at import time ensures the FastAPI
+    app cannot boot with a degenerate configuration.
+    """
+    assert REPO_INDEX_PERSIST_BATCH_SIZE > 0, (
+        f"REPO_INDEX_PERSIST_BATCH_SIZE must be positive, "
+        f"got {REPO_INDEX_PERSIST_BATCH_SIZE}"
+    )
+    assert REPO_INDEX_DELETE_BATCH_SIZE > 0, (
+        f"REPO_INDEX_DELETE_BATCH_SIZE must be positive, "
+        f"got {REPO_INDEX_DELETE_BATCH_SIZE}"
+    )
+    assert REPO_INDEX_LOCK_TTL_MIN >= 5, (
+        f"REPO_INDEX_LOCK_TTL_MIN must be >= 5 minutes to avoid spurious "
+        f"sweeps, got {REPO_INDEX_LOCK_TTL_MIN}"
+    )
+    assert REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL >= 1, (
+        f"REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL must be at least every "
+        f"batch (>=1), got {REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL}"
+    )
+    assert REPO_INDEX_LATENCY_RESERVOIR_SIZE >= 100, (
+        f"REPO_INDEX_LATENCY_RESERVOIR_SIZE must be >= 100 for usable p95, "
+        f"got {REPO_INDEX_LATENCY_RESERVOIR_SIZE}"
+    )
+    assert REPO_INDEX_LOCK_IDLE_EVICTION_SECONDS >= 60, (
+        f"REPO_INDEX_LOCK_IDLE_EVICTION_SECONDS must be >= 60s to avoid "
+        f"churn on warm repos, got {REPO_INDEX_LOCK_IDLE_EVICTION_SECONDS}"
+    )
+
+
+# Run the invariant at module import so degenerate configurations
+# fail fast (cannot boot the FastAPI app).
+_validate_repo_index_constants()

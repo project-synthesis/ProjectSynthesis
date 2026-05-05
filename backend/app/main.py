@@ -351,6 +351,9 @@ async def lifespan(app: FastAPI):
     async def _recurring_gc_task() -> None:
         from app.database import async_session_factory
         from app.services.gc import run_recurring_gc
+        from app.services.repo_index_service import (
+            _evict_idle_repo_index_locks,
+        )
         from app.services.write_queue import (
             WriteQueueDeadError,
             WriteQueueStoppedError,
@@ -361,6 +364,22 @@ async def lifespan(app: FastAPI):
                 wq = getattr(app.state, "write_queue", None)
                 async with async_session_factory() as db:  # type: ignore[assignment]
                     await run_recurring_gc(db, write_queue=wq)  # type: ignore[arg-type]
+                # v0.4.16 P1b — sweep idle entries from the per-(repo, branch)
+                # lock registry. Independent of the DB sweep above and
+                # never raises because the helper itself is wrapped in
+                # try/except below.
+                try:
+                    evicted = await _evict_idle_repo_index_locks()
+                    if evicted:
+                        logger.info(
+                            "recurring_gc: evicted %d idle repo_index lock entries",
+                            evicted,
+                        )
+                except Exception:
+                    logger.debug(
+                        "recurring_gc: lock-dict eviction failed",
+                        exc_info=True,
+                    )
             except asyncio.CancelledError:
                 raise
             except (WriteQueueStoppedError, WriteQueueDeadError) as exc:
@@ -1476,6 +1495,9 @@ async def lifespan(app: FastAPI):
                                     db=db,
                                     github_client=gc,
                                     embedding_service=_shared_embedding_service,
+                                    write_queue=getattr(
+                                        app.state, "write_queue", None,
+                                    ),
                                 )
                                 result = await index_svc.incremental_update(
                                     repo_full_name=repo.full_name,
