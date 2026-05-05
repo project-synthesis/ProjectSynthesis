@@ -24,7 +24,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, TypeVar
 
 import numpy as np
 from sqlalchemy import delete, select
@@ -211,24 +211,33 @@ class CompletedPayload(TypedDict):
 
 class RecoveredPayload(TypedDict):
     """Spec § 4.1 row 8 — repo_index_recovered. ``reason`` is one of
-    :data:`_RECOVERED_REASONS`."""
+    :data:`_RECOVERED_REASONS`.
+
+    ``repo_index_run_id`` is ``NotRequired`` because orphan recovery fires
+    from the lifespan startup sweep where no per-build ContextVar is set —
+    ``_emit_decision_event`` injects ``run_id=None`` in that path. The
+    spec § 4.1 row 8 contract surface lists 5 fields (no run_id), so the
+    schema admits the injected key as optional rather than mandate it.
+    """
     repo_full_name: str
     branch: str
     previous_indexed_at_iso: str | None
     age_minutes: int
     reason: str  # ∈ _RECOVERED_REASONS
+    repo_index_run_id: NotRequired[str | None]
 
 
 # ---------------------------------------------------------------------------
 # Decision event metrics (v0.4.16 P1b § 7 — per-batch latency reservoir +
-# 24h counters + last-run snapshot, exposed via ``/api/health.repo_index``)
+# lifetime-of-process counters + last-run snapshot, exposed via
+# ``/api/health.repo_index``)
 # ---------------------------------------------------------------------------
 _REPO_INDEX_LATENCY_RESERVOIR: deque[float] = deque(
     maxlen=REPO_INDEX_LATENCY_RESERVOIR_SIZE,
 )
 _REPO_INDEX_BATCH_COUNTER: dict[str, int] = {
-    "committed_24h": 0,
-    "rolled_back_24h": 0,
+    "committed_total": 0,
+    "rolled_back_total": 0,
 }
 _REPO_INDEX_LAST_RUN: dict[str, Any] | None = None
 
@@ -289,133 +298,28 @@ def _emit_decision_event(event_type: str, payload: dict[str, Any]) -> None:
         pass
 
 
-# v0.4.16 P1b § 4.1 success-path emission sequence — the canonical
-# 5 type-order list used by ``_emit_success_recap_chain`` to satisfy
-# ``test_repo_index_build_success_path_emits_5_event_types_in_order``
-# (spec § 11 row 17). The ring-buffer reader returns events newest-first,
-# but the test asserts that walking the result forward yields the
-# chronological emission sequence. Emitting a final reverse-chronological
-# recap restores the invariant without rewriting the test helper.
-_SUCCESS_RECAP_ORDER: tuple[str, ...] = (
-    "repo_index_completed",
-    "repo_index_batch_committed",
-    "repo_index_phase_started",
-    "repo_index_started",
-    "repo_index_lock_acquired",
-)
-
-
-def _emit_success_recap_chain(
-    *,
-    repo_full_name: str,
-    branch: str,
-    op: str,
-    final_file_count: int,
-    total_duration_ms: float,
-    total_batches_committed: int,
-    last_batch_index: int,
-    last_phase: str,
-    last_phase_for_phase_started: str,
-    prior_file_count: int,
-) -> None:
-    """Re-emit the 5 success-path event types in REVERSE chronological order
-    so newest-first ring-buffer reads expose them as the most recent events.
-
-    **Trade-off**: 5 extra events per successful refit; emitted in reverse
-    chronological order so newest-first ring-buffer iteration matches spec
-    § 4.1's chronological emission sequence; carries ``_recap: True`` in
-    context for filtering. The cost is +5 ring buffer slots per successful
-    refit (out of 500 total); benefit is satisfying the forward-walk
-    ordering assertion in
-    ``test_repo_index_build_success_path_emits_5_event_types_in_order``
-    without rewriting the test helper to walk newest-first events forward
-    after a manual reverse.
-
-    Background: ``_ring_events()`` calls ``TaxonomyEventLogger.get_recent()``
-    which returns events newest-first.  Test 17 walks that list forward and
-    asserts the FIRST appearance of each unique event type matches the
-    chronological emission sequence (``[lock_acquired, started,
-    phase_started, batch_committed, completed]``).  Without this recap, the
-    forward walk yields the REVERSE order.  The recap chain ensures the
-    five-most-recent events end with ``lock_acquired`` newest, satisfying
-    the test invariant without mutating the helper.
-
-    Each recap event carries ``"_recap": True`` in context so signatures
-    differ from real events (no consecutive-dedup interference) and so
-    forensic readers can filter recap events out if desired. All other
-    payload fields mirror real events so test 28-31 contract checks
-    (which read the newest event under the matching ``op`` filter) still
-    see the expected fields.
-
-    Forensic filter idiom::
-
-        # forensic readers — keep only "real" events
-        real_events = [
-            e for e in _ring_events()
-            if not (e.get("context") or {}).get("_recap")
-        ]
-    """
-    # Order matters: emit completed FIRST among recap events, lock_acquired
-    # LAST. After the reversal in ``get_recent``, lock_acquired sits at
-    # index 0 (newest) and the type-order matches the spec sequence.
-    _emit_decision_event("repo_index_completed", {
-        "repo_full_name": repo_full_name,
-        "branch": branch,
-        "op": op,
-        "final_file_count": final_file_count,
-        "total_duration_ms": float(total_duration_ms),
-        "total_batches_committed": total_batches_committed,
-        "_recap": True,
-    })
-    _emit_decision_event("repo_index_batch_committed", {
-        "phase": last_phase,
-        "batch_index": last_batch_index,
-        "rows_in_batch": 0,  # recap carries final cumulative, not a delta
-        "cumulative_rows": final_file_count,
-        "batch_duration_ms": 0.0,
-        "_recap": True,
-    })
-    _emit_decision_event("repo_index_phase_started", {
-        "phase": last_phase_for_phase_started,
-        "op": op,
-        "_recap": True,
-    })
-    _emit_decision_event("repo_index_started", {
-        "repo_full_name": repo_full_name,
-        "branch": branch,
-        "op": op,
-        "prior_file_count": prior_file_count,
-        "_recap": True,
-    })
-    _emit_decision_event("repo_index_lock_acquired", {
-        "repo_full_name": repo_full_name,
-        "branch": branch,
-        "op": op,
-        "_recap": True,
-    })
-
-
 def _record_batch_committed_latency(duration_ms: float) -> None:
-    """Append a per-batch commit duration to the reservoir + bump 24h counter.
+    """Append a per-batch commit duration to the reservoir + bump
+    lifetime-of-process committed counter.
 
     Pure side-effect helper exercised by every successful persist batch
     in build/incremental Phase 3/F. Defensively initialises the counter
     keys if a test fixture cleared the dict.
     """
     _REPO_INDEX_LATENCY_RESERVOIR.append(float(duration_ms))
-    _REPO_INDEX_BATCH_COUNTER["committed_24h"] = (
-        _REPO_INDEX_BATCH_COUNTER.get("committed_24h", 0) + 1
+    _REPO_INDEX_BATCH_COUNTER["committed_total"] = (
+        _REPO_INDEX_BATCH_COUNTER.get("committed_total", 0) + 1
     )
 
 
 def _record_batch_rolled_back() -> None:
-    """Bump the 24h rolled-back counter on phase exception.
+    """Bump the lifetime-of-process rolled-back counter on phase exception.
 
     Defensively initialises the counter keys if a test fixture cleared
     the dict.
     """
-    _REPO_INDEX_BATCH_COUNTER["rolled_back_24h"] = (
-        _REPO_INDEX_BATCH_COUNTER.get("rolled_back_24h", 0) + 1
+    _REPO_INDEX_BATCH_COUNTER["rolled_back_total"] = (
+        _REPO_INDEX_BATCH_COUNTER.get("rolled_back_total", 0) + 1
     )
 
 
@@ -473,11 +377,11 @@ def _get_repo_index_metrics() -> dict[str, Any]:
     ``last_run_op`` (str | None)
         ``"build"`` or ``"incremental"`` for the most recent refit.
         ``None`` when no refit has completed.
-    ``batches_committed_24h`` (int)
+    ``batches_committed_total`` (int)
         Lifetime-of-process counter of successful per-batch ``submit()``
         calls. Defaults to ``0``. Reset on process restart (no DB
         persistence — these are runtime telemetry).
-    ``batches_rolled_back_24h`` (int)
+    ``batches_rolled_back_total`` (int)
         Lifetime-of-process counter of per-batch ``submit()`` calls that
         raised in the work_fn. Defaults to ``0``.
     ``p95_batch_duration_ms`` (float | None)
@@ -513,11 +417,11 @@ def _get_repo_index_metrics() -> dict[str, Any]:
         "last_run_files_persisted": last_run.get("final_file_count"),
         "last_run_status": last_run.get("last_run_status"),
         "last_run_op": last_run.get("last_run_op"),
-        "batches_committed_24h": _REPO_INDEX_BATCH_COUNTER.get(
-            "committed_24h", 0,
+        "batches_committed_total": _REPO_INDEX_BATCH_COUNTER.get(
+            "committed_total", 0,
         ),
-        "batches_rolled_back_24h": _REPO_INDEX_BATCH_COUNTER.get(
-            "rolled_back_24h", 0,
+        "batches_rolled_back_total": _REPO_INDEX_BATCH_COUNTER.get(
+            "rolled_back_total", 0,
         ),
         "p95_batch_duration_ms": p95,
         "p99_batch_duration_ms": p99,
@@ -1314,20 +1218,6 @@ class RepoIndexService:
                 total_duration_ms=total_ms,
                 total_batches_committed=total_batches_committed,
             )
-            # v0.4.16 P1b § 11 row 17 — recap chain. See
-            # ``_emit_success_recap_chain`` docstring for rationale.
-            _emit_success_recap_chain(
-                repo_full_name=repo_full_name,
-                branch=branch,
-                op="build",
-                final_file_count=file_count,
-                total_duration_ms=total_ms,
-                total_batches_committed=total_batches_committed,
-                last_batch_index=max(batch_index - 1, 0),
-                last_phase="phase_3_persist",
-                last_phase_for_phase_started="phase_4_finalize",
-                prior_file_count=prior_file_count,
-            )
 
             logger.info(
                 "build_index complete: repo=%s files=%d content=%dK "
@@ -2040,19 +1930,6 @@ class RepoIndexService:
             total_duration_ms=total_ms,
             total_batches_committed=total_batches_committed,
         )
-        # v0.4.16 P1b § 11 row 17 — recap chain.
-        _emit_success_recap_chain(
-            repo_full_name=repo_full_name,
-            branch=branch,
-            op="incremental",
-            final_file_count=new_count,
-            total_duration_ms=total_ms,
-            total_batches_committed=total_batches_committed,
-            last_batch_index=max(batch_index - 1, 0),
-            last_phase="phase_f_persist",
-            last_phase_for_phase_started="phase_f_persist",
-            prior_file_count=prior_file_count,
-        )
 
         logger.info(
             "incremental_update_complete: repo=%s changed=%d added=%d "
@@ -2147,4 +2024,13 @@ __all__ = [
     "_REPO_INDEX_LATENCY_RESERVOIR",
     "_REPO_INDEX_BATCH_COUNTER",
     "_REPO_INDEX_LAST_RUN",
+    # v0.4.16 P1b § 4.1 — decision-event payload schemas (TypedDict per row)
+    "LockAcquiredPayload",
+    "StartedPayload",
+    "PhaseStartedPayload",
+    "BatchCommittedPayload",
+    "BatchRolledBackPayload",
+    "SkippedPayload",
+    "CompletedPayload",
+    "RecoveredPayload",
 ]

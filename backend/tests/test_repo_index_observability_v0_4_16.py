@@ -77,7 +77,7 @@ def _reset_repo_index_observability_state(tmp_path):
     # _REPO_INDEX_LAST_RUN is a sentinel dict|None — assign None defensively.
     if hasattr(_ris, "_REPO_INDEX_LAST_RUN"):
         try:
-            _ris._REPO_INDEX_LAST_RUN = None  # type: ignore[attr-defined]
+            _ris._REPO_INDEX_LAST_RUN = None
         except Exception:
             pass
 
@@ -107,7 +107,7 @@ def _reset_repo_index_observability_state(tmp_path):
             obj.clear()
     if hasattr(_ris, "_REPO_INDEX_LAST_RUN"):
         try:
-            _ris._REPO_INDEX_LAST_RUN = None  # type: ignore[attr-defined]
+            _ris._REPO_INDEX_LAST_RUN = None
         except Exception:
             pass
     _ris.read_and_embed_files = _original_read_and_embed
@@ -339,6 +339,9 @@ async def test_repo_index_build_success_path_emits_5_event_types_in_order(
     )
 
     # First-seen ordering check (spec § 4.1 success-path emission sequence).
+    # ``_ring_events()`` returns events newest-first; iterating ``reversed``
+    # walks chronologically so the first-seen sequence matches the spec's
+    # natural emission order without inflating the event log.
     expected_order = [
         "repo_index_lock_acquired",
         "repo_index_started",
@@ -347,7 +350,7 @@ async def test_repo_index_build_success_path_emits_5_event_types_in_order(
         "repo_index_completed",
     ]
     seen_first: list[str] = []
-    for t in op_types:
+    for t in reversed(op_types):
         if t in expected_order and t not in seen_first:
             seen_first.append(t)
     assert seen_first == expected_order, (
@@ -706,8 +709,8 @@ async def test_health_repo_index_block_exposes_10_fields(
     exactly these 10 keys (per spec § 7 implementation surface #3):
 
       last_run_at, last_run_duration_ms, last_run_files_persisted,
-      last_run_status, last_run_op, batches_committed_24h,
-      batches_rolled_back_24h, p95_batch_duration_ms,
+      last_run_status, last_run_op, batches_committed_total,
+      batches_rolled_back_total, p95_batch_duration_ms,
       p99_batch_duration_ms, active_locks
 
     Pre-Cycle-2: ``HealthResponse`` has no ``repo_index`` field → KeyError
@@ -735,8 +738,8 @@ async def test_health_repo_index_block_exposes_10_fields(
         "last_run_files_persisted",
         "last_run_status",
         "last_run_op",
-        "batches_committed_24h",
-        "batches_rolled_back_24h",
+        "batches_committed_total",
+        "batches_rolled_back_total",
         "p95_batch_duration_ms",
         "p99_batch_duration_ms",
         "active_locks",
@@ -1278,9 +1281,9 @@ async def test_decision_event_payload_contract_completed(db_session) -> None:
         f"total_duration_ms must be numeric; got "
         f"{type(ctx.get('total_duration_ms')).__name__}"
     )
-    assert ctx.get("total_batches_committed") >= 1, (
+    assert ctx["total_batches_committed"] >= 1, (
         f"total_batches_committed must be >= 1; got "
-        f"{ctx.get('total_batches_committed')!r}"
+        f"{ctx['total_batches_committed']!r}"
     )
 
     # Refit-fatal invariant: total_batches_rolled_back must NOT appear in
