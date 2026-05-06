@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.17 — 2026-05-06
+
 ### Changed
 - **v0.4.17 P2 — Probe internals split (Path A only — module-level helpers)** — `backend/app/services/probe_service.py` (2493 LOC) split into a thinner orchestrator (~2200 LOC, ~12% shrink) + 3 NEW modules:
   - `probe_common.py` (~250 LOC) — `current_probe_id` ContextVar (canonical home) + utility helpers (`_apply_scope_filter`, `_truncate`, `_commit_with_retry`, `_stub_dimension_scores`).
