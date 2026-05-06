@@ -6,6 +6,78 @@ For active work, see [`ROADMAP.md`](ROADMAP.md). For per-change detail with file
 
 ---
 
+### v0.4.17 — Foundation P2 Path A: probe internals split (2026-05-06)
+
+Behavior-preserving refactor. `backend/app/services/probe_service.py` (2493 LOC) split into a thinner orchestrator (~2204 LOC) + 3 NEW modules holding extracted module-level helpers. ProbeService class methods + `_run_impl()` body byte-for-byte unchanged. Public API preserved via 2-symbol re-export shim. **Path B (Phase 3 body extraction) deferred indefinitely** — see ROADMAP "Probe Phase 3 body extraction — deferred" for the architectural questions to resolve before re-attempting.
+
+**New modules:**
+- `probe_common.py` (129 LOC) — `current_probe_id` ContextVar (canonical home post-split) + utility helpers (`_apply_scope_filter`, `_truncate`, `_commit_with_retry`, `_stub_dimension_scores`).
+- `probe_phases.py` (70 LOC) — Phase 1 grounding helpers (`_resolve_curated_files`, `_resolve_curated_synthesis`, `_resolve_dominant_stack`).
+- `probe_phase_5.py` (190 LOC) — Phase 5 reporting helpers (`_render_final_report`, `_resolve_followups`).
+
+**Public API surface preserved:**
+- `from app.services.probe_service import ProbeService` (6 sites: 3 production + 3 test) — class stays in `probe_service.py`.
+- `from app.services.probe_service import current_probe_id` (1 site: `probe_event_correlation.py`) — re-imported from `probe_common.py` at top of `probe_service.py`. ContextVar identity preserved (Python re-import is a name binding).
+
+**TDD execution:** 7 commits in `(v0.4.17-p2)` namespace (Tasks 5+7 correctly identified as no-ops after Tasks 2-4 finalized). Both V1 (spec compliance) and V2 (code quality) returned APPROVED-ZERO-INCONSISTENCIES. PR #69 rebase-merged.
+
+**Validation iteration trail:**
+- Spec: 8 rounds (REJECTED ×3 → APPROVED-WITH-MINOR ×2 → APPROVED-ZERO ×1, then v6 Path-A scope reduction → APPROVED-ZERO at v8).
+- Plan: 1 round (APPROVED-WITH-MINOR → 3 surgical fixes → effectively APPROVED-ZERO at v3).
+
+**Acceptance results:** 79 probe tests PASS (78 existing + 1 new backward-compat). Full backend suite: 3551 PASS + 2 SKIPPED + 2 deselected. ruff clean. `_run_impl()` body byte-for-byte unchanged from BASELINE_SHA `08655abc`. Patch-target audit returns exactly 4 expected lines, zero drift.
+
+**Foundation phase context:** P1 + P2 Path A complete. P3 (substrate unification) next at v0.4.18; P4 (long-handler restructures) at v0.4.19; Probe T2-T4 at v0.4.20-v0.4.22.
+
+---
+
+### v0.4.16 — Foundation P1: SQLite-debt closure (2026-05-05)
+
+Two parallel architectural cycles closing the SQLite migration story:
+- **P1a — Cold-path commit chunking** with cumulative Q-gates (cold-path full-refit no longer monopolizes the writer slot)
+- **P1b — `_bg_index`/`build_index`/`incremental_update`/`invalidate_index` migration** to WriteQueue with per-batch chunking + per-(repo, branch) `asyncio.Lock` + lifespan orphan recovery + 8 decision-event types + `repo_index` health block
+
+**P1a deliverables (cold-path chunking):**
+- 4-phase SAVEPOINT-bounded execution (`cp_pre_reembed` outer + 4 inner per-phase nested SAVEPOINTs)
+- Q-checks fire after Phase 1 (re-embed) + Phase 2 (reassign); Q regression rolls back to `cp_pre_reembed` (full revert preserves "Q never drops" invariant)
+- New `ColdPathPhaseFailure` + `ColdPathQCheckEvalFailure` typed exceptions
+- Module-level `_COLD_PATH_LOCK` (asyncio.Lock) serializes concurrent invocations
+- `_COLD_PATH_RUN_ID` ContextVar propagates correlation IDs through phase calls
+- `_restore_silhouette_from_snapshot()` defensively recovers in-memory state if process crashed mid-cold-path
+- Peer-writer-aware quiescing via `cluster_metadata["refit_in_progress_until"]` flag (4 peer paths integrated: hot path, batch_persistence, feedback_service, seed)
+- 8 decision-event types: `lock_acquired`, `cold_path_started`, `cold_path_phase_started`, `cold_path_phase_committed`, `cold_path_q_check`, `cold_path_phase_rolled_back`, `cold_path_completed`, `silhouette_restored_from_snapshot`
+- Health endpoint `cold_path` block with 9 fields
+- 7 new constants in `taxonomy/_constants.py` + `_validate_cold_path_constants()` invariant
+
+**P1b deliverables (repo-index chunking):**
+- Per-batch chunking at `REPO_INDEX_PERSIST_BATCH_SIZE=50` (DELETEs at `REPO_INDEX_DELETE_BATCH_SIZE=200`)
+- Per-(repo, branch) `asyncio.Lock` registry serializes concurrent invocations; second call returns early via `repo_index_skipped(reason=lock_held)`
+- Lifespan startup sweep `_gc_orphan_repo_index_runs()` flips stuck `status='indexing'` rows older than `REPO_INDEX_LOCK_TTL_MIN=30 min` to `status='error'`
+- Refit-fatal model: any batch failure marks meta error and re-raises; previously-committed batches stay in DB; idempotent retry via Phase 1 DELETE on rebuild
+- `_REPO_INDEX_RUN_ID` ContextVar correlates phase calls
+- 8 decision-event types: `repo_index_lock_acquired`, `repo_index_started`, `repo_index_phase_started`, `repo_index_batch_committed`, `repo_index_batch_rolled_back`, `repo_index_skipped`, `repo_index_completed`, `repo_index_recovered`
+- Per-batch SSE `index_phase_changed` throttled at `REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL=5` batches
+- Reason-code enums (`_BATCH_ROLLBACK_REASONS`, `_SKIPPED_REASONS`, `_RECOVERED_REASONS`) enforced at emission via `_assert_reason_in_set`
+- 8 `TypedDict` payload schemas exported from `repo_index_service` `__all__`
+- Health endpoint `repo_index` block with 10 fields (`last_run_at`, `last_run_duration_ms`, `last_run_files_persisted`, `last_run_status`, `last_run_op`, `batches_committed_total`, `batches_rolled_back_total`, `p95_batch_duration_ms`, `p99_batch_duration_ms`, `active_locks`)
+- 6 new constants in `taxonomy/_constants.py` + `_validate_repo_index_constants()` invariant
+
+**Strict 7-dispatch TDD per cycle:** RED → GREEN → REFACTOR → INTEGRATE → OPERATE → V1 (spec compliance) → V2 (code quality). Both cycles iterated to APPROVED-ZERO-INCONSISTENCIES on independent subagent reviews.
+
+**PRs:** PR #67 (P1a, rebase-merged) + PR #68 (P1b, rebase-merged).
+
+**Foundation phase milestone:** Closes the SQLite migration story. Audit-hook RAISE-in-prod flip becomes a one-line config change post-7-day-watch-window.
+
+---
+
+### v0.4.15 — HistoryPanel pagination correctness P0 (2026-05-04, retroactively tagged 2026-05-05)
+
+Backend now accepts `project_id` Query param on `GET /history` + `OptimizationService.list_optimizations()` accepts the matching kwarg. Frontend `getHistory()` + HistoryPanel call sites push `project_id: projectStore.currentProjectId` + `status: 'completed'` to the server, eliminating the ~9-row-per-page regression that surfaced post-ADR-005 multi-project rollout. New `$effect` re-fetches on project switch with `untrack()` race guard + capture-and-bail pattern at both fetch sites. Defensive client-side filters preserved as belt-and-suspenders.
+
+**Retroactive tagging:** the work was completed and merged 2026-05-04 in commits aec2aad7 (RED) → 56de067c (CHANGELOG entry) but `./scripts/release.sh` was never run because v0.4.16 Foundation P1 work began immediately afterwards. The HistoryPanel fix subsequently appeared in v0.4.16's published changelog as a co-shipped item. The v0.4.15 tag (created 2026-05-05) restores the originally-scoped release boundary so the version history matches the work decomposition: v0.4.15 = standalone P0 fix; v0.4.16 = Foundation P1.
+
+---
+
 ### v0.4.14 — SQLite migration finalization (2026-05-04)
 
 Closes the v0.4.13 short-lived-write deferred sites. After v0.4.14, every short-lived write path inside the foreground request lifecycle (passthrough pending insert, sampling-pipeline persist, audit logs, OAuth flows, status updates) routes through the WriteQueue. Long-handler sites (refine, save_result, optimize internal-pipeline) and cold-path full-refit + `_bg_index`/`build_index` remain on the legacy path; all are tracked for v0.4.15 architectural cycles.

@@ -2,9 +2,15 @@
 
 Living document tracking planned improvements. Items are prioritized but not scheduled. Each entry links to the relevant spec or ADR when available.
 
-**Snapshot:** v0.4.15-dev (in development, post-v0.4.14). Last release: v0.4.14 (2026-05-04 — SQLite migration finalization). v0.4.15 P0 shipped via PR #66 on 2026-05-04 (HistoryPanel pagination correctness — server-pushdown of `project_id` + `status` filters).
+**Snapshot:** v0.4.18-dev (in development, post-v0.4.17). Last release: v0.4.17 (2026-05-06 — Foundation P2 Path A: probe internals split into 3 new modules + 1 trimmed orchestrator).
 
-**Active foundation phase (zero-tech-debt prep for Probe T2-T4):** P1 SQLite-debt closure → P2 Probe internals cleanup → P3 Substrate unification (SeedRun/ProbeRun → unified RunRow) → P4 Long-handler restructures. After foundation, Probe Tier 2 / Tier 3 / Tier 4 ship on the unified substrate with no retroactive migration debt. See "Foundation phase" section below for ordering rationale.
+**Active foundation phase (zero-tech-debt prep for Probe T2-T4):**
+- ~~P1 SQLite-debt closure~~ — **SHIPPED v0.4.16 (2026-05-05)**: cold-path commit chunking (P1a) + `_bg_index`/`build_index` per-batch chunking (P1b)
+- ~~P2 Path A probe internals cleanup~~ — **SHIPPED v0.4.17 (2026-05-06)**: 9 module-level helpers + `current_probe_id` ContextVar relocated to `probe_common.py` / `probe_phases.py` / `probe_phase_5.py`. ProbeService class methods + `_run_impl()` body untouched. ~12% LOC shrink. **P2 Path B (Phase 3 body extraction) deferred** — see "Probe Phase 3 body extraction — deferred" entry under Exploring for the architectural questions to resolve.
+- **P3 Substrate unification** (SeedRun/ProbeRun → unified RunRow) — **next, target v0.4.18**
+- **P4 Long-handler restructures** — re-allocated to v0.4.19 (originally bundled with v0.4.17 P2 but P2 alone shipped at the right size; P4 deserves its own cycle)
+
+After foundation, Probe Tier 2 / Tier 3 / Tier 4 ship on the unified substrate with no retroactive migration debt. See "Foundation phase" section below for ordering rationale + scope detail per phase.
 
 > **Shipped work archived in [`SHIPPED.md`](SHIPPED.md).** This file tracks only forward-looking items (Immediate, Planned, Exploring, Deferred) plus partial-tier work where a follow-up tier is still active.
 
@@ -14,6 +20,8 @@ Living document tracking planned improvements. Items are prioritized but not sch
 - **Exploring** — under investigation, no decision yet
 - **Deferred** — considered and postponed with rationale
 - **Partially shipped** — portions shipped with version tags; remaining work called out
+- **Superseded** — entry is an earlier scope subsumed by a later phase/cycle (kept for cross-reference)
+- **Shipped** — historical entry retained for context; full detail in [`SHIPPED.md`](SHIPPED.md)
 
 ---
 
@@ -63,28 +71,30 @@ Living document tracking planned improvements. Items are prioritized but not sch
 
 ## Planned
 
-### Foundation phase — zero-tech-debt prep for Probe Tier 2-4 (v0.4.16-v0.4.19)
-**Status:** Brainstorm in flight (2026-05-04).
+### Foundation phase — zero-tech-debt prep for Probe Tier 2-4 (v0.4.16-v0.4.20)
+**Status:** P1 + P2 Path A shipped (v0.4.16, v0.4.17). P3 + P4 + P2 Path B remaining. Updated 2026-05-06.
 **Rationale:** Topic Probe Tier 1 (v0.4.12) shipped against the v0.4.x SQLite + probe-internal substrate as it existed then. Tiers 2, 3, and 4 each layer significant new surfaces (save-as-suite, replay, regression alarm, CI hooks, promotion flow, substrate unification). Shipping them on the current substrate would either (a) accumulate retroactive migration debt as the substrate evolves, or (b) force breaking schema changes mid-tier. The foundation phase eliminates that future cost by closing all known SQLite-migration tail items + probe-internal tech debt + substrate unification BEFORE T2 features start.
 
 **Phase ordering (dependency chain):**
 
-| # | Sub-project | Depends on | Reason it's first |
-|---|---|---|---|
-| **P1** | **SQLite-debt closure** (cold-path commit chunking + `_bg_index`/`build_index` per-file batching) | nothing | Independent of probe; closes v0.4.13/v0.4.14 migration story; unblocks audit-hook RAISE-in-prod flip; can run in parallel with P2 |
-| **P2 (Path A)** | **Probe internals cleanup — module-level helpers** (split `services/probe_service.py` 2493 LOC by extracting 9 module-level free functions + `current_probe_id` ContextVar into 3 NEW modules: `probe_common.py`, `probe_phases.py`, `probe_phase_5.py`. ProbeService class methods + `_run_impl()` body stay intact). | nothing | Independent of P1; pure code-move. Net delta: probe_service.py 2493 → ~2200 LOC (~12% shrink). Truly behavior-preserving. |
-| **P2 (Path B — DEFERRED)** | **Phase 3 body extraction from `_run_impl()` — DEFERRED** (was originally planned to extract the ~600-LOC Phase 3 body of `_run_impl()` into a `running(...)` free function). Spec validation (5 rounds) + plan validation (1 round) collectively surfaced architectural questions that the spec didn't resolve: (a) `_run_impl()` is `async def -> AsyncIterator`, and Phase 3 contains 3 `yield` statements — extracting it as a coroutine returning a tuple is impossible; the function must be an async generator OR the orchestrator must invert via callback yield; (b) live source captures 7 distinct `self.X` attributes (`context_service`, `embedding_service`, `_pending_to_prompt_result`, `provider`, `_resolve_write_queue`, `session_factory`, `_tag_probe_rows`) — the spec listed 10 phantom params (`target_score`, `read_failures`, `embed_failures` don't exist in Phase 3); (c) Phase 3 has 8+ inline imports inside the body that need re-homing decisions; (d) 2 test sites use `patch.object(probe_service_mod, ...)` and `monkeypatch.setattr(ps_mod, "bulk_persist", ...)` — patch-target drift after extraction needs explicit per-callsite design. Path B requires a fresh design cycle (async-generator signature OR yield-callback pattern) plus exhaustive capture audit before it can ship. | P2 Path A complete (clean module boundaries make Path B's surface smaller) | When ready: dedicated brainstorm → spec → plan → cycle. Probe T2 still ships without it (T2 needs unified substrate from P3, not Phase 3 isolation). |
-| **P3** | **Substrate unification** (collapse `SeedRun`/`ProbeRun` semantics into a unified `RunRow` model + `RunOrchestrator` service with pluggable `SeedAgentGenerator` + `TopicProbeGenerator`; backward-compat REST/MCP shims for `/api/probes`, `/api/seed`, `synthesis_probe`, `synthesis_seed`) | P2 (clean modules to migrate) | T4 ships by construction; T2/T3 features build natively on unified substrate with zero retroactive migration |
-| **P4** | **Long-handler restructures** (separate read/process/write phases in `tools/refine.py:50,:156`, `tools/save_result.py:85`, `tools/optimize.py:198` so the LLM call lives outside any session and persistence boundaries route through the queue) | nothing (probe-independent but bundled for zero-tech-debt completion) | Closes the final SQLite migration tail; not probe-blocking but a cleanup-track release inside the foundation envelope |
+| # | Sub-project | Status | Depends on | Notes |
+|---|---|---|---|---|
+| **P1** | **SQLite-debt closure** (P1a cold-path commit chunking + P1b `_bg_index`/`build_index` per-batch chunking) | **SHIPPED v0.4.16** (2026-05-05) | nothing | Closes v0.4.13/v0.4.14 migration story. Audit-hook RAISE-in-prod flip unblocked. PR #67 (P1a) + PR #68 (P1b) both rebase-merged. |
+| **P2 (Path A)** | **Probe internals cleanup — module-level helpers** (9 module-level free functions + `current_probe_id` ContextVar relocated to `probe_common.py` / `probe_phases.py` / `probe_phase_5.py`. ProbeService class + `_run_impl()` body untouched.) | **SHIPPED v0.4.17** (2026-05-06) | nothing | Pure code-move. probe_service.py 2493 → 2204 LOC (~12% shrink). 7 commits, both V1+V2 validators APPROVED-ZERO. PR #69 rebase-merged. |
+| **P2 (Path B — DEFERRED)** | **Phase 3 body extraction from `_run_impl()`** | **DEFERRED indefinitely** (no version target) | P2 Path A complete | Plan-validation round 1 caught structural defects spec missed: (a) `_run_impl` is `AsyncIterator`-returning + Phase 3 contains 3 `yield` statements — extraction signature must be redesigned as async-generator or callback-yield pattern; (b) 7 actual `self.X` captures (spec invented `target_score`/`read_failures`/`embed_failures` — none exist in source); (c) 8+ inline imports inside body need re-homing decisions; (d) 2 test sites use `patch.object(probe_service_mod, ...)` / `monkeypatch.setattr(ps_mod, ...)` patch-target drift. **T2-T4 do NOT depend on Path B** — they depend on P3 substrate unification only. Full architectural questions documented in "Probe Phase 3 body extraction — deferred" Exploring entry below. |
+| **P3** | **Substrate unification** (collapse `SeedRun`/`ProbeRun` semantics into a unified `RunRow` model + `RunOrchestrator` service with pluggable `SeedAgentGenerator` + `TopicProbeGenerator`; backward-compat REST/MCP shims for `/api/probes`, `/api/seed`, `synthesis_probe`, `synthesis_seed`) — **next foundation phase** | **Planned, target v0.4.18** | P2 Path A (clean module boundaries simplify the migration surface) | Biggest single architectural commitment of foundation. T4 ships by construction; T2/T3 features build natively on unified substrate with zero retroactive migration. See dedicated "Foundation P3 — Substrate unification" section below for architectural sketch. |
+| **P4** | **Long-handler restructures** (separate read/process/write phases in `tools/refine.py:50,:156`, `tools/save_result.py:85`, `tools/optimize.py:198` so the LLM call lives outside any session and persistence boundaries route through the queue) | **Planned, target v0.4.19** | nothing (probe-independent but bundled in foundation envelope) | Closes the final SQLite migration tail. Was originally bundled with v0.4.17 P2 ("if compatible scope"); P2 alone shipped at the right size, so P4 gets its own cycle at v0.4.19. Not probe-blocking but a cleanup-track release inside the foundation envelope. See dedicated "Foundation P4 — Long-handler restructures" section below. |
 
-**Release allocation (aspirational, may compress if size permits):**
-- **v0.4.16** = Foundation P1 (SQLite-debt closure) — **SHIPPED 2026-05-05**
-- **v0.4.17** = Foundation P2 Path A (probe internals — module-level helpers extraction) + P4 (long-handler restructures) [if compatible scope]
-- **v0.4.18** = Foundation P3 (substrate unification — biggest single architectural commitment)
-- **v0.4.19** = Probe Tier 2 (save-as-suite + replay + UI + regression alarm)
-- **v0.4.20** = Probe Tier 3 (release.sh CI + probe→seed promotion + drill-into-cluster)
-- **v0.4.21** = Probe Tier 4 (final UI consolidation — substrate already done in P3)
-- **TBD** = Foundation P2 Path B (Phase 3 body extraction — deferred indefinitely; needs fresh design cycle; not blocking T2-T4 because T2 ships on the unified substrate from P3, not on Phase 3 isolation)
+**Release allocation (revised 2026-05-06 — P4 split out of v0.4.17, T2-T4 shifted by 1):**
+- **v0.4.15** (2026-05-04 retroactive) — HistoryPanel pagination correctness P0 fix — **SHIPPED**
+- **v0.4.16** (2026-05-05) — Foundation P1 (SQLite-debt closure: P1a cold-path chunking + P1b bg_index batching) — **SHIPPED**
+- **v0.4.17** (2026-05-06) — Foundation P2 Path A (probe internals — module-level helpers extraction) — **SHIPPED**
+- **v0.4.18** (next) — Foundation P3 (substrate unification — biggest architectural commitment) — **PLANNED**
+- **v0.4.19** — Foundation P4 (long-handler restructures: refine/save_result/optimize handlers) — **PLANNED**
+- **v0.4.20** — Probe Tier 2 (save-as-suite + replay + UI + regression alarm) — **PLANNED**
+- **v0.4.21** — Probe Tier 3 (release.sh CI + probe→seed promotion + drill-into-cluster) — **PLANNED**
+- **v0.4.22** — Probe Tier 4 (final UI consolidation — substrate already done in P3) — **PLANNED**
+- **TBD** — Foundation P2 Path B (Phase 3 body extraction — deferred indefinitely; needs fresh design cycle; not blocking T2-T4 because T2 ships on the unified substrate from P3, not on Phase 3 isolation)
 
 **Per-phase specs:** each phase gets its own spec → plan → strict 7-dispatch TDD cycle (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → spec-compliance reviewer → code-quality reviewer) per `feedback_tdd_protocol.md`. P1 brainstorm starts immediately after this ROADMAP update lands.
 
@@ -93,68 +103,147 @@ Living document tracking planned improvements. Items are prioritized but not sch
 - P3 supersedes Topic Probe "Tier 4 (substrate unification)" — that delivery shifts left into foundation.
 - P4 supersedes the standalone "tools/refine.py", "tools/save_result.py", "tools/optimize.py:198" entries below.
 
-**P2 scope reduction (2026-05-06):** Path B (Phase 3 body extraction) deferred after spec round 5 + plan round 1 surfaced unresolved architectural questions. v0.4.17 P2 ships Path A only (helpers extraction) — pure code-move, ~12% LOC shrink, zero risk. Path B re-design queued as an exploring item below ("Probe Phase 3 body extraction — deferred"). T2/T3/T4 do NOT depend on Path B; they depend on P3 substrate unification only.
+**P2 scope reduction (2026-05-06):** Path B (Phase 3 body extraction) deferred after spec round 5 + plan round 1 surfaced unresolved architectural questions. v0.4.17 P2 shipped Path A only (helpers extraction) — pure code-move, ~12% LOC shrink, zero risk. Path B re-design queued as an exploring item below ("Probe Phase 3 body extraction — deferred"). T2/T3/T4 do NOT depend on Path B; they depend on P3 substrate unification only.
+
+**P4 re-allocation (2026-05-06):** P4 was originally bundled with v0.4.17 P2 with the qualifier "if compatible scope". v0.4.17 P2 (Path A only) shipped at the right size as a focused cycle, so P4 moves to its own v0.4.19 release. Probe Tier 2-4 shift by one minor (T2=v0.4.20, T3=v0.4.21, T4=v0.4.22).
 
 ---
 
-### Cycle-19→22 replay validation post-v0.4.9 (immediate follow-up)
-**Status:** In flight (running 2026-04-28, 4 cycles × 20 prompts total via `scripts/validate_taxonomy_emergence.py`)
-**Context:** v0.4.9 shipped F1-F5 audit-prompt scoring hardening. Cycle-23 (5 fresh prompts) was inconclusive — 2 hit Opus 4.7 infrastructure timeouts (>600s urlopen budget), 3 averaged 7.35 (vs v0.4.8 baseline 7.36). Replay re-runs the 20-prompt corpus through the v4 scoring formula. Expected: mean rises from 7.36 → ~7.85 per the audit doc's projection. Either confirms F1-F5 effectiveness on a representative corpus or surfaces a new bottleneck (LLM scorer, conciseness gate, etc.).
+### Foundation P3 — Substrate unification (target v0.4.18)
+**Status:** Planned (next foundation phase). Detailed brainstorm pending.
 
-**Mean delta validation (pending):** post-replay, compare per-cycle mean against v0.4.8 baseline + measure F5 false-premise flag firings + verify F4 strategy fidelity (`strategy_used == effective_strategy` on every persisted row). If mean ≥ 7.7 → close the loop. If <7.7 → forensic deep-dive on which fix(es) under-delivered.
+**Scope:** Collapse `SeedRun` and `ProbeRun` into a single unified `RunRow` model + a `RunOrchestrator` service that dispatches to pluggable generators (`SeedAgentGenerator` for template-driven seed runs, `TopicProbeGenerator` for the agentic-from-topic-and-codebase path). All current REST + MCP surfaces (`/api/probes`, `/api/seed`, `synthesis_probe`, `synthesis_seed`) keep their endpoints and response shapes via backward-compat shims that translate to/from the unified substrate.
 
-**Infrastructure follow-up:** extend `validate_taxonomy_emergence.py` `_post` timeout from 600s → 900s OR add an Opus-4.7 → Sonnet-4.6 downshift for prompts that exceed the budget, so future cycles don't lose data points to infrastructure.
+**Why this matters:**
+
+1. **T2 save-as-suite + replay** is a `RunRow` operation by construction once SeedRun and ProbeRun share storage. Without P3, save-as-suite must be implemented twice (once for each model) or the substrate forks.
+2. **T3 probe→seed-agent promotion** becomes a `RunRow.mode` flip plus a metadata write — no cross-model migration.
+3. **T4 final UI consolidation** (SeedModal becomes one tab with two modes) ships natively with one history surface.
+4. **Cross-process orchestration cleanup** — eliminates duplicate persistence helpers (`_set_probe_status` vs `_set_seed_status`, `_persist_and_assign_probe` vs `_persist_and_assign_seed`) that today drift independently.
+
+**Architectural sketch (subject to brainstorm):**
+
+```
+backend/app/models.py
+  RunRow                      → id, mode ∈ {seed_agent, topic_probe}, ...common fields
+                                (started_at, completed_at, status, prompt_results JSON,
+                                 taxonomy_delta JSON, final_report TEXT, project_id FK)
+                                + mode-specific JSONB columns:
+                                  - seed_agent_meta: {template_path, agent_id}
+                                  - topic_probe_meta: {topic, scope, intent_hint, repo_full_name}
+  ProbeRun, SeedRun           → DEPRECATED (kept as views or backward-compat aliases initially)
+
+backend/app/services/
+  run_orchestrator.py         → RunOrchestrator dispatches per RunRow.mode
+  generators/
+    base.py                   → RunGenerator protocol (generate_prompts, persist_progress)
+    seed_agent_generator.py   → wraps current seed_orchestrator + agent_loader
+    topic_probe_generator.py  → wraps current ProbeService grounding + probe_generation
+
+backend/app/routers/
+  runs.py                     → unified GET /api/runs (paginated list, filter by mode)
+  probes.py                   → backward-compat shim — translates old POST/GET to RunRow
+  seed.py                     → backward-compat shim — same pattern
+
+MCP tools/
+  synthesis_probe             → backward-compat (tool surface unchanged; backend dispatches via RunRow)
+  synthesis_seed              → backward-compat (same)
+```
+
+**Migration path:** Alembic migration adds `RunRow` table + `mode` discriminator + per-mode metadata columns. Backfill from `ProbeRun` + `SeedRun` at startup once. Dual-write window where both old + new tables receive writes (one cycle). Then read-flip: REST + MCP shims read from `RunRow` only. Final migration drops `ProbeRun` + `SeedRun` tables (or keeps them as views).
+
+**Risks:**
+- Schema migration complexity (largest of any foundation phase). Spec must be validated against actual production data shape before plan.
+- Dual-write window timing (1 cycle = 1 release, or 1 cycle = 1 dev branch?).
+- Backward-compat shim semantic preservation under all 5 phases of probe + 9 phases of seed.
+
+**Files (estimated):** 1 Alembic migration, `models.py` (`RunRow`), `services/run_orchestrator.py` (NEW), `services/generators/` (NEW package), `routers/runs.py` (NEW), `routers/probes.py` + `routers/seed.py` (shims), MCP tool dispatch updates.
+
+**Estimated scope:** ~1500-2000 LOC backend + 1 schema migration + ~80 new tests + comprehensive backward-compat regression suite.
+
+**Brainstorm prerequisite:** Read this entry + the Topic Probe Tier 4 historical context below. Confirm the unified `RunRow` shape before spec authoring (current ProbeRun has 13 columns, SeedRun has 11 — most overlap; mode-specific fields go to JSON metadata columns).
 
 ---
 
-### v0.4.11 domain proposal hardening (post-replay forensic finding, 2026-04-28)
-**Status:** Planned
-**Trigger:** the cycle-19→22 replay surfaced a "ghost domain" pathology — `fullstack` was promoted to a top-level domain at 04:59:35 UTC on insufficient evidence, ended up with 0 members, and is now frozen by the 48h dissolution grace gate (`DOMAIN_DISSOLUTION_MIN_AGE_HOURS=48`) until ~02:59 UTC the next day. The empty domain node clutters `/api/domains` and `taxonomy/tree` for ~46 hours with no functional path to dissolve.
+### Foundation P4 — Long-handler restructures (target v0.4.19)
+**Status:** Planned. Detailed brainstorm pending.
 
-**Root-cause analysis (live forensic):**
+**Scope:** Split read/process/write phases in 3 long-running MCP tool handlers so each LLM call lives outside any DB session lifetime, and persistence boundaries route through the WriteQueue. Closes the final v0.4.13 SQLite migration tail (the 3 sites explicitly deferred at v0.4.14).
 
-`engine._propose_domains()` accepted `fullstack` as a new domain on:
-- **1 seed cluster** (single point of evidence — cluster `7461846c`, since merged out)
-- **66.67% consistency** — just 2-of-3 prompts agreeing on `domain_raw="fullstack"`
-- **Coherence = 0.0**, *skipped* the enrichment threshold (0.4) instead of failing the gate
-- **`signal_enrichment: skipped_coherence` event** logged the issue but did not block creation
+**Affected sites (verified at v0.4.17):**
 
-This violates the design intent. Domain emergence should be **signal concentration** — multiple clusters consistently labeling themselves with a new domain. One cluster of 3 prompts is not a domain; it's a cluster.
+| Site | Issue | Restructure pattern |
+|---|---|---|
+| `tools/refine.py:50, :156` | `RefinementService.refine_prompt()` LLM call wrapped inside `async with` session lifetime | Extract LLM call out → return tuple → caller persists via `submit()` |
+| `tools/save_result.py:85` | Heuristic scoring + analyzer A4 LLM fallback wrapped inside session | Same pattern: split scoring (read), LLM analysis (no session), persistence (queued submit) |
+| `tools/optimize.py:198` | Full `PipelineOrchestrator` 4-LLM SSE loop wrapped inside one session | Each LLM phase yields out of session; persistence boundaries become discrete `submit()` calls between yields |
 
-**Two structural bugs:**
+**Why this matters:**
 
-1. **Single-cluster acceptance** — `_propose_domains()` does not enforce a minimum cluster-count floor. Sub-domain proposal already has equivalent `single_cluster` skip logic (visible in events: `sub_domain_skipped: reason=single_cluster, consistency_pct=83.3`). Domains lack the parallel gate.
+1. **Audit-hook RAISE-in-prod flip** is currently gated on these 3 sites being clean. Today they emit WARN. Post-P4, audit hook can flip to RAISE for the entire stack — drift writes become hard failures at source instead of forensic-reconstruction-after-symptom.
+2. **Foundation invariant.** v0.4.13 architectural fix promised "100% of writers route through queue, except cold path (closed in P1)". P4 is the last remaining exception.
+3. **Long-LLM-call SQLite contention.** Today, an LLM call inside a session holds the writer slot for the multi-second LLM round-trip. Concurrent writers either contend or fail. Post-P4, the writer slot is held only during the persistence flush (~10-50ms).
 
-2. **Coherence skip semantics** — when coherence is 0.0 (uncomputable due to single cluster), `signal_enrichment` logs `skipped_coherence` but does NOT block creation. Should either fail the gate or require an alternate evidence threshold.
+**Restructure pattern (canonical):**
 
-**Compounding pathology:** subsequent prompts classifying `prompt_domain="fullstack"` get `tree_integrity_repair: domain_reset_to_general` (resolver cache race, or qualifier vocabulary mismatch) — meaning a ghost domain cannot organically accumulate followers. Worst of both worlds: created on weak evidence AND can't recover.
+```python
+# Before (refine.py)
+async with async_session_factory() as db:
+    refinement = await refinement_service.refine_prompt(db, ...)  # LLM call inside session
+    db.add(refinement)
+    await db.commit()
 
-**Fixes:**
+# After
+# Step 1: read context (short session)
+async with async_session_factory() as db:
+    context = await refinement_service.build_refinement_context(db, ...)
 
-**P0 — `DOMAIN_PROPOSAL_MIN_SEED_CLUSTERS`** — add constant to `taxonomy/_constants.py` with default `3`. `_propose_domains()` rejects candidates below this floor. Module-level invariant assert at import time. R8-style fail-fast on configuration drift. Mirrors the existing sub-domain `single_cluster` gate. Estimated: ~50 LOC + 4 tests.
+# Step 2: LLM call (no session)
+result = await refinement_service.invoke_refinement_llm(context)
 
-**P0 — `DOMAIN_PROPOSAL_REQUIRE_COHERENCE`** — add boolean constant to `_constants.py` with default `True`. When set, `_propose_domains()` rejects candidates with `coherence < DOMAIN_COHERENCE_FLOOR (0.4)`. Replaces the soft `skipped_coherence` event with a hard `proposal_rejected_coherence` event. Estimated: ~30 LOC + 3 tests.
+# Step 3: persist via WriteQueue
+async def _persist(db: AsyncSession) -> None:
+    db.add(Refinement(...))
+    await db.commit()
 
-**P1 — `POST /api/domains/{id}/dissolve-empty` operator endpoint** — bypasses the 48h age gate when `member_count == 0 AND age >= DOMAIN_GHOST_DISSOLUTION_MIN_AGE_MINUTES (default 30)`. Mirrors v0.4.8 R6 (`rebuild-sub-domains`) — operator escape hatch for the current ghost. Pydantic `ge=0` runtime validation, idempotent on already-dissolved targets, emits `domain_ghost_dissolved` telemetry. Rate-limited 10/min. Estimated: ~80 LOC + 3 router tests + 4 service tests.
+await write_queue.submit(_persist, operation_label="refine_persist")
+```
 
-**P2 — `ghost` readiness tier** — extend `compute_domain_readiness()` to return `ghost` tier when `member_count == 0 AND age < DOMAIN_DISSOLUTION_MIN_AGE_HOURS`. Surfaces in UI as "awaiting dissolution" instead of looking healthy in the topology. ToastDispatcher gates ghost-tier on a separate preference (default off — operator-only signal). Estimated: ~40 LOC + 2 tests.
+**Risks:**
+- `RefinementService.refine_prompt()` and friends may have internal session-bound caching that breaks under split. Audit each method for `db.refresh()` / `db.flush()` calls inside the LLM-call portion.
+- SSE streaming during `tools/optimize.py:198` 4-phase loop: the SSE generator must yield through the orchestrator, not through the session. Current code passes `db` into the orchestrator — restructure requires passing a callback or context object instead.
 
-**Acceptance criteria for v0.4.11 ship:**
+**Files:** `backend/app/tools/refine.py`, `backend/app/tools/save_result.py`, `backend/app/tools/optimize.py`, possibly `backend/app/services/refinement_service.py` (signature changes), `backend/app/services/pipeline.py` (orchestrator session boundary extraction).
 
-1. Live verification: replay a fullstack-classifying prompt, confirm `_propose_domains()` rejects with `proposal_rejected_min_seed_clusters` event (P0.1)
-2. Live verification: same prompt path with single cluster + 0 coherence rejected with `proposal_rejected_coherence` event (P0.2)
-3. `POST /api/domains/{current-fullstack-id}/dissolve-empty` returns 200 + emits `domain_ghost_dissolved` + `taxonomy_changed`, with the ghost gone from `/api/domains` immediately (P1)
-4. Frontend topology shows `ghost` tier on empty domains awaiting dissolution (P2)
-5. Full backend suite passes ≥ 3187 (3180 + ~7 new)
+**Estimated scope:** ~600-800 LOC + ~30 new tests + 3 dedicated TDD cycles (one per site). Each site can ship independently if cycles compress.
 
-**Spec target:** `docs/specs/domain-proposal-hardening-2026-04-28.md` (TBD).
+---
 
-**Cross-link:** the cycle-19→22 replay v2 (currently in flight) is the validation corpus for whether these proposal-gate changes affect organic domain emergence in the audit-class workload. Pre-fix `fullstack` was created from a cross-cutting prompt; post-fix the same evidence pattern would not promote — which may be desirable (no ghost) or undesirable (slower emergence). The replay's domain-creation event count tells us which.
+### Post-foundation horizon (v0.5.x — exploring)
+
+After Foundation P3 + P4 + Probe T2-T4 ship (target window: v0.4.18-v0.4.22), the architecture is ready for a v0.5.0 major. Candidate themes (none yet committed):
+
+| Theme | Surface | Status |
+|---|---|---|
+| **Integration store** | Pluggable context providers beyond GitHub (Google Drive, Notion, local FS, Confluence, Figma) per ADR-006 | Planned (no version target — see "Integration store" entry below) |
+| **Non-developer onboarding** | Adaptive UI labels + vertical-aware first-run flow per ADR-006 | Partially shipped (engine parity complete; UI adaptation remains — see "Non-developer onboarding pathway" entry) |
+| **Hierarchical topology navigation** | 4-level drill-down topology (project → domain → cluster → prompt) | Planned (was target v0.4.0 — re-targeting to v0.5.x given foundation phase pre-empted; see "Hierarchical topology navigation" entry) |
+| **Unified scoring service** | Eliminate scoring-orchestration duplication across 4 call sites | Planned (no version — see "Unified scoring service" entry) |
+| **Pipeline progress visualization** | Streaming token previews + per-phase timing for optimize/refine | Planned (no version — see "Pipeline progress visualization" entry) |
+| **Time-gated cleanup follow-ups** | Audit-hook RAISE-in-prod flip + `WriterLockedAsyncSession` removal | Time-gated (7-day post-P4 trigger — see entries under Planned) |
+
+The v0.5.0 major would either (a) ship one or two of these as the headline feature, or (b) be a clean architecture milestone marker if the foundation + probe lifecycle leaves the codebase in a release-worthy state worth bumping the minor for.
+
+---
+
+
+### v0.4.11 domain proposal hardening — SHIPPED
+**Status:** SHIPPED v0.4.11 (2026-04-28). Closed the `fullstack` ghost-domain pathology surfaced by the cycle-19→22 v2 replay: domain proposal now requires ≥2 distinct contributing clusters (`DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS`); operator escape hatch `POST /api/domains/{id}/dissolve-empty` lets ops force-dissolve ghost domains without waiting for the 48h dissolution gate. Full technical detail (P0a + P1 + acceptance criteria + event taxonomy) in [`SHIPPED.md`](SHIPPED.md#v0411--2026-04-28).
 
 ---
 
 ### Topic Probe — agentic targeted exploration of a user-specified concern against the linked codebase
-**Status:** **Tier 1 SHIPPED** (v0.4.12, 2026-04-29). Tier 2 / Tier 3 / Tier 4 remain **Planned**, now sequenced AFTER the foundation phase to ship on a unified substrate with zero retroactive migration debt: T2=v0.4.19, T3=v0.4.20, T4=v0.4.21. (Tier 2 was bumped repeatedly — v0.4.13 → v0.4.14 → v0.4.15 → v0.4.19 — as architectural fixes (SQLite contention, SQLite migration finalization, HistoryPanel pagination) and now the foundation phase shipped first; see SHIPPED.md + the "Foundation phase" entry above for the complete rationale.)
+**Status:** **Tier 1 SHIPPED** (v0.4.12, 2026-04-29). Tier 2 / Tier 3 / Tier 4 remain **Planned**, sequenced AFTER the foundation phase: T2=v0.4.20, T3=v0.4.21, T4=v0.4.22 (revised 2026-05-06 — shifted by 1 minor when P4 split out of v0.4.17). Tier 2 was bumped repeatedly through public releases — v0.4.13 → v0.4.14 → v0.4.15 → v0.4.20 — as architectural fixes (SQLite contention, SQLite migration finalization, HistoryPanel pagination, foundation phase) shipped first; see SHIPPED.md + the "Foundation phase" entry above for the complete rationale.
 
 **Tier 1 deliverables (SHIPPED):**
 - `POST /api/probes` (SSE), `GET /api/probes`, `GET /api/probes/{id}`
@@ -170,7 +259,7 @@ This violates the design intent. Domain emergence should be **signal concentrati
 - Spec: `docs/specs/topic-probe-2026-04-29.md` (gitignored)
 - Plan: `docs/plans/topic-probe-tier-1-2026-04-29.md` (gitignored)
 
-**Tier 2 (v0.4.19) — Planned. PREREQUISITES: SQLite writer-slot contention fix (v0.4.13) + finalization (v0.4.14) + Foundation P1 (cold-path chunking + bg_index batching, v0.4.16) + Foundation P3 (unified substrate, v0.4.18). Tier 2's save-as-suite + replay regression detection depend on the unified substrate so saved suites travel cleanly into T3/T4.**
+**Tier 2 (v0.4.20) — Planned. PREREQUISITES (all SHIPPED or PLANNED in foundation): SQLite writer-slot contention fix (v0.4.13) ✓ + finalization (v0.4.14) ✓ + Foundation P1 (cold-path chunking + bg_index batching, v0.4.16) ✓ + Foundation P2 Path A (probe internals split, v0.4.17) ✓ + Foundation P3 (unified substrate, v0.4.18) — pending. Tier 2's save-as-suite + replay regression detection depend on the unified substrate so saved suites travel cleanly into T3/T4.**
 - `POST /api/probes/{id}/save-as-suite` — fork a probe run into a `ValidationSuite` (frozen prompt fixture + assertions captured from the run's actual scores)
 - `POST /api/probes/{id}/replay` — re-run a saved suite against current code state (regression detection)
 - UI Navigator panel: "Topic Probe" tab in SeedModal + live taxonomy mini-view + final report card with copy-as-markdown
@@ -178,13 +267,13 @@ This violates the design intent. Domain emergence should be **signal concentrati
 - Topic-only mode (no codebase grounding) for non-developer verticals — drops Phase 1, generates from topic alone (ADR-006 follow-up)
 - Replace blocking SSE with 202 Accepted + `GET /api/probes/{id}` polling for client-timeout decoupling on long probes (>10 prompts)
 
-**Tier 3 (v0.4.20) — Planned:**
+**Tier 3 (v0.4.21) — Planned:**
 - `release.sh` CI hook: register critical probe topics as pre-release gates (fail = block release)
 - Probe → seed-agent promotion flow: a saved probe with consistently high scores can be promoted to `prompts/seed-agents/<topic-slug>.md` (trivially clean on the unified substrate from Foundation P3 — promotion is a `mode` flip plus a metadata write, not a cross-model migration)
 - "Drill into cluster" action on seed runs auto-launches a probe scoped to the cluster's intent_label
 - Cross-tier composition: probe-discovered prompts feed seed-agent few-shot context
 
-**Tier 4 (v0.4.21) — Planned (mostly cleanup):**
+**Tier 4 (v0.4.22) — Planned (mostly cleanup):**
 - The substrate unification originally slated for T4 has been promoted into Foundation P3 (v0.4.18). T4's remaining surface is the user-visible consolidation: SeedModal becomes one tab with two modes (template-driven / topic-driven) sharing the unified form scaffold. Single history surface (already enabled by P3's `RunRow`). Final UI polish.
 
 **Vision:** A user-driven, codebase-aware seed mode where the user specifies a topic, concern, or feature and the agentic seed system organically populates the taxonomy with focused prompts anchored in the user's actual code. The system reads the linked GitHub repo, generates 10–20 prompts targeted at the topic with real code references (`engine.py:_compute_centroid`, `services/taxonomy/matching.py`, etc.), runs them through the optimization pipeline, watches the taxonomy emerge new domains/sub-domains organically as signal concentrates, and delivers a final report of what shipped — taxonomy changes, top-scoring outputs, extracted patterns, recommended follow-ups.
@@ -366,8 +455,8 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 
 ---
 
-### Hierarchical topology navigation — project → domain → cluster → prompt (target: v0.4.0)
-**Status:** Planned (targeted for v0.4.0 — edge system shipped in v0.3.30; drill-down is a major render-pipeline rewrite)
+### Hierarchical topology navigation — project → domain → cluster → prompt
+**Status:** Planned (no firm version target — moved to v0.5.x post-foundation per "Post-foundation horizon" above; original v0.4.0 target predated the foundation phase reordering. Edge system shipped in v0.3.30; drill-down is a major render-pipeline rewrite that deserves a clean major or its own focused minor.)
 **Context:** The current 3D topology view (`SemanticTopology`) renders ALL nodes in a single scene: project nodes, domain nodes, active clusters, candidates, mature clusters — 76+ nodes at current scale. At 200+ clusters across 3 projects, this becomes visually overwhelming. Domain nodes (structural grouping) and active clusters (semantic content) serve different purposes but are rendered identically in the same space. There is no way to "zoom into" a project or domain.
 
 **Vision:** A hierarchical drill-down topology inspired by filesystem navigation. Each level of the taxonomy hierarchy gets its own view with appropriate aesthetics and interaction patterns:
@@ -528,36 +617,36 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 
 ---
 
-### Cold-path commit chunking with per-phase Q-gates → **Foundation P1 (v0.4.16)**
-**Status:** SUPERSEDED by Foundation P1 entry above. Retained here for cross-reference + technical context.
+### Cold-path commit chunking with per-phase Q-gates → **Foundation P1 (v0.4.16)** — SHIPPED
+**Status:** SHIPPED v0.4.16 (P1a). Full historical detail in [`SHIPPED.md`](SHIPPED.md#v0416--foundation-p1-sqlite-debt-closure-2026-05-05). Retained here for technical context + cross-reference.
 **Context:** v0.4.13 shipped the single-writer queue and v0.4.14 finalized short-lived foreground writes, but the taxonomy cold-path full-refit remains on `WriterLockedAsyncSession` + `cold_path_mode` audit-hook bypass. The refit's transaction span (multi-second commits across thousands of cluster rows) does not fit the queue's per-task timeout model.
 **Plan:** chunk each refit phase (re-embedding pass, cluster reassignment, label reconciliation, member-count repair) into per-batch `submit()` calls with `await asyncio.sleep(0)` between, gated by per-phase Q-gates so a downstream phase only runs after its upstream chunk batch confirms commit. Each chunk fits the default `timeout=300s` envelope. Removes the last `cold_path_mode` audit-hook bypass; cold path becomes structurally identical to hot/warm in routing terms.
 **Files:** `backend/app/services/taxonomy/cold_path.py`, `taxonomy/warm_phases.py` (refit invocation), audit-hook flag retirement in `database.py`.
 
 ---
 
-### `_bg_index` / `RepoIndexService.build_index()` per-file batching → **Foundation P1 (v0.4.16)**
-**Status:** SUPERSEDED by Foundation P1 entry above (combined with cold-path chunking). Retained for cross-reference.
+### `_bg_index` / `RepoIndexService.build_index()` per-file batching → **Foundation P1 (v0.4.16)** — SHIPPED
+**Status:** SHIPPED v0.4.16 (P1b — combined with cold-path chunking). Full historical detail in [`SHIPPED.md`](SHIPPED.md#v0416--foundation-p1-sqlite-debt-closure-2026-05-05). Retained here for technical context + cross-reference.
 **Context:** v0.4.14 left `_bg_index` and `RepoIndexService.build_index()` on the legacy session because per-file index inserts span minutes for large repos. Plan: per-file write batching where each batch is one `submit()` call that fits the default `timeout=300s` envelope, with progress events between batches so users see live indexing.
 **Files:** `backend/app/services/repo_index_service.py`, `routers/github_repos.py` (background-task integration).
 
 ---
 
-### `tools/refine.py` handler restructure → **Foundation P4 (v0.4.17)**
+### `tools/refine.py` handler restructure → **Foundation P4 (v0.4.19)**
 **Status:** SUPERSEDED by Foundation P4 entry above. Retained for cross-reference.
 **Context:** v0.4.14 deferred `tools/refine.py:50, :156` because the handler wraps `RefinementService` LLM call inside its own session — write-queue migration requires extracting the LLM call out of the session lifetime so the queued submit owns only the persistence boundary, not the multi-second LLM round-trip.
 **Files:** `backend/app/tools/refine.py`, `services/refinement_service.py` (session boundary refactor).
 
 ---
 
-### `tools/save_result.py` handler restructure → **Foundation P4 (v0.4.17)**
+### `tools/save_result.py` handler restructure → **Foundation P4 (v0.4.19)**
 **Status:** SUPERSEDED by Foundation P4 entry above. Retained for cross-reference.
 **Context:** v0.4.14 deferred `tools/save_result.py:85` because the handler wraps heuristic scoring + analyzer A4 LLM fallback inside its own session. Same restructure pattern as refine: extract LLM call from session lifetime, keep only persistence inside the queued submit.
 **Files:** `backend/app/tools/save_result.py`, scoring/analyzer call-site refactor.
 
 ---
 
-### `tools/optimize.py:198` orchestrator restructure → **Foundation P4 (v0.4.17)**
+### `tools/optimize.py:198` orchestrator restructure → **Foundation P4 (v0.4.19)**
 **Status:** SUPERSEDED by Foundation P4 entry above. Retained for cross-reference.
 **Context:** v0.4.14 deferred the `tools/optimize.py:198` site because the handler wraps the full `PipelineOrchestrator` 4-LLM SSE loop. The orchestrator must be split so each persistence boundary is a discrete `submit()` while the long LLM phases run outside any session.
 **Files:** `backend/app/tools/optimize.py`, `services/pipeline.py` (SSE persistence boundary extraction).
@@ -627,6 +716,9 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 For the historical record of completed work — every release tag from v0.3.6-dev to the current latest, with per-fix detail, file/line references, and audit cross-links — see [`SHIPPED.md`](SHIPPED.md).
 
 **Recent releases:**
+- **v0.4.17** (2026-05-06) — Foundation P2 Path A: probe internals split into 3 new modules (`probe_common.py`, `probe_phases.py`, `probe_phase_5.py`) + 1 trimmed orchestrator (`probe_service.py` 2493 → 2204 LOC, ~12% shrink). `_run_impl()` body byte-for-byte preserved. Public API (`ProbeService` + `current_probe_id`) preserved via 2-symbol re-export shim. Path B Phase 3 body extraction deferred indefinitely.
+- **v0.4.16** (2026-05-05) — Foundation P1: cold-path commit chunking with cumulative Q-gates (P1a) + `_bg_index`/`build_index`/`incremental_update`/`invalidate_index` migrated to WriteQueue with per-batch chunking + per-(repo, branch) `asyncio.Lock` + lifespan orphan recovery + 8 decision-event types + `repo_index` health block (P1b). 6 new constants in `taxonomy/_constants.py`.
+- **v0.4.15** (2026-05-04 retroactive) — HistoryPanel pagination correctness P0: server-pushdown of `project_id` + `status` filters; capture-and-bail race guard at fetch sites. Retroactively tagged 2026-05-05.
 - **v0.4.14** (2026-05-04) — SQLite migration finalization: short-lived foreground writes (passthrough pending, sampling persist, audit logs, OAuth flows, status updates) routed through WriteQueue; `submit_batch()` helper added
 - **v0.4.13** (2026-05-04) — SQLite writer-slot contention architectural fix (single-writer queue), suite 3457 passing
 - **v0.4.12** (2026-05-02) — Topic Probe Tier 1 + post-Tier-1 architectural hardening
