@@ -4,6 +4,12 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+- **Pre-existing Alembic schema drift cleanup (Foundation P3 prework)** — `alembic check` now exits cleanly (`No new upgrade operations detected.`) instead of failing with 8 drift items. Three logical fixes:
+  - `backend/app/models.py` declares the 9 hotpath indexes that migration `cc9c44e78f78` created but never round-tripped to the model (every `OptimizationService.VALID_SORT_COLUMNS` entry plus the `(project_id, created_at DESC)` composite plus the `feedbacks.optimization_id` FK join). Composite uses `created_at.desc()` so SQLAlchemy reflection matches the on-disk DESC expression.
+  - `backend/alembic/env.py` adds a `compare_type` callback that treats SQLite's `JSON↔TEXT` and `Float↔REAL` pairs as equivalent (same affinity, same on-disk bytes, same query behavior — re-declaring would be pure churn). Plus an `include_object` filter on `uq_prompt_cluster_domain_label` because SQLAlchemy's reflector silently skips expression-based partial indexes (see SAWarning) and would always flag the model's plain-column declaration as missing.
+  - New migration `2d61e9b37427` repairs the only two real drift items: re-creates the partial unique index `uq_prompt_cluster_domain_label ON prompt_cluster (COALESCE(parent_id, ''), label) WHERE state = 'domain'` if absent (multi-project domain-label uniqueness — ADR-005), and re-asserts `NOT NULL` on `global_patterns.id` for deployments where SQLite's VARCHAR PRIMARY KEY left it nullable. Both ops are idempotent via inspector guards. `_has_index()` queries `sqlite_master` directly because `inspect().get_indexes()` cannot reflect expression-based indexes. `downgrade()` is a deliberate no-op.
+
 ## v0.4.17 — 2026-05-06
 
 ### Changed
