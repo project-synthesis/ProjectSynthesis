@@ -32,6 +32,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         render_as_batch=True,
         include_object=_include_object,
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -43,6 +44,7 @@ def do_run_migrations(connection):
         target_metadata=target_metadata,
         render_as_batch=True,
         include_object=_include_object,
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()
