@@ -5,6 +5,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.types import JSON, Float, Numeric
 
 from alembic import context
 from app.models import Base
@@ -24,6 +25,43 @@ def _include_object(object, name, type_, reflected, compare_to):
     return True
 
 
+def _compare_type(context, inspected_column, metadata_column, inspected_type, metadata_type):
+    """Suppress spurious SQLite affinity drift on JSON↔TEXT and Float↔REAL.
+
+    SQLite has only 5 storage classes (NULL, INTEGER, REAL, TEXT, BLOB) — column
+    "types" are advisory and resolve to one of those affinities. SQLAlchemy
+    declares ``JSON`` and ``Float`` columns; the inspector reflects them as
+    ``TEXT`` and ``REAL`` respectively when the table was originally created via
+    an older raw-SQL path or a legacy startup-time auto-creation hook (as is
+    the case for ``optimizations.phase_weights_json`` and a handful of
+    ``global_patterns`` JSON columns). Re-declaring the columns via
+    ``batch_alter_table`` is pure churn — same on-disk bytes, same query
+    behavior — so we treat the pair as equivalent and let ``alembic check``
+    pass cleanly. Real type changes (e.g. INTEGER↔TEXT) still fail-loud because
+    they cross affinity boundaries.
+    """
+    dialect = context.dialect.name if context else ""
+    if dialect != "sqlite":
+        return None  # let Alembic's default comparison run on non-SQLite
+
+    inspected_cls = type(inspected_type)
+    metadata_cls = type(metadata_type)
+
+    # JSON ↔ TEXT (SQLAlchemy stores JSON as a TEXT-affinity column)
+    if isinstance(metadata_type, JSON) and inspected_cls.__name__ == "TEXT":
+        return False
+    if isinstance(inspected_type, JSON) and metadata_cls.__name__ == "TEXT":
+        return False
+
+    # Float ↔ REAL (Float is just a REAL with optional precision)
+    if isinstance(metadata_type, (Float, Numeric)) and inspected_cls.__name__ == "REAL":
+        return False
+    if isinstance(inspected_type, (Float, Numeric)) and metadata_cls.__name__ == "REAL":
+        return False
+
+    return None  # fall back to Alembic's default comparison
+
+
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -32,6 +70,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         render_as_batch=True,
         include_object=_include_object,
+        compare_type=_compare_type,
         transaction_per_migration=True,
     )
     with context.begin_transaction():
@@ -44,6 +83,7 @@ def do_run_migrations(connection):
         target_metadata=target_metadata,
         render_as_batch=True,
         include_object=_include_object,
+        compare_type=_compare_type,
         transaction_per_migration=True,
     )
     with context.begin_transaction():
