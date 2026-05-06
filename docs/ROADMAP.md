@@ -72,17 +72,19 @@ Living document tracking planned improvements. Items are prioritized but not sch
 | # | Sub-project | Depends on | Reason it's first |
 |---|---|---|---|
 | **P1** | **SQLite-debt closure** (cold-path commit chunking + `_bg_index`/`build_index` per-file batching) | nothing | Independent of probe; closes v0.4.13/v0.4.14 migration story; unblocks audit-hook RAISE-in-prod flip; can run in parallel with P2 |
-| **P2** | **Probe internals cleanup** (split `services/probe_service.py` 2493 LOC into focused modules — orchestrator / persistence / generation / cancellation; extract reusable primitives: verify-after-persist, per-prompt streaming, early-abort) | nothing | Independent of P1; smaller modules are easier to migrate in P3 than a monolith |
+| **P2 (Path A)** | **Probe internals cleanup — module-level helpers** (split `services/probe_service.py` 2493 LOC by extracting 9 module-level free functions + `current_probe_id` ContextVar into 3 NEW modules: `probe_common.py`, `probe_phases.py`, `probe_phase_5.py`. ProbeService class methods + `_run_impl()` body stay intact). | nothing | Independent of P1; pure code-move. Net delta: probe_service.py 2493 → ~2200 LOC (~12% shrink). Truly behavior-preserving. |
+| **P2 (Path B — DEFERRED)** | **Phase 3 body extraction from `_run_impl()` — DEFERRED** (was originally planned to extract the ~600-LOC Phase 3 body of `_run_impl()` into a `running(...)` free function). Spec validation (5 rounds) + plan validation (1 round) collectively surfaced architectural questions that the spec didn't resolve: (a) `_run_impl()` is `async def -> AsyncIterator`, and Phase 3 contains 3 `yield` statements — extracting it as a coroutine returning a tuple is impossible; the function must be an async generator OR the orchestrator must invert via callback yield; (b) live source captures 7 distinct `self.X` attributes (`context_service`, `embedding_service`, `_pending_to_prompt_result`, `provider`, `_resolve_write_queue`, `session_factory`, `_tag_probe_rows`) — the spec listed 10 phantom params (`target_score`, `read_failures`, `embed_failures` don't exist in Phase 3); (c) Phase 3 has 8+ inline imports inside the body that need re-homing decisions; (d) 2 test sites use `patch.object(probe_service_mod, ...)` and `monkeypatch.setattr(ps_mod, "bulk_persist", ...)` — patch-target drift after extraction needs explicit per-callsite design. Path B requires a fresh design cycle (async-generator signature OR yield-callback pattern) plus exhaustive capture audit before it can ship. | P2 Path A complete (clean module boundaries make Path B's surface smaller) | When ready: dedicated brainstorm → spec → plan → cycle. Probe T2 still ships without it (T2 needs unified substrate from P3, not Phase 3 isolation). |
 | **P3** | **Substrate unification** (collapse `SeedRun`/`ProbeRun` semantics into a unified `RunRow` model + `RunOrchestrator` service with pluggable `SeedAgentGenerator` + `TopicProbeGenerator`; backward-compat REST/MCP shims for `/api/probes`, `/api/seed`, `synthesis_probe`, `synthesis_seed`) | P2 (clean modules to migrate) | T4 ships by construction; T2/T3 features build natively on unified substrate with zero retroactive migration |
 | **P4** | **Long-handler restructures** (separate read/process/write phases in `tools/refine.py:50,:156`, `tools/save_result.py:85`, `tools/optimize.py:198` so the LLM call lives outside any session and persistence boundaries route through the queue) | nothing (probe-independent but bundled for zero-tech-debt completion) | Closes the final SQLite migration tail; not probe-blocking but a cleanup-track release inside the foundation envelope |
 
 **Release allocation (aspirational, may compress if size permits):**
-- **v0.4.16** = Foundation P1 (SQLite-debt closure)
-- **v0.4.17** = Foundation P2 (probe internals cleanup) + P4 (long-handler restructures) [if compatible scope]
+- **v0.4.16** = Foundation P1 (SQLite-debt closure) — **SHIPPED 2026-05-05**
+- **v0.4.17** = Foundation P2 Path A (probe internals — module-level helpers extraction) + P4 (long-handler restructures) [if compatible scope]
 - **v0.4.18** = Foundation P3 (substrate unification — biggest single architectural commitment)
 - **v0.4.19** = Probe Tier 2 (save-as-suite + replay + UI + regression alarm)
 - **v0.4.20** = Probe Tier 3 (release.sh CI + probe→seed promotion + drill-into-cluster)
 - **v0.4.21** = Probe Tier 4 (final UI consolidation — substrate already done in P3)
+- **TBD** = Foundation P2 Path B (Phase 3 body extraction — deferred indefinitely; needs fresh design cycle; not blocking T2-T4 because T2 ships on the unified substrate from P3, not on Phase 3 isolation)
 
 **Per-phase specs:** each phase gets its own spec → plan → strict 7-dispatch TDD cycle (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → spec-compliance reviewer → code-quality reviewer) per `feedback_tdd_protocol.md`. P1 brainstorm starts immediately after this ROADMAP update lands.
 
@@ -90,6 +92,8 @@ Living document tracking planned improvements. Items are prioritized but not sch
 - P1 supersedes the standalone "Cold-path commit chunking" + "_bg_index/RepoIndexService.build_index() per-file batching" entries below.
 - P3 supersedes Topic Probe "Tier 4 (substrate unification)" — that delivery shifts left into foundation.
 - P4 supersedes the standalone "tools/refine.py", "tools/save_result.py", "tools/optimize.py:198" entries below.
+
+**P2 scope reduction (2026-05-06):** Path B (Phase 3 body extraction) deferred after spec round 5 + plan round 1 surfaced unresolved architectural questions. v0.4.17 P2 ships Path A only (helpers extraction) — pure code-move, ~12% LOC shrink, zero risk. Path B re-design queued as an exploring item below ("Probe Phase 3 body extraction — deferred"). T2/T3/T4 do NOT depend on Path B; they depend on P3 substrate unification only.
 
 ---
 
@@ -492,6 +496,35 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 ### Conciseness heuristic calibration for technical prompts
 **Status:** Exploring
 **Context:** The heuristic conciseness scorer uses Type-Token Ratio which penalizes repeated domain terminology ("scoring", "heuristic", "pipeline" across sections). Technical specification prompts score artificially low on conciseness despite being well-structured. Needs a domain-aware TTR adjustment or alternative metric.
+
+---
+
+### Probe Phase 3 body extraction — deferred from Foundation P2 (2026-05-06)
+**Status:** Exploring (was Foundation P2 Path B; deferred 2026-05-06 after spec validation surfaced unresolved architectural questions).
+**Context:** The original Foundation P2 design proposed extracting Phase 3's ~600-LOC body from `ProbeService._run_impl()` into a free function `running(...)` in a new `probe_phase_3.py` module. After 5 spec validation rounds + 1 plan validation round, the plan reviewer caught structural defects:
+
+1. **`_run_impl()` is `async def -> AsyncIterator[Any]`**, and Phase 3 contains 3 `yield` statements (`yield ProbeRateLimitedEvent`, `yield ProbeProgressEvent` ×2). A function with `yield` becomes an `AsyncGenerator`, not an awaitable returning a tuple. The spec's `running(...) -> tuple[list, int, int]` signature is impossible. Two valid redesigns: (a) `running(...) -> AsyncIterator[Event]` with caller doing `async for ev in running(...): yield ev`, or (b) `running(...)` accepts a `yield_callback` parameter that the caller wires to its own `yield`. Both change the orchestrator's call shape.
+
+2. **Spec's 10-param `running(...)` signature is wrong.** Live `grep -oE "self\.\w+"` over Phase 3 (lines 924-1530) shows 7 actual captures: `context_service`, `embedding_service`, `_pending_to_prompt_result`, `provider`, `_resolve_write_queue`, `session_factory`, `_tag_probe_rows`. Spec invented `target_score`, `read_failures`, `embed_failures` — none exist in source. Spec also got attribute names wrong (`self._db` vs actual `self.db`, etc.).
+
+3. **Phase 3 has 8+ inline imports** at lines ~938-952 (`from app.config import PROMPTS_DIR`, `from app.services.batch_orchestrator import run_batch`, etc.). Lifting them to top-of-`probe_phase_3.py` could introduce circular-import risk via `taxonomy/__init__`; keeping them inline works but is unconventional.
+
+4. **Test patch-target drift.** `tests/test_probe_service.py:1042` uses `patch.object(probe_service_mod, "_render_final_report", ...)`; `tests/test_probe_service.py:1100` uses `monkeypatch.setattr(ps_mod, "bulk_persist", ...)` — both rebind module attributes that move post-extraction. Whether they continue to work depends on call-site choice (bare-name lookup vs fully-qualified import). Spec didn't address.
+
+**v0.4.17 P2 (Path A only) shipped without these issues** — extracted only the 9 module-level free functions + `current_probe_id` ContextVar to 3 new modules (probe_common, probe_phases, probe_phase_5). `_run_impl()` body untouched. Pure code-move.
+
+**Triggers (revisit when):**
+- A Topic Probe T2/T3 feature requires a stable Phase 3 entry point (not currently true — T2 ships on the unified `RunRow` substrate from P3, not on Phase 3 isolation)
+- The orchestrator-extracted-from-yield-generator pattern is needed elsewhere in the codebase (e.g., refine pipeline) — would amortize the design cost
+- A different cycle revisits `probe_service.py` for unrelated reasons and the Phase 3 body has grown further
+
+**When ready, the design must answer:**
+- Async-generator return vs yield-callback parameter (pick one)
+- Exhaustive `self.<X>` capture audit (live grep, not spec-invented)
+- Inline-import handling (lift vs keep, with circular-import audit)
+- Test patch-target audit (bare-name lookup vs fully-qualified — preserve current semantics)
+
+**Files:** `backend/app/services/probe_service.py` (Phase 3 body removal — currently lines 924-1530), `backend/app/services/probe_phase_3.py` (NEW — full body + inner-closure `_abort_watcher`).
 
 ---
 
