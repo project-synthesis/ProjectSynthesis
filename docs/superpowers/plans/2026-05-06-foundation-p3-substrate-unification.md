@@ -344,7 +344,7 @@ cd backend && source .venv/bin/activate && pytest tests/test_run_row_model.py -v
 
 Expected: ImportError or AttributeError on `from app.models import RunRow, ProbeRun` (one of them doesn't exist yet) OR table-not-found on the `run_row` DB queries. **All tests FAIL** — that's RED.
 
-### Task 1.2: GREEN — add `RunRow` model + Alembic migration + STI ProbeRun alias
+### Task 1.2: GREEN — add `RunRow` model + Alembic migration + Python-alias ProbeRun
 
 - [ ] **Step 1: Add RunRow class to models.py**
 
@@ -650,7 +650,7 @@ Expected: 8/8 PASS. (`test_migration_idempotent_when_already_migrated` is a `pyt
 
 Read the migration file end-to-end. The matched-state guard is concise. The `INSERT...SELECT` is single-statement. No extraction warranted at this size.
 
-The model file: verify `ProbeRun(RunRow)` keeps the original `__tablename__ = "probe_run"` semantics — it should NOT, because STI shares the parent's table. Remove any `__tablename__` from `ProbeRun` if present.
+The model file: verify `ProbeRun(RunRow)` does NOT declare its own `__tablename__`. Because option (b) Python-alias subclasses inherit the parent's `__tablename__` automatically (SQLAlchemy convention), setting `__tablename__='probe_run'` on the subclass would create a separate or conflicting mapping. Remove any `__tablename__` from `ProbeRun` if present.
 
 - [ ] **Step 2: Verify no test regressions**
 
@@ -2127,7 +2127,7 @@ async def _do_sweep(write_db: AsyncSession) -> int:
     return total
 ```
 
-Wait — note: with the STI `ProbeRun` alias, `_gc_orphan_probe_runs` operates on `RunRow WHERE mode='topic_probe'` automatically. Calling both helpers would double-process orphans. **Update the legacy helper to be a no-op** in PR1 (it'll be deleted in PR2):
+**Note on double-processing:** with the option (b) Python-alias `ProbeRun`, `select(ProbeRun)` returns ALL `run_row` rows regardless of mode (no STI discriminator filter). If both `_gc_orphan_probe_runs` (legacy, operating via `select(ProbeRun)`) and `_gc_orphan_runs` (new, operating via `select(RunRow)`) ran in `_do_sweep`, they would both sweep the same row set — double-processing identical UPDATE statements. **Update the legacy helper to be a no-op** in PR1 (it'll be deleted in PR2):
 
 In `_gc_orphan_probe_runs(db)`, replace the body with:
 
@@ -3151,7 +3151,7 @@ class SeedAgentGenerator:
             pass
 ```
 
-NOTE: the `...` placeholders represent translation work — the implementer must read `tools/seed.py:handle_seed` (lines 207-360) and translate each step. The structure above shows the shape; full bodies are mechanical translation.
+**Acceptance gate for Cycle 7 GREEN:** Cycle 7's 10 cat-5 tests must all pass — particularly `test_full_chain_completed` (Test 1), `test_partial_mode_classification` (Test 8), `test_early_failure_path_returns_failed_result` (Test 9), and `test_result_keys_match_spec_shape` (Test 10) collectively pin the contract.
 
 - [ ] **Step 2: Update `batch_orchestrator.py:240-258` to thread `run_id` from current_run_id**
 
