@@ -55,6 +55,7 @@ from app.schemas.probes import (
 )
 from app.services.batch_orchestrator import BATCH_CONCURRENCY_BY_TIER
 from app.services.event_bus import event_bus
+
 # v0.4.17 P2 -- moved-symbol re-imports for backward compat + internal call sites
 from app.services.probe_common import (
     _apply_scope_filter,
@@ -66,7 +67,7 @@ from app.services.probe_common import (
 from app.services.probe_generation import generate_probe_prompts
 from app.services.probe_phase_5 import (
     _render_final_report,
-    _resolve_followups,
+    _resolve_followups,  # noqa: F401 -- re-export for backward compat (used by _render_final_report inside probe_phase_5)
 )
 from app.services.probe_phases import (
     _resolve_curated_files,
