@@ -64,6 +64,11 @@ from app.services.probe_common import (
     current_probe_id,  # noqa: F401 -- re-export for legacy `from probe_service import current_probe_id`
 )
 from app.services.probe_generation import generate_probe_prompts
+from app.services.probe_phases import (
+    _resolve_curated_files,
+    _resolve_curated_synthesis,
+    _resolve_dominant_stack,
+)
 from app.services.taxonomy.event_logger import get_event_logger
 
 logger = logging.getLogger(__name__)
@@ -236,56 +241,6 @@ def _render_final_report(
         f"- scoring_formula_version: {agg.scoring_formula_version}"
     )
     return "\n".join(lines)
-
-
-def _resolve_curated_files(curated: Any) -> list[str]:
-    """Return file paths from a ``CuratedCodebaseContext``-shaped object.
-
-    Production shape: ``selected_files: list[dict]`` with ``path`` keys
-    (see ``services/repo_index_query.py``). Returns ``[]`` on absent or
-    falsy input.
-    """
-    if curated is None:
-        return []
-    selected = getattr(curated, "selected_files", None) or []
-    out: list[str] = []
-    for d in selected:
-        if isinstance(d, dict):
-            path = d.get("path") or d.get("file_path")
-            if path:
-                out.append(str(path))
-    return out
-
-
-def _resolve_curated_synthesis(curated: Any) -> str | None:
-    """Return the cached explore-synthesis excerpt for the probe.
-
-    The probe-specific ``explore_synthesis_excerpt`` attribute is preferred
-    (set by Tier 2 grounding when the cached synthesis is layered on top of
-    curated retrieval). Falls back to ``context_text`` from the production
-    ``CuratedCodebaseContext`` shape.
-    """
-    if curated is None:
-        return None
-    for attr in ("explore_synthesis_excerpt", "context_text"):
-        v = getattr(curated, attr, None)
-        if v:
-            return str(v)
-    return None
-
-
-def _resolve_dominant_stack(curated: Any) -> list[str]:
-    """Return dominant tech stack as a list of stable string tokens.
-
-    Tier 2 grounding will source this from ``WorkspaceIntelligence`` and
-    layer it onto the curated-context object before passing it here.
-    """
-    if curated is None:
-        return []
-    stack = getattr(curated, "dominant_stack", None)
-    if isinstance(stack, list):
-        return [str(s) for s in stack]
-    return []
 
 
 # ---------------------------------------------------------------------------
