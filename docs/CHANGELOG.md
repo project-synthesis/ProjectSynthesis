@@ -4,6 +4,16 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Changed
+- **v0.4.17 P2 — Probe internals split (Path A only — module-level helpers)** — `backend/app/services/probe_service.py` (2493 LOC) split into a thinner orchestrator (~2200 LOC, ~12% shrink) + 3 NEW modules:
+  - `probe_common.py` (~250 LOC) — `current_probe_id` ContextVar (canonical home) + utility helpers (`_apply_scope_filter`, `_truncate`, `_commit_with_retry`, `_stub_dimension_scores`).
+  - `probe_phases.py` (~80 LOC) — Phase 1 grounding helpers (`_resolve_curated_files`, `_resolve_curated_synthesis`, `_resolve_dominant_stack`).
+  - `probe_phase_5.py` (~170 LOC) — Phase 5 reporting helpers (`_render_final_report`, `_resolve_followups`).
+  - Public API preserved: `from app.services.probe_service import ProbeService` (6 import sites) + `from app.services.probe_service import current_probe_id` (1 import site) keep working unchanged. ContextVar identity preserved via re-import (Python re-import is a name binding).
+  - Pure code-move: `ProbeService` class methods + `_run_impl()` body untouched. Phase 3 body extraction (Path B) deferred per ROADMAP "Probe Phase 3 body extraction — deferred" entry due to architectural questions surfaced during validation (yields in async-generator context, exhaustive `self.X` capture audit, inline-import handling, test patch-target audit).
+  - Behavior preserved (verified by 78 probe tests + 1 new backward-compat test passing). Test count 3550 → 3551 PASS (3553 collected).
+  - Foundation P2: establishes module boundaries that T2/T3 features will extend.
+
 ## v0.4.16 — 2026-05-05
 
 ### Added
