@@ -10,26 +10,53 @@
 
 **Discipline:** Strict 7-dispatch TDD per cycle: RED → GREEN → REFACTOR → INTEGRATE → OPERATE → spec-compliance reviewer → code-quality reviewer per `feedback_tdd_protocol.md`. The RED test pins the contract; subsequent phases never break it. Commit after every phase. REFACTOR subagent is dispatched explicitly (not folded into GREEN). Reviewers run as independent subagents — no self-review.
 
-**Phase template applied to every cycle that touches writers, events, or persistence (Cycles 1, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14):**
+## Canonical INTEGRATE + OPERATE Phase Templates
 
-After RED → GREEN → REFACTOR for each cycle, every such cycle MUST include:
+**Every cycle in the qualifying list (1, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14) MUST conclude with two final tasks pointing back to these templates.** Per `feedback_tdd_protocol.md`: "No phase is optional." Each phase = its own dispatch + its own commit.
 
-**INTEGRATE phase task** — verify the cycle's deliverable composes correctly with adjacent subsystems:
-- Run the cycle's tests + any tests for subsystems the cycle interacts with (e.g., Cycle 4 RunOrchestrator INTEGRATE runs orchestrator tests + write_queue tests + gc tests).
-- Lint + mypy clean (`cd backend && ruff check . && mypy app/`).
-- No dangling imports / circular imports introduced.
-- For schema cycles: alembic upgrade + downgrade + upgrade roundtrip verified.
-- For event-emission cycles: `event_bus._subscribers` does not retain leaked subscribers after a cycle test run.
-- Commit message tagged `[INTEGRATE]`.
+### `[INTEGRATE]` template
 
-**OPERATE phase task** — exercise the cycle's deliverable end-to-end against the running app:
-- Spin up backend in dev mode (`./init.sh restart` or pytest with full lifespan).
-- Issue real REST/MCP calls covering the new code path (curl + jq).
-- Verify no `database is locked` errors, no audit-hook WARN, no orphaned tasks at process shutdown.
-- For SSE cycles: subscribe to `/api/events`, kick off a real run, observe wire events match the snapshot fixture byte-for-byte.
-- Commit message tagged `[OPERATE]`.
+When a cycle's task list ends with `Task X.N: INTEGRATE — per template`, the dispatched implementer executes:
 
-Per `feedback_tdd_protocol.md`: "No phase is optional. Skipping any phase has shipped a defect at least once." OPERATE is non-negotiable for any cycle changing writer paths or SSE response semantics.
+1. Run the cycle's new tests + cross-subsystem tests called out by the cycle. Default cross-subsystem set: `tests/test_write_queue.py` (any cycle that submits writes), `tests/test_event_bus.py` (any cycle that publishes events), `tests/test_lifespan.py` (any cycle that touches `app.state`).
+2. `cd backend && source .venv/bin/activate && ruff check app/ && mypy app/`. Both clean.
+3. `cd backend && pytest --no-cov -q` — full backend suite, no failures.
+4. For schema-touching cycles (1): `alembic upgrade head` + `alembic downgrade -1` + `alembic upgrade head` roundtrip — no errors, schema reverts cleanly, re-applies cleanly.
+5. For event-emission cycles (6, 7, 9, 11, 12): grep `event_bus._subscribers` size at test teardown — must be 0 (no leaked subscribers).
+6. Frontend tests if frontend changed (15): `cd frontend && npm run test`.
+7. Commit empty (or with any minor fixes uncovered) tagged `chore(v0.4.18-p3): [INTEGRATE] cycle <N>`.
+
+### `[OPERATE]` template
+
+When a cycle's task list ends with `Task X.M: OPERATE — per template`, the dispatched implementer executes:
+
+1. `./init.sh restart` (or equivalent for the cycle's affected services).
+2. Issue a real call covering the cycle's code path:
+   - REST cycles (10, 11, 12): `curl` against the new/modified endpoint; `jq` to verify shape.
+   - MCP cycles (13): invoke the tool through Claude Code or the MCP HTTP stub; verify result schema.
+   - Generator cycles (6, 7): `curl POST /api/probes` (or `/api/seed`) with a real fixture topic; observe SSE / response.
+   - Schema cycle (1): `sqlite3 data/synthesis.db` and inspect `run_row` table directly; verify column shape + row count vs. probe_run pre-migration.
+3. Tail logs: `tail -F data/backend.log` during the call. Assert NO `database is locked`, NO `[AUDIT-HOOK] WARN`, NO `orphaned task at shutdown`.
+4. For SSE cycles (11): capture full event stream via `curl --no-buffer -N`. Diff against the previously captured v0.4.17 snapshot fixture (`tests/fixtures/probe_sse_v0.4.17.txt`). Volatile fields stripped via `_strip_volatile` helper. Diff must be empty.
+5. Commit tagged `chore(v0.4.18-p3): [OPERATE] cycle <N>` with a one-line note of what was verified.
+
+**Skipping a phase = shipping a defect.** Do not collapse INTEGRATE + OPERATE into a single task.
+
+### Per-cycle INTEGRATE/OPERATE expectations table
+
+| Cycle | INTEGRATE targets | OPERATE action |
+|---|---|---|
+| 1 | `tests/test_run_row_model.py` + alembic roundtrip + ruff + mypy | `sqlite3 data/synthesis.db ".schema run_row"`, verify backfill row count |
+| 4 | `tests/test_run_orchestrator.py` + `tests/test_write_queue.py` + `tests/test_lifespan.py` | Construct orchestrator in REPL, dispatch a stub generator, observe WriteQueue commits |
+| 5 | `tests/test_gc_runs.py` + `tests/test_gc.py` + lifespan test | Restart backend, force a stale `running` row, verify GC marks it failed |
+| 6 | `tests/test_topic_probe_generator.py` + cross-subsystem (write_queue, event_bus) | `curl POST /api/probes` with real fixture, observe full SSE phase sequence |
+| 7 | `tests/test_seed_agent_generator.py` + cross-subsystem | `curl POST /api/seed` with real fixture, observe `seed_*` decision events + `seed_batch_progress` bus events |
+| 9 | `tests/test_event_bus_subscribe_for_run.py` + `tests/test_event_bus.py` | REPL-level: subscribe + publish + observe filtering + replay |
+| 10 | `tests/test_runs_router.py` + lifespan + ruff/mypy | `curl GET /api/runs` with mode/status/project_id filters |
+| 11 | `tests/test_probe_router.py` + cross-subsystem | `curl POST /api/probes` with `--no-buffer -N`, diff full SSE against v0.4.17 snapshot |
+| 12 | `tests/test_seed_router.py` + cross-subsystem | `curl POST /api/seed` (sync) + `curl GET /api/seed` (new endpoint) |
+| 13 | `tests/test_mcp_tools_p3.py` + cross-subsystem | Invoke `synthesis_probe` and `synthesis_seed` via Claude Code MCP — verify tool result schema validates |
+| 14 | Full backend suite + frontend suite | Restart backend, confirm `from app.models import ProbeRun` raises ImportError (alias gone) |
 
 **Fixture-cycle prerequisite:** Cycles 6, 7, 11, 12 depend on fixtures (`audit_hook`, `event_bus_capture`, `taxonomy_event_capture`, `provider_mock` family, `seed_orchestrator_mock`, etc.) that don't exist in `backend/tests/conftest.py` today. **Cycle 3.5** (between schema cycle and orchestrator cycle) introduces these fixtures with their own RED/GREEN/REFACTOR cycle.
 
@@ -626,14 +653,27 @@ If any legacy probe_run test fails because it inserts directly to `probe_run` (t
 
 ```bash
 git add backend/app/models.py backend/alembic/versions/<id>_add_run_row_table_foundation_p3.py backend/tests/test_run_row_model.py
-git commit -m "feat(v0.4.18-p3): add RunRow model + migration with STI ProbeRun alias
+### Task 1.4: INTEGRATE — per template (cycle 1 row)
+
+Apply the `[INTEGRATE]` template (top of plan). Cycle-1 specifics from the per-cycle table: run `tests/test_run_row_model.py` + alembic upgrade/downgrade/upgrade roundtrip + `ruff` + `mypy`. Commit with `[INTEGRATE]` tag.
+
+### Task 1.5: OPERATE — per template (cycle 1 row)
+
+Apply the `[OPERATE]` template. Cycle-1 specifics: `sqlite3 data/synthesis.db ".schema run_row"` after restart; verify all 18 columns present; verify backfill row count matches pre-migration `probe_run` row count via `SELECT COUNT(*) FROM run_row WHERE mode='topic_probe'`.
+
+### Task 1.6: Cycle 1 final commit
+
+git commit -m "feat(v0.4.18-p3): add RunRow model + migration with ProbeRun Python-alias
 
 - New RunRow table with 18 columns, 4 indexes, 4-value status
 - Atomic Alembic migration: create + 4 index + INSERT...SELECT + drop
 - Matched-state idempotency guard for partial-completion safety
 - Reversible downgrade with NOT NULL re-COALESCE for legacy schema
-- ProbeRun retained as STI subclass (polymorphic_identity='topic_probe')
-  with .scope and .commit_sha property accessors for legacy reads
+- ProbeRun retained as plain Python subclass of RunRow (no SQLAlchemy STI;
+  no polymorphic_on / polymorphic_identity) — defaults mode='topic_probe'
+  in __init__ for legacy callers, with .scope and .commit_sha property
+  accessors for legacy reads. Safe in PR1 because no seed_agent rows exist
+  until PR2 wires the seed dispatch through RunOrchestrator.
 - 8 RunRow model + migration tests (cat 1)
 
 Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md § 4"
@@ -2224,30 +2264,69 @@ async def test_cancellation_propagates(provider_hanging_mock, repo_index_mock, t
 
 
 # Test 9: current_run_id ContextVar inherited into spawned tasks
-async def test_context_var_inherited_into_spawned_tasks(provider_mock, repo_index_mock, taxonomy_mock) -> None:
-    """Inner tasks the generator spawns see the parent's current_run_id."""
+async def test_context_var_inherited_into_spawned_tasks() -> None:
+    """asyncio.create_task copies the parent's ContextVar values into the new
+    task's context at task-creation time. RunOrchestrator sets current_run_id
+    before invoking generator.run; generators that spawn inner tasks (e.g.,
+    probe_service.py:839, 850, 904) must see the correct run_id.
+
+    This test isolates the asyncio behavior — does NOT require running the
+    generator end-to-end. It pins the documented Python-runtime behavior so
+    that a future Python upgrade or asyncio change is detected.
+    """
     from app.services.probe_common import current_run_id
 
-    captured = []
+    captured: list[str | None] = []
 
-    class CapturingProvider:
-        async def call(self, *args, **kwargs):
-            # Spawn an inner task and capture context var inside
-            async def inner():
-                captured.append(current_run_id.get())
+    async def inner():
+        # Inner task — should inherit the parent's ContextVar value
+        captured.append(current_run_id.get())
+
+    async def outer_with_run_id_set():
+        token = current_run_id.set("ctx-inherit-1")
+        try:
+            # Spawn inner task while ContextVar is set
             await asyncio.create_task(inner())
-            return AsyncMock()
+        finally:
+            current_run_id.reset(token)
 
-    # Set ContextVar manually then call generator directly
-    token = current_run_id.set("ctx-inherit-1")
-    try:
-        # ... pass CapturingProvider into generator and run
-        pass
-    finally:
+    await outer_with_run_id_set()
+    assert captured == ["ctx-inherit-1"]
+
+
+# Test 9b: ContextVar reset in parent does NOT propagate to in-flight children
+async def test_context_var_reset_does_not_propagate_to_in_flight_children() -> None:
+    """Documented Python-runtime behavior: contextvars.Token reset in parent
+    does NOT affect a child task already spawned with the prior value.
+
+    Spec section 11 risk #6 covers this — pinned here as a regression alarm
+    against a future Python upgrade silently changing the semantics.
+    """
+    from app.services.probe_common import current_run_id
+
+    captured: list[str | None] = []
+    inner_started = asyncio.Event()
+    parent_can_reset = asyncio.Event()
+
+    async def inner():
+        # Wait for parent to reset before reading
+        inner_started.set()
+        await parent_can_reset.wait()
+        captured.append(current_run_id.get())
+
+    async def outer():
+        token = current_run_id.set("ctx-noprop-1")
+        # Spawn child while value is set
+        child_task = asyncio.create_task(inner())
+        await inner_started.wait()
+        # Now reset the parent — this should NOT affect the child
         current_run_id.reset(token)
-    # Implementation-dependent assertion; exact form depends on generator internals
-    # If generator doesn't spawn inner tasks during a minimal mock run, skip
-    pytest.skip("Inner-task spawning is implementation detail; covered by integration tests")
+        parent_can_reset.set()
+        await child_task
+
+    await outer()
+    # Child sees the value that was set when it was spawned, not None
+    assert captured == ["ctx-noprop-1"]
 
 
 # Test 10: aggregate keys populated correctly
@@ -2280,7 +2359,39 @@ async def test_no_direct_run_row_writes(provider_mock, repo_index_mock, taxonomy
     audit_hook.reset()
     await gen.run(req, run_id="audit-1")
     # No RunRow inserts/updates from inside generator
-    assert not any("run_row" in w.statement.lower() for w in audit_hook.warnings)
+    assert not any("run_row" in str(w).lower() for w in audit_hook.warnings)
+
+
+# Test 13 (NEW — addresses spec coverage gap A from V1 review):
+# Channel 2 (taxonomy_event_logger) probe decision events carry run_id in context
+async def test_channel_2_probe_decisions_carry_run_id_in_context(provider_mock, repo_index_mock, taxonomy_mock, taxonomy_event_capture) -> None:
+    """Per spec § 6.4 there are TWO event channels. Channel 1 (event_bus) is
+    covered by Test 2. Channel 2 (taxonomy_event_logger.log_decision) — used
+    for the structured decision log + Observatory ActivityPanel — must also
+    carry run_id, threaded via the current_run_id ContextVar that
+    inject_probe_id reads.
+    """
+    from app.services.probe_common import current_run_id
+
+    gen = await _make_generator(provider_mock, repo_index_mock, taxonomy_mock)
+    req = RunRequest(mode="topic_probe", payload={"topic": "ch2", "repo_full_name": "o/r"})
+
+    # RunOrchestrator normally sets the ContextVar; mimic it here for direct
+    # generator invocation so taxonomy events can correlate.
+    token = current_run_id.set("ch2-rid-1")
+    try:
+        await gen.run(req, run_id="ch2-rid-1")
+    finally:
+        current_run_id.reset(token)
+
+    probe_decisions = taxonomy_event_capture.decisions_with_op("probe")
+    # Every probe-op decision fired during the run carries run_id either
+    # explicitly in context or via inject_probe_id reading current_run_id
+    for d in probe_decisions:
+        run_id = d.context.get("run_id") or d.context.get("probe_id")
+        assert run_id == "ch2-rid-1", (
+            f"probe decision {d.decision} missing run_id correlation: {d.context}"
+        )
 ```
 
 Note: many of these tests depend on fixtures (`provider_mock`, `event_bus_capture`, etc.) that need to be added to conftest. Some tests (#9, #11) include `pytest.skip` for implementation-dependent paths.
@@ -2493,9 +2604,52 @@ class TopicProbeGenerator:
         return {"domains_touched": [], "clusters_created": 0}  # placeholder; reuse real diff
 ```
 
-NOTE: this skeleton elides full method bodies. The actual implementation must preserve byte-for-byte behavior from `probe_service.py`. The spec section 5.4 is authoritative.
+**Translation contract:** the source of truth for behavior is `backend/app/services/probe_service.py:_run_impl()` (lines ~404-1500 in v0.4.17). The implementer **copies the body verbatim** and applies these mechanical rewrites:
 
-Implementation guidance: open `backend/app/services/probe_service.py`, read `_run_impl` end-to-end (lines ~404-1500), and translate each `yield ProbeXxxEvent(...)` to `event_bus.publish("xxx_event", {**payload, "run_id": run_id})`. Remove all `_set_probe_status` calls. Replace the final `ProbeRunResult` construction with `GeneratorResult` return.
+**Yield → publish mapping (exhaustive — verified against probe_service.py):**
+
+| Source pattern | Replacement | Source line(s) |
+|---|---|---|
+| `yield ProbeStartedEvent(...)` | `event_bus.publish("probe_started", {**payload, "run_id": run_id})` | ~466 |
+| `yield ProbeGroundingEvent(...)` | `event_bus.publish("probe_grounding", {**payload, "run_id": run_id})` | ~575 |
+| `yield ProbeGeneratingEvent(...)` | `event_bus.publish("probe_generating", {**payload, "run_id": run_id})` | ~627 |
+| `yield ProbeProgressEvent(...)` | `event_bus.publish("probe_prompt_completed", {**payload, "run_id": run_id})` | per `_event_name_for` mapping |
+| `yield ProbeRateLimitedEvent(...)` | `event_bus.publish("ProbeRateLimitedEvent", {**payload, "run_id": run_id})` | ~986 |
+| `yield ProbeCompletedEvent(...)` | `event_bus.publish("probe_completed", {**payload, "run_id": run_id})` | ~1454 |
+| `yield ProbeFailedEvent(...)` | `event_bus.publish("probe_failed", {**payload, "run_id": run_id})` | exception paths |
+| `event_bus.publish("rate_limit_active", ...)` (existing) | Add `"run_id": run_id` to payload dict (additive) | ~1007 |
+
+**Deletions (must NOT be carried over to the generator):**
+- All `await self._set_probe_status(...)` calls. RunOrchestrator owns status. Source lines: 412, 429 (initial running INSERT), 1352 (terminal status), 1592, 1600, 1659, 1666 (failure/cancellation marks).
+- The final `ProbeRunResult(...)` construction inside `_run_impl`. Replace with `return GeneratorResult(...)`.
+- The `current_probe_id.set(probe_id)` / `.reset(token)` (lines 445, 1519). RunOrchestrator does this around the generator call.
+- The `ProbeRun` row INSERT block (lines ~404-440). RunOrchestrator's `_create_row` handles this.
+- Cancellation handler under `asyncio.shield()` (lines ~1568-1605). RunOrchestrator catches `CancelledError` at the outer level.
+
+**Preservations (carry verbatim):**
+- All 5 phases' internal logic (grounding query, prompt generation, per-prompt loop, observability, reporting).
+- Module-level helpers from P2 Path A (`probe_common`, `probe_phases`, `probe_phase_5`) are imported, not reimplemented.
+- `_compute_taxonomy_delta` body — copy from probe_service's existing taxonomy-diff logic verbatim.
+- Aggregate construction logic (mean_overall, scoring_formula_version, etc.) — copy from probe_service's `_serialize_full` + aggregate-build path.
+
+**Terminal status classification (NEW logic — generator owns):**
+After the per-prompt loop:
+```python
+completed_count = sum(1 for r in prompt_results if r.get("status") == "completed")
+failed_count = sum(1 for r in prompt_results if r.get("status") == "failed")
+if completed_count > 0 and failed_count == 0:
+    terminal = "completed"
+elif completed_count == 0:
+    terminal = "failed"
+else:
+    terminal = "partial"
+```
+
+Mirrors `tools/seed.py:362-364` partial classification logic (and matches `probe_service.py:1338-1342`).
+
+**Acceptance gate for GREEN step:** the snapshot test `test_full_event_sequence_snapshot_byte_identical` (Cycle 6 Test 11) compares the new generator's emitted event sequence against a captured fixture from running v0.4.17 ProbeService against the same input. Diff must be empty (modulo timestamps + UUIDs + the additive `run_id` field).
+
+The skeleton above shows the SHAPE — the implementer fills in each phase's body by translating `_run_impl` lines per the mapping table. Total translated LOC: ~600 (matches the line range 404-1500 in probe_service.py minus the deletion list).
 
 - [ ] **Step 2: Run tests — should pass**
 
@@ -2807,50 +2961,143 @@ class SeedAgentGenerator:
             "prompts_count": len(generated_prompts),
         })
 
-        # Run batch + persist + taxonomy assign — reuse existing helpers
+        # === Run batch + persist + taxonomy assign ===
+        # Translation contract: copy `tools/seed.py:handle_seed` body lines
+        # 207-360 verbatim into this method. The translation is mechanical
+        # apart from variable rebinds documented below.
+
         from app.services.batch_pipeline import (
             run_batch, bulk_persist, batch_taxonomy_assign,
         )
 
-        # ... (preserve tools/seed.py:handle_seed lines 207-360 logic verbatim,
-        # threading run_id into seed_batch_progress emissions inside batch_orchestrator)
-        # For brevity, the full body is omitted here; the implementer reads
-        # tools/seed.py and translates each step into this generator.
+        # Variable rebinds from handle_seed:
+        #   payload["provider"] → already extracted as `provider` above
+        #   payload["context_service"] → already extracted as `context_service`
+        #   self._write_queue → already injected via __init__
+        #   The transient WriteQueue construction in handle_seed (lines 285-306)
+        #   is REMOVED — this generator always receives a real WriteQueue from
+        #   RunOrchestrator (via DI in lifespan).
 
-        # Final classification
-        completed = ...  # count from results
-        failed = ...  # count from results
+        # Concrete derivation of `results`, `completed`, `failed`, summary, taxonomy_result:
+        # (mirror handle_seed lines 207-360 — the implementer copies the actual logic)
 
-        if failed == 0 and completed > 0:
+        try:
+            results = await run_batch(
+                prompts=generated_prompts,
+                provider=provider,
+                prompt_loader=PromptLoader(PROMPTS_DIR),
+                embedding_service=EmbeddingService(),
+                max_parallel=self._compute_max_parallel(payload),  # see helper below
+                codebase_context=payload.get("codebase_context") if not prompts else None,
+                batch_id=batch_id,
+                session_factory=async_session_factory,
+                taxonomy_engine=self._taxonomy_engine,
+                domain_resolver=self._domain_resolver,
+                tier=payload.get("tier"),
+                context_service=context_service,
+            )
+        except Exception as exc:
+            logger.error("Seed batch execution failed: %s", exc, exc_info=True)
+            self._log_decision("seed_failed", run_id, {
+                "batch_id": batch_id, "phase": "optimize",
+                "error_type": type(exc).__name__, "error_message": str(exc)[:200],
+            })
+            return GeneratorResult(
+                terminal_status="failed",
+                prompts_generated=len(generated_prompts),
+                prompt_results=[],
+                aggregate={"prompts_optimized": 0, "prompts_failed": len(generated_prompts),
+                           "summary": f"Batch execution failed: {exc}"},
+                taxonomy_delta={"domains_touched": [], "clusters_created": 0},
+                final_report=None,
+            )
+
+        try:
+            await bulk_persist(results, self._write_queue, batch_id)
+        except Exception as exc:
+            completed = sum(1 for r in results if r.status == "completed")
+            self._log_decision("seed_failed", run_id, {
+                "batch_id": batch_id, "phase": "persist",
+                "error_type": type(exc).__name__, "error_message": str(exc)[:200],
+                "prompts_completed_before_failure": completed,
+            })
+            return GeneratorResult(
+                terminal_status="partial",  # some succeeded but persist crashed
+                prompts_generated=len(generated_prompts),
+                prompt_results=[r.__dict__ for r in results],
+                aggregate={"prompts_optimized": completed,
+                           "prompts_failed": len(results) - completed,
+                           "summary": f"Optimized {completed} but persist failed: {exc}"},
+                taxonomy_delta={"domains_touched": [], "clusters_created": 0},
+                final_report=None,
+            )
+
+        try:
+            taxonomy_result = await batch_taxonomy_assign(
+                results, self._write_queue, batch_id,
+            )
+        except Exception as exc:
+            logger.warning("Taxonomy integration failed (non-fatal): %s", exc)
+            taxonomy_result = {"clusters_assigned": 0, "clusters_created": 0,
+                               "domains_touched": []}
+
+        # === Final classification ===
+        completed = sum(1 for r in results if r.status == "completed")
+        failed = sum(1 for r in results if r.status == "failed")
+
+        if completed > 0 and failed == 0:
             terminal = "completed"
         elif completed == 0:
             terminal = "failed"
         else:
             terminal = "partial"
 
-        self._log_decision("seed_completed" if terminal != "failed" else "seed_failed",
-                           run_id, {
-                               "batch_id": batch_id,
-                               "terminal_status": terminal,
-                               "completed": completed,
-                               "failed": failed,
-                           })
+        summary = (
+            f"{completed} prompts optimized"
+            f"{f', {failed} failed' if failed else ''}"
+            f". {taxonomy_result.get('clusters_created', 0)} clusters created"
+            f", domains: {', '.join(taxonomy_result.get('domains_touched', []))}"
+        )
+
+        self._log_decision(
+            "seed_completed" if terminal != "failed" else "seed_failed",
+            run_id, {
+                "batch_id": batch_id,
+                "terminal_status": terminal,
+                "prompts_optimized": completed,
+                "prompts_failed": failed,
+                "clusters_created": taxonomy_result.get("clusters_created", 0),
+                "domains_touched": taxonomy_result.get("domains_touched", []),
+            },
+        )
 
         return GeneratorResult(
             terminal_status=terminal,
             prompts_generated=len(generated_prompts),
-            prompt_results=...,  # results
+            prompt_results=[r.__dict__ for r in results],
             aggregate={
                 "prompts_optimized": completed,
                 "prompts_failed": failed,
-                "summary": f"{completed} prompts optimized; {failed} failed",
+                "summary": summary,
             },
             taxonomy_delta={
-                "domains_touched": ...,  # from batch_taxonomy_assign
-                "clusters_created": ...,
+                "domains_touched": taxonomy_result.get("domains_touched", []),
+                "clusters_created": taxonomy_result.get("clusters_created", 0),
             },
             final_report=None,
         )
+
+    @staticmethod
+    def _compute_max_parallel(payload: dict) -> int:
+        """Mirrors handle_seed lines 207-213 max_parallel logic."""
+        tier = payload.get("tier", "passthrough")
+        provider = payload.get("provider")
+        if tier == "internal" and provider is not None:
+            return 10 if getattr(provider, "name", "") == "claude_cli" else 5
+        elif tier == "sampling":
+            return 2
+        else:
+            return 1
 
     @staticmethod
     def _log_decision(decision: str, run_id: str, context: dict) -> None:
@@ -3049,8 +3296,10 @@ backward-compat shims.
 - ContextVar rebind: current_probe_id → current_run_id in probe_common.py
   (canonical home), preserves object identity.
 - _gc_orphan_runs replaces _gc_orphan_probe_runs (legacy returns 0).
-- ProbeRun retained as STI alias (polymorphic_identity='topic_probe') with
-  property accessors for legacy .scope / .commit_sha reads.
+- ProbeRun retained as plain Python subclass of RunRow (no STI / no
+  polymorphic_on) with default mode='topic_probe' in __init__ + property
+  accessors for legacy .scope / .commit_sha reads. Safe in PR1 because no
+  seed_agent rows exist until PR2.
 
 ## Test plan
 
@@ -3170,17 +3419,31 @@ async def test_subscribe_for_run_aclose_terminates() -> None:
 
 
 async def test_subscribe_for_run_does_not_break_existing_subscribers() -> None:
-    """Adding a per-run subscription must not regress the global subscribe()."""
+    """Adding a per-run subscription must not regress the global subscribe().
+
+    EventBus.subscribe() is an async generator (yields per-event payloads), so
+    consume it with `async for`, NOT `await`. Capture the first event and
+    assert shape.
+    """
     from app.services.event_bus import event_bus
-    global_sub_q = await event_bus.subscribe()
     run_sub = event_bus.subscribe_for_run("coexist-1")
 
+    # Subscribe to the global async-generator stream
+    global_events = []
+    async def consume_global():
+        async for payload in event_bus.subscribe():
+            global_events.append(payload)
+            if len(global_events) >= 1:
+                break
+    global_task = asyncio.create_task(consume_global())
+    await asyncio.sleep(0)  # let subscription register
+
     event_bus.publish("probe_completed", {"run_id": "coexist-1"})
+    await asyncio.wait_for(global_task, timeout=2)
 
     # Global subscriber sees the event
-    payload = await asyncio.wait_for(global_sub_q.get(), timeout=2)
-    assert payload["event"] == "probe_completed"
-    assert payload["data"]["run_id"] == "coexist-1"
+    assert global_events[0]["event"] == "probe_completed"
+    assert global_events[0]["data"]["run_id"] == "coexist-1"
 
     # Run-filtered subscriber also sees it
     received = []
@@ -3192,6 +3455,25 @@ async def test_subscribe_for_run_does_not_break_existing_subscribers() -> None:
     assert received[0].kind == "probe_completed"
 
     await run_sub.aclose()
+
+
+async def test_subscribe_for_run_handles_bus_shutdown_sentinel_gracefully() -> None:
+    """If event_bus.shutdown() pushes a non-dict sentinel into all subscriber
+    queues, the subscription terminates cleanly via the non-dict guard in
+    __anext__ — does NOT crash on .get() against the sentinel."""
+    from app.services.event_bus import event_bus
+    sub = event_bus.subscribe_for_run("shutdown-1")
+
+    # Simulate a shutdown pushing a non-dict object directly into the queue
+    sub._queue.put_nowait(object())  # non-dict, non-None
+
+    received = []
+    async def collect():
+        async for evt in sub:
+            received.append(evt)
+    # Should terminate via StopAsyncIteration, no crash
+    await asyncio.wait_for(collect(), timeout=2)
+    assert received == []
 ```
 
 - [ ] **Step 2: Run — must fail on `subscribe_for_run` not existing**
@@ -3252,12 +3534,18 @@ class _RunSubscription:
     async def __anext__(self):
         while True:
             payload = await self._queue.get()
-            if payload is None:  # sentinel — close requested
+            # Two distinct sentinel conditions: aclose() pushes None;
+            # bus.shutdown() pushes the bus's _SHUTDOWN_SENTINEL singleton.
+            # Handle both safely without crashing on .get() of a non-dict.
+            if payload is None:
+                self._cleanup()
+                raise StopAsyncIteration
+            if not isinstance(payload, dict):
+                # _SHUTDOWN_SENTINEL or any other non-dict marker
                 self._cleanup()
                 raise StopAsyncIteration
             data = payload.get("data") or {}
             if isinstance(data, dict) and data.get("run_id") == self._run_id:
-                # Wrap into a small envelope object for callers
                 return _EventForRun(
                     kind=payload.get("event"),
                     payload=data,
@@ -3776,19 +4064,54 @@ async def test_subscription_excludes_taxonomy_changed_optimization_created(clien
 
 
 async def test_post_probes_writes_run_row_status_running_at_start(client, db):
-    """RunRow exists with status='running' before generator returns.
-    Verified by checking the row exists during the SSE stream."""
+    """RunRow exists with status='running' BEFORE the generator starts running.
+
+    Race-window verification: the SSE stream MUST yield probe_started before
+    any subsequent event. By the time the test reads the first SSE line, the
+    row has been INSERTed by RunOrchestrator._create_row (which awaits the
+    WriteQueue commit before generator dispatch).
+    """
     import asyncio
     resp = client.post("/api/probes", json={
         "topic": "early-row", "repo_full_name": "o/r", "n_prompts": 1,
     })
-    # First SSE event must be probe_started → row already exists at that point
     first_line = next(resp.iter_lines())
     assert b"probe_started" in first_line
+    # Row already exists at this point — assert via a fresh SELECT before draining
+    rows = (await db.execute(select(RunRow).where(RunRow.topic == "early-row"))).scalars().all()
+    assert len(rows) == 1
+    # status MAY be 'running' OR already terminal if the test fixture is fast,
+    # but the row MUST exist
+    assert rows[0].status in ("running", "completed", "partial", "failed")
 
-    # Now query for any RunRow rows from this run; row exists with mode='topic_probe'
-    rows = (await db.execute(select(RunRow).where(RunRow.mode == "topic_probe"))).scalars().all()
-    assert any(r.topic == "early-row" for r in rows)
+
+# Test 13 (NEW — addresses spec coverage gap D from V1 review):
+# Client-disconnect mid-stream cleanly closes orchestrator-side subscription
+async def test_client_disconnect_cleans_up_subscription(client, event_bus_capture):
+    """Spec § 6.2 requires that client disconnects don't leak subscriptions
+    on event_bus._subscribers. The router's `finally: await subscription.aclose()`
+    block must run.
+    """
+    from app.services.event_bus import event_bus
+    initial_subs = len(event_bus._subscribers)
+
+    # Open a streaming connection, read 1 event, then disconnect
+    with client.stream("POST", "/api/probes", json={
+        "topic": "dc-test", "repo_full_name": "o/r", "n_prompts": 5,
+    }) as resp:
+        first = next(resp.iter_lines())
+        assert b"probe_started" in first
+        # Don't read more — close the connection mid-stream
+
+    # Allow async cleanup
+    import asyncio
+    await asyncio.sleep(0.5)
+
+    # Subscriber count must return to baseline (no leak)
+    assert len(event_bus._subscribers) == initial_subs, (
+        f"subscription leak: started with {initial_subs}, ended with "
+        f"{len(event_bus._subscribers)}"
+    )
 
 
 def _strip_volatile(line: bytes) -> str:
@@ -4102,14 +4425,144 @@ Replace the body of `synthesis_probe` MCP tool handler to call `app.state.run_or
 
 Replace `handle_seed` body to call `app.state.run_orchestrator.run("seed_agent", ...)` and convert the resulting `RunRow` back to `SeedOutput` (with additive `run_id`). Most of the orchestration logic moves to `SeedAgentGenerator` (already done in cycle 7).
 
-- [ ] **Step 3: Tests**
+- [ ] **Step 3: Tests** — RED first
 
-Add MCP tool regression tests covering:
-- synthesis_probe response schema preserved
-- synthesis_seed response schema preserved + additive run_id
-- Both tools dispatch through RunOrchestrator
-- Error paths preserved
-- 6 tests total (cat 8)
+Create `backend/tests/test_mcp_tools_p3.py` with 6 cat 8 tests + 1 spec-gap-C test:
+
+```python
+"""MCP tool regression for Foundation P3 RunOrchestrator dispatch.
+
+Covers spec § 9 cat 8 (6 tests) + spec gap C (1 test).
+"""
+from __future__ import annotations
+
+import pytest
+
+pytestmark = pytest.mark.asyncio
+
+
+# Test 1: synthesis_probe result schema unchanged (additive only)
+async def test_synthesis_probe_result_schema_preserved(mcp_test_client) -> None:
+    result = await mcp_test_client.call_tool("synthesis_probe", arguments={
+        "topic": "schema-probe", "repo_full_name": "o/r", "n_prompts": 1,
+    })
+    # All today's keys present
+    expected_keys = {
+        "id", "topic", "scope", "intent_hint", "repo_full_name",
+        "started_at", "completed_at", "prompts_generated",
+        "prompt_results", "aggregate", "taxonomy_delta", "final_report",
+        "status", "suite_id",
+    }
+    assert expected_keys.issubset(result.keys())
+
+
+# Test 2: synthesis_seed result schema preserved + additive run_id
+async def test_synthesis_seed_result_schema_with_run_id(mcp_test_client) -> None:
+    result = await mcp_test_client.call_tool("synthesis_seed", arguments={
+        "project_description": "MCP schema validation", "prompt_count": 2,
+    })
+    expected = {
+        "status", "batch_id", "tier", "prompts_generated",
+        "prompts_optimized", "prompts_failed", "estimated_cost_usd",
+        "domains_touched", "clusters_created", "summary", "duration_ms",
+    }
+    assert expected.issubset(result.keys())
+    assert "run_id" in result  # additive
+    new_keys = set(result.keys()) - expected
+    assert new_keys == {"run_id"}, f"unexpected new keys: {new_keys}"
+
+
+# Test 3: synthesis_probe dispatches through RunOrchestrator
+async def test_synthesis_probe_routes_through_run_orchestrator(mcp_test_client, monkeypatch) -> None:
+    from app.services import run_orchestrator as ro_mod
+
+    calls = []
+    real_run = ro_mod.RunOrchestrator.run
+    async def _spy(self, mode, request, *, run_id=None):
+        calls.append((mode, run_id))
+        return await real_run(self, mode, request, run_id=run_id)
+    monkeypatch.setattr(ro_mod.RunOrchestrator, "run", _spy)
+
+    await mcp_test_client.call_tool("synthesis_probe", arguments={
+        "topic": "dispatch", "repo_full_name": "o/r", "n_prompts": 1,
+    })
+    assert calls and calls[0][0] == "topic_probe"
+
+
+# Test 4: synthesis_seed dispatches through RunOrchestrator
+async def test_synthesis_seed_routes_through_run_orchestrator(mcp_test_client, monkeypatch) -> None:
+    from app.services import run_orchestrator as ro_mod
+
+    calls = []
+    real_run = ro_mod.RunOrchestrator.run
+    async def _spy(self, mode, request, *, run_id=None):
+        calls.append((mode, run_id))
+        return await real_run(self, mode, request, run_id=run_id)
+    monkeypatch.setattr(ro_mod.RunOrchestrator, "run", _spy)
+
+    await mcp_test_client.call_tool("synthesis_seed", arguments={
+        "project_description": "dispatch test", "prompt_count": 1,
+    })
+    assert calls and calls[0][0] == "seed_agent"
+
+
+# Test 5: synthesis_probe error path preserved (link_repo_first → ValueError)
+async def test_synthesis_probe_link_repo_first_error_preserved(mcp_test_client) -> None:
+    with pytest.raises(ValueError, match="link_repo_first"):
+        await mcp_test_client.call_tool("synthesis_probe", arguments={
+            "topic": "x",  # missing repo_full_name
+        })
+
+
+# Test 6: synthesis_seed early-failure preserved (returns SeedOutput, status='failed')
+async def test_synthesis_seed_early_failure_returns_failed_status(mcp_test_client) -> None:
+    result = await mcp_test_client.call_tool("synthesis_seed", arguments={})  # nothing supplied
+    assert result["status"] == "failed"
+    assert "Requires project_description" in result["summary"]
+
+
+# Test 7 (NEW — addresses spec coverage gap C from V1 review):
+# Empirical MCP SDK strict-validation behavior — additive run_id field accepted
+async def test_mcp_sdk_strict_validation_accepts_additive_run_id(mcp_test_client) -> None:
+    """Spec § 11 risk: strict MCP client validators (Claude Code, VSCode bridge)
+    might reject the additive run_id field. Pydantic's `extra='ignore'` is for
+    INPUT side; output models always emit declared fields. The risk is on the
+    SDK validator side.
+
+    This test exercises the actual MCP transport (via mcp_test_client) and
+    asserts that the tool result with the additive run_id field is accepted
+    by the SDK's response-schema validation. If this test ever fails, gate
+    the run_id emission behind a feature flag (per spec § 11 backup plan).
+    """
+    # Call synthesis_seed; verify the SDK doesn't raise schema-validation errors
+    result = await mcp_test_client.call_tool("synthesis_seed", arguments={
+        "project_description": "SDK validation test", "prompt_count": 1,
+    })
+    # If the SDK rejected the additive field, the call would have raised
+    # before reaching here. Assert presence as final confirmation.
+    assert "run_id" in result
+    assert isinstance(result["run_id"], str)
+
+
+# Add fixture dependency (in conftest)
+# @pytest.fixture
+# def mcp_test_client():
+#     """Real MCP client connected to the in-process MCP server.
+#     Uses fastmcp.Client(server) — verifies actual SDK validation."""
+#     from fastmcp import Client
+#     from app.mcp_server import mcp
+#     return Client(mcp)
+```
+
+The `mcp_test_client` fixture uses `fastmcp.Client(server)` to round-trip through the real MCP SDK validator (NOT the FastAPI test client) — exercising the same schema-validation path Claude Code uses. Add to `conftest.py` in Cycle 3.5 if not already present.
+
+- [ ] **Step 4: Run tests — fail because tools still on legacy dispatch**
+
+```bash
+cd backend && source .venv/bin/activate && pytest tests/test_mcp_tools_p3.py -v
+```
+
+Expected: 7 tests fail until Cycle 13 GREEN refactors the dispatch.
 
 - [ ] **Step 4: Commit**
 
