@@ -7,7 +7,7 @@ Living document tracking planned improvements. Items are prioritized but not sch
 **Active foundation phase (zero-tech-debt prep for Probe T2-T4):**
 - ~~P1 SQLite-debt closure~~ — **SHIPPED v0.4.16 (2026-05-05)**: cold-path commit chunking (P1a) + `_bg_index`/`build_index` per-batch chunking (P1b)
 - ~~P2 Path A probe internals cleanup~~ — **SHIPPED v0.4.17 (2026-05-06)**: 9 module-level helpers + `current_probe_id` ContextVar relocated to `probe_common.py` / `probe_phases.py` / `probe_phase_5.py`. ProbeService class methods + `_run_impl()` body untouched. ~12% LOC shrink. **P2 Path B (Phase 3 body extraction) deferred** — see "Probe Phase 3 body extraction — deferred" entry under Exploring for the architectural questions to resolve.
-- **P3 Substrate unification** (SeedRun/ProbeRun → unified RunRow) — **next, target v0.4.18**
+- **P3 Substrate unification** (`ProbeRun` + seed surface → unified `RunRow`; seed gains row-state for the first time — there is no `SeedRun` model today) — **next, target v0.4.18**
 - **P4 Long-handler restructures** — re-allocated to v0.4.19 (originally bundled with v0.4.17 P2 but P2 alone shipped at the right size; P4 deserves its own cycle)
 
 After foundation, Probe Tier 2 / Tier 3 / Tier 4 ship on the unified substrate with no retroactive migration debt. See "Foundation phase" section below for ordering rationale + scope detail per phase.
@@ -82,7 +82,7 @@ After foundation, Probe Tier 2 / Tier 3 / Tier 4 ship on the unified substrate w
 | **P1** | **SQLite-debt closure** (P1a cold-path commit chunking + P1b `_bg_index`/`build_index` per-batch chunking) | **SHIPPED v0.4.16** (2026-05-05) | nothing | Closes v0.4.13/v0.4.14 migration story. Audit-hook RAISE-in-prod flip unblocked. PR #67 (P1a) + PR #68 (P1b) both rebase-merged. |
 | **P2 (Path A)** | **Probe internals cleanup — module-level helpers** (9 module-level free functions + `current_probe_id` ContextVar relocated to `probe_common.py` / `probe_phases.py` / `probe_phase_5.py`. ProbeService class + `_run_impl()` body untouched.) | **SHIPPED v0.4.17** (2026-05-06) | nothing | Pure code-move. probe_service.py 2493 → 2204 LOC (~12% shrink). 7 commits, both V1+V2 validators APPROVED-ZERO. PR #69 rebase-merged. |
 | **P2 (Path B — DEFERRED)** | **Phase 3 body extraction from `_run_impl()`** | **DEFERRED indefinitely** (no version target) | P2 Path A complete | Plan-validation round 1 caught structural defects spec missed: (a) `_run_impl` is `AsyncIterator`-returning + Phase 3 contains 3 `yield` statements — extraction signature must be redesigned as async-generator or callback-yield pattern; (b) 7 actual `self.X` captures (spec invented `target_score`/`read_failures`/`embed_failures` — none exist in source); (c) 8+ inline imports inside body need re-homing decisions; (d) 2 test sites use `patch.object(probe_service_mod, ...)` / `monkeypatch.setattr(ps_mod, ...)` patch-target drift. **T2-T4 do NOT depend on Path B** — they depend on P3 substrate unification only. Full architectural questions documented in "Probe Phase 3 body extraction — deferred" Exploring entry below. |
-| **P3** | **Substrate unification** (collapse `SeedRun`/`ProbeRun` semantics into a unified `RunRow` model + `RunOrchestrator` service with pluggable `SeedAgentGenerator` + `TopicProbeGenerator`; backward-compat REST/MCP shims for `/api/probes`, `/api/seed`, `synthesis_probe`, `synthesis_seed`) — **next foundation phase** | **Planned, target v0.4.18** | P2 Path A (clean module boundaries simplify the migration surface) | Biggest single architectural commitment of foundation. T4 ships by construction; T2/T3 features build natively on unified substrate with zero retroactive migration. See dedicated "Foundation P3 — Substrate unification" section below for architectural sketch. |
+| **P3** | **Substrate unification** (introduce a unified `RunRow` model + `RunOrchestrator` service with pluggable `SeedAgentGenerator` + `TopicProbeGenerator`; `ProbeRun` migrates into `RunRow`; the seed surface — which has **no run-state model today** — gains persistence for the first time; backward-compat REST/MCP shims preserve `/api/probes`, `/api/seed`, `synthesis_probe`, `synthesis_seed` response shapes) — **next foundation phase** | **Planned, target v0.4.18** | P2 Path A (clean module boundaries simplify the migration surface) | Biggest single architectural commitment of foundation. **The asymmetry: `ProbeRun` exists with 17 columns + full lifecycle (status tracking, GC sweep, REST list/get); the seed surface is fire-and-forget — no row-state, no list endpoint, no `GET /api/seed/{id}`, no `SeedRun` model has ever existed**. P3 is therefore not a "collapse two models" exercise; it is "introduce row-state to seeding while reshaping `ProbeRun` into a generic `RunRow`". T4 ships by construction; T2/T3 features build natively on unified substrate with zero retroactive migration. See dedicated "Foundation P3 — Substrate unification" section below for architectural sketch. |
 | **P4** | **Long-handler restructures** (separate read/process/write phases in `tools/refine.py:50,:156`, `tools/save_result.py:85`, `tools/optimize.py:198` so the LLM call lives outside any session and persistence boundaries route through the queue) | **Planned, target v0.4.19** | nothing (probe-independent but bundled in foundation envelope) | Closes the final SQLite migration tail. Was originally bundled with v0.4.17 P2 ("if compatible scope"); P2 alone shipped at the right size, so P4 gets its own cycle at v0.4.19. Not probe-blocking but a cleanup-track release inside the foundation envelope. See dedicated "Foundation P4 — Long-handler restructures" section below. |
 
 **Release allocation (revised 2026-05-06 — P4 split out of v0.4.17, T2-T4 shifted by 1):**
@@ -110,58 +110,115 @@ After foundation, Probe Tier 2 / Tier 3 / Tier 4 ship on the unified substrate w
 ---
 
 ### Foundation P3 — Substrate unification (target v0.4.18)
-**Status:** Planned (next foundation phase). Detailed brainstorm pending.
+**Status:** Brainstorm complete (2026-05-06); spec authoring queued. Target v0.4.18.
 
-**Scope:** Collapse `SeedRun` and `ProbeRun` into a single unified `RunRow` model + a `RunOrchestrator` service that dispatches to pluggable generators (`SeedAgentGenerator` for template-driven seed runs, `TopicProbeGenerator` for the agentic-from-topic-and-codebase path). All current REST + MCP surfaces (`/api/probes`, `/api/seed`, `synthesis_probe`, `synthesis_seed`) keep their endpoints and response shapes via backward-compat shims that translate to/from the unified substrate.
+**Scope:** Introduce a unified `RunRow` model + a `RunOrchestrator` service that dispatches to pluggable generators (`SeedAgentGenerator` for template-driven seed runs, `TopicProbeGenerator` for the agentic-from-topic-and-codebase path). `ProbeRun` migrates into `RunRow`; the seed surface gains run-state persistence for the first time. All current REST + MCP surfaces (`/api/probes`, `/api/seed`, `synthesis_probe`, `synthesis_seed`) keep their endpoints and response shapes via backward-compat shims that translate to/from the unified substrate. A new `GET /api/runs` endpoint (paginated, mode-filterable) exposes the unified view for T4's UI consolidation.
+
+**Reality check on the asymmetry (verified 2026-05-06 against `main` @ v0.4.18-dev):**
+
+| Layer | Probe (today) | Seed (today) |
+|---|---|---|
+| Persistence model | `ProbeRun` — 17 columns: `id, topic, scope, intent_hint, repo_full_name, project_id, commit_sha, started_at, completed_at, prompts_generated, prompt_results, aggregate, taxonomy_delta, final_report, status, suite_id, error` (`models.py:570`, migration `ec86c86ba298`) | **none** — no `SeedRun` model has ever existed; zero matches in `models.py`, `alembic/versions/`, or any service. Only persisted artifact of a seed run is the resulting `Optimization` rows tagged `source="batch_seed"` |
+| REST surface | `POST /api/probes` (SSE), `GET /api/probes` (paginated list), `GET /api/probes/{id}` | `POST /api/seed` (synchronous fire-and-forget — returns `SeedOutput` once); **no list, no GET-by-id** |
+| MCP tool | `synthesis_probe` (returns `probe_id`, supports SSE under sampling) | `synthesis_seed` (synchronous; returns `SeedOutput`; no run id retained beyond the in-memory `batch_id` UUID) |
+| Lifecycle | full — status tracking, error capture, `_gc_orphan_probe_runs` startup sweep, cancellation handler under `asyncio.shield()`, `_set_probe_status` queued helper | none — `seed_batch_progress` events fly through `event_bus`, lost on disconnect, never accumulated |
+| Frontend | **zero code** — no `probe.ts` API client, no `Probe*` components; the REST + MCP surfaces have no SvelteKit consumer | `SeedModal.svelte` renders live progress + final summary in-modal; no history component |
+
+So P3 is not "collapse two models into one" — it is "introduce run-state to the seed surface AND reshape probe run-state into a generic `RunRow` substrate at the same time, without regressing any existing surface contract."
 
 **Why this matters:**
 
-1. **T2 save-as-suite + replay** is a `RunRow` operation by construction once SeedRun and ProbeRun share storage. Without P3, save-as-suite must be implemented twice (once for each model) or the substrate forks.
-2. **T3 probe→seed-agent promotion** becomes a `RunRow.mode` flip plus a metadata write — no cross-model migration.
-3. **T4 final UI consolidation** (SeedModal becomes one tab with two modes) ships natively with one history surface.
-4. **Cross-process orchestration cleanup** — eliminates duplicate persistence helpers (`_set_probe_status` vs `_set_seed_status`, `_persist_and_assign_probe` vs `_persist_and_assign_seed`) that today drift independently.
+1. **T2 save-as-suite + replay** keys off `RunRow.id`. Without P3, the seed surface has no row-state to attach a save-as-suite operation to — save-as-suite ships probe-only or seed grows ad-hoc persistence.
+2. **T3 probe→seed-agent promotion** becomes a `RunRow.mode` flip plus a metadata write. Without P3, promotion has nothing on the seed side to read from.
+3. **T4 final UI consolidation** (SeedModal becomes one tab with two modes) ships natively with one history surface. Today there is no history surface for either mode on the frontend, so T4 builds it once on top of `RunRow` rather than twice.
+4. **Lifecycle parity, end of helper drift** — today only `_set_probe_status` exists; there is no seed-side equivalent. `RunOrchestrator` owns the persistence helpers once and both modes inherit identical status/error/GC behavior. Eliminates a class of bugs we haven't hit yet only because the seed side has no row to drift on.
 
-**Architectural sketch (subject to brainstorm):**
+**Architectural sketch (post-brainstorm, 2026-05-06):**
 
 ```
 backend/app/models.py
-  RunRow                      → id, mode ∈ {seed_agent, topic_probe}, ...common fields
-                                (started_at, completed_at, status, prompt_results JSON,
-                                 taxonomy_delta JSON, final_report TEXT, project_id FK)
-                                + mode-specific JSONB columns:
-                                  - seed_agent_meta: {template_path, agent_id}
-                                  - topic_probe_meta: {topic, scope, intent_hint, repo_full_name}
-  ProbeRun, SeedRun           → DEPRECATED (kept as views or backward-compat aliases initially)
+  RunRow                      → id, mode ∈ {seed_agent, topic_probe}, ...shared lifecycle
+                                (status, started_at, completed_at, error, project_id FK,
+                                 repo_full_name, prompts_generated, prompt_results JSON,
+                                 aggregate JSON, taxonomy_delta JSON, final_report TEXT,
+                                 suite_id) + promoted-from-probe query-hot columns
+                                (topic, intent_hint — both nullable; NULL for seed mode)
+                                + mode-specific JSON metadata columns:
+                                  - topic_probe_meta: {scope, commit_sha}
+                                  - seed_agent_meta: {project_description, workspace_path,
+                                    agents, prompt_count, prompts_provided, batch_id, tier,
+                                    estimated_cost_usd}
+  ProbeRun                    → DROPPED in the same Alembic migration after backfill.
+                                No SQL VIEW (no future purpose) and no SeedRun deprecation
+                                (no SeedRun model has ever existed).
 
 backend/app/services/
-  run_orchestrator.py         → RunOrchestrator dispatches per RunRow.mode
+  run_orchestrator.py         → RunOrchestrator: creates row → dispatches to generator by
+                                mode → awaits result → persists final state. Owns
+                                _set_run_status (replaces _set_probe_status), GC sweep,
+                                cancellation handler under asyncio.shield(). All writes
+                                route through WriteQueue.
   generators/
-    base.py                   → RunGenerator protocol (generate_prompts, persist_progress)
-    seed_agent_generator.py   → wraps current seed_orchestrator + agent_loader
-    topic_probe_generator.py  → wraps current ProbeService grounding + probe_generation
+    base.py                   → RunGenerator protocol: `async def run(request, *, run_id)
+                                -> RunResult`. Awaitable, NOT an async iterator —
+                                progress events publish to event_bus directly with run_id
+                                in payload (no re-publication layer in RunOrchestrator).
+    seed_agent_generator.py   → refactored from seed_orchestrator + tools/seed dispatch
+    topic_probe_generator.py  → refactored from probe_service.py 5-phase flow
 
 backend/app/routers/
-  runs.py                     → unified GET /api/runs (paginated list, filter by mode)
-  probes.py                   → backward-compat shim — translates old POST/GET to RunRow
-  seed.py                     → backward-compat shim — same pattern
+  runs.py                     → NEW — unified GET /api/runs (paginated list, filter by mode,
+                                ordered started_at desc), GET /api/runs/{id}
+  probes.py                   → backward-compat shim — POST returns SSE constructed by
+                                event_bus subscription filtered by run_id (NOT by service
+                                iteration); event names + payload shapes byte-identical
+                                to today's probe contract. GET endpoints serialize from
+                                RunRow through the existing ProbeRunSummary/ProbeRunResult
+                                shapes.
+  seed.py                     → backward-compat shim — POST /api/seed stays SYNCHRONOUS
+                                (Path 1 from brainstorm: live UI updates flow through
+                                /api/events bus filtered by run_id, NOT by SSE on POST).
+                                SeedOutput response gains additive run_id field — only
+                                allowed shape change. New GET /api/seed and
+                                GET /api/seed/{id} surfaces (additive — no existing caller
+                                breaks).
 
 MCP tools/
-  synthesis_probe             → backward-compat (tool surface unchanged; backend dispatches via RunRow)
-  synthesis_seed              → backward-compat (same)
+  synthesis_probe             → backward-compat (response shape unchanged; backend dispatches via RunRow)
+  synthesis_seed              → backward-compat (SeedOutput unchanged + additive run_id field)
 ```
 
-**Migration path:** Alembic migration adds `RunRow` table + `mode` discriminator + per-mode metadata columns. Backfill from `ProbeRun` + `SeedRun` at startup once. Dual-write window where both old + new tables receive writes (one cycle). Then read-flip: REST + MCP shims read from `RunRow` only. Final migration drops `ProbeRun` + `SeedRun` tables (or keeps them as views).
+**Migration path** (one Alembic migration; no dual-write window needed since seed has no rows to dual-write):
+1. Alembic up: create `run_row` table (shared lifecycle columns + promoted `topic`/`intent_hint` + `mode` discriminator + per-mode JSON metadata columns), create 4 indexes (`mode+started`, `status+started`, `project_id`, `topic`).
+2. Backfill: `INSERT INTO run_row SELECT ... FROM probe_run` — `mode='topic_probe'` for every row, shared columns copied direct, `scope`/`commit_sha` rolled into `topic_probe_meta` JSON.
+3. Drop `probe_run` indexes + table in the same upgrade (decision Q4=a — no VIEW, no follow-up migration).
+4. Read-flip is automatic at deploy time: PR1 ships `RunRow` model + `RunOrchestrator` dark (no router wiring); PR2 wires shims atomically.
+5. Seed gains row-state from cycle one: every `POST /api/seed` writes a `RunRow(mode='seed_agent', status='running')` via WriteQueue **before** kicking off `batch_pipeline.run_batch()` (small extra latency on synchronous return is acceptable; resolves the "persist before vs after" risk by accepting the latency cost in exchange for crash-recovery semantics).
 
-**Risks:**
-- Schema migration complexity (largest of any foundation phase). Spec must be validated against actual production data shape before plan.
-- Dual-write window timing (1 cycle = 1 release, or 1 cycle = 1 dev branch?).
-- Backward-compat shim semantic preservation under all 5 phases of probe + 9 phases of seed.
+**Risks (post-brainstorm — design risks resolved; spec-implementation risks remain):**
+- Schema migration complexity — largest of any foundation phase but materially simpler than the original framing because there is no `SeedRun` to merge or backfill from. Alembic downgrade reverses the backfill via `INSERT INTO probe_run SELECT ... FROM run_row WHERE mode='topic_probe'` with JSON-extract for scope/commit_sha — gives rollback safety without needing a VIEW.
+- Cancellation shielding under `RunOrchestrator` — probe's existing `asyncio.shield()` cancellation handler currently lives inside `_run_impl`. Moving it up one layer to `RunOrchestrator` requires the spec to verify the SSE response (now bus-subscription-based) does not terminate before the row is marked failed. **Spec-level risk.**
+- `current_probe_id` ContextVar re-export coverage — every taxonomy event firing inside a run uses this ContextVar today. P3 renames it to `current_run_id` with a re-export shim; coverage must be verified at every firing site via grep at spec time. **Spec-level risk.**
+- Frontend filter race — `SeedModal.svelte` subscribes to `seed_batch_progress` filtered by `run_id` after `POST /api/seed` returns. Race window between subscription and first event is small but must be tested. **Spec-level risk.**
 
-**Files (estimated):** 1 Alembic migration, `models.py` (`RunRow`), `services/run_orchestrator.py` (NEW), `services/generators/` (NEW package), `routers/runs.py` (NEW), `routers/probes.py` + `routers/seed.py` (shims), MCP tool dispatch updates.
+**Files (estimated):** 1 Alembic migration, `models.py` (`RunRow` add, `ProbeRun` retire-or-shim), `services/run_orchestrator.py` (NEW), `services/generators/` (NEW package — `base.py`, `seed_agent_generator.py`, `topic_probe_generator.py`), `routers/runs.py` (NEW), `routers/probes.py` (shim), `routers/seed.py` (shim — and gain row-write), `tools/seed.py` + `tools/probe.py` (dispatch updates), `services/probe_service.py` (refactored into `topic_probe_generator.py`), `services/seed_orchestrator.py` (refactored into `seed_agent_generator.py`), `services/gc.py` (`_gc_orphan_probe_runs` → `_gc_orphan_runs`).
 
-**Estimated scope:** ~1500-2000 LOC backend + 1 schema migration + ~80 new tests + comprehensive backward-compat regression suite.
+**Estimated scope:** ~1500-2000 LOC backend + 1 schema migration + ~80 new tests + comprehensive backward-compat regression suite for both `/api/probes` and `/api/seed` shapes + `synthesis_probe`/`synthesis_seed` MCP tool snapshot tests.
 
-**Brainstorm prerequisite:** Read this entry + the Topic Probe Tier 4 historical context below. Confirm the unified `RunRow` shape before spec authoring (current ProbeRun has 13 columns, SeedRun has 11 — most overlap; mode-specific fields go to JSON metadata columns).
+**Brainstorm decisions (2026-05-06 — all six questions resolved; spec doc captures full rationale):**
+
+| # | Question | Decision |
+|---|---|---|
+| Q1 | Asymmetry handling | **Asymmetric collapse, one-step.** RunRow + RunOrchestrator + generators ship in v0.4.18; seed gains row-state for the first time; ProbeRun → RunRow in same migration. No transient SeedRun model. |
+| Q2 | RunRow column shape | **Hybrid columns.** Shared lifecycle fields + promoted `topic`/`intent_hint` first-class; mode-specific fields in `topic_probe_meta` / `seed_agent_meta` JSON. |
+| Q3 | POST /api/seed semantics | **Path 1: sync POST + global SSE bus.** Sync POST gains additive `run_id`; live UI updates flow through existing `/api/events` filtered by `run_id` (additive event field). No SSE on POST. |
+| Q4 | probe_run table fate | **Drop immediately** in same Alembic migration. No SQL VIEW. Alembic downgrade gives rollback safety. |
+| Q5 | Generator protocol | **Awaitable generators + bus events.** `async def run(request, *, run_id) -> RunResult`. Probe's vestigial AsyncIterator retired; events publish directly to bus from generators (no re-publication layer in RunOrchestrator). |
+| Q6 | Rollout | **Two PRs.** PR1 = dark substrate (RunRow + RunOrchestrator + generators + tests, no router wiring). PR2 = wire shims atomically + frontend `run_id` filter additive. Backend-only; T4 (v0.4.22) does the unified UI. |
+
+**Spec doc:** `docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md` (committed at brainstorm close).
+
+**Earlier-draft correction:** the original "ProbeRun has 13 columns, SeedRun has 11 — most overlap" framing in pre-2026-05-06 ROADMAP drafts was incorrect — `ProbeRun` has 17 columns and `SeedRun` does not exist. The corrected reality is captured in the asymmetry table above.
 
 ---
 
@@ -614,6 +671,33 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 - Test patch-target audit (bare-name lookup vs fully-qualified — preserve current semantics)
 
 **Files:** `backend/app/services/probe_service.py` (Phase 3 body removal — currently lines 924-1530), `backend/app/services/probe_phase_3.py` (NEW — full body + inner-closure `_abort_watcher`).
+
+---
+
+### `Accept`-header content negotiation for SSE on `POST /api/seed` — deferred from Foundation P3 (2026-05-06)
+**Status:** Exploring (deferred from Foundation P3 brainstorm). No version target.
+**Context:** P3 (v0.4.18) keeps `POST /api/seed` synchronous to preserve byte-for-byte backward compat with all existing callers (REST, MCP `synthesis_seed`, frontend `SeedModal`, CLI). Live UI updates flow through the existing `/api/events` global SSE bus filtered by the additive `run_id` field, which suffices for the T4 history surface. Future clients that prefer SSE on the POST itself (parity with `POST /api/probes`) can be served via HTTP content negotiation: `Accept: application/json` → sync as today; `Accept: text/event-stream` → SSE stream of `seed_*` events terminating on `seed_completed`/`seed_failed`. Strictly additive — old callers unchanged.
+
+**Trigger:** any of the following.
+1. T4's frontend history-detail UI prefers tailing the POST response over subscribing to `/api/events` (e.g., to handle race conditions when the modal opens before subscription registers).
+2. A new external integration (CI script, automation tool) requests SSE-on-POST without bus-subscription overhead.
+3. `synthesis_seed_stream` MCP tool variant needed for parity with future streaming MCP patterns.
+
+**Files (estimated):** `backend/app/routers/seed.py` (Accept-header switch + SSE response branch), `backend/app/tools/seed.py` (optional streaming variant), 6-8 new tests covering both paths + Accept-header fallback semantics.
+
+**Decision:** YAGNI at P3 ship time. Revisit post-T4 if any trigger fires.
+
+---
+
+### `current_probe_id` → `current_run_id` ContextVar rename completion — deferred from Foundation P3 (2026-05-06)
+**Status:** Exploring (cleanup follow-up). No version target.
+**Context:** Foundation P3 (v0.4.18) renames the `current_probe_id` ContextVar (declared in `services/probe_service.py`, re-exported by `services/probe_event_correlation.py`) to `current_run_id` as part of the substrate unification — every taxonomy event fired during a run now correlates via the unified ContextVar regardless of mode. To preserve byte-for-byte backward compat for any out-of-tree consumer or test patching `current_probe_id` directly, P3 keeps the old name as a re-export alias of the new one. The alias is dead weight after a few release cycles confirm no in-tree callers use the old name.
+
+**Trigger:** 2+ release cycles post-v0.4.18 with zero in-tree references to `current_probe_id` (verified via grep) and no external bug reports about ContextVar correlation. Then drop the re-export shim and let any remaining stragglers update to the canonical name.
+
+**Files (estimated):** `backend/app/services/probe_event_correlation.py` (delete `current_probe_id` re-export), 1-2 test updates if any tests still import the old name.
+
+**Decision:** Bundle into a future cleanup-track release (likely v0.4.20+). Sub-1-hour change once trigger is met.
 
 ---
 

@@ -181,7 +181,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
   **38 ACs total / 39 tests across 8 test files.** Full backend suite: 3232 passed + 1 skipped (was 3191 + 1, +41 net new tests). ruff + mypy clean. Spec: `docs/specs/topic-probe-2026-04-29.md` (gitignored). Plan: `docs/plans/topic-probe-tier-1-2026-04-29.md` (gitignored).
 
-  **All 4 Topic Probe tiers will ship within the 0.4.x line:** Tier 1 = v0.4.12 (this release), Tier 2 = v0.4.15 (save-as-suite + replay + UI navigator — bumped repeatedly: v0.4.13 → v0.4.14 → v0.4.15 as each prior release was reallocated to ship architectural fixes), Tier 3 = v0.4.16 (cross-tier composition: probe → seed-agent promotion, drill-into-cluster from seed run), Tier 4 = v0.4.17 (substrate unification: SeedRun and ProbeRun collapse to one model).
+  **All 4 Topic Probe tiers will ship within the 0.4.x line:** Tier 1 = v0.4.12 (this release), Tier 2 = v0.4.15 (save-as-suite + replay + UI navigator — bumped repeatedly: v0.4.13 → v0.4.14 → v0.4.15 as each prior release was reallocated to ship architectural fixes), Tier 3 = v0.4.16 (cross-tier composition: probe → seed-agent promotion, drill-into-cluster from seed run), Tier 4 = v0.4.17 (substrate unification: SeedRun and ProbeRun collapse to one model). _(Note, revised 2026-05-06: this v0.4.12-time forward plan changed substantially. Foundation phase took priority — current allocation: T2=v0.4.20, T3=v0.4.21, T4=v0.4.22, with substrate unification promoted into Foundation P3 at v0.4.18. The "SeedRun and ProbeRun collapse" framing was also incorrect; `SeedRun` does not exist as a model — only `ProbeRun` does. See `docs/ROADMAP.md` for the live plan.)_
 
 ## v0.4.11 — 2026-04-28
 
