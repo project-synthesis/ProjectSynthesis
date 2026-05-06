@@ -19,8 +19,21 @@ target_metadata = Base.metadata
 
 def _include_object(object, name, type_, reflected, compare_to):
     """Exclude FK constraints from autogenerate — SQLite does not reliably
-    preserve FK metadata through ALTER TABLE RENAME operations."""
+    preserve FK metadata through ALTER TABLE RENAME operations.
+
+    Also exclude ``uq_prompt_cluster_domain_label`` from index comparison.
+    The on-disk form wraps ``parent_id`` in ``COALESCE(parent_id, '')``
+    (NULL-uniqueness for multi-project domain labels — SQLite treats
+    ``NULL != NULL`` in unique indexes), which SQLAlchemy reflection
+    cannot match against the model's plain-column ``Index(...)``
+    declaration. The index IS present and correct in every supported
+    deployment (created by migrations ``a1b2c3d4e5f6`` then rewritten by
+    ``e7f8a9b0c1d2`` and re-asserted by ``2d61e9b37427``); without this
+    filter, ``alembic check`` flags a false positive on every CI run.
+    """
     if type_ == "foreign_key_constraint":
+        return False
+    if type_ == "index" and name == "uq_prompt_cluster_domain_label":
         return False
     return True
 
