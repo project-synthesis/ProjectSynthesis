@@ -151,7 +151,7 @@ Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-desi
 ## Cycle 1 — RunRow model + Alembic migration
 
 **Files:**
-- Modify: `backend/app/models.py` (add `RunRow`, add `ProbeRun` STI alias)
+- Modify: `backend/app/models.py` (add `RunRow`, add `ProbeRun` Python-alias)
 - Create: `backend/alembic/versions/<NEW>_add_run_row_table.py`
 - Create: `backend/tests/test_run_row_model.py`
 
@@ -417,17 +417,16 @@ Find the existing `class ProbeRun(Base):` definition (currently at `models.py:57
 
 ```python
 class ProbeRun(RunRow):
-    """Backward-compat alias for RunRow + property accessors for legacy
-    .scope / .commit_sha reads. Retained for PR1 only — PR2 deletes this class.
+    """Backward-compat Python alias for RunRow with legacy kwarg extraction.
 
-    NOTE: NO __mapper_args__ — this is plain Python subclassing, not SQLAlchemy
-    STI. ProbeRun shares RunRow's table; no polymorphic identity is set, so
-    instantiating ProbeRun(...) produces a row with whatever mode the caller
-    passes (caller responsible for setting mode='topic_probe' explicitly).
+    Defaults mode='topic_probe' and accepts legacy keyword arguments
+    `scope` and `commit_sha` (which existed as columns on the old probe_run
+    table) by extracting them into `topic_probe_meta` JSON before parent
+    __init__. Property accessors expose them back for legacy reads.
 
-    select(ProbeRun) returns all run_row rows (NOT filtered) — but PR1 has
-    zero seed_agent rows since the seed dispatch path doesn't go through
-    RunOrchestrator until PR2. Safe transient state.
+    REQUIRED for PR1 backward-compat: probe_service.py:404 + 1577 instantiate
+    ProbeRun with `scope=...` and `commit_sha=...` kwargs. The custom
+    __init__ below routes those into `topic_probe_meta`.
     """
 
     @property
@@ -439,10 +438,24 @@ class ProbeRun(RunRow):
         return (self.topic_probe_meta or {}).get("commit_sha")
 
     def __init__(self, **kwargs):
-        # Default mode='topic_probe' for legacy callers that don't supply it.
+        # Extract legacy kwargs that became JSON metadata in P3
+        scope = kwargs.pop("scope", None)
+        commit_sha = kwargs.pop("commit_sha", None)
+
+        if scope is not None or commit_sha is not None:
+            existing = kwargs.get("topic_probe_meta") or {}
+            if scope is not None:
+                existing["scope"] = scope
+            if commit_sha is not None:
+                existing["commit_sha"] = commit_sha
+            kwargs["topic_probe_meta"] = existing
+
+        # Default mode='topic_probe' for legacy callers
         kwargs.setdefault("mode", "topic_probe")
         super().__init__(**kwargs)
 ```
+
+**Verified backward-compat:** `probe_service.py:404` calls `ProbeRun(id=..., topic=..., scope=scope, intent_hint=..., repo_full_name=..., project_id=..., started_at=..., status=..., commit_sha=...)`. With this `__init__`, `scope` and `commit_sha` are pulled out into `topic_probe_meta`, all other kwargs flow to `RunRow.__init__` as native columns. No probe_service.py change needed in PR1.
 
 - [ ] **Step 3: Generate migration**
 
@@ -645,9 +658,9 @@ The model file: verify `ProbeRun(RunRow)` keeps the original `__tablename__ = "p
 cd backend && source .venv/bin/activate && pytest tests/test_run_row_model.py tests/test_probe_run_model.py -v
 ```
 
-Expected: all pass. The legacy `test_probe_run_model.py` should continue working via the STI alias's property accessors (`.scope`, `.commit_sha`).
+Expected: all pass. The legacy `test_probe_run_model.py` should continue working via the Python-alias's property accessors (`.scope`, `.commit_sha`).
 
-If any legacy probe_run test fails because it inserts directly to `probe_run` (table now gone), update those tests to instantiate `ProbeRun()` (which targets `run_row` via STI).
+If any legacy probe_run test fails because it inserts directly to `probe_run` (table now gone), update those tests to instantiate `ProbeRun()` (which targets `run_row` via the Python-alias property accessors).
 
 - [ ] **Step 3: Commit**
 
@@ -1209,6 +1222,7 @@ Expected: every test ERRORs with "fixture not found".
 @dataclass
 class _AuditHookCapture:
     warnings: list = field(default_factory=list)
+    _caplog: Any = None
 
     def reset(self) -> None:
         self.warnings.clear()
@@ -1216,21 +1230,30 @@ class _AuditHookCapture:
     def warn(self, msg: str) -> None:
         self.warnings.append(msg)
 
+    def populate_from_caplog(self) -> None:
+        """Refresh warnings from the underlying caplog records."""
+        if self._caplog is None:
+            return
+        self.warnings = [
+            str(r.message) for r in self._caplog.records
+            if "audit" in r.name.lower() or "[AUDIT-HOOK]" in str(r.message)
+        ]
+
+
 @pytest.fixture
-def audit_hook(monkeypatch) -> _AuditHookCapture:
-    """Captures audit-hook WARNs during a test. Replaces the real audit hook
-    so direct DB writes from inside tests don't trigger raises in CI."""
-    cap = _AuditHookCapture()
-    # Monkey-patch the audit hook's warn method to record into cap
-    from app.services import write_queue as wq_mod
-    real_warn = wq_mod._audit_warn if hasattr(wq_mod, "_audit_warn") else None
-    def _capture(*args, **kwargs):
-        cap.warn(args[0] if args else str(kwargs))
-        if real_warn:
-            real_warn(*args, **kwargs)
-    if real_warn:
-        monkeypatch.setattr(wq_mod, "_audit_warn", _capture)
+def audit_hook(caplog) -> _AuditHookCapture:
+    """Captures audit-hook WARN records from logger output.
+
+    The real audit hook (database.py event listener for direct read-engine writes)
+    emits via `logging.warning("[AUDIT-HOOK] direct write detected: ...")`. This
+    fixture lets tests assert no such warnings fired during a code path. Tests
+    call `audit_hook.populate_from_caplog()` then check `audit_hook.warnings`.
+    """
+    import logging
+    cap = _AuditHookCapture(_caplog=caplog)
+    caplog.set_level(logging.WARNING)
     yield cap
+    cap.populate_from_caplog()
 
 
 @dataclass
@@ -1386,6 +1409,21 @@ def repo_index_mock() -> Any:
 def taxonomy_mock() -> Any:
     from unittest.mock import MagicMock
     return MagicMock()
+
+
+@pytest.fixture
+async def mcp_test_client():
+    """Real MCP client connected to the in-process MCP server.
+
+    Uses fastmcp.Client for actual MCP SDK round-trip — exercises the same
+    schema-validation path Claude Code + VSCode bridge use, NOT the FastAPI
+    test client. Required for spec § 11 risk: MCP SDK strict-validation of
+    additive run_id field.
+    """
+    from fastmcp import Client
+    from app.mcp_server import mcp
+    async with Client(mcp) as client:
+        yield client
 ```
 
 Imports needed at top of conftest (add if not present):
@@ -3249,7 +3287,7 @@ Expected: ≥58 tests pass (some skipped). All RED-then-GREEN tests now pass.
 cd backend && source .venv/bin/activate && pytest -x
 ```
 
-Expected: full suite passes. Note: legacy `_set_probe_status` tests should still pass via the STI alias property accessors.
+Expected: full suite passes. Note: legacy `_set_probe_status` tests should still pass via the Python-alias property accessors.
 
 ### Task 8.3: PR1 commit + PR open
 
@@ -3310,7 +3348,7 @@ backward-compat shims.
 - [x] Run tests/test_gc_runs.py (4 tests)
 - [x] Run tests/test_topic_probe_generator.py (12 tests, ~10 pass)
 - [x] Run tests/test_seed_agent_generator.py (10 tests, ~7-8 pass)
-- [x] Existing legacy probe + seed tests pass via STI alias
+- [x] Existing legacy probe + seed tests pass via the Python-alias property accessors alias
 - [x] alembic upgrade + downgrade roundtrip
 - [x] No live behavior changes — backward compat preserved
 
@@ -3636,90 +3674,90 @@ Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-desi
 - [ ] **Step 1: Create test file**
 
 ```python
-"""Tests for /api/runs endpoints — Foundation P3 cat 9, 6 tests."""
+"""Tests for /api/runs endpoints — Foundation P3 cat 9, 6 tests.
+
+Uses async patterns (httpx.AsyncClient + AsyncSession via db_session) matching
+the conftest convention used elsewhere in this suite.
+"""
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
+from datetime import datetime, timedelta
+from sqlalchemy.ext.asyncio import AsyncSession
+from httpx import AsyncClient
+
+from app.models import RunRow
+
+pytestmark = pytest.mark.asyncio
 
 
-def test_get_runs_pagination_envelope(client: TestClient) -> None:
-    resp = client.get("/api/runs?limit=10")
+async def test_get_runs_pagination_envelope(async_client: AsyncClient) -> None:
+    resp = await async_client.get("/api/runs?limit=10")
     assert resp.status_code == 200
     body = resp.json()
     assert {"total", "count", "offset", "items", "has_more", "next_offset"}.issubset(body.keys())
 
 
-def test_get_runs_filter_by_mode(client: TestClient, db) -> None:
-    # Setup: insert 1 probe + 1 seed run
-    from app.models import RunRow
-    from datetime import datetime
-    db.add(RunRow(id="r-probe", mode="topic_probe", status="completed", started_at=datetime.utcnow()))
-    db.add(RunRow(id="r-seed", mode="seed_agent", status="completed", started_at=datetime.utcnow()))
-    db.commit()  # sync db fixture for testclient
+async def test_get_runs_filter_by_mode(async_client: AsyncClient, db_session: AsyncSession) -> None:
+    db_session.add(RunRow(id="r-probe", mode="topic_probe", status="completed", started_at=datetime.utcnow()))
+    db_session.add(RunRow(id="r-seed", mode="seed_agent", status="completed", started_at=datetime.utcnow()))
+    await db_session.commit()
 
-    resp = client.get("/api/runs?mode=topic_probe")
+    resp = await async_client.get("/api/runs?mode=topic_probe")
     assert resp.status_code == 200
     ids = [r["id"] for r in resp.json()["items"]]
     assert "r-probe" in ids and "r-seed" not in ids
 
 
-def test_get_runs_filter_by_status(client: TestClient, db) -> None:
-    from app.models import RunRow
-    from datetime import datetime
-    db.add(RunRow(id="r-running", mode="topic_probe", status="running", started_at=datetime.utcnow()))
-    db.add(RunRow(id="r-failed", mode="topic_probe", status="failed", started_at=datetime.utcnow()))
-    db.commit()
+async def test_get_runs_filter_by_status(async_client: AsyncClient, db_session: AsyncSession) -> None:
+    db_session.add(RunRow(id="r-running", mode="topic_probe", status="running", started_at=datetime.utcnow()))
+    db_session.add(RunRow(id="r-failed", mode="topic_probe", status="failed", started_at=datetime.utcnow()))
+    await db_session.commit()
 
-    resp = client.get("/api/runs?status=failed")
+    resp = await async_client.get("/api/runs?status=failed")
     assert resp.status_code == 200
     statuses = {r["status"] for r in resp.json()["items"]}
     assert statuses == {"failed"}
 
 
-def test_get_runs_filter_by_project_id(client: TestClient, db) -> None:
-    from app.models import RunRow, PromptCluster
-    from datetime import datetime
+async def test_get_runs_filter_by_project_id(async_client: AsyncClient, db_session: AsyncSession) -> None:
+    from app.models import PromptCluster
     proj = PromptCluster(id="proj-x", state="project", label="x")
-    db.add(proj)
-    db.add(RunRow(id="r-with-proj", mode="topic_probe", status="completed", started_at=datetime.utcnow(), project_id="proj-x"))
-    db.add(RunRow(id="r-no-proj", mode="topic_probe", status="completed", started_at=datetime.utcnow()))
-    db.commit()
+    db_session.add(proj)
+    db_session.add(RunRow(id="r-with-proj", mode="topic_probe", status="completed", started_at=datetime.utcnow(), project_id="proj-x"))
+    db_session.add(RunRow(id="r-no-proj", mode="topic_probe", status="completed", started_at=datetime.utcnow()))
+    await db_session.commit()
 
-    resp = client.get("/api/runs?project_id=proj-x")
+    resp = await async_client.get("/api/runs?project_id=proj-x")
     assert resp.status_code == 200
     ids = [r["id"] for r in resp.json()["items"]]
     assert ids == ["r-with-proj"]
 
 
-def test_get_runs_ordered_started_at_desc(client: TestClient, db) -> None:
-    from app.models import RunRow
-    from datetime import datetime, timedelta
+async def test_get_runs_ordered_started_at_desc(async_client: AsyncClient, db_session: AsyncSession) -> None:
     base = datetime.utcnow()
     for i in range(3):
-        db.add(RunRow(
+        db_session.add(RunRow(
             id=f"r-{i}", mode="topic_probe", status="completed",
             started_at=base - timedelta(minutes=i),
         ))
-    db.commit()
+    await db_session.commit()
 
-    resp = client.get("/api/runs?limit=3")
+    resp = await async_client.get("/api/runs?limit=3")
     items = resp.json()["items"]
     ids = [r["id"] for r in items]
     assert ids == ["r-0", "r-1", "r-2"]  # newest first
 
 
-def test_get_run_by_id_returns_full_detail(client: TestClient, db) -> None:
-    from app.models import RunRow
-    from datetime import datetime
-    db.add(RunRow(
+async def test_get_run_by_id_returns_full_detail(async_client: AsyncClient, db_session: AsyncSession) -> None:
+    db_session.add(RunRow(
         id="r-detail", mode="topic_probe", status="completed",
         started_at=datetime.utcnow(),
         topic="testtopic", topic_probe_meta={"scope": "**/*"},
     ))
-    db.commit()
+    await db_session.commit()
 
-    resp = client.get("/api/runs/r-detail")
+    resp = await async_client.get("/api/runs/r-detail")
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] == "r-detail"
@@ -3727,8 +3765,8 @@ def test_get_run_by_id_returns_full_detail(client: TestClient, db) -> None:
     assert body["topic_probe_meta"] == {"scope": "**/*"}
 
 
-def test_get_run_by_id_404_on_miss(client: TestClient) -> None:
-    resp = client.get("/api/runs/nonexistent")
+async def test_get_run_by_id_404_on_miss(async_client: AsyncClient) -> None:
+    resp = await async_client.get("/api/runs/nonexistent")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "run_not_found"
 ```
@@ -4143,10 +4181,22 @@ In `backend/app/routers/probes.py`, replace the `post_probe` handler body to use
 @router.post("/probes")
 async def post_probe(request: Request):
     """SSE stream — caller mints run_id, registers subscription, then dispatches."""
-    raw = await request.json()
+    try:
+        raw = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "invalid_json") from exc
+
     if not isinstance(raw, dict) or not raw.get("repo_full_name"):
         raise HTTPException(400, "link_repo_first")
-    body = ProbeRunRequest(**raw)
+
+    try:
+        body = ProbeRunRequest(**raw)
+    except ValidationError as exc:
+        # Pydantic raises ValidationError → FastAPI defaults to 422.
+        # Translate to canonical 400 with "invalid_request" reason code,
+        # matching v0.4.17 routers/probes.py behavior byte-for-byte.
+        logger.info("POST /api/probes: invalid request body — %s", exc.errors())
+        raise HTTPException(status_code=400, detail="invalid_request") from exc
 
     orchestrator: RunOrchestrator = request.app.state.run_orchestrator
     run_id = str(uuid.uuid4())  # caller-side allocation
@@ -4173,7 +4223,7 @@ async def post_probe(request: Request):
 
 - [ ] **Step 2: Update GET /api/probes + GET /api/probes/{id}**
 
-Replace `_serialize_summary(row: ProbeRun)` and `_serialize_full(row: ProbeRun)` to read from `RunRow WHERE mode='topic_probe'` (the `ProbeRun` STI alias still works but be explicit). The serializer body remains the same — it consumes the same column names. Just change the model imports.
+Replace `_serialize_summary(row: ProbeRun)` and `_serialize_full(row: ProbeRun)` to read from `RunRow WHERE mode='topic_probe'` (the `ProbeRun` Python-alias still works but be explicit). The serializer body remains the same — it consumes the same column names. Just change the model imports.
 
 - [ ] **Step 3: Run tests — must pass**
 
@@ -4190,7 +4240,7 @@ git commit -m "feat(v0.4.18-p3-PR2): probes router refactored to RunOrchestrator
 - POST /api/probes uses race-free subscribe-before-dispatch
 - SSE response constructed via event_bus.subscribe_for_run
 - Event names + payload shapes byte-identical to v0.4.17
-- GET endpoints read from RunRow via STI alias
+- GET endpoints read from RunRow via the Python-alias property accessors alias
 - 12 shim regression tests (cat 6)
 
 Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md § 6.2"
@@ -4581,7 +4631,7 @@ git commit -m "feat(v0.4.18-p3-PR2): MCP tools dispatch through RunOrchestrator
 
 **Files:**
 - Modify: `backend/app/services/probe_service.py` (delete class)
-- Modify: `backend/app/models.py` (remove ProbeRun STI alias)
+- Modify: `backend/app/models.py` (remove ProbeRun Python-alias)
 - Modify: 8 affected test files (51 reference rewrites)
 
 6 tests for refactor coverage per spec §9 cat 12.
@@ -4621,7 +4671,7 @@ For reads of `.scope` / `.commit_sha`:
 
 In `backend/app/services/probe_service.py`, remove the `class ProbeService:` definition. Module-level helpers (`probe_common.py`, `probe_phases.py`, `probe_phase_5.py`) remain. Module-level imports that referenced the class (e.g., `dependencies/probes.py:build_probe_service`) need updating to construct/return `RunOrchestrator` instead.
 
-- [ ] **Step 4: Remove ProbeRun STI subclass from models.py**
+- [ ] **Step 4: Remove ProbeRun Python subclass from models.py**
 
 ```python
 # Delete the ProbeRun(RunRow) class entirely.
@@ -4649,7 +4699,7 @@ git add backend/app/models.py backend/app/services/probe_service.py backend/app/
 git commit -m "refactor(v0.4.18-p3-PR2): delete ProbeService class + ProbeRun alias
 
 - ProbeService class removed (logic lives in TopicProbeGenerator)
-- ProbeRun STI alias removed from models.py
+- ProbeRun Python-alias removed from models.py
 - 51 ProbeRun references in 8 test files rewritten to RunRow
 - Module-level probe helpers (probe_common, probe_phases, probe_phase_5) retained
 - 6 refactor coverage tests (cat 12)
@@ -4738,7 +4788,7 @@ gh pr create --title "Foundation P3 PR2: live + shims (RunOrchestrator dispatch 
 
 PR2 of Foundation P3 (v0.4.18). Wires all four backward-compat surfaces
 (/api/probes, /api/seed, synthesis_probe, synthesis_seed) through
-RunOrchestrator. Removes the PR1 ProbeRun STI alias + ProbeService class.
+RunOrchestrator. Removes the PR1 ProbeRun Python-alias + ProbeService class.
 Adds new /api/runs unified endpoints + /api/seed list/get.
 
 ## What changes
