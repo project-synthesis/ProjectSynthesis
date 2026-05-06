@@ -10,6 +10,29 @@
 
 **Discipline:** Strict 7-dispatch TDD per cycle: RED → GREEN → REFACTOR → INTEGRATE → OPERATE → spec-compliance reviewer → code-quality reviewer per `feedback_tdd_protocol.md`. The RED test pins the contract; subsequent phases never break it. Commit after every phase. REFACTOR subagent is dispatched explicitly (not folded into GREEN). Reviewers run as independent subagents — no self-review.
 
+**Phase template applied to every cycle that touches writers, events, or persistence (Cycles 1, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14):**
+
+After RED → GREEN → REFACTOR for each cycle, every such cycle MUST include:
+
+**INTEGRATE phase task** — verify the cycle's deliverable composes correctly with adjacent subsystems:
+- Run the cycle's tests + any tests for subsystems the cycle interacts with (e.g., Cycle 4 RunOrchestrator INTEGRATE runs orchestrator tests + write_queue tests + gc tests).
+- Lint + mypy clean (`cd backend && ruff check . && mypy app/`).
+- No dangling imports / circular imports introduced.
+- For schema cycles: alembic upgrade + downgrade + upgrade roundtrip verified.
+- For event-emission cycles: `event_bus._subscribers` does not retain leaked subscribers after a cycle test run.
+- Commit message tagged `[INTEGRATE]`.
+
+**OPERATE phase task** — exercise the cycle's deliverable end-to-end against the running app:
+- Spin up backend in dev mode (`./init.sh restart` or pytest with full lifespan).
+- Issue real REST/MCP calls covering the new code path (curl + jq).
+- Verify no `database is locked` errors, no audit-hook WARN, no orphaned tasks at process shutdown.
+- For SSE cycles: subscribe to `/api/events`, kick off a real run, observe wire events match the snapshot fixture byte-for-byte.
+- Commit message tagged `[OPERATE]`.
+
+Per `feedback_tdd_protocol.md`: "No phase is optional. Skipping any phase has shipped a defect at least once." OPERATE is non-negotiable for any cycle changing writer paths or SSE response semantics.
+
+**Fixture-cycle prerequisite:** Cycles 6, 7, 11, 12 depend on fixtures (`audit_hook`, `event_bus_capture`, `taxonomy_event_capture`, `provider_mock` family, `seed_orchestrator_mock`, etc.) that don't exist in `backend/tests/conftest.py` today. **Cycle 3.5** (between schema cycle and orchestrator cycle) introduces these fixtures with their own RED/GREEN/REFACTOR cycle.
+
 **Reference reading before starting:**
 - `docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md` (the spec — source of truth)
 - `~/.claude/projects/.../memory/feedback_tdd_protocol.md` (TDD protocol)
@@ -207,22 +230,36 @@ async def test_run_row_seed_agent_meta_roundtrips(db: AsyncSession) -> None:
     assert fetched.seed_agent_meta == seed_meta
 
 
-async def test_probe_run_sti_alias_filters_to_topic_probe(db: AsyncSession) -> None:
-    """ProbeRun is a single-table-inheritance alias of RunRow filtered to mode='topic_probe'.
+async def test_probe_run_alias_default_mode_is_topic_probe(db: AsyncSession) -> None:
+    """ProbeRun(...) sets mode='topic_probe' by default (legacy-compat).
 
-    Verifies that `select(ProbeRun)` returns only rows where mode='topic_probe',
-    not seed_agent rows. Defense-in-depth correctness per spec section 10.1.
+    Per spec section 10.1 option (b): ProbeRun is a Python subclass of RunRow
+    that defaults mode='topic_probe' in __init__. PR1 has zero seed_agent
+    rows (the seed dispatch doesn't go through RunOrchestrator until PR2),
+    so the lack of select-time filter is safe transient.
     """
     from datetime import datetime
-    from sqlalchemy import select
 
-    db.add(RunRow(id="probe-1", mode="topic_probe", status="running", started_at=datetime.utcnow()))
-    db.add(RunRow(id="seed-1", mode="seed_agent", status="running", started_at=datetime.utcnow()))
-    await db.commit()
+    row = ProbeRun(id="probe-default", started_at=datetime.utcnow(),
+                   topic_probe_meta={"scope": "**/*", "commit_sha": None})
+    assert row.mode == "topic_probe"
 
-    rows = (await db.execute(select(ProbeRun))).scalars().all()
-    ids = {r.id for r in rows}
-    assert ids == {"probe-1"}, f"ProbeRun should filter to topic_probe; got {ids}"
+
+async def test_probe_run_property_accessors_read_topic_probe_meta(db: AsyncSession) -> None:
+    """Legacy .scope / .commit_sha access paths work via property accessors."""
+    from datetime import datetime
+
+    row = ProbeRun(
+        id="probe-props", started_at=datetime.utcnow(),
+        topic_probe_meta={"scope": "src/**/*.py", "commit_sha": "abc123"},
+    )
+    assert row.scope == "src/**/*.py"
+    assert row.commit_sha == "abc123"
+
+    # Defaults when topic_probe_meta is empty
+    bare = ProbeRun(id="probe-bare", started_at=datetime.utcnow())
+    assert bare.scope == "**/*"  # default fallback
+    assert bare.commit_sha is None
 
 
 async def test_migration_idempotent_when_already_migrated(db: AsyncSession) -> None:
@@ -331,10 +368,13 @@ class RunRow(Base):
     topic_probe_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     seed_agent_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    __mapper_args__ = {
-        "polymorphic_on": "mode",
-        "polymorphic_identity": "run_row",  # base; subclasses set their own
-    }
+    # Deliberately NO polymorphic_on / polymorphic_identity — SQLAlchemy STI
+    # is awkward when neither parent nor subclasses are routinely instantiated
+    # by mode-discriminator. PR1 uses option (b) from spec § 10.1: ProbeRun
+    # is a Python alias of RunRow with property accessors. select(ProbeRun)
+    # returns ALL run_row rows — but PR1 has zero seed_agent rows since the
+    # seed router/MCP path doesn't dispatch through RunOrchestrator until PR2.
+    # PR2 deletes the alias entirely before any seed_agent row exists.
 
     __table_args__ = (
         Index("ix_run_row_mode_started", "mode", "started_at"),
@@ -344,20 +384,24 @@ class RunRow(Base):
     )
 ```
 
-- [ ] **Step 2: Replace `class ProbeRun(Base)` with STI subclass**
+- [ ] **Step 2: Replace `class ProbeRun(Base)` with Python-alias + property mixin**
 
-Find the existing `class ProbeRun(Base):` definition (currently at `models.py:570-605`) and replace the entire class body with:
+Find the existing `class ProbeRun(Base):` definition (currently at `models.py:570-605`) and replace with:
 
 ```python
 class ProbeRun(RunRow):
-    """Backward-compat single-table-inheritance alias for RunRow filtered to
-    mode='topic_probe'. Retained for PR1 only — PR2 deletes this class.
+    """Backward-compat alias for RunRow + property accessors for legacy
+    .scope / .commit_sha reads. Retained for PR1 only — PR2 deletes this class.
 
-    `select(ProbeRun)` automatically filters to WHERE mode='topic_probe'.
-    Legacy attribute access (.scope, .commit_sha) is provided via property
-    methods that read from topic_probe_meta JSON.
+    NOTE: NO __mapper_args__ — this is plain Python subclassing, not SQLAlchemy
+    STI. ProbeRun shares RunRow's table; no polymorphic identity is set, so
+    instantiating ProbeRun(...) produces a row with whatever mode the caller
+    passes (caller responsible for setting mode='topic_probe' explicitly).
+
+    select(ProbeRun) returns all run_row rows (NOT filtered) — but PR1 has
+    zero seed_agent rows since the seed dispatch path doesn't go through
+    RunOrchestrator until PR2. Safe transient state.
     """
-    __mapper_args__ = {"polymorphic_identity": "topic_probe"}
 
     @property
     def scope(self) -> str:
@@ -366,9 +410,12 @@ class ProbeRun(RunRow):
     @property
     def commit_sha(self) -> str | None:
         return (self.topic_probe_meta or {}).get("commit_sha")
-```
 
-This subclass inherits all RunRow columns + adds property accessors for legacy code paths that read `.scope` and `.commit_sha` directly.
+    def __init__(self, **kwargs):
+        # Default mode='topic_probe' for legacy callers that don't supply it.
+        kwargs.setdefault("mode", "topic_probe")
+        super().__init__(**kwargs)
+```
 
 - [ ] **Step 3: Generate migration**
 
@@ -984,6 +1031,366 @@ git commit -m "feat(v0.4.18-p3): add RunRequest/RunResult/RunSummary schemas + G
 - 7 schema + dataclass tests
 
 Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md § 5.1, § 6.1"
+```
+
+### Task 3.4: INTEGRATE — schemas + dataclass compose with existing imports
+
+- [ ] **Step 1: Run lint + mypy**
+
+```bash
+cd backend && source .venv/bin/activate && ruff check app/schemas/runs.py app/services/generators/ && mypy app/schemas/runs.py app/services/generators/
+```
+
+Expected: clean.
+
+- [ ] **Step 2: Run full backend suite for regressions**
+
+```bash
+cd backend && source .venv/bin/activate && pytest --no-cov -q
+```
+
+Expected: all pre-existing tests + 7 new tests pass; no other module breaks from the new imports.
+
+- [ ] **Step 3: Commit `[INTEGRATE]`**
+
+```bash
+git commit --allow-empty -m "ops(v0.4.18-p3): [INTEGRATE] cycle 3 schemas + dataclass clean
+
+ruff + mypy clean for schemas/runs.py + services/generators/.
+Full backend suite passes with 7 new tests (cat 3 partial).
+No import-cycle regressions detected."
+```
+
+### Task 3.5: OPERATE — instantiate schemas at runtime
+
+- [ ] **Step 1: Smoke-test schema instantiation in a real Python REPL**
+
+```bash
+cd backend && source .venv/bin/activate && python -c "
+from app.schemas.runs import RunRequest, RunResult, RunListResponse, RunSummary
+from app.services.generators.base import GeneratorResult, RunGenerator
+print('OK', GeneratorResult.__dataclass_fields__.keys())
+"
+```
+
+Expected output includes `dict_keys(['terminal_status', 'prompts_generated', 'prompt_results', 'aggregate', 'taxonomy_delta', 'final_report'])`.
+
+- [ ] **Step 2: Commit `[OPERATE]`**
+
+```bash
+git commit --allow-empty -m "ops(v0.4.18-p3): [OPERATE] cycle 3 runtime instantiation verified"
+```
+
+---
+
+## Cycle 3.5 — Test fixtures (audit_hook, event_bus_capture, taxonomy_event_capture, provider mocks)
+
+**Files:**
+- Modify: `backend/tests/conftest.py`
+- Create: `backend/tests/fixtures/run_p3_fixtures.py` (or inline in conftest)
+
+These fixtures are dependencies of Cycles 4, 6, 7, 9, 11, 12. Introduced as their own cycle to avoid copy-paste across test files.
+
+### Task 3.5.1: RED — fixture-presence smoke tests
+
+- [ ] **Step 1: Create `backend/tests/test_p3_fixtures_present.py`**
+
+```python
+"""Sentinel tests verifying P3 fixtures are wired into conftest."""
+from __future__ import annotations
+
+import pytest
+
+pytestmark = pytest.mark.asyncio
+
+
+async def test_audit_hook_fixture_captures_warnings(audit_hook) -> None:
+    audit_hook.warn("test warn")
+    assert any("test warn" in str(w) for w in audit_hook.warnings)
+
+
+async def test_event_bus_capture_records_published(event_bus_capture) -> None:
+    from app.services.event_bus import event_bus
+    event_bus.publish("probe_started", {"run_id": "fix-1"})
+    assert any(e.kind == "probe_started" for e in event_bus_capture.events)
+
+
+async def test_event_bus_capture_filter_by_run_id(event_bus_capture) -> None:
+    from app.services.event_bus import event_bus
+    event_bus.publish("probe_started", {"run_id": "fix-A"})
+    event_bus.publish("probe_started", {"run_id": "fix-B"})
+    a_events = event_bus_capture.events_for_run("fix-A")
+    assert len(a_events) == 1
+
+
+async def test_taxonomy_event_capture_records_decisions(taxonomy_event_capture) -> None:
+    from app.services.taxonomy.event_logger import get_event_logger
+    try:
+        get_event_logger().log_decision(
+            path="hot", op="seed", decision="seed_started",
+            context={"batch_id": "fix-1", "run_id": "fix-rid"},
+        )
+    except RuntimeError:
+        pytest.skip("event logger not initialized in this test session")
+    decisions = taxonomy_event_capture.decisions_with_op("seed")
+    assert any(d.context.get("run_id") == "fix-rid" for d in decisions)
+
+
+def test_provider_mock_fixture_default_returns_completed(provider_mock) -> None:
+    """Default provider_mock returns a successful response."""
+    assert provider_mock is not None  # presence check; real exercise in test_topic_probe_generator
+
+
+def test_provider_partial_mock_simulates_mixed_outcomes(provider_partial_mock) -> None:
+    assert provider_partial_mock is not None
+
+
+def test_seed_orchestrator_mock_has_generate(seed_orchestrator_mock) -> None:
+    assert hasattr(seed_orchestrator_mock, "generate")
+```
+
+- [ ] **Step 2: Run — must fail because fixtures don't exist**
+
+```bash
+cd backend && source .venv/bin/activate && pytest tests/test_p3_fixtures_present.py -v
+```
+
+Expected: every test ERRORs with "fixture not found".
+
+### Task 3.5.2: GREEN — define fixtures in conftest
+
+- [ ] **Step 1: Append fixtures to `backend/tests/conftest.py`**
+
+```python
+# ============================================================
+# Foundation P3 fixtures (added 2026-05-06)
+# ============================================================
+
+@dataclass
+class _AuditHookCapture:
+    warnings: list = field(default_factory=list)
+
+    def reset(self) -> None:
+        self.warnings.clear()
+
+    def warn(self, msg: str) -> None:
+        self.warnings.append(msg)
+
+@pytest.fixture
+def audit_hook(monkeypatch) -> _AuditHookCapture:
+    """Captures audit-hook WARNs during a test. Replaces the real audit hook
+    so direct DB writes from inside tests don't trigger raises in CI."""
+    cap = _AuditHookCapture()
+    # Monkey-patch the audit hook's warn method to record into cap
+    from app.services import write_queue as wq_mod
+    real_warn = wq_mod._audit_warn if hasattr(wq_mod, "_audit_warn") else None
+    def _capture(*args, **kwargs):
+        cap.warn(args[0] if args else str(kwargs))
+        if real_warn:
+            real_warn(*args, **kwargs)
+    if real_warn:
+        monkeypatch.setattr(wq_mod, "_audit_warn", _capture)
+    yield cap
+
+
+@dataclass
+class _BusEvent:
+    kind: str
+    payload: dict
+
+@dataclass
+class _EventBusCapture:
+    events: list[_BusEvent] = field(default_factory=list)
+
+    def events_for_run(self, run_id: str) -> list[_BusEvent]:
+        return [e for e in self.events if e.payload.get("run_id") == run_id]
+
+@pytest.fixture
+async def event_bus_capture(monkeypatch) -> _EventBusCapture:
+    """Captures every event published to event_bus during the test.
+    Hooks publish() directly, parallel to existing subscribers."""
+    from app.services.event_bus import event_bus
+    cap = _EventBusCapture()
+    real_publish = event_bus.publish
+    def _wrapped(event_type, data):
+        cap.events.append(_BusEvent(
+            kind=event_type, payload=data if isinstance(data, dict) else {},
+        ))
+        return real_publish(event_type, data)
+    monkeypatch.setattr(event_bus, "publish", _wrapped)
+    yield cap
+
+
+@dataclass
+class _TaxDecision:
+    path: str
+    op: str
+    decision: str
+    context: dict
+
+@dataclass
+class _TaxonomyEventCapture:
+    decisions: list[_TaxDecision] = field(default_factory=list)
+
+    def decisions_with_op(self, op: str) -> list[_TaxDecision]:
+        return [d for d in self.decisions if d.op == op]
+
+@pytest.fixture
+def taxonomy_event_capture(monkeypatch) -> _TaxonomyEventCapture:
+    """Captures every taxonomy_event_logger.log_decision call."""
+    from app.services.taxonomy import event_logger as el_mod
+    cap = _TaxonomyEventCapture()
+    real_logger_class = el_mod.TaxonomyEventLogger
+    real_log = real_logger_class.log_decision
+    def _wrapped(self, path, op, decision, context):
+        cap.decisions.append(_TaxDecision(
+            path=path, op=op, decision=decision, context=context,
+        ))
+        return real_log(self, path, op, decision, context)
+    monkeypatch.setattr(real_logger_class, "log_decision", _wrapped)
+    yield cap
+
+
+@pytest.fixture
+def provider_mock() -> Any:
+    """Default Sonnet provider mock returning a 'completed' response."""
+    from unittest.mock import AsyncMock
+    p = AsyncMock()
+    p.complete_parsed.return_value = AsyncMock(
+        result_text="optimized prompt",
+        model="claude-sonnet-4-6",
+    )
+    return p
+
+
+@pytest.fixture
+def provider_partial_mock() -> Any:
+    """Simulates 1 success + 1 failure across N prompts."""
+    from unittest.mock import AsyncMock
+    p = AsyncMock()
+    counter = {"n": 0}
+    async def _call(*args, **kwargs):
+        counter["n"] += 1
+        if counter["n"] % 2 == 0:
+            raise RuntimeError("partial failure simulation")
+        return AsyncMock(result_text="ok", model="claude-sonnet-4-6")
+    p.complete_parsed = _call
+    return p
+
+
+@pytest.fixture
+def provider_all_fail_mock() -> Any:
+    from unittest.mock import AsyncMock
+    p = AsyncMock()
+    p.complete_parsed.side_effect = RuntimeError("all fail simulation")
+    return p
+
+
+@pytest.fixture
+def provider_429_then_ok_mock() -> Any:
+    """First call raises 429, subsequent calls succeed."""
+    from unittest.mock import AsyncMock
+    p = AsyncMock()
+    counter = {"n": 0}
+    async def _call(*args, **kwargs):
+        counter["n"] += 1
+        if counter["n"] == 1:
+            err = RuntimeError("HTTP 429: rate limited")
+            raise err
+        return AsyncMock(result_text="ok", model="claude-sonnet-4-6")
+    p.complete_parsed = _call
+    return p
+
+
+@pytest.fixture
+def provider_hanging_mock() -> Any:
+    """Provider that never returns — used for cancellation tests."""
+    from unittest.mock import AsyncMock
+    p = AsyncMock()
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(60)
+    p.complete_parsed = _hang
+    return p
+
+
+@pytest.fixture
+def seed_orchestrator_mock() -> Any:
+    """Mock SeedOrchestrator returning a successful generation."""
+    from unittest.mock import AsyncMock, MagicMock
+    orch = MagicMock()
+    gen_result = MagicMock()
+    gen_result.prompts = ["prompt 1", "prompt 2", "prompt 3"]
+    orch.generate = AsyncMock(return_value=gen_result)
+    return orch
+
+
+@pytest.fixture
+def seed_orchestrator_failing_mock() -> Any:
+    from unittest.mock import AsyncMock, MagicMock
+    orch = MagicMock()
+    orch.generate = AsyncMock(side_effect=RuntimeError("generation failed"))
+    return orch
+
+
+@pytest.fixture
+def repo_index_mock() -> Any:
+    from unittest.mock import AsyncMock, MagicMock
+    rix = MagicMock()
+    rix.query_curated_context = AsyncMock(return_value=MagicMock(
+        relevant_files=[], explore_synthesis_excerpt="", known_domains=[],
+    ))
+    return rix
+
+
+@pytest.fixture
+def taxonomy_mock() -> Any:
+    from unittest.mock import MagicMock
+    return MagicMock()
+```
+
+Imports needed at top of conftest (add if not present):
+
+```python
+from dataclasses import dataclass, field
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+```
+
+- [ ] **Step 2: Run — fixture sentinel tests pass**
+
+```bash
+cd backend && source .venv/bin/activate && pytest tests/test_p3_fixtures_present.py -v
+```
+
+Expected: 7/7 PASS.
+
+### Task 3.5.3: REFACTOR + INTEGRATE + OPERATE + commit
+
+- [ ] **Step 1: Verify no existing test breaks from the fixture additions**
+
+```bash
+cd backend && source .venv/bin/activate && pytest --no-cov -q
+```
+
+Expected: full suite passes; no fixture-name collisions.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add backend/tests/conftest.py backend/tests/test_p3_fixtures_present.py
+git commit -m "feat(v0.4.18-p3): test fixtures for P3 cycles
+
+- audit_hook: captures audit-hook warnings during a test
+- event_bus_capture: records every event_bus.publish call
+- taxonomy_event_capture: records taxonomy_event_logger.log_decision calls
+- provider_mock family: mock Sonnet provider variants (default/partial/all-fail/
+  429-then-ok/hanging)
+- seed_orchestrator_mock + failing variant
+- repo_index_mock + taxonomy_mock
+
+These fixtures are dependencies of Cycles 4, 6, 7, 9, 11, 12.
+
+7 sentinel tests verify all fixtures are wired."
 ```
 
 ---
@@ -2688,7 +3095,11 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_subscribe_for_run_filters_by_run_id() -> None:
-    """Only events with payload.run_id == subscribed run_id are yielded."""
+    """Only events with data.run_id == subscribed run_id are yielded.
+
+    Note: existing EventBus.publish() takes (event_type, data) — data dict
+    is what carries run_id, not "payload".
+    """
     from app.services.event_bus import event_bus
     sub = event_bus.subscribe_for_run("run-1")
 
@@ -2711,7 +3122,7 @@ async def test_subscribe_for_run_filters_by_run_id() -> None:
 
 async def test_subscribe_for_run_excludes_events_without_run_id() -> None:
     """Events that don't carry run_id (taxonomy_changed, optimization_created,
-    etc.) are filtered out."""
+    etc.) are filtered out at iteration time."""
     from app.services.event_bus import event_bus
     sub = event_bus.subscribe_for_run("run-x")
 
@@ -2732,7 +3143,8 @@ async def test_subscribe_for_run_excludes_events_without_run_id() -> None:
 
 
 async def test_subscribe_for_run_replay_buffer_500ms() -> None:
-    """Events fired within the last 500ms before subscription are replayed."""
+    """Events fired within the last 500ms before subscription are replayed
+    from EventBus._replay_buffer."""
     from app.services.event_bus import event_bus
 
     event_bus.publish("probe_started", {"run_id": "rb-1"})
@@ -2751,10 +3163,35 @@ async def test_subscribe_for_run_replay_buffer_500ms() -> None:
 
 
 async def test_subscribe_for_run_aclose_terminates() -> None:
-    """Calling aclose() on the subscription stops iteration."""
+    """Calling aclose() on the subscription stops iteration cleanly."""
     from app.services.event_bus import event_bus
     sub = event_bus.subscribe_for_run("close-1")
-    await sub.aclose()  # Should not raise; iteration would end immediately
+    await sub.aclose()  # Should not raise
+
+
+async def test_subscribe_for_run_does_not_break_existing_subscribers() -> None:
+    """Adding a per-run subscription must not regress the global subscribe()."""
+    from app.services.event_bus import event_bus
+    global_sub_q = await event_bus.subscribe()
+    run_sub = event_bus.subscribe_for_run("coexist-1")
+
+    event_bus.publish("probe_completed", {"run_id": "coexist-1"})
+
+    # Global subscriber sees the event
+    payload = await asyncio.wait_for(global_sub_q.get(), timeout=2)
+    assert payload["event"] == "probe_completed"
+    assert payload["data"]["run_id"] == "coexist-1"
+
+    # Run-filtered subscriber also sees it
+    received = []
+    async def collect():
+        async for evt in run_sub:
+            received.append(evt)
+            break
+    await asyncio.wait_for(collect(), timeout=2)
+    assert received[0].kind == "probe_completed"
+
+    await run_sub.aclose()
 ```
 
 - [ ] **Step 2: Run — must fail on `subscribe_for_run` not existing**
@@ -2767,81 +3204,101 @@ Expected: AttributeError on `event_bus.subscribe_for_run`.
 
 ### Task 9.2: GREEN — implement subscribe_for_run
 
-- [ ] **Step 1: Add method to event_bus**
+- [ ] **Step 1: Add method to existing `EventBus` class without changing publish()**
 
-In `backend/app/services/event_bus.py`, add a `subscribe_for_run(run_id)` method to the `_EventBus` class (or wherever the existing `subscribe()` lives):
+The existing `EventBus` class (verified at `backend/app/services/event_bus.py:24`) uses:
+- `_subscribers: set[asyncio.Queue]` (NOT list)
+- `_replay_buffer: deque[dict]` where each item is `{"event": str, "data": dict|Any, "timestamp": float, "seq": int}`
+- `publish(event_type, data)` (NOT `publish(kind, payload)`)
+- `time.time()` (wall clock)
 
-```python
-class _EventBus:
-    def __init__(self) -> None:
-        self._subscribers: list[asyncio.Queue] = []
-        self._replay_buffer: deque[tuple[float, str, dict]] = deque(maxlen=256)
-        # ... existing init ...
-
-    # ... existing methods ...
-
-    def subscribe_for_run(self, run_id: str):
-        """Filtered subscription — yields only events where payload.run_id == run_id.
-
-        Includes 500ms ring-buffer replay so subscribers that register slightly
-        after the run starts still see all events from the start.
-        """
-        queue: asyncio.Queue = asyncio.Queue()
-
-        # Replay events from last 500ms with matching run_id
-        now = time.monotonic()
-        for ts, kind, payload in self._replay_buffer:
-            if now - ts > 0.5:
-                continue
-            if payload.get("run_id") != run_id:
-                continue
-            queue.put_nowait(_EventEnvelope(kind=kind, payload=payload))
-
-        self._subscribers.append(queue)
-
-        async def _iter():
-            try:
-                while True:
-                    evt = await queue.get()
-                    if evt is None:  # sentinel for close
-                        break
-                    if evt.payload.get("run_id") == run_id:
-                        yield evt
-            finally:
-                if queue in self._subscribers:
-                    self._subscribers.remove(queue)
-
-        async def _aclose():
-            queue.put_nowait(None)
-
-        gen = _iter()
-        gen.aclose = _aclose  # type: ignore[attr-defined]
-        return gen
-```
-
-You'll also need `_EventEnvelope`:
+The new method must coexist with the existing `subscribe()` and the existing replay buffer. **DO NOT modify `publish()` or replace `_subscribers` / `_replay_buffer`.** Add a class-based `_RunSubscription` helper that filters from existing internals:
 
 ```python
-from dataclasses import dataclass
+# backend/app/services/event_bus.py — additive change
+
+class _RunSubscription:
+    """Filtered async iterator yielding only events where payload.run_id == run_id.
+
+    Backed by a per-instance asyncio.Queue that the parent EventBus pushes to
+    via the existing _subscribers set. Filter happens at iteration time so
+    subscribers that don't carry run_id are excluded silently.
+    """
+
+    def __init__(self, bus: "EventBus", run_id: str) -> None:
+        self._bus = bus
+        self._run_id = run_id
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+        self._closed = False
+
+        # Register on bus's existing subscribers set
+        self._bus._subscribers.add(self._queue)
+
+        # 500ms ring-buffer replay from the existing _replay_buffer
+        now = time.time()
+        for payload in list(self._bus._replay_buffer):
+            if now - payload["timestamp"] > 0.5:
+                continue
+            data = payload.get("data") or {}
+            if isinstance(data, dict) and data.get("run_id") == run_id:
+                try:
+                    self._queue.put_nowait(payload)
+                except asyncio.QueueFull:
+                    pass  # replay best-effort
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        while True:
+            payload = await self._queue.get()
+            if payload is None:  # sentinel — close requested
+                self._cleanup()
+                raise StopAsyncIteration
+            data = payload.get("data") or {}
+            if isinstance(data, dict) and data.get("run_id") == self._run_id:
+                # Wrap into a small envelope object for callers
+                return _EventForRun(
+                    kind=payload.get("event"),
+                    payload=data,
+                )
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._queue.put_nowait(None)  # sentinel
+        except asyncio.QueueFull:
+            pass
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        self._bus._subscribers.discard(self._queue)
+
 
 @dataclass
-class _EventEnvelope:
+class _EventForRun:
+    """Lightweight envelope for SSE consumers of a per-run subscription."""
     kind: str
     payload: dict
+
+
+# Add this method to the existing EventBus class
+class EventBus:
+    # ... existing methods preserved ...
+
+    def subscribe_for_run(self, run_id: str) -> _RunSubscription:
+        """Filtered subscription. Yields events where data.run_id == run_id.
+
+        Includes 500ms replay window from the existing _replay_buffer.
+        Excludes events without run_id in their data dict (taxonomy_changed,
+        optimization_created, etc.).
+        """
+        return _RunSubscription(self, run_id)
 ```
 
-And update `publish()` to use this envelope and append to `_replay_buffer`:
-
-```python
-def publish(self, kind: str, payload: dict) -> None:
-    envelope = _EventEnvelope(kind=kind, payload=payload)
-    self._replay_buffer.append((time.monotonic(), kind, payload))
-    for sub in self._subscribers:
-        try:
-            sub.put_nowait(envelope)
-        except asyncio.QueueFull:
-            logger.warning("event_bus subscriber queue full; dropping event")
-```
+Note: `publish()` is **unchanged** — existing subscribers (including the global `/api/events` SSE endpoint) continue to work identically. The `_RunSubscription` filters from the existing payload shape.
 
 - [ ] **Step 2: Run tests — must pass**
 
@@ -3154,67 +3611,204 @@ Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-desi
 
 - [ ] **Step 1: Add tests covering byte-identical SSE + race-free subscription**
 
-In `backend/tests/test_probe_router.py`, add or update tests. Key tests:
+In `backend/tests/test_probe_router.py`, add or update the 12 cat-6 tests. Each has a real assertion body:
 
 ```python
-async def test_post_probes_sse_event_sequence_byte_identical(client, fixture_probe_run):
-    """Snapshot test: SSE event sequence (names + payloads) is byte-identical to v0.4.17."""
-    # Compare against pre-recorded fixture from v0.4.17 ProbeService
-    pass
+import pytest
+from datetime import datetime
+from sqlalchemy import select
+from app.models import RunRow
+
+pytestmark = pytest.mark.asyncio
 
 
-async def test_post_probes_subscription_registered_before_dispatch(client, race_capture):
-    """Caller mints run_id; SSE subscription registers before generator starts.
-    No first-event-lost race."""
-    pass
+async def test_post_probes_sse_event_sequence_byte_identical(client, event_bus_capture, snapshot):
+    """SSE event sequence (names + payloads) byte-identical to v0.4.17 fixture."""
+    resp = client.post("/api/probes", json={
+        "topic": "snap-probe", "scope": "**/*", "intent_hint": "explore",
+        "repo_full_name": "o/r", "n_prompts": 3,
+    })
+    assert resp.status_code == 200
+    sse_lines = list(resp.iter_lines())
+    # Strip volatile fields (timestamps, UUIDs) before snapshot
+    normalized = [_strip_volatile(line) for line in sse_lines if line]
+    snapshot.assert_match("\n".join(normalized), "probe_sse_sequence_v0.4.17")
+
+
+async def test_post_probes_subscription_registered_before_dispatch(client, event_bus_capture):
+    """First event yielded by the SSE stream MUST be probe_started — proving
+    the subscription registered before RunOrchestrator dispatched."""
+    resp = client.post("/api/probes", json={
+        "topic": "race", "repo_full_name": "o/r", "n_prompts": 1,
+    })
+    first = next(l for l in resp.iter_lines() if l.startswith(b"event: "))
+    assert first == b"event: probe_started"
 
 
 async def test_get_probes_list_serializes_runrow_via_probe_run_summary(client, db):
-    """GET /api/probes serializes RunRow WHERE mode='topic_probe' through ProbeRunSummary shape."""
-    pass
+    """GET /api/probes returns RunRow WHERE mode='topic_probe' through ProbeRunSummary."""
+    db.add(RunRow(
+        id="probe-1", mode="topic_probe", status="completed",
+        started_at=datetime.utcnow(), topic="hello", repo_full_name="o/r",
+    ))
+    db.add(RunRow(
+        id="seed-1", mode="seed_agent", status="completed",
+        started_at=datetime.utcnow(),
+    ))
+    db.commit()
+
+    resp = client.get("/api/probes")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    ids = {it["id"] for it in items}
+    assert "probe-1" in ids and "seed-1" not in ids
+    assert items[0]["topic"] == "hello"  # ProbeRunSummary shape preserved
 
 
 async def test_get_probe_by_id_serializes_through_probe_run_result(client, db):
-    pass
+    """GET /api/probes/{id} returns full ProbeRunResult shape."""
+    db.add(RunRow(
+        id="probe-detail", mode="topic_probe", status="completed",
+        started_at=datetime.utcnow(),
+        topic="detail-test", intent_hint="explore",
+        repo_full_name="o/r",
+        topic_probe_meta={"scope": "src/**", "commit_sha": "abc"},
+        prompt_results=[], aggregate={"mean_overall": 7.5},
+    ))
+    db.commit()
+
+    resp = client.get("/api/probes/probe-detail")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == "probe-detail"
+    assert body["topic"] == "detail-test"
+    assert body["scope"] == "src/**"  # ProbeRunResult shape (scope at top level)
+    assert body["commit_sha"] == "abc"
 
 
 async def test_get_probes_link_repo_first_error_preserved(client):
-    pass
+    """POST /api/probes without repo_full_name returns 400 link_repo_first."""
+    resp = client.post("/api/probes", json={"topic": "x"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "link_repo_first"
 
 
 async def test_get_probe_404_probe_not_found(client):
-    pass
+    resp = client.get("/api/probes/nonexistent-id")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "probe_not_found"
 
 
 async def test_get_probes_pagination_envelope(client, db):
-    pass
+    for i in range(5):
+        db.add(RunRow(
+            id=f"p-{i}", mode="topic_probe", status="completed",
+            started_at=datetime.utcnow(), topic=f"t-{i}",
+        ))
+    db.commit()
+
+    resp = client.get("/api/probes?limit=2")
+    body = resp.json()
+    assert {"total", "count", "offset", "items", "has_more", "next_offset"}.issubset(body.keys())
+    assert body["count"] == 2
+    assert body["has_more"] is True
 
 
 async def test_post_probes_invalid_request_400(client):
-    pass
+    resp = client.post("/api/probes", json={
+        "repo_full_name": "o/r", "topic": "x", "n_prompts": 1000,  # exceeds max
+    })
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid_request"
 
 
-async def test_post_probes_run_id_in_event_payloads(client, sse_capture):
-    pass
+async def test_post_probes_run_id_in_event_payloads(client, event_bus_capture):
+    resp = client.post("/api/probes", json={
+        "topic": "rid-test", "repo_full_name": "o/r", "n_prompts": 1,
+    })
+    # Drain the SSE response so all events are captured
+    list(resp.iter_lines())
+    probe_events = [e for e in event_bus_capture.events if e.kind.startswith("probe_")]
+    assert all(e.payload.get("run_id") for e in probe_events)
 
 
-async def test_subscription_filters_other_run_events(client, sse_capture, db):
+async def test_subscription_filters_other_run_events(client, db):
     """Events for a different run don't appear in this run's SSE stream."""
-    pass
+    from app.services.event_bus import event_bus
+    sub = event_bus.subscribe_for_run("target-run")
+
+    event_bus.publish("probe_started", {"run_id": "target-run", "topic": "t"})
+    event_bus.publish("probe_started", {"run_id": "other-run", "topic": "x"})
+    event_bus.publish("probe_completed", {"run_id": "target-run"})
+
+    received = []
+    async def collect():
+        async for evt in sub:
+            received.append(evt)
+            if evt.kind == "probe_completed":
+                break
+    import asyncio
+    await asyncio.wait_for(collect(), timeout=2)
+
+    assert all(e.payload.get("run_id") == "target-run" for e in received)
 
 
-async def test_subscription_excludes_taxonomy_changed_optimization_created(client, sse_capture):
-    """Events without run_id in payload are filtered out."""
-    pass
+async def test_subscription_excludes_taxonomy_changed_optimization_created(client):
+    """Events without run_id in data are filtered out."""
+    from app.services.event_bus import event_bus
+    sub = event_bus.subscribe_for_run("filt-run")
+
+    event_bus.publish("taxonomy_changed", {"trigger": "test"})  # no run_id
+    event_bus.publish("optimization_created", {"id": "o1"})  # no run_id
+    event_bus.publish("probe_completed", {"run_id": "filt-run"})
+
+    received = []
+    async def collect():
+        async for evt in sub:
+            received.append(evt)
+            if evt.kind == "probe_completed":
+                break
+    import asyncio
+    await asyncio.wait_for(collect(), timeout=2)
+
+    kinds = {e.kind for e in received}
+    assert kinds == {"probe_completed"}
 
 
 async def test_post_probes_writes_run_row_status_running_at_start(client, db):
-    pass
+    """RunRow exists with status='running' before generator returns.
+    Verified by checking the row exists during the SSE stream."""
+    import asyncio
+    resp = client.post("/api/probes", json={
+        "topic": "early-row", "repo_full_name": "o/r", "n_prompts": 1,
+    })
+    # First SSE event must be probe_started → row already exists at that point
+    first_line = next(resp.iter_lines())
+    assert b"probe_started" in first_line
+
+    # Now query for any RunRow rows from this run; row exists with mode='topic_probe'
+    rows = (await db.execute(select(RunRow).where(RunRow.mode == "topic_probe"))).scalars().all()
+    assert any(r.topic == "early-row" for r in rows)
+
+
+def _strip_volatile(line: bytes) -> str:
+    """Helper: strip timestamps + UUIDs for snapshot comparison."""
+    import re
+    s = line.decode("utf-8", errors="replace")
+    s = re.sub(r'"started_at":\s*"[^"]+"', '"started_at": "<TS>"', s)
+    s = re.sub(r'"completed_at":\s*"[^"]+"', '"completed_at": "<TS>"', s)
+    s = re.sub(r'"run_id":\s*"[a-f0-9-]+"', '"run_id": "<UUID>"', s)
+    s = re.sub(r'"id":\s*"[a-f0-9-]+"', '"id": "<UUID>"', s)
+    return s
 ```
 
-(Full test bodies follow the patterns established in earlier cycles.)
-
 - [ ] **Step 2: Run — fail because router still on legacy ProbeService dispatch**
+
+```bash
+cd backend && source .venv/bin/activate && pytest tests/test_probe_router.py -v
+```
+
+Expected: tests fail because (a) RunOrchestrator dispatch path not yet wired in routers/probes.py POST handler — first test `test_post_probes_sse_event_sequence_byte_identical` will fail because the response uses ProbeService (no run_id in payload yet), (b) GET endpoints don't yet read from RunRow.
 
 ### Task 11.2: GREEN — refactor probes.py shim
 
@@ -3289,43 +3883,190 @@ Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-desi
 
 8 tests per spec section 9 category 7.
 
-### Task 12.1: RED + GREEN — 8 seed shim tests
+### Task 12.1: RED — 8 seed shim tests
 
-- [ ] **Step 1: Test cases (paraphrased from spec §9 cat 7)**
+- [ ] **Step 1: Add tests with real assertion bodies**
+
+In `backend/tests/test_seed_router.py`:
 
 ```python
-# In backend/tests/test_seed_router.py
+import pytest
+from datetime import datetime
+from sqlalchemy import select
+from app.models import RunRow
 
-async def test_post_seed_response_shape_byte_identical_with_run_id(client):
-    """SeedOutput shape preserved + additive run_id field."""
+pytestmark = pytest.mark.asyncio
 
-async def test_post_seed_status_completed_on_success(client):
-    """All 4 status values reachable in response."""
 
-async def test_post_seed_status_partial_when_failures(client):
-    pass
+SEED_OUTPUT_REQUIRED_KEYS = {
+    "status", "batch_id", "tier", "prompts_generated", "prompts_optimized",
+    "prompts_failed", "estimated_cost_usd", "domains_touched",
+    "clusters_created", "summary", "duration_ms",
+}
+
+
+async def test_post_seed_response_shape_byte_identical_with_run_id(client, seed_orchestrator_mock):
+    """SeedOutput shape preserved + additive run_id field, no other changes."""
+    resp = client.post("/api/seed", json={
+        "project_description": "Test seed run for shape validation",
+        "prompt_count": 5,
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    # Existing keys must all be present
+    assert SEED_OUTPUT_REQUIRED_KEYS.issubset(body.keys())
+    # Additive run_id is the ONLY new key
+    new_keys = set(body.keys()) - SEED_OUTPUT_REQUIRED_KEYS
+    assert new_keys == {"run_id"}
+    assert isinstance(body["run_id"], str) and len(body["run_id"]) >= 32
+
+
+async def test_post_seed_status_completed_on_success(client, seed_orchestrator_mock):
+    """All prompts succeed → SeedOutput.status == 'completed'."""
+    resp = client.post("/api/seed", json={
+        "project_description": "Successful seed run", "prompt_count": 3,
+    })
+    assert resp.json()["status"] == "completed"
+
+
+async def test_post_seed_status_partial_when_failures(client, seed_orchestrator_mock):
+    """1+ succeeded AND 1+ failed → SeedOutput.status == 'partial'.
+
+    Mock the batch pipeline to return mixed results.
+    """
+    from unittest.mock import patch
+
+    async def _mixed_run_batch(*args, **kwargs):
+        from app.services.batch_pipeline import PendingOptimization
+        return [
+            PendingOptimization(prompt="p1", status="completed", optimization_id="o1"),
+            PendingOptimization(prompt="p2", status="failed", optimization_id=None),
+        ]
+
+    with patch("app.services.batch_pipeline.run_batch", side_effect=_mixed_run_batch):
+        resp = client.post("/api/seed", json={
+            "project_description": "Mixed", "prompt_count": 2,
+        })
+        assert resp.json()["status"] == "partial"
+        assert resp.json()["prompts_failed"] == 1
+        assert resp.json()["prompts_optimized"] == 1
+
 
 async def test_post_seed_status_failed_on_input_validation(client):
-    """Early-failure path: missing project_description + missing prompts → HTTP 200 with status='failed'."""
+    """Early-failure path: missing project_description + missing prompts + no
+    provider → HTTP 200 with status='failed' (preserves today's contract)."""
+    resp = client.post("/api/seed", json={})  # nothing supplied
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "failed"
+    assert "Requires project_description" in body["summary"]
+    assert body["prompts_optimized"] == 0
+
 
 async def test_get_seed_list_returns_only_seed_agent_runs(client, db):
-    pass
+    """GET /api/seed returns RunRow WHERE mode='seed_agent' only."""
+    db.add(RunRow(id="seed-list-1", mode="seed_agent", status="completed",
+                  started_at=datetime.utcnow()))
+    db.add(RunRow(id="probe-list-1", mode="topic_probe", status="completed",
+                  started_at=datetime.utcnow()))
+    db.commit()
+
+    resp = client.get("/api/seed")
+    assert resp.status_code == 200
+    ids = {r["id"] for r in resp.json()["items"]}
+    assert "seed-list-1" in ids and "probe-list-1" not in ids
+
 
 async def test_get_seed_by_id_404_on_miss(client):
-    pass
+    resp = client.get("/api/seed/nonexistent-uuid")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "run_not_found"
 
-async def test_post_seed_persists_run_row_at_start(client, db):
-    """RunRow exists with status='running' before generator returns."""
+
+async def test_post_seed_persists_run_row_at_start(client, db, seed_orchestrator_mock):
+    """RunRow exists with status='running' before/during generator runs.
+    Verified by checking the row appears in the DB after the call returns."""
+    resp = client.post("/api/seed", json={
+        "project_description": "Persisted at start", "prompt_count": 2,
+    })
+    body = resp.json()
+    run_id = body["run_id"]
+    row = await db.get(RunRow, run_id)
+    assert row is not None
+    assert row.mode == "seed_agent"
+    assert row.status in ("completed", "partial", "failed")  # terminal by call return
+
 
 async def test_post_seed_duration_ms_none_safe_when_completed_at_none(client, db):
-    pass
+    """Edge case: a row with completed_at=None still serializes without crash."""
+    db.add(RunRow(
+        id="seed-no-completed", mode="seed_agent", status="failed",
+        started_at=datetime.utcnow(), completed_at=None,
+        seed_agent_meta={"batch_id": "x"},
+        aggregate={"prompts_optimized": 0, "prompts_failed": 0, "summary": "x"},
+        taxonomy_delta={"domains_touched": [], "clusters_created": 0},
+    ))
+    db.commit()
+
+    resp = client.get("/api/seed/seed-no-completed")
+    assert resp.status_code == 200
+    # SeedOutput-style serialization not applicable on GET (uses RunResult);
+    # but the GET-by-id endpoint should not crash
+    body = resp.json()
+    assert body["completed_at"] is None
 ```
 
-- [ ] **Step 2: Refactor `routers/seed.py`**
+- [ ] **Step 2: Run tests — fail because router not refactored yet**
 
-Replace `seed_taxonomy` handler to dispatch through RunOrchestrator and add new GET endpoints. See spec section 6.3 for the canonical shim shape.
+```bash
+cd backend && source .venv/bin/activate && pytest tests/test_seed_router.py -v
+```
 
-- [ ] **Step 3: Run tests + commit**
+Expected: tests fail because POST /api/seed doesn't yet dispatch through RunOrchestrator (no `run_id` in response), GET /api/seed and GET /api/seed/{id} don't exist yet.
+
+### Task 12.2: GREEN — refactor `routers/seed.py`
+
+- [ ] **Step 1: Replace seed_taxonomy handler**
+
+Replace the existing handler body to dispatch through `RunOrchestrator` and serialize the resulting `RunRow` back to `SeedOutput`. See spec section 6.3 for the canonical shim shape including the `aggregate`/`seed_meta`/`taxonomy_delta` None-guards.
+
+- [ ] **Step 2: Add new GET endpoints**
+
+```python
+@router.get("/api/seed", response_model=RunListResponse)
+async def list_seed_runs(
+    status: str | None = Query(None),
+    project_id: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> RunListResponse:
+    base = select(RunRow).where(RunRow.mode == "seed_agent")
+    if status: base = base.where(RunRow.status == status)
+    if project_id: base = base.where(RunRow.project_id == project_id)
+    # ... pagination as in routers/runs.py
+
+
+@router.get("/api/seed/{run_id}", response_model=RunResult)
+async def get_seed_run(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> RunResult:
+    row = await db.get(RunRow, run_id)
+    if row is None or row.mode != "seed_agent":
+        raise HTTPException(status_code=404, detail="run_not_found")
+    return _serialize_full(row)  # reuse routers/runs.py helper
+```
+
+- [ ] **Step 3: Run tests — must pass**
+
+```bash
+cd backend && source .venv/bin/activate && pytest tests/test_seed_router.py -v
+```
+
+Expected: 8/8 PASS.
+
+### Task 12.3: REFACTOR + INTEGRATE + OPERATE + commit
 
 ```bash
 cd backend && source .venv/bin/activate && pytest tests/test_seed_router.py -v
