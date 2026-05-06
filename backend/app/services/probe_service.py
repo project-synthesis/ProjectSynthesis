@@ -19,11 +19,9 @@ See docs/specs/topic-probe-2026-04-29.md sec 4.5 for full design.
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import logging
 import statistics
 from collections.abc import AsyncIterator
-from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -57,36 +55,23 @@ from app.schemas.probes import (
 )
 from app.services.batch_orchestrator import BATCH_CONCURRENCY_BY_TIER
 from app.services.event_bus import event_bus
+# v0.4.17 P2 -- moved-symbol re-imports for backward compat + internal call sites
+from app.services.probe_common import (
+    _apply_scope_filter,
+    _commit_with_retry,
+    _stub_dimension_scores,
+    _truncate,
+    current_probe_id,  # noqa: F401 -- re-export for legacy `from probe_service import current_probe_id`
+)
 from app.services.probe_generation import generate_probe_prompts
 from app.services.taxonomy.event_logger import get_event_logger
 
 logger = logging.getLogger(__name__)
 
-# C4<->C7 dependency resolution -- declare ContextVar where it is SET (here).
-# C7's probe_event_correlation.py re-exports + adds inject_probe_id helper.
-current_probe_id: ContextVar[str | None] = ContextVar(
-    "current_probe_id", default=None,
-)
-
 
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
-
-
-def _apply_scope_filter(files: list[str], scope: str) -> list[str]:
-    """Post-retrieval glob filter.
-
-    ``RepoIndexQuery.query_curated_context`` has no scope parameter, so the
-    probe applies the filter here at the boundary.
-    """
-    if scope == "**/*" or not scope:
-        return files
-    return [f for f in files if fnmatch.fnmatch(f, scope)]
-
-
-def _truncate(s: str, n: int) -> str:
-    return s if len(s) <= n else s[: n - 3] + "..."
 
 
 def _resolve_followups(
@@ -251,76 +236,6 @@ def _render_final_report(
         f"- scoring_formula_version: {agg.scoring_formula_version}"
     )
     return "\n".join(lines)
-
-
-async def _commit_with_retry(
-    db: AsyncSession,
-    *,
-    max_attempts: int = 5,
-    probe_id: str = "",
-) -> None:
-    """Commit with exponential backoff on SQLite "database is locked".
-
-    The canonical batch path has just committed N Optimization INSERTs +
-    OptimizationPattern joins + cluster updates immediately before. The
-    warm-path engine runs in the same process and may hold writers
-    concurrently. Under SQLite WAL the final ProbeRun UPDATE can hit
-    transient lock contention even with busy_timeout=30s. Retrying with
-    backoff (0.5s, 1s, 2s, 4s, 8s -- max ~15s) catches the window
-    without losing the terminal-state write.
-
-    Raises the underlying error after ``max_attempts`` so the
-    orchestrator's top-level except handler still marks the row failed.
-    """
-    import sqlalchemy.exc as _sa_exc
-
-    delay = 0.5
-    last_exc: Exception | None = None
-    for attempt in range(max_attempts):
-        try:
-            await db.commit()
-            if attempt > 0:
-                logger.info(
-                    "probe %s commit succeeded on attempt %d",
-                    probe_id, attempt + 1,
-                )
-            return
-        except _sa_exc.OperationalError as exc:
-            last_exc = exc
-            if "database is locked" not in str(exc):
-                raise
-            logger.warning(
-                "probe %s commit hit lock (attempt %d/%d); backing off %.1fs",
-                probe_id, attempt + 1, max_attempts, delay,
-            )
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, 8.0)
-    if last_exc is not None:
-        raise last_exc
-
-
-def _stub_dimension_scores() -> DimensionScores:
-    """Per-prompt deterministic baseline scores.
-
-    Tier 1 ProbeService synthesizes per-prompt results in-memory rather than
-    calling the full pipeline (which has heavy provider/loader dependencies
-    not present in unit tests). The dimension values are intentionally
-    asymmetric so analysis-vs-default weight differences surface in the
-    aggregate (AC-C4-6).
-
-    Default-weights overall: 6.80; analysis-weights overall: 7.30.
-    """
-    return DimensionScores(
-        clarity=9.0,
-        specificity=9.0,
-        structure=8.0,
-        faithfulness=4.0,
-        conciseness=4.0,
-    )
 
 
 def _resolve_curated_files(curated: Any) -> list[str]:
