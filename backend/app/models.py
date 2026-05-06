@@ -104,6 +104,28 @@ class Optimization(Base):
     improvement_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     suggestions: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
 
+    # Hotpath indices created by migration cc9c44e78f78 — every column in
+    # ``OptimizationService.VALID_SORT_COLUMNS`` that the list endpoints can
+    # sort/filter on, plus the ``(project_id, created_at DESC)`` composite
+    # that serves the most common "WHERE project_id = ? ORDER BY created_at
+    # DESC" pattern out of one B-tree. ``project_id`` already has its own
+    # column-level index from ``index=True`` on the FK above; this row-level
+    # composite stays for the join-with-sort case.
+    __table_args__ = (
+        Index("ix_optimizations_created_at", "created_at"),
+        Index("ix_optimizations_overall_score", "overall_score"),
+        Index("ix_optimizations_task_type", "task_type"),
+        Index("ix_optimizations_status", "status"),
+        Index("ix_optimizations_strategy_used", "strategy_used"),
+        Index("ix_optimizations_intent_label", "intent_label"),
+        Index("ix_optimizations_domain", "domain"),
+        Index(
+            "ix_optimizations_project_created",
+            "project_id",
+            created_at.desc(),
+        ),
+    )
+
 
 class Feedback(Base):
     __tablename__ = "feedbacks"
@@ -117,6 +139,12 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
     rating: Mapped[str] = mapped_column(String, nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # FK join column — ``WHERE optimization_id = ?`` is the only feedback
+    # query path. Created by migration cc9c44e78f78.
+    __table_args__ = (
+        Index("ix_feedbacks_optimization_id", "optimization_id"),
+    )
 
 
 class TaskTypeTelemetry(Base):
