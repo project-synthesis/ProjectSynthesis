@@ -31,7 +31,6 @@ from app.services.generators.base import GeneratorResult
 from app.services.probe_common import (
     _apply_scope_filter,
     _truncate,
-    current_run_id,
 )
 from app.services.probe_phases import (
     _resolve_curated_files,
@@ -759,8 +758,3 @@ class TopicProbeGenerator:
 
 
 __all__ = ["TopicProbeGenerator"]
-
-
-# Suppress unused-import warning — current_run_id is re-exported for callers
-# that want to thread the ContextVar directly.
-_ = current_run_id
