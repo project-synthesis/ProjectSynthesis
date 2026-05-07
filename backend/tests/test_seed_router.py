@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
