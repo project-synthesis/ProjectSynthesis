@@ -17,7 +17,6 @@ from app.schemas.runs import RunRequest
 from app.services.generators.base import GeneratorResult
 from app.services.run_orchestrator import RunOrchestrator
 
-
 pytestmark = pytest.mark.asyncio
 
 
@@ -300,7 +299,7 @@ async def test_write_queue_lambdas_commit_before_returning(write_queue, db) -> N
     gen = StubProbeGenerator()
     orch = await _build(write_queue, gen)
     req = RunRequest(mode="topic_probe", payload={})
-    row = await orch.run("topic_probe", req, run_id="commit-1")
+    await orch.run("topic_probe", req, run_id="commit-1")
     # The fact that the row is readable from a different session proves commit happened
     from sqlalchemy import select
     await db.commit()
