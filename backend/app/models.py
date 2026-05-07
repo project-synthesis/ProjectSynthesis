@@ -670,9 +670,10 @@ class ProbeRun(RunRow):
     table) by extracting them into `topic_probe_meta` JSON before parent
     __init__. Property accessors expose them back for legacy reads.
 
-    REQUIRED for PR1 backward-compat: probe_service.py:404 + 1577 instantiate
-    ProbeRun with `scope=...` and `commit_sha=...` kwargs. The custom
-    __init__ below routes those into `topic_probe_meta`.
+    REQUIRED for PR1 backward-compat: ``probe_service.py`` instantiates
+    ProbeRun with ``scope=...`` and ``commit_sha=...`` kwargs (see the two
+    ``ProbeRun(...)`` call sites at the start of ``ProbeService.start_probe``).
+    The custom ``__init__`` below routes those into ``topic_probe_meta``.
 
     Inherits __tablename__ = "run_row" from RunRow (no STI).
     """
