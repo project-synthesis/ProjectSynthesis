@@ -50,8 +50,14 @@ async def test_get_runs_filter_by_project_id(app_client: AsyncClient, db_session
     from app.models import PromptCluster
     proj = PromptCluster(id="proj-x", state="project", label="x")
     db_session.add(proj)
-    db_session.add(RunRow(id="r-with-proj", mode="topic_probe", status="completed", started_at=datetime.utcnow(), project_id="proj-x"))
-    db_session.add(RunRow(id="r-no-proj", mode="topic_probe", status="completed", started_at=datetime.utcnow()))
+    db_session.add(RunRow(
+        id="r-with-proj", mode="topic_probe", status="completed",
+        started_at=datetime.utcnow(), project_id="proj-x",
+    ))
+    db_session.add(RunRow(
+        id="r-no-proj", mode="topic_probe", status="completed",
+        started_at=datetime.utcnow(),
+    ))
     await db_session.commit()
 
     resp = await app_client.get("/api/runs?project_id=proj-x")

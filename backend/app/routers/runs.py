@@ -21,8 +21,8 @@ router = APIRouter(prefix="/api", tags=["runs"])
 def _serialize_summary(row: RunRow) -> RunSummary:
     return RunSummary(
         id=row.id,
-        mode=row.mode,
-        status=row.status,
+        mode=row.mode,  # type: ignore[arg-type]
+        status=row.status,  # type: ignore[arg-type]
         started_at=row.started_at,
         completed_at=row.completed_at,
         project_id=row.project_id,
@@ -36,8 +36,8 @@ def _serialize_summary(row: RunRow) -> RunSummary:
 def _serialize_full(row: RunRow) -> RunResult:
     return RunResult(
         id=row.id,
-        mode=row.mode,
-        status=row.status,
+        mode=row.mode,  # type: ignore[arg-type]
+        status=row.status,  # type: ignore[arg-type]
         started_at=row.started_at,
         completed_at=row.completed_at,
         error=row.error,
