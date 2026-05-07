@@ -2034,4 +2034,10 @@ try:
 except ImportError:
     pass
 
+try:
+    from app.routers.runs import router as runs_router
+    app.include_router(runs_router)
+except ImportError:
+    pass
+
 asgi_app = app
