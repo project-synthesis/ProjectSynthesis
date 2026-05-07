@@ -1,9 +1,12 @@
 """Shared test fixtures + helpers."""
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock
+from dataclasses import dataclass, field
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -327,3 +330,225 @@ def reset_taxonomy_engine():
     reset_engine()
     yield
     reset_engine()
+
+
+# ============================================================
+# Foundation P3 fixtures (added 2026-05-06)
+# ============================================================
+#
+# These fixtures support Cycles 4, 6, 7, 9, 11, 12 of the Foundation P3
+# substrate-unification plan. They isolate per-test side effects on the
+# global event bus, taxonomy event logger, and Sonnet provider so the
+# RunOrchestrator/RunGenerator integration tests can assert on observable
+# state (warnings, events, decisions) without bleeding across tests.
+
+@dataclass
+class _AuditHookCapture:
+    warnings: list = field(default_factory=list)
+    _caplog: Any = None
+
+    def reset(self) -> None:
+        self.warnings.clear()
+
+    def warn(self, msg: str) -> None:
+        self.warnings.append(msg)
+
+    def populate_from_caplog(self) -> None:
+        """Refresh warnings from the underlying caplog records."""
+        if self._caplog is None:
+            return
+        self.warnings = [
+            str(r.message) for r in self._caplog.records
+            if "audit" in r.name.lower() or "[AUDIT-HOOK]" in str(r.message)
+        ]
+
+
+@pytest.fixture
+def audit_hook(caplog) -> _AuditHookCapture:
+    """Captures audit-hook WARN records from logger output.
+
+    The real audit hook (database.py event listener for direct read-engine writes)
+    emits via ``logging.warning("[AUDIT-HOOK] direct write detected: ...")``. This
+    fixture lets tests assert no such warnings fired during a code path. Tests
+    call ``audit_hook.populate_from_caplog()`` then check ``audit_hook.warnings``.
+    """
+    cap = _AuditHookCapture(_caplog=caplog)
+    caplog.set_level(logging.WARNING)
+    yield cap
+    cap.populate_from_caplog()
+
+
+@dataclass
+class _BusEvent:
+    kind: str
+    payload: dict
+
+
+@dataclass
+class _EventBusCapture:
+    events: list[_BusEvent] = field(default_factory=list)
+
+    def events_for_run(self, run_id: str) -> list[_BusEvent]:
+        return [e for e in self.events if e.payload.get("run_id") == run_id]
+
+
+@pytest_asyncio.fixture
+async def event_bus_capture(monkeypatch) -> _EventBusCapture:
+    """Captures every event published to event_bus during the test.
+    Hooks publish() directly, parallel to existing subscribers."""
+    from app.services.event_bus import event_bus
+    cap = _EventBusCapture()
+    real_publish = event_bus.publish
+
+    def _wrapped(event_type, data):
+        cap.events.append(_BusEvent(
+            kind=event_type, payload=data if isinstance(data, dict) else {},
+        ))
+        return real_publish(event_type, data)
+
+    monkeypatch.setattr(event_bus, "publish", _wrapped)
+    yield cap
+
+
+@dataclass
+class _TaxDecision:
+    path: str
+    op: str
+    decision: str
+    context: dict
+
+
+@dataclass
+class _TaxonomyEventCapture:
+    decisions: list[_TaxDecision] = field(default_factory=list)
+
+    def decisions_with_op(self, op: str) -> list[_TaxDecision]:
+        return [d for d in self.decisions if d.op == op]
+
+
+@pytest.fixture
+def taxonomy_event_capture(monkeypatch) -> _TaxonomyEventCapture:
+    """Captures every taxonomy_event_logger.log_decision call."""
+    from app.services.taxonomy import event_logger as el_mod
+    cap = _TaxonomyEventCapture()
+    real_logger_class = el_mod.TaxonomyEventLogger
+    real_log = real_logger_class.log_decision
+
+    def _wrapped(self, path, op, decision, context):
+        cap.decisions.append(_TaxDecision(
+            path=path, op=op, decision=decision, context=context,
+        ))
+        return real_log(self, path, op, decision, context)
+
+    monkeypatch.setattr(real_logger_class, "log_decision", _wrapped)
+    yield cap
+
+
+@pytest.fixture
+def provider_mock() -> Any:
+    """Default Sonnet provider mock returning a 'completed' response."""
+    p = AsyncMock()
+    p.complete_parsed.return_value = AsyncMock(
+        result_text="optimized prompt",
+        model="claude-sonnet-4-6",
+    )
+    return p
+
+
+@pytest.fixture
+def provider_partial_mock() -> Any:
+    """Simulates 1 success + 1 failure across N prompts."""
+    p = AsyncMock()
+    counter = {"n": 0}
+
+    async def _call(*args, **kwargs):
+        counter["n"] += 1
+        if counter["n"] % 2 == 0:
+            raise RuntimeError("partial failure simulation")
+        return AsyncMock(result_text="ok", model="claude-sonnet-4-6")
+
+    p.complete_parsed = _call
+    return p
+
+
+@pytest.fixture
+def provider_all_fail_mock() -> Any:
+    p = AsyncMock()
+    p.complete_parsed.side_effect = RuntimeError("all fail simulation")
+    return p
+
+
+@pytest.fixture
+def provider_429_then_ok_mock() -> Any:
+    """First call raises 429, subsequent calls succeed."""
+    p = AsyncMock()
+    counter = {"n": 0}
+
+    async def _call(*args, **kwargs):
+        counter["n"] += 1
+        if counter["n"] == 1:
+            err = RuntimeError("HTTP 429: rate limited")
+            raise err
+        return AsyncMock(result_text="ok", model="claude-sonnet-4-6")
+
+    p.complete_parsed = _call
+    return p
+
+
+@pytest.fixture
+def provider_hanging_mock() -> Any:
+    """Provider that never returns — used for cancellation tests."""
+    p = AsyncMock()
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    p.complete_parsed = _hang
+    return p
+
+
+@pytest.fixture
+def seed_orchestrator_mock() -> Any:
+    """Mock SeedOrchestrator returning a successful generation."""
+    orch = MagicMock()
+    gen_result = MagicMock()
+    gen_result.prompts = ["prompt 1", "prompt 2", "prompt 3"]
+    orch.generate = AsyncMock(return_value=gen_result)
+    return orch
+
+
+@pytest.fixture
+def seed_orchestrator_failing_mock() -> Any:
+    orch = MagicMock()
+    orch.generate = AsyncMock(side_effect=RuntimeError("generation failed"))
+    return orch
+
+
+@pytest.fixture
+def repo_index_mock() -> Any:
+    rix = MagicMock()
+    rix.query_curated_context = AsyncMock(return_value=MagicMock(
+        relevant_files=[], explore_synthesis_excerpt="", known_domains=[],
+    ))
+    return rix
+
+
+@pytest.fixture
+def taxonomy_mock() -> Any:
+    return MagicMock()
+
+
+@pytest_asyncio.fixture
+async def mcp_test_client():
+    """Real MCP client connected to the in-process MCP server.
+
+    Uses ``fastmcp.Client`` for actual MCP SDK round-trip — exercises the same
+    schema-validation path Claude Code + VSCode bridge use, NOT the FastAPI
+    test client. Required for spec § 11 risk: MCP SDK strict-validation of
+    additive run_id field.
+    """
+    from fastmcp import Client
+
+    from app.mcp_server import mcp
+    async with Client(mcp) as client:
+        yield client
