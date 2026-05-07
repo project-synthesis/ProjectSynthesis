@@ -55,7 +55,27 @@ async def write_queue(writer_engine):
 
 
 @pytest_asyncio.fixture
-async def db(writer_engine) -> AsyncGenerator[AsyncSession, None]:
+async def patched_session_factory(writer_engine, monkeypatch):
+    """Repoint app.database.async_session_factory at the shared in-memory DB.
+
+    RunOrchestrator._reload uses the canonical async_session_factory for the
+    "standard read path". Without this patch the read goes against the
+    production engine and never sees rows the WriteQueue committed to the
+    in-memory writer engine. Mirrors how production wires both engines onto
+    the same SQLite file so reads see writes.
+    """
+    import app.database as database_mod
+    new_factory = async_sessionmaker(
+        writer_engine, class_=AsyncSession, expire_on_commit=False,
+    )
+    monkeypatch.setattr(database_mod, "async_session_factory", new_factory)
+    yield new_factory
+
+
+@pytest_asyncio.fixture
+async def db(
+    writer_engine, patched_session_factory,
+) -> AsyncGenerator[AsyncSession, None]:
     """Read session against the same shared URI so commits from the WriteQueue
     are immediately visible. Created AFTER writer_engine to ensure schema
     materialization (Base.metadata.create_all) has happened."""
