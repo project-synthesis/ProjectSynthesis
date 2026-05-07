@@ -595,39 +595,109 @@ class PromptTemplate(Base):
     )
 
 
-class ProbeRun(Base):
-    """Topic Probe run (Tier 1, v0.5.0).
+class RunRow(Base):
+    """Unified run-state model (Foundation P3, v0.4.18).
 
-    Captures a single user-initiated probe execution: topic, scope, the
-    generated prompts (via probe-agent.md → Sonnet), each per-prompt
-    optimization outcome, the taxonomy delta over the run window, and
-    the final markdown report.
+    Replaces ProbeRun and introduces row-state persistence to the seed
+    surface for the first time. See spec section 4.1.
+
+    Mode discriminator values: 'topic_probe' | 'seed_agent'. Future modes
+    (e.g., 'scheduled_probe', 'replay_run') extend this enum.
     """
-    __tablename__ = "probe_run"
+    __tablename__ = "run_row"
 
+    # Identity / discriminator
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    topic: Mapped[str] = mapped_column(String, nullable=False)
-    scope: Mapped[str] = mapped_column(String, nullable=False, default="**/*")
-    intent_hint: Mapped[str] = mapped_column(String, nullable=False, default="explore")
-    repo_full_name: Mapped[str] = mapped_column(String, nullable=False)
-    project_id: Mapped[str | None] = mapped_column(
-        String, ForeignKey("prompt_cluster.id"), nullable=True,
+    mode: Mapped[str] = mapped_column(String, nullable=False)
+
+    # Shared lifecycle
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="running", server_default="running",
     )
-    commit_sha: Mapped[str | None] = mapped_column(String, nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow,
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    prompts_generated: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Shared correlation
+    project_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("prompt_cluster.id"), nullable=True,
+    )
+    repo_full_name: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Promoted from probe-mode (Q2 hybrid — query-hot)
+    topic: Mapped[str | None] = mapped_column(String, nullable=True)
+    intent_hint: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Shared output payloads
+    prompts_generated: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
     prompt_results: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     aggregate: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     taxonomy_delta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     final_report: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String, nullable=False, default="running")
+
+    # Suite linkage (T2 readiness)
     suite_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Mode-specific JSON metadata
+    topic_probe_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    seed_agent_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Deliberately NO polymorphic_on / polymorphic_identity — SQLAlchemy STI
+    # is awkward when neither parent nor subclasses are routinely instantiated
+    # by mode-discriminator. PR1 uses option (b) from spec § 10.1: ProbeRun
+    # is a Python alias of RunRow with property accessors. select(ProbeRun)
+    # returns ALL run_row rows — but PR1 has zero seed_agent rows since the
+    # seed router/MCP path doesn't dispatch through RunOrchestrator until PR2.
+    # PR2 deletes the alias entirely before any seed_agent row exists.
 
     __table_args__ = (
-        Index("ix_probe_run_status_started", "status", "started_at"),
-        Index("ix_probe_run_project_id", "project_id"),
+        Index("ix_run_row_mode_started", "mode", "started_at"),
+        Index("ix_run_row_status_started", "status", "started_at"),
+        Index("ix_run_row_project_id", "project_id"),
+        Index("ix_run_row_topic", "topic"),
     )
+
+
+class ProbeRun(RunRow):
+    """Backward-compat Python alias for RunRow with legacy kwarg extraction.
+
+    Defaults mode='topic_probe' and accepts legacy keyword arguments
+    `scope` and `commit_sha` (which existed as columns on the old probe_run
+    table) by extracting them into `topic_probe_meta` JSON before parent
+    __init__. Property accessors expose them back for legacy reads.
+
+    REQUIRED for PR1 backward-compat: probe_service.py:404 + 1577 instantiate
+    ProbeRun with `scope=...` and `commit_sha=...` kwargs. The custom
+    __init__ below routes those into `topic_probe_meta`.
+
+    Inherits __tablename__ = "run_row" from RunRow (no STI).
+    """
+
+    @property
+    def scope(self) -> str:
+        return (self.topic_probe_meta or {}).get("scope", "**/*")
+
+    @property
+    def commit_sha(self) -> str | None:
+        return (self.topic_probe_meta or {}).get("commit_sha")
+
+    def __init__(self, **kwargs: Any) -> None:
+        # Extract legacy kwargs that became JSON metadata in P3
+        scope = kwargs.pop("scope", None)
+        commit_sha = kwargs.pop("commit_sha", None)
+
+        if scope is not None or commit_sha is not None:
+            existing = kwargs.get("topic_probe_meta") or {}
+            if scope is not None:
+                existing["scope"] = scope
+            if commit_sha is not None:
+                existing["commit_sha"] = commit_sha
+            kwargs["topic_probe_meta"] = existing
+
+        # Default mode='topic_probe' for legacy callers
+        kwargs.setdefault("mode", "topic_probe")
+        super().__init__(**kwargs)
