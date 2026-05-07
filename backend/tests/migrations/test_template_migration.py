@@ -25,6 +25,7 @@ import pytest
 from sqlalchemy import create_engine, text
 
 _PRE_TEMPLATE_HEAD = "bad4ceeb3451"
+_TEMPLATE_REVISION = "f1e2d3c4b5a6"  # Template architecture migration (child of _PRE_TEMPLATE_HEAD).
 _BACKEND_DIR = Path(__file__).resolve().parents[2]  # …/backend
 _ALEMBIC_INI = _BACKEND_DIR / "alembic.ini"
 
@@ -172,7 +173,15 @@ def _seed_template_cluster(
 
 
 def _run_template_migration(engine, ini_path: Path) -> None:
-    _alembic(["upgrade", "head"], ini_path)
+    """Apply only the template-entity migration (``f1e2d3c4b5a6``) — not all
+    later migrations. This keeps these tests focused on template-migration
+    behavior and avoids walking later, unrelated migrations whose own
+    invariants (e.g., the run_row partial-state guard introduced in
+    ``58510d3f6b81``, which fires when ``stamp _PRE_TEMPLATE_HEAD`` ->
+    ``upgrade head`` re-traverses ``d3f5a8c91024 → 58510d3f6b81``) would
+    otherwise interfere with these template-specific assertions.
+    """
+    _alembic(["upgrade", _TEMPLATE_REVISION], ini_path)
 
 
 # ---------------------------------------------------------------------------
@@ -220,22 +229,27 @@ def test_happy_path_migrates_template_cluster(migrated_db):
 def test_migration_is_idempotent(migrated_db):
     """Re-enter ``upgrade()`` a second time against an already-migrated DB.
 
-    A plain ``alembic upgrade head`` twice is a no-op the second time because
-    alembic's revision pointer already sits at head — the function body never
+    A plain ``alembic upgrade <rev>`` twice is a no-op the second time because
+    alembic's revision pointer already sits at <rev> — the function body never
     executes. To actually exercise the in-function ``_table_exists`` /
     ``_column_exists`` / ``_index_exists`` / insert pre-check guards, we
     ``alembic stamp bad4ceeb3451`` to rewind the revision pointer without
-    touching schema or data, then re-run ``alembic upgrade head``. The second
+    touching schema or data, then re-run ``upgrade f1e2d3c4b5a6``. The second
     ``upgrade()`` now runs against a DB where every DDL object already exists
     and the prompt_templates row is already present — and must converge
     without crashing, duplicating rows, or re-flipping cluster state.
+
+    NOTE: The second upgrade targets ``_TEMPLATE_REVISION`` (not ``head``)
+    so we don't re-walk later, unrelated migrations whose own invariants
+    (e.g., the run_row partial-state guard in ``58510d3f6b81``) would trip
+    on the stamp-back pattern.
     """
     engine, ini_path = migrated_db
     _seed_template_cluster(engine, cluster_id="c1", has_opt=True, parent_id=None)
     _run_template_migration(engine, ini_path)
 
     # Rewind the alembic revision pointer without touching schema/data so the
-    # next ``upgrade head`` actually re-enters ``upgrade()``.
+    # next ``upgrade f1e2d3c4b5a6`` actually re-enters ``upgrade()``.
     _alembic(["stamp", _PRE_TEMPLATE_HEAD], ini_path)
     _run_template_migration(engine, ini_path)
 

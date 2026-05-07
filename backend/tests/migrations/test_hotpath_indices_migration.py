@@ -79,7 +79,7 @@ def _indices_on(engine, table: str) -> set[str]:
 
 def test_upgrade_creates_all_optimization_indices(fresh_db):
     engine, ini_path = fresh_db
-    _alembic(["upgrade", "head"], ini_path)
+    _alembic(["upgrade", _HOTPATH_REVISION], ini_path)
 
     opt_indices = _indices_on(engine, "optimizations")
     fb_indices = _indices_on(engine, "feedbacks")
@@ -91,14 +91,20 @@ def test_upgrade_creates_all_optimization_indices(fresh_db):
 
 
 def test_upgrade_is_idempotent(fresh_db):
-    """Running upgrade twice must converge — indices are not duplicated."""
+    """Running upgrade twice must converge — indices are not duplicated.
+
+    The second upgrade targets ``_HOTPATH_REVISION`` (not ``head``) so we
+    don't re-walk later, unrelated migrations whose own invariants (e.g.,
+    the run_row partial-state guard in ``58510d3f6b81``) would trip on the
+    stamp-back pattern.
+    """
     engine, ini_path = fresh_db
-    _alembic(["upgrade", "head"], ini_path)
+    _alembic(["upgrade", _HOTPATH_REVISION], ini_path)
 
     # Rewind the alembic pointer to the pre-hotpath revision, then re-run.
     # Because each DDL is guarded with `_has_index()`, the second run is a no-op.
     _alembic(["stamp", _PRE_HOTPATH_HEAD], ini_path)
-    _alembic(["upgrade", "head"], ini_path)
+    _alembic(["upgrade", _HOTPATH_REVISION], ini_path)
 
     opt_indices = _indices_on(engine, "optimizations")
     assert _EXPECTED_OPT_INDICES <= opt_indices, "indices lost on re-entry"
@@ -106,7 +112,7 @@ def test_upgrade_is_idempotent(fresh_db):
 
 def test_downgrade_drops_new_indices(fresh_db):
     engine, ini_path = fresh_db
-    _alembic(["upgrade", "head"], ini_path)
+    _alembic(["upgrade", _HOTPATH_REVISION], ini_path)
     _alembic(["downgrade", _PRE_HOTPATH_HEAD], ini_path)
 
     opt_indices = _indices_on(engine, "optimizations")
