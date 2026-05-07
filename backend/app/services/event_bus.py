@@ -5,6 +5,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,88 @@ class EventBus:
     @property
     def subscriber_count(self) -> int:
         return len(self._subscribers)
+
+    def subscribe_for_run(self, run_id: str) -> "_RunSubscription":
+        """Filtered subscription. Yields events where data.run_id == run_id.
+
+        Includes 500ms replay window from the existing _replay_buffer.
+        Excludes events without run_id in their data dict (taxonomy_changed,
+        optimization_created, etc.).
+        """
+        return _RunSubscription(self, run_id)
+
+
+@dataclass
+class _EventForRun:
+    """Lightweight envelope for SSE consumers of a per-run subscription."""
+    kind: str
+    payload: dict
+
+
+class _RunSubscription:
+    """Filtered async iterator yielding only events where payload.run_id == run_id.
+
+    Backed by a per-instance asyncio.Queue that the parent EventBus pushes to
+    via the existing _subscribers set. Filter happens at iteration time so
+    subscribers that don't carry run_id are excluded silently.
+    """
+
+    def __init__(self, bus: "EventBus", run_id: str) -> None:
+        self._bus = bus
+        self._run_id = run_id
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+        self._closed = False
+
+        # Register on bus's existing subscribers set
+        self._bus._subscribers.add(self._queue)
+
+        # 500ms ring-buffer replay from the existing _replay_buffer
+        now = time.time()
+        for payload in list(self._bus._replay_buffer):
+            if now - payload["timestamp"] > 0.5:
+                continue
+            data = payload.get("data") or {}
+            if isinstance(data, dict) and data.get("run_id") == run_id:
+                try:
+                    self._queue.put_nowait(payload)
+                except asyncio.QueueFull:
+                    pass  # replay best-effort
+
+    def __aiter__(self) -> "_RunSubscription":
+        return self
+
+    async def __anext__(self) -> _EventForRun:
+        while True:
+            payload = await self._queue.get()
+            # Two distinct sentinel conditions: aclose() pushes None;
+            # bus.shutdown() pushes the bus's _SHUTDOWN_SENTINEL singleton.
+            # Handle both safely without crashing on .get() of a non-dict.
+            if payload is None:
+                self._cleanup()
+                raise StopAsyncIteration
+            if not isinstance(payload, dict):
+                # _SHUTDOWN_SENTINEL or any other non-dict marker
+                self._cleanup()
+                raise StopAsyncIteration
+            data = payload.get("data") or {}
+            if isinstance(data, dict) and data.get("run_id") == self._run_id:
+                return _EventForRun(
+                    kind=payload.get("event"),
+                    payload=data,
+                )
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._queue.put_nowait(None)  # sentinel
+        except asyncio.QueueFull:
+            pass
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        self._bus._subscribers.discard(self._queue)
 
 
 event_bus = EventBus()
