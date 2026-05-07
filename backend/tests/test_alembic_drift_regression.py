@@ -369,13 +369,17 @@ def test_alembic_check_reports_no_drift():
     commit reintroduces drift — declared model vs. on-disk schema mismatch
     — this assertion fails immediately with the diff in stdout.
 
-    The production DB is the only correct comparison target because a
-    handful of columns are added at startup time by ``app/main.py`` (see
-    the chain of idempotent ``ALTER TABLE optimizations ADD COLUMN
-    routing_tier`` etc. starting at line ~600) rather than via an alembic
-    migration. A freshly migrated DB would surface those as "drift" and
-    drown the real signal — the user-verified baseline pins the live state
-    that lifespan + migrations together produce.
+    Originally the production DB was the only correct comparison target
+    because ~12 columns were added at startup time by ``app/main.py`` via
+    idempotent ``ALTER TABLE`` blocks. Migration ``bdd8e96cf489``
+    consolidated those hooks into Alembic, so a freshly migrated DB now
+    matches the production schema. The production-DB target is retained
+    because cosmetic SQLite affinity drift (JSON↔TEXT, Float↔REAL) only
+    surfaces on legacy DBs that went through the old hook path; the
+    ``compare_type`` callback in ``alembic/env.py`` forgives that drift,
+    and pinning against a real legacy DB exercises the callback in
+    anger. See also ``tests/test_main_lifespan_no_ddl.py`` for the
+    static-text invariant that DDL hooks stay out of lifespan.
 
     Skipped (not failed) when the production DB is absent — keeps a fresh
     clone CI from spuriously failing before ``./init.sh`` has ever run.
