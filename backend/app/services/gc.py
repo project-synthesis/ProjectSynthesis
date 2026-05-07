@@ -305,8 +305,8 @@ async def _gc_orphan_runs(db: AsyncSession) -> int:
     """
     from app.models import RunRow
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=RUN_ORPHAN_TTL_HOURS)
-    now = datetime.now(timezone.utc)
+    now = _utcnow()
+    cutoff = now - timedelta(hours=RUN_ORPHAN_TTL_HOURS)
     result = await db.execute(
         update(RunRow)
         .where(RunRow.status == "running")
