@@ -1121,6 +1121,86 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # Foundation P3 (v0.4.18): RunOrchestrator for unified run substrate.
+    #
+    # Generators are stateless service-singletons; instantiate once per
+    # process. RepoIndexQuery requires a per-request DB session, so the
+    # lifespan singleton passes None — PR2 router shims will rewrap the
+    # generator at request time with the live DB-bound RepoIndexQuery.
+    # taxonomy_engine is a real process singleton already on app.state.
+    #
+    # The orchestrator is a no-op until PR2 wires routers/MCP shims; this
+    # cycle just registers the dispatch table so the lifespan composition
+    # is verified end-to-end.
+    # Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md § 10.1
+    # ------------------------------------------------------------------
+    try:
+        from app.services.generators.seed_agent_generator import (
+            SeedAgentGenerator,
+        )
+        from app.services.generators.topic_probe_generator import (
+            TopicProbeGenerator,
+        )
+        from app.services.run_orchestrator import RunOrchestrator
+        from app.services.seed_orchestrator import SeedOrchestrator
+
+        _wq = getattr(app.state, "write_queue", None)
+        _routing = getattr(app.state, "routing", None)
+        _provider = (
+            _routing.state.provider if _routing is not None else None
+        )
+        _taxonomy_engine = getattr(app.state, "taxonomy_engine", None)
+
+        # TopicProbeGenerator: provider + repo_index_query + taxonomy_engine
+        # (positional). repo_index_query is None at the singleton level —
+        # PR2 router shims construct a per-request RepoIndexQuery and pass
+        # a request-bound generator into the orchestrator dispatch table.
+        topic_probe_gen = TopicProbeGenerator(
+            provider=_provider,
+            repo_index_query=None,
+            taxonomy_engine=_taxonomy_engine,
+            write_queue=_wq,
+        )
+
+        # SeedAgentGenerator wraps the existing SeedOrchestrator; the
+        # orchestrator handles agent dispatch + dedup, the generator
+        # handles run/persist/taxonomy-assign with the WriteQueue.
+        _seed_orch = SeedOrchestrator(provider=_provider)
+        seed_agent_gen = SeedAgentGenerator(
+            seed_orchestrator=_seed_orch,
+            write_queue=_wq,
+        )
+
+        if _wq is not None:
+            app.state.run_orchestrator = RunOrchestrator(
+                write_queue=_wq,
+                generators={
+                    "topic_probe": topic_probe_gen,
+                    "seed_agent": seed_agent_gen,
+                },
+            )
+            app.state.lifespan_order.append("run_orchestrator_registered")
+            logger.info(
+                "RunOrchestrator registered (modes=%s)",
+                list(app.state.run_orchestrator._generators.keys()),
+            )
+        else:
+            # No WriteQueue → no orchestrator (RunOrchestrator requires it
+            # for row writes). Surfaces only when WriteQueue init failed
+            # above; the broader system is already degraded in that case.
+            app.state.run_orchestrator = None
+            logger.warning(
+                "RunOrchestrator not registered: WriteQueue unavailable",
+            )
+    except Exception as _ro_exc:
+        logger.error(
+            "Failed to register RunOrchestrator: %s",
+            _ro_exc,
+            exc_info=True,
+        )
+        app.state.run_orchestrator = None
+
     # Initialize unified context enrichment service
     try:
         from app.services.context_enrichment import ContextEnrichmentService
