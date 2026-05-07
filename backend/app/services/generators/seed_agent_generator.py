@@ -169,8 +169,8 @@ class SeedAgentGenerator:
         # ---- Phase 3: Run batch + persist + taxonomy assign ----
         # Mirror handle_seed:206-360. Function-local imports so the test
         # harness can monkey-patch at the module level.
-        from app.database import async_session_factory
         from app.config import PROMPTS_DIR
+        from app.database import async_session_factory
         from app.services.batch_pipeline import (
             batch_taxonomy_assign,
             bulk_persist,
@@ -199,7 +199,7 @@ class SeedAgentGenerator:
         try:
             results = await run_batch(
                 prompts=generated_prompts,
-                provider=provider,
+                provider=provider,  # type: ignore[arg-type]
                 prompt_loader=PromptLoader(PROMPTS_DIR),
                 embedding_service=EmbeddingService(),
                 max_parallel=max_parallel,
