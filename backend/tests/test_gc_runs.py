@@ -20,7 +20,6 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models import Base, RunRow
 
-
 pytestmark = pytest.mark.asyncio
 
 
