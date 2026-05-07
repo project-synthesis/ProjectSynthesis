@@ -1,20 +1,33 @@
-"""Topic Probe REST surface (Tier 1, v0.4.12).
+"""Topic Probe REST surface (Tier 1, v0.4.12 + Foundation P3, v0.4.18).
 
-Three endpoints:
-  - ``POST /api/probes`` — SSE stream of 5 phase events from
-    ``ProbeService.run()``. Rate-limited per client IP via
-    ``settings.PROBE_RATE_LIMIT`` (default 5/minute).
+Refactored to a backward-compat shim under Foundation P3 (Cycle 11):
+
+  - ``POST /api/probes`` — race-free SSE stream. The router mints a
+    ``run_id``, registers an ``event_bus.subscribe_for_run`` subscription
+    BEFORE dispatching the run, then iterates the subscription to stream
+    events to the client. Pydantic ``ValidationError`` translates to a
+    canonical HTTP 400 with ``detail='invalid_request'``. Missing
+    ``repo_full_name`` short-circuits to a 400 with ``detail='link_repo_first'``.
   - ``GET /api/probes`` — paginated list (``ProbeListResponse``), sorted
-    by ``started_at desc``. Filters: ``status?``, ``project_id?``.
+    by ``started_at desc``. Reads from ``RunRow WHERE mode='topic_probe'``.
   - ``GET /api/probes/{probe_id}`` — full ``ProbeRunResult``. 404 with
     ``probe_not_found`` reason code on miss.
 
-See ``docs/specs/topic-probe-2026-04-29.md`` § 4.6.
+The 8 SSE event types (``probe_started``, ``probe_grounding``,
+``probe_generating``, ``probe_prompt_completed``, ``probe_completed``,
+``probe_failed``, ``ProbeRateLimitedEvent``, ``rate_limit_active``) are
+preserved byte-for-byte. Only additive change: every payload carries a
+``run_id`` field for cross-channel correlation.
+
+See:
+  - ``docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md`` § 6.2
+  - ``docs/specs/topic-probe-2026-04-29.md`` § 4.6 (pre-Foundation contract)
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -26,11 +39,10 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies.probes import get_probe_service
 from app.dependencies.rate_limit import RateLimit
-from app.models import ProbeRun
+from app.models import RunRow
 from app.schemas.pipeline_contracts import SCORING_FORMULA_VERSION
 from app.schemas.probes import (
     ProbeAggregate,
-    ProbeError,
     ProbeListResponse,
     ProbePromptResult,
     ProbeRunRequest,
@@ -38,14 +50,17 @@ from app.schemas.probes import (
     ProbeRunSummary,
     ProbeTaxonomyDelta,
 )
-from app.services.probe_service import ProbeService
+from app.schemas.runs import RunRequest
+from app.services.event_bus import event_bus
 from app.utils.sse import format_sse
 
 # Re-export ``get_probe_service`` so callers (including tests overriding
 # via ``app.dependency_overrides[...]``) can import it from either the
 # router module or the canonical ``app.dependencies.probes`` location.
-# C6 (MCP tool) imports from ``app.dependencies.probes`` to avoid the
-# router→service cross-layer import.
+# Cycle 13 (MCP tool) imports from ``app.dependencies.probes`` to avoid
+# the router→service cross-layer import. Even after the Cycle 11 shim
+# refactor, the legacy ProbeService dispatch path is still wired in
+# tools/probe.py until Cycle 13 retires it.
 __all__ = ["router", "get_probe_service"]
 
 logger = logging.getLogger(__name__)
@@ -56,12 +71,19 @@ _PROBE_RATE_LIMIT = RateLimit(lambda: settings.PROBE_RATE_LIMIT)
 
 
 # ---------------------------------------------------------------------------
-# Serialization helpers
+# Serialization helpers — read from RunRow WHERE mode='topic_probe'
 # ---------------------------------------------------------------------------
 
 
-def _serialize_summary(row: ProbeRun) -> ProbeRunSummary:
-    """Project a ProbeRun row down to the compact list-view summary."""
+def _serialize_summary(row: RunRow) -> ProbeRunSummary:
+    """Project a ``RunRow`` row down to the compact ``ProbeRunSummary``.
+
+    Only invoked on rows where ``mode='topic_probe'``; ``topic`` and
+    ``repo_full_name`` are guaranteed populated by the orchestrator's
+    ``_create_row`` for probe-mode dispatches. Defensive ``or ''``
+    fallbacks keep legacy rows that may have been written before the
+    P3 contract from raising on serialization.
+    """
     mean_overall: float | None = None
     agg = row.aggregate or {}
     if isinstance(agg, dict):
@@ -70,8 +92,8 @@ def _serialize_summary(row: ProbeRun) -> ProbeRunSummary:
             mean_overall = float(v)
     return ProbeRunSummary(
         id=row.id,
-        topic=row.topic,
-        repo_full_name=row.repo_full_name,
+        topic=row.topic or "",
+        repo_full_name=row.repo_full_name or "",
         started_at=row.started_at,
         completed_at=row.completed_at,
         status=row.status,
@@ -80,22 +102,34 @@ def _serialize_summary(row: ProbeRun) -> ProbeRunSummary:
     )
 
 
-def _serialize_full(row: ProbeRun) -> ProbeRunResult:
-    """Hydrate a ProbeRun row into the full ProbeRunResult Pydantic model."""
+def _serialize_full(row: RunRow) -> ProbeRunResult:
+    """Hydrate a ``RunRow`` row into the full ``ProbeRunResult`` model.
+
+    Reads ``scope`` and ``commit_sha`` from ``topic_probe_meta`` JSON
+    column (P3 unified storage) — those used to live as dedicated
+    columns on the legacy ``probe_run`` table.
+    """
     prompt_results = [
         ProbePromptResult(**r) for r in (row.prompt_results or [])
     ]
-    agg_dict = row.aggregate or {"scoring_formula_version": SCORING_FORMULA_VERSION}
+    agg_dict = row.aggregate or {
+        "scoring_formula_version": SCORING_FORMULA_VERSION,
+    }
     agg = ProbeAggregate(**agg_dict)
     delta = ProbeTaxonomyDelta(**(row.taxonomy_delta or {}))
+
+    meta = row.topic_probe_meta or {}
+    scope = meta.get("scope") or "**/*"
+    commit_sha = meta.get("commit_sha")
+
     return ProbeRunResult(
         id=row.id,
-        topic=row.topic,
-        scope=row.scope,
-        intent_hint=row.intent_hint,
-        repo_full_name=row.repo_full_name,
+        topic=row.topic or "",
+        scope=scope,
+        intent_hint=row.intent_hint or "",
+        repo_full_name=row.repo_full_name or "",
         project_id=row.project_id,
-        commit_sha=row.commit_sha,
+        commit_sha=commit_sha,
         started_at=row.started_at,
         completed_at=row.completed_at,
         prompts_generated=row.prompts_generated or 0,
@@ -109,7 +143,7 @@ def _serialize_full(row: ProbeRun) -> ProbeRunResult:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/probes — SSE streaming run
+# POST /api/probes — race-free SSE streaming run via RunOrchestrator
 # ---------------------------------------------------------------------------
 
 
@@ -117,20 +151,22 @@ def _serialize_full(row: ProbeRun) -> ProbeRunResult:
     "/probes",
     dependencies=[Depends(_PROBE_RATE_LIMIT)],
 )
-async def post_probe(
-    request: Request,
-    service: ProbeService = Depends(get_probe_service),
-):
+async def post_probe(request: Request):
     """Kick off a topic probe; stream phase events as SSE.
 
-    Pre-stream gate: missing ``repo_full_name`` short-circuits to a 400
-    with body ``"link_repo_first"`` (AC-C5-6) so callers see the
-    remediation reason code without an open SSE stream. The repo gate
-    runs before Pydantic validation so the canonical reason code wins
-    over a generic 422 when ``repo_full_name`` is the only missing
-    field. Body validation (topic length, n_prompts range, intent_hint
-    enum) then runs through ``ProbeRunRequest`` and surfaces any
-    failure as a 400 with reason ``invalid_request``.
+    Race-free pattern (spec § 6.2):
+      1. Caller mints ``run_id = str(uuid.uuid4())``
+      2. Construct ``event_bus.subscribe_for_run(run_id)`` BEFORE dispatch
+      3. ``asyncio.create_task(orchestrator.run("topic_probe", ..., run_id=run_id))``
+      4. SSE stream iterates the subscription; terminates on
+         ``probe_completed`` or ``probe_failed``
+      5. ``finally: await subscription.aclose()`` — no leaked subscribers
+         on client disconnect
+
+    Pre-stream gates (preserve pre-Foundation reason codes):
+      - Missing ``repo_full_name`` → 400 ``link_repo_first``
+      - Pydantic validation failure → 400 ``invalid_request``
+      - Malformed JSON → 400 ``invalid_json``
     """
     try:
         raw = await request.json()
@@ -153,36 +189,47 @@ async def post_probe(
         )
         raise HTTPException(status_code=400, detail="invalid_request") from exc
 
+    orchestrator = getattr(request.app.state, "run_orchestrator", None)
+    if orchestrator is None:
+        # Surfaces only if lifespan failed to register the orchestrator
+        # (e.g., WriteQueue init failed). Probe-mode SSE cannot proceed.
+        raise HTTPException(
+            status_code=503, detail="run_orchestrator_unavailable",
+        )
+
+    run_id = str(uuid.uuid4())
+    run_request = RunRequest(mode="topic_probe", payload=body.model_dump())
+
+    # Subscribe FIRST so the buffer captures any events the orchestrator
+    # publishes during _create_row + generator start. The 500ms ring-buffer
+    # replay inside _RunSubscription is defense-in-depth for any caller
+    # that subscribes after dispatch (e.g., reconnecting clients).
+    subscription = event_bus.subscribe_for_run(run_id)
+
+    # Kick off run as background task with pre-allocated run_id.
+    run_task: asyncio.Task[Any] = asyncio.create_task(  # type: ignore[type-arg]
+        orchestrator.run("topic_probe", run_request, run_id=run_id),
+    )
+    # Suppress "Task exception was never retrieved" warnings — the SSE
+    # consumer doesn't await the task itself; the orchestrator handles
+    # its own failure marking under asyncio.shield, and the bus events
+    # carry probe_failed for the client.
+    run_task.add_done_callback(_swallow_task_exception)
+
     async def event_stream():
         try:
-            async for event in service.run(body):
-                # Each event is a Pydantic model; encode the type name as
-                # the SSE event-name and the model_dump payload as the data.
-                event_name = _event_name_for(event)
-                try:
-                    data = event.model_dump(mode="json")
-                except Exception:  # noqa: BLE001 — last-resort serialization
-                    data = {}
-                yield format_sse(event_name, data)
-        except ProbeError as exc:
-            # ProbeService emits a ``ProbeFailedEvent`` on every internal
-            # failure path BEFORE raising — so we just log the reason and
-            # close the stream cleanly with HTTP 200. Tests assert that
-            # errors live in the SSE payload, not the response status.
-            logger.info("probe stream ended with ProbeError: %s", exc.reason)
-        except Exception as exc:  # noqa: BLE001 — never break the stream contract
-            # Defensive backstop for unexpected failures (DB connection
-            # broken mid-stream, etc.) that the service couldn't trap.
-            # ProbeError paths are handled above and never reach here.
-            logger.error("probe stream error: %s", exc, exc_info=True)
-            yield format_sse(
-                "probe_failed",
-                {
-                    "phase": "running",
-                    "error_class": type(exc).__name__,
-                    "error_message_truncated": str(exc)[:200],
-                },
-            )
+            async for event in subscription:
+                yield format_sse(event.kind, event.payload)
+                # Termination on terminal events only. Rate-limit events
+                # (``ProbeRateLimitedEvent``, ``rate_limit_active``) are
+                # informational, not terminal.
+                if event.kind in ("probe_completed", "probe_failed"):
+                    break
+        finally:
+            await subscription.aclose()
+            # If the client disconnects, run_task may still be running;
+            # the orchestrator handles its own cancellation/cleanup via
+            # ``asyncio.shield`` in ``_mark_failed``.
 
     return StreamingResponse(
         event_stream(),
@@ -195,22 +242,20 @@ async def post_probe(
     )
 
 
-def _event_name_for(event: Any) -> str:
-    """Map a Pydantic event class name to the SSE event name."""
-    cls = type(event).__name__
-    mapping = {
-        "ProbeStartedEvent": "probe_started",
-        "ProbeGroundingEvent": "probe_grounding",
-        "ProbeGeneratingEvent": "probe_generating",
-        "ProbeProgressEvent": "probe_prompt_completed",
-        "ProbeCompletedEvent": "probe_completed",
-        "ProbeFailedEvent": "probe_failed",
-    }
-    return mapping.get(cls, cls)
+def _swallow_task_exception(task: "asyncio.Task[Any]") -> None:
+    """Drain any exception from the orchestrator task so asyncio doesn't
+    log "Task exception was never retrieved" — the orchestrator already
+    persisted the failure to the row and emitted ``probe_failed`` on the
+    bus, so the SSE stream surfaces it to the client.
+    """
+    try:
+        task.result()
+    except (asyncio.CancelledError, BaseException):  # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------------------
-# GET /api/probes — paginated list
+# GET /api/probes — paginated list (RunRow WHERE mode='topic_probe')
 # ---------------------------------------------------------------------------
 
 
@@ -222,18 +267,23 @@ async def list_probes(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> ProbeListResponse:
-    """Return a paginated, ``started_at desc`` view of probe runs."""
-    base = select(ProbeRun)
+    """Return a paginated, ``started_at desc`` view of topic-probe runs.
+
+    Only ``RunRow`` rows with ``mode='topic_probe'`` are surfaced — seed
+    runs live under ``GET /api/seed`` (Cycle 12). Both modes share the
+    same underlying table.
+    """
+    base = select(RunRow).where(RunRow.mode == "topic_probe")
     if status is not None:
-        base = base.where(ProbeRun.status == status)
+        base = base.where(RunRow.status == status)
     if project_id is not None:
-        base = base.where(ProbeRun.project_id == project_id)
+        base = base.where(RunRow.project_id == project_id)
 
     total_q = select(func.count()).select_from(base.subquery())
     total = (await db.execute(total_q)).scalar_one()
 
     page_q = (
-        base.order_by(ProbeRun.started_at.desc())
+        base.order_by(RunRow.started_at.desc())
         .limit(limit)
         .offset(offset)
     )
@@ -263,8 +313,22 @@ async def get_probe(
     probe_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> ProbeRunResult:
-    """Return the full ``ProbeRunResult`` for a probe id, or 404."""
-    row = await db.get(ProbeRun, probe_id)
-    if row is None:
+    """Return the full ``ProbeRunResult`` for a probe id, or 404.
+
+    Defends against accidentally returning a seed-mode row that happens
+    to share the id space — though the orchestrator never reuses ids,
+    the explicit ``mode == 'topic_probe'`` guard preserves the surface
+    contract that this endpoint only exposes probe runs.
+    """
+    row = await db.get(RunRow, probe_id)
+    if row is None or row.mode != "topic_probe":
         raise HTTPException(status_code=404, detail="probe_not_found")
     return _serialize_full(row)
+
+
+# ---------------------------------------------------------------------------
+# Type-checker placeholder — keep ``Any`` import-time available for the
+# ``asyncio.Task[Any]`` annotation above without polluting public API.
+# ---------------------------------------------------------------------------
+
+from typing import Any  # noqa: E402  (kept after the routes for readability)

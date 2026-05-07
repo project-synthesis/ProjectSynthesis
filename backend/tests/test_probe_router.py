@@ -431,7 +431,7 @@ class TestProbeRouterFoundationP3:
             "scope": "**/*",
             "intent_hint": "explore",
             "repo_full_name": "owner/repo",
-            "n_prompts": 3,
+            "n_prompts": 5,  # ProbeRunRequest enforces ge=5
         }
         async with app_client.stream(
             "POST", "/api/probes", json=body,
@@ -440,12 +440,14 @@ class TestProbeRouterFoundationP3:
             text = await resp.aread()
         events = _parse_sse(text.decode())
         # Event names sequence: probe_started → probe_grounding → probe_generating
-        # → probe_prompt_completed × 3 → probe_completed
+        # → probe_prompt_completed × 5 → probe_completed
         names = [n for n, _ in events]
         assert names == [
             "probe_started",
             "probe_grounding",
             "probe_generating",
+            "probe_prompt_completed",
+            "probe_prompt_completed",
             "probe_prompt_completed",
             "probe_prompt_completed",
             "probe_prompt_completed",
@@ -496,7 +498,7 @@ class TestProbeRouterFoundationP3:
         body = {
             "topic": "race",
             "repo_full_name": "owner/repo",
-            "n_prompts": 1,
+            "n_prompts": 5,  # ProbeRunRequest enforces ge=5
         }
         async with app_client.stream(
             "POST", "/api/probes", json=body,
@@ -636,11 +638,13 @@ class TestProbeRouterFoundationP3:
         Pydantic raises ValidationError → FastAPI defaults to 422. The
         router shim translates these to 400 with 'invalid_request' so
         clients have a single canonical error shape to switch on.
+        ``topic="xx"`` (length 2) violates ``min_length=3``, generating
+        a clean ValidationError that's not also a link_repo_first miss.
         """
         resp = await app_client.post("/api/probes", json={
             "repo_full_name": "owner/repo",
-            "topic": "x",
-            "n_prompts": 1000,  # exceeds max=25
+            "topic": "xx",  # violates min_length=3
+            "n_prompts": 1000,  # exceeds le=25
         })
         assert resp.status_code == 400
         assert resp.json()["detail"] == "invalid_request"
@@ -656,7 +660,7 @@ class TestProbeRouterFoundationP3:
         body = {
             "topic": "rid-test",
             "repo_full_name": "owner/repo",
-            "n_prompts": 1,
+            "n_prompts": 5,  # ProbeRunRequest enforces ge=5
         }
         async with app_client.stream(
             "POST", "/api/probes", json=body,
@@ -750,13 +754,26 @@ class TestProbeRouterFoundationP3:
         body = {
             "topic": "early-row",
             "repo_full_name": "owner/repo",
-            "n_prompts": 1,
+            "n_prompts": 5,  # ProbeRunRequest enforces ge=5
         }
         async with app_client.stream(
             "POST", "/api/probes", json=body,
         ) as resp:
             assert resp.status_code == 200
             await resp.aread()
+
+        # Drain any pending orchestrator-side persistence task so the
+        # background ``_persist_final`` write completes BEFORE the test
+        # queries db_session. Without this drain the orchestrator's
+        # commit can race the test read on the shared in-memory session.
+        for _ in range(20):
+            await asyncio.sleep(0.05)
+            other_tasks = [
+                t for t in asyncio.all_tasks()
+                if t is not asyncio.current_task() and not t.done()
+            ]
+            if not other_tasks:
+                break
 
         rows = (
             await db_session.execute(
