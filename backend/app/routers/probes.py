@@ -207,7 +207,7 @@ async def post_probe(request: Request):
     subscription = event_bus.subscribe_for_run(run_id)
 
     # Kick off run as background task with pre-allocated run_id.
-    run_task: asyncio.Task[Any] = asyncio.create_task(  # type: ignore[type-arg]
+    run_task: asyncio.Task[Any] = asyncio.create_task(
         orchestrator.run("topic_probe", run_request, run_id=run_id),
     )
     # Suppress "Task exception was never retrieved" warnings — the SSE

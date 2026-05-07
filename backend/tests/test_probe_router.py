@@ -17,9 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import uuid
-from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,16 +26,10 @@ import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.models import ProbeRun, RunRow
+from app.models import RunRow
 from app.schemas.pipeline_contracts import SCORING_FORMULA_VERSION
 from app.schemas.probes import (
     ProbeAggregate,
-    ProbeCompletedEvent,
-    ProbeGeneratingEvent,
-    ProbeGroundingEvent,
-    ProbeProgressEvent,
-    ProbeRunRequest,
-    ProbeStartedEvent,
     ProbeTaxonomyDelta,
 )
 from app.schemas.runs import RunRequest
@@ -72,22 +64,6 @@ def _parse_sse(text: str) -> list[tuple[str, dict]]:
         if ev is not None:
             out.append((ev, data))
     return out
-
-
-def _strip_volatile(text: str) -> str:
-    """Strip timestamps + UUIDs for snapshot-style comparison."""
-    s = re.sub(r'"started_at":\s*"[^"]+"', '"started_at": "<TS>"', text)
-    s = re.sub(r'"completed_at":\s*"[^"]+"', '"completed_at": "<TS>"', s)
-    s = re.sub(r'"timestamp":\s*[0-9]+(\.[0-9]+)?', '"timestamp": "<TS>"', s)
-    s = re.sub(r'"run_id":\s*"[a-f0-9-]+"', '"run_id": "<UUID>"', s)
-    s = re.sub(r'"probe_id":\s*"[a-f0-9-]+"', '"probe_id": "<UUID>"', s)
-    s = re.sub(
-        r'"optimization_id":\s*"[a-f0-9-]+"',
-        '"optimization_id": "<UUID>"', s,
-    )
-    s = re.sub(r'"id":\s*"[a-f0-9-]+"', '"id": "<UUID>"', s)
-    s = re.sub(r'"seq":\s*[0-9]+', '"seq": "<N>"', s)
-    return s
 
 
 @pytest.fixture(autouse=True)
@@ -142,59 +118,6 @@ async def sample_probe_run_id(db_session) -> str:
     )
     await db_session.commit()
     return pid
-
-
-def _stub_events(probe_id: str, n_prompts: int) -> list[Any]:
-    """Build the canonical 5-phase event sequence for a happy-path probe."""
-    out: list[Any] = [
-        ProbeStartedEvent(
-            probe_id=probe_id,
-            topic="probe-topic",
-            scope="**/*",
-            intent_hint="explore",
-            n_prompts=n_prompts,
-            repo_full_name="owner/repo",
-        ),
-        ProbeGroundingEvent(
-            probe_id=probe_id,
-            retrieved_files_count=3,
-            has_explore_synthesis=True,
-            dominant_stack=["python"],
-        ),
-        ProbeGeneratingEvent(
-            probe_id=probe_id,
-            prompts_generated=n_prompts,
-            generator_duration_ms=1234,
-            generator_model="claude-sonnet-4-6",
-        ),
-    ]
-    for i in range(n_prompts):
-        out.append(
-            ProbeProgressEvent(
-                probe_id=probe_id,
-                current=i + 1,
-                total=n_prompts,
-                optimization_id=str(uuid.uuid4()),
-                intent_label="audit cache",
-                overall_score=7.30,
-            )
-        )
-    out.append(
-        ProbeCompletedEvent(
-            probe_id=probe_id,
-            status="completed",
-            mean_overall=7.30,
-            prompts_generated=n_prompts,
-            taxonomy_delta_summary={
-                "domains_created": 0,
-                "sub_domains_created": 0,
-                "clusters_created": 0,
-                "clusters_split": 0,
-                "proposal_rejected_min_source_clusters": 0,
-            },
-        )
-    )
-    return out
 
 
 # ---------------------------------------------------------------------------
