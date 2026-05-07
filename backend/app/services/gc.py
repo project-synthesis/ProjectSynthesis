@@ -39,10 +39,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Probes are user-driven (typical run <30min). Rows stuck in
-# 'running' past this TTL are stragglers from client-disconnect or
-# server-restart scenarios — _gc_orphan_probe_runs marks them failed.
-PROBE_ORPHAN_TTL_HOURS = 1
+# Foundation P3 (v0.4.18): unified run orphan sweep — both topic_probe
+# and seed_agent mode rows in 'running' state past this TTL are stragglers
+# from client-disconnect or server-restart scenarios. ``_gc_orphan_runs``
+# marks them failed at startup. Runs are user-driven (typical <30min).
+RUN_ORPHAN_TTL_HOURS = 1
+
+# Backward-compat alias preserved for v0.4.18 (PR1). Deleted in PR2 once
+# the legacy ``_gc_orphan_probe_runs`` no-op stub is removed.
+PROBE_ORPHAN_TTL_HOURS = RUN_ORPHAN_TTL_HOURS
 
 
 def _utcnow() -> datetime:
@@ -74,7 +79,8 @@ async def run_startup_gc(
             total += await _gc_failed_optimizations(write_db)
             total += await _gc_archived_zero_member_clusters(write_db)
             total += await _gc_orphan_meta_patterns(write_db)
-            total += await _gc_orphan_probe_runs(write_db)
+            total += await _gc_orphan_probe_runs(write_db)  # legacy no-op (PR1; deleted PR2)
+            total += await _gc_orphan_runs(write_db)  # P3: sweeps topic_probe + seed_agent
             total += await _gc_orphan_repo_index_runs(write_db)
             total += await _gc_test_leak_optimizations(write_db)
             total += await _gc_reconcile_member_counts(write_db)
@@ -97,7 +103,8 @@ async def run_startup_gc(
     total_cleaned += await _gc_failed_optimizations(db)
     total_cleaned += await _gc_archived_zero_member_clusters(db)
     total_cleaned += await _gc_orphan_meta_patterns(db)
-    total_cleaned += await _gc_orphan_probe_runs(db)
+    total_cleaned += await _gc_orphan_probe_runs(db)  # legacy no-op (PR1; deleted PR2)
+    total_cleaned += await _gc_orphan_runs(db)  # P3: sweeps topic_probe + seed_agent
     total_cleaned += await _gc_orphan_repo_index_runs(db)
     # v0.4.12: defense-in-depth against test-leak (Optimization rows
     # with non-uuid IDs). Production code uses uuid4() exclusively;
@@ -257,41 +264,64 @@ async def _gc_orphan_meta_patterns(db: AsyncSession) -> int:
 
 
 async def _gc_orphan_probe_runs(db: AsyncSession) -> int:
-    """Mark stale ``status='running'`` probe_run rows as failed at startup.
+    """Legacy alias — superseded by ``_gc_orphan_runs`` in Foundation P3 (v0.4.18).
 
-    Probes are user-driven (typical run <30min); rows in 'running' state
-    for >``PROBE_ORPHAN_TTL_HOURS`` are stragglers from client-disconnect
-    or server-restart scenarios. Mirrors the ``_gc_failed_optimizations``
-    pattern.
+    Returns 0; the unified ``_gc_orphan_runs`` sweep covers both
+    ``topic_probe`` and ``seed_agent`` mode rows including legacy
+    probe-mode rows (table is the unified ``run_row``). This function
+    will be deleted in PR2 once all callers have migrated. The signature
+    is preserved (``db: AsyncSession) -> int``) so the helper composes
+    inside ``run_startup_gc._do_sweep`` without behavioural drift.
+
+    Note on double-processing: with the option (b) Python-alias
+    ``ProbeRun``, ``select(ProbeRun)`` returns ALL ``run_row`` rows
+    regardless of mode (no STI discriminator filter). If both this
+    helper (operating via ``select(ProbeRun)``) and ``_gc_orphan_runs``
+    (operating via ``select(RunRow)``) executed in ``_do_sweep``, they
+    would sweep the same row set twice — identical UPDATE statements.
+    The no-op body avoids that redundancy.
+    """
+    return 0
+
+
+async def _gc_orphan_runs(db: AsyncSession) -> int:
+    """Sweep stale ``status='running'`` RunRow rows past ``RUN_ORPHAN_TTL_HOURS``.
+
+    Foundation P3 (v0.4.18) — supersedes ``_gc_orphan_probe_runs``. Sweeps
+    both ``topic_probe`` and ``seed_agent`` mode rows in one pass. Rows in
+    ``status='running'`` whose ``started_at`` predates ``RUN_ORPHAN_TTL_HOURS``
+    are stragglers from client-disconnect or server-restart scenarios; the
+    orchestrator coroutine that was managing them died with the previous
+    process. Marks them ``status='failed'``, ``error='orphaned (ttl exceeded)'``,
+    ``completed_at=now``.
+
+    Caller is responsible for committing — composes inside
+    ``run_startup_gc._do_sweep`` batched commit. Mirrors the
+    ``_gc_failed_optimizations`` / legacy ``_gc_orphan_probe_runs`` pattern.
 
     Idempotent: safe to call on a DB with no orphan rows.
 
-    v0.4.12: at startup, ALL ``status='running'`` rows are orphans by
-    definition -- the orchestrator coroutine that was managing the
-    probe died with the previous process. The TTL gate (used by the
-    HOURLY ``run_recurring_gc`` sweep) is irrelevant on startup; a
-    probe in 'running' state with no live coroutine cannot recover
-    no matter how recent. The startup sweep therefore drops the TTL
-    gate -- any restart immediately reconciles every orphan probe
-    instead of leaving them dangling for an hour.
+    Returns the rowcount of rows flipped to ``status='failed'``.
     """
-    from app.models import ProbeRun
+    from app.models import RunRow
 
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=RUN_ORPHAN_TTL_HOURS)
     now = datetime.now(timezone.utc)
     result = await db.execute(
-        update(ProbeRun)
-        .where(ProbeRun.status == "running")
+        update(RunRow)
+        .where(RunRow.status == "running")
+        .where(RunRow.started_at < cutoff)
         .values(
             status="failed",
-            error="orphaned_at_startup",
+            error="orphaned (ttl exceeded)",
             completed_at=now,
         )
     )
     cleaned = result.rowcount or 0  # type: ignore[attr-defined]
     if cleaned:
         logger.info(
-            "GC: marked %d orphan probe_run rows as failed at startup "
-            "(coroutine died with previous process)", cleaned,
+            "GC: marked %d orphan run_row rows as failed "
+            "(status='running' past TTL=%dh)", cleaned, RUN_ORPHAN_TTL_HOURS,
         )
     return cleaned
 

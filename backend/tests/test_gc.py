@@ -402,52 +402,33 @@ class TestRunStartupGC:
 # ---------------------------------------------------------------------------
 
 class TestGCOrphanProbeRuns:
-    """Probes stuck in ``status='running'`` past the orphan TTL get marked
-    failed at startup. Mirrors the ``_gc_failed_optimizations`` pattern.
+    """Foundation P3 (v0.4.18): ``_gc_orphan_probe_runs`` is a no-op stub.
 
-    Surfaced by validation orphan ``97512f6a`` -- curl client disconnected
-    mid-stream and the row stayed ``running`` indefinitely. Without a
-    startup sweep, restart-scenario orphans accumulate forever.
+    Superseded by ``_gc_orphan_runs`` which sweeps both ``topic_probe`` and
+    ``seed_agent`` mode rows in one pass. The legacy helper is preserved as
+    a no-op returning 0 so ``run_startup_gc._do_sweep`` can keep calling
+    both helpers without double-processing the same row set (the
+    ``ProbeRun`` Python alias selects ALL ``run_row`` rows regardless of
+    mode — STI discriminator absent). Deleted in PR2.
+
+    See ``test_gc_runs.py`` for the live contract on
+    ``_gc_orphan_runs``.
     """
 
-    async def test_marks_all_running_probes_failed_at_startup(self, db_session):
-        """v0.4.12: at startup, ALL running probes are orphans -- the
-        coroutine that was managing each one died with the previous
-        process. Pre-v0.4.12, only probes older than ``PROBE_ORPHAN_TTL_HOURS``
-        were swept; this trapped recently-started probes in 'running'
-        for an hour after a server restart, blocking the UI status bar
-        + leaving stale rows in the topology view.
-
-        The TTL gate was dropped from this startup-only function. The
-        recurring sweep (which is governed by ``run_recurring_gc`` and
-        does NOT call this function) is unaffected.
-        """
+    async def test_legacy_helper_is_no_op_after_p3(self, db_session):
+        """v0.4.18 Foundation P3: the legacy helper returns 0 even when
+        orphan rows are present. ``_gc_orphan_runs`` covers what it did."""
         old = datetime.now(timezone.utc) - timedelta(hours=2)
-        new = datetime.now(timezone.utc) - timedelta(minutes=10)
 
-        old_row = ProbeRun(
+        db_session.add(ProbeRun(
             id="orphan-old", topic="x", scope="**/*",
             intent_hint="explore", repo_full_name="o/r",
             started_at=old, status="running",
-        )
-        new_row = ProbeRun(
-            id="orphan-new", topic="y", scope="**/*",
-            intent_hint="explore", repo_full_name="o/r",
-            started_at=new, status="running",
-        )
-        db_session.add_all([old_row, new_row])
+        ))
         await db_session.commit()
 
         cleaned = await _gc_orphan_probe_runs(db_session)
-        assert cleaned == 2  # Both swept, regardless of age
-
-        await db_session.refresh(old_row)
-        await db_session.refresh(new_row)
-        assert old_row.status == "failed"
-        assert old_row.error == "orphaned_at_startup"
-        assert old_row.completed_at is not None
-        assert new_row.status == "failed"
-        assert new_row.error == "orphaned_at_startup"
+        assert cleaned == 0  # No-op; row is left untouched here.
 
     async def test_no_orphans_returns_zero(self, db_session):
         """Idempotent: safe to call on a DB with no orphan rows."""
