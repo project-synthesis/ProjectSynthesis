@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -364,7 +364,7 @@ class _AuditHookCapture:
 
 
 @pytest.fixture
-def audit_hook(caplog) -> _AuditHookCapture:
+def audit_hook(caplog) -> Generator[_AuditHookCapture, None, None]:
     """Captures audit-hook WARN records from logger output.
 
     The real audit hook (database.py event listener for direct read-engine writes)
@@ -393,7 +393,7 @@ class _EventBusCapture:
 
 
 @pytest_asyncio.fixture
-async def event_bus_capture(monkeypatch) -> _EventBusCapture:
+async def event_bus_capture(monkeypatch) -> AsyncGenerator[_EventBusCapture, None]:
     """Captures every event published to event_bus during the test.
     Hooks publish() directly, parallel to existing subscribers."""
     from app.services.event_bus import event_bus
@@ -427,7 +427,7 @@ class _TaxonomyEventCapture:
 
 
 @pytest.fixture
-def taxonomy_event_capture(monkeypatch) -> _TaxonomyEventCapture:
+def taxonomy_event_capture(monkeypatch) -> Generator[_TaxonomyEventCapture, None, None]:
     """Captures every taxonomy_event_logger.log_decision call."""
     from app.services.taxonomy import event_logger as el_mod
     cap = _TaxonomyEventCapture()
