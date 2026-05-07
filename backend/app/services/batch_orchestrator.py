@@ -237,10 +237,16 @@ async def run_batch(
             except RuntimeError:
                 pass
 
-            # Publish seed_batch_progress to event bus for SSE frontend
+            # Publish seed_batch_progress to event bus for SSE frontend.
+            # v0.4.18 Foundation P3: thread run_id from current_run_id ContextVar
+            # (set by RunOrchestrator around the SeedAgentGenerator invocation).
+            # Additive — the legacy batch_id field is preserved for back-compat
+            # so existing SSE consumers don't break.
             try:
+                from app.services.probe_common import current_run_id
                 event_bus.publish("seed_batch_progress", {
                     "batch_id": batch_id,
+                    "run_id": current_run_id.get(),
                     "phase": "optimize",
                     "completed": sum(1 for r in results if r is not None),
                     "total": len(prompts),
