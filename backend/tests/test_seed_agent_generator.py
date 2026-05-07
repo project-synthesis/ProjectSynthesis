@@ -191,8 +191,8 @@ async def test_seed_batch_progress_has_run_id(
     carry run_id from the current_run_id ContextVar (set by RunOrchestrator
     around generator invocation; SeedAgentGenerator threads it via the
     ContextVar as the existing channel)."""
-    from app.services.generators.seed_agent_generator import SeedAgentGenerator
     from app.services.event_bus import event_bus
+    from app.services.generators.seed_agent_generator import SeedAgentGenerator
     from app.services.probe_common import current_run_id
 
     _patch_batch_pipeline(
