@@ -202,8 +202,10 @@ async def _run_adr005_migration(db) -> None:
             _sel(LinkedRepo).where(LinkedRepo.project_node_id.is_(None))
         )).scalars().all()
     except Exception:
-        # Column may not exist yet on very old schemas — handled by the
-        # ALTER TABLE block in lifespan. Safe to skip here.
+        # Column always present from migration ``bdd8e96cf489`` (v0.4.18);
+        # this guard is retained as belt-and-braces for fresh DBs whose
+        # ``alembic upgrade head`` was somehow skipped (e.g., manual
+        # ``Base.metadata.create_all()`` bootstrap pre-migration era).
         unlinked_repos = []
 
     provisioned = 0
@@ -594,177 +596,15 @@ async def lifespan(app: FastAPI):
             await engine.load_index_caches(DATA_DIR)
 
             # v0.4.13 cycle 9: enter migration_mode so the audit hook
-            # (installed later in lifespan) does NOT fire on the
-            # idempotent ALTER TABLE / DML migrations below. Cleared
-            # immediately before the event-consumption ``async for``
+            # (installed later in lifespan) does NOT fire on the runtime
+            # DML migrations below (Legacy project provisioning + ADR-005
+            # backfills + B8 GlobalPattern repair). All schema-level DDL
+            # was migrated out of lifespan into Alembic in v0.4.18 (see
+            # migration ``bdd8e96cf489``); only data migrations remain.
+            # Cleared immediately before the event-consumption ``async for``
             # loop and signaled via ``_migrations_done``.
             from app.database import read_engine_meta
             read_engine_meta.migration_mode = True
-
-            # Startup: ensure routing_tier column exists (SQLite ALTER TABLE)
-            # SQLAlchemy create_all() only creates new tables, not new columns
-            # on existing tables. This is idempotent — duplicate ADD COLUMN
-            # raises OperationalError which we catch and ignore.
-            try:
-                from sqlalchemy import text as _text_rt
-                async with async_session_factory() as _alt_db:
-                    await _alt_db.execute(
-                        _text_rt("ALTER TABLE optimizations ADD COLUMN routing_tier VARCHAR")
-                    )
-                    await _alt_db.commit()
-                    logger.info("Added routing_tier column to optimizations table")
-            except Exception:
-                pass  # Column already exists — expected on subsequent startups
-
-            # Startup: backfill routing_tier on legacy records (idempotent)
-            try:
-                from sqlalchemy import update as _upd_rt
-
-                from app.models import Optimization as _Opt_rt
-
-                async with async_session_factory() as _rt_db:
-                    await _rt_db.execute(
-                        _upd_rt(_Opt_rt)
-                        .where(_Opt_rt.routing_tier.is_(None), _Opt_rt.provider == "mcp_sampling")
-                        .values(routing_tier="sampling")
-                    )
-                    await _rt_db.execute(
-                        _upd_rt(_Opt_rt)
-                        .where(_Opt_rt.routing_tier.is_(None), _Opt_rt.provider.like("%passthrough%"))
-                        .values(routing_tier="passthrough")
-                    )
-                    await _rt_db.execute(
-                        _upd_rt(_Opt_rt)
-                        .where(_Opt_rt.routing_tier.is_(None))
-                        .values(routing_tier="internal")
-                    )
-                    await _rt_db.commit()
-                    logger.info("Routing tier backfill complete")
-            except Exception as rt_exc:
-                logger.warning("Routing tier backfill failed (non-fatal): %s", rt_exc)
-
-            # Startup: ensure global_source_count column exists on meta_patterns
-            try:
-                async with async_session_factory() as _gsc_db:
-                    from sqlalchemy import text as _text_gsc
-                    await _gsc_db.execute(
-                        _text_gsc("ALTER TABLE meta_patterns ADD COLUMN global_source_count INTEGER NOT NULL DEFAULT 0")
-                    )
-                    await _gsc_db.commit()
-                    logger.info("Added global_source_count column to meta_patterns table")
-            except Exception:
-                pass  # Column already exists
-
-            # Startup: ensure optimized_embedding + transformation_embedding columns exist
-            try:
-                async with async_session_factory() as _emb_db:
-                    await _emb_db.execute(
-                        _text_gsc("ALTER TABLE optimizations ADD COLUMN optimized_embedding BLOB")
-                    )
-                    await _emb_db.commit()
-            except Exception:
-                pass
-            try:
-                async with async_session_factory() as _emb_db2:
-                    await _emb_db2.execute(
-                        _text_gsc("ALTER TABLE optimizations ADD COLUMN transformation_embedding BLOB")
-                    )
-                    await _emb_db2.commit()
-            except Exception:
-                pass
-            # Startup: ensure phase_weights_json column exists on optimizations
-            try:
-                async with async_session_factory() as _pw_db:
-                    await _pw_db.execute(
-                        _text_gsc("ALTER TABLE optimizations ADD COLUMN phase_weights_json TEXT")
-                    )
-                    await _pw_db.commit()
-            except Exception:
-                pass
-            # Startup: ensure weighted_member_sum column exists on prompt_cluster
-            try:
-                async with async_session_factory() as _wms_db:
-                    await _wms_db.execute(
-                        _text_gsc("ALTER TABLE prompt_cluster ADD COLUMN weighted_member_sum REAL NOT NULL DEFAULT 0.0")
-                    )
-                    await _wms_db.commit()
-            except Exception:
-                pass
-            # Startup: ensure created_at index on taxonomy_snapshots
-            try:
-                async with async_session_factory() as _idx_db:
-                    await _idx_db.execute(
-                        _text_gsc(
-                            "CREATE INDEX IF NOT EXISTS ix_taxonomy_snapshot_created_at "
-                            "ON taxonomy_snapshots (created_at DESC)"
-                        )
-                    )
-                    await _idx_db.commit()
-            except Exception:
-                pass
-
-            # ADR-005: ensure project_id column on optimizations
-            try:
-                async with async_session_factory() as _pid_db:
-                    from sqlalchemy import text as _text_pid
-                    await _pid_db.execute(
-                        _text_pid("ALTER TABLE optimizations ADD COLUMN project_id VARCHAR(36)")
-                    )
-                    await _pid_db.commit()
-                    logger.info("Added project_id column to optimizations")
-            except Exception:
-                pass  # Column already exists
-
-            # ADR-005: ensure project_id index on optimizations
-            try:
-                async with async_session_factory() as _pidx_db:
-                    from sqlalchemy import text as _text_pidx
-                    await _pidx_db.execute(
-                        _text_pidx(
-                            "CREATE INDEX IF NOT EXISTS ix_optimizations_project_id"
-                            " ON optimizations (project_id)"
-                        )
-                    )
-                    await _pidx_db.commit()
-            except Exception:
-                pass
-
-            # ADR-005: ensure global_patterns table exists
-            try:
-                async with async_session_factory() as _gp_db:
-                    from sqlalchemy import text as _text_gp
-                    await _gp_db.execute(_text_gp("""
-                        CREATE TABLE IF NOT EXISTS global_patterns (
-                            id VARCHAR(36) PRIMARY KEY,
-                            pattern_text TEXT NOT NULL,
-                            embedding BLOB,
-                            source_cluster_ids TEXT NOT NULL DEFAULT '[]',
-                            source_project_ids TEXT NOT NULL DEFAULT '[]',
-                            cross_project_count INTEGER NOT NULL DEFAULT 0,
-                            global_source_count INTEGER NOT NULL DEFAULT 0,
-                            avg_cluster_score REAL,
-                            promoted_at DATETIME NOT NULL,
-                            last_validated_at DATETIME NOT NULL,
-                            state VARCHAR(20) NOT NULL DEFAULT 'active'
-                        )
-                    """))
-                    await _gp_db.commit()
-            except Exception:
-                pass
-
-            # ADR-005 Phase 2A: ensure project_node_id column on linked_repos
-            # (must run BEFORE _run_adr005_migration because Step 2.5 reads
-            # and writes LinkedRepo.project_node_id to auto-provision projects).
-            try:
-                async with async_session_factory() as _pnid_db:
-                    from sqlalchemy import text as _text_pnid
-                    await _pnid_db.execute(
-                        _text_pnid("ALTER TABLE linked_repos ADD COLUMN project_node_id VARCHAR(36)")
-                    )
-                    await _pnid_db.commit()
-                    logger.info("Added project_node_id column to linked_repos")
-            except Exception:
-                pass  # Column already exists
 
             # ADR-005: Legacy project node + domain detach + per-repo project
             # provisioning + project_id backfill. See _run_adr005_migration.
@@ -817,93 +657,6 @@ async def lifespan(app: FastAPI):
                     )
             except Exception as _b8_exc:
                 logger.warning("B8 startup repair failed (non-fatal): %s", _b8_exc)
-
-            # ADR-005 Phase 2B: ensure global_pattern_id column on optimization_patterns
-            try:
-                async with async_session_factory() as _gpid_db:
-                    from sqlalchemy import text as _text_gpid
-                    await _gpid_db.execute(
-                        _text_gpid("ALTER TABLE optimization_patterns ADD COLUMN global_pattern_id VARCHAR(36)")
-                    )
-                    await _gpid_db.commit()
-            except Exception:
-                pass  # Column already exists
-
-            # Ensure explore_synthesis column on repo_index_meta
-            try:
-                async with async_session_factory() as _es_db:
-                    from sqlalchemy import text as _text_es
-                    await _es_db.execute(
-                        _text_es("ALTER TABLE repo_index_meta ADD COLUMN explore_synthesis TEXT")
-                    )
-                    await _es_db.commit()
-            except Exception:
-                pass  # Column already exists
-
-            # Ensure synthesis_status column on repo_index_meta
-            try:
-                async with async_session_factory() as _ss_db:
-                    from sqlalchemy import text as _text_ss
-                    await _ss_db.execute(
-                        _text_ss(
-                            "ALTER TABLE repo_index_meta "
-                            "ADD COLUMN synthesis_status VARCHAR DEFAULT 'pending' NOT NULL"
-                        )
-                    )
-                    await _ss_db.commit()
-            except Exception:
-                pass  # Column already exists
-
-            # Ensure synthesis_error column on repo_index_meta
-            try:
-                async with async_session_factory() as _se_db:
-                    from sqlalchemy import text as _text_se
-                    await _se_db.execute(
-                        _text_se("ALTER TABLE repo_index_meta ADD COLUMN synthesis_error TEXT")
-                    )
-                    await _se_db.commit()
-            except Exception:
-                pass  # Column already exists
-
-            # Backfill: mark existing rows with synthesis as ready
-            try:
-                async with async_session_factory() as _bf_synth_db:
-                    from sqlalchemy import text as _text_bf_synth
-                    await _bf_synth_db.execute(
-                        _text_bf_synth(
-                            "UPDATE repo_index_meta SET synthesis_status = 'ready' "
-                            "WHERE explore_synthesis IS NOT NULL AND synthesis_status = 'pending'"
-                        )
-                    )
-                    await _bf_synth_db.commit()
-            except Exception:
-                pass
-
-            # Ensure content column on repo_file_index (full source for curated context)
-            try:
-                async with async_session_factory() as _rc_db:
-                    from sqlalchemy import text as _text_rc
-                    await _rc_db.execute(
-                        _text_rc("ALTER TABLE repo_file_index ADD COLUMN content TEXT")
-                    )
-                    await _rc_db.commit()
-            except Exception:
-                pass  # Column already exists
-
-            # Ensure unique index on repo_file_index (repo, branch, path) for incremental upserts
-            try:
-                async with async_session_factory() as _rfi_idx_db:
-                    from sqlalchemy import text as _text_rfi_idx
-                    await _rfi_idx_db.execute(
-                        _text_rfi_idx(
-                            "CREATE UNIQUE INDEX IF NOT EXISTS "
-                            "idx_repo_file_index_repo_branch_path "
-                            "ON repo_file_index (repo_full_name, branch, file_path)"
-                        )
-                    )
-                    await _rfi_idx_db.commit()
-            except Exception:
-                pass  # Index already exists
 
             # One-time backfill: embed optimized_prompt + transformation for existing rows
             import numpy as np
