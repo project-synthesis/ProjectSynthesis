@@ -190,7 +190,7 @@ class _RunSubscription:
             data = payload.get("data") or {}
             if isinstance(data, dict) and data.get("run_id") == self._run_id:
                 return _EventForRun(
-                    kind=payload.get("event"),
+                    kind=str(payload.get("event") or ""),
                     payload=data,
                 )
 
