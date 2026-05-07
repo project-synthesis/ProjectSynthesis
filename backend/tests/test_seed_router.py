@@ -109,7 +109,39 @@ class _StubSeedGenerator:
 
 
 @pytest_asyncio.fixture
-async def stub_seed_orchestrator(app_client: AsyncClient):
+async def patched_orchestrator_session_factory(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+):
+    """Repoint ``app.database.async_session_factory`` at ``db_session``.
+
+    ``RunOrchestrator._reload`` reads back the row through
+    ``app.database.async_session_factory()`` so the post-write read
+    sees the row that the WriteQueue stub committed against
+    ``db_session``. Without this patch, ``_reload`` opens a new session
+    against the production engine where the in-memory test row doesn't
+    exist and raises ``RuntimeError("run row {id} not found after persist")``.
+    """
+    import app.database as database_mod
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return db_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def _factory():
+        return _SessionContext()
+
+    monkeypatch.setattr(database_mod, "async_session_factory", _factory)
+    yield _factory
+
+
+@pytest_asyncio.fixture
+async def stub_seed_orchestrator(
+    app_client: AsyncClient,
+    patched_orchestrator_session_factory: Any,
+):
     """Install a RunOrchestrator with a stub seed-agent generator.
 
     The orchestrator runs the WriteQueue + stub generator end-to-end so
@@ -135,7 +167,10 @@ async def stub_seed_orchestrator(app_client: AsyncClient):
 
 
 @pytest_asyncio.fixture
-async def stub_seed_orchestrator_partial(app_client: AsyncClient):
+async def stub_seed_orchestrator_partial(
+    app_client: AsyncClient,
+    patched_orchestrator_session_factory: Any,
+):
     """Stub orchestrator returning a 'partial' terminal status.
 
     Mirrors the SeedAgentGenerator classification rule: 1+ succeeded AND
@@ -163,7 +198,10 @@ async def stub_seed_orchestrator_partial(app_client: AsyncClient):
 
 
 @pytest_asyncio.fixture
-async def stub_seed_orchestrator_failed(app_client: AsyncClient):
+async def stub_seed_orchestrator_failed(
+    app_client: AsyncClient,
+    patched_orchestrator_session_factory: Any,
+):
     """Stub orchestrator returning early-failure (no project_description / provider)."""
     from app.main import app
     from app.services.run_orchestrator import RunOrchestrator
@@ -237,7 +275,7 @@ async def test_post_seed_status_completed_on_success(
         "/api/seed",
         json={
             "project_description": "Successful seed run for status check".ljust(40, "x"),
-            "prompt_count": 3,
+            "prompt_count": 5,
         },
     )
     assert resp.status_code == 200
@@ -326,7 +364,7 @@ async def test_post_seed_persists_run_row_at_start(
         "/api/seed",
         json={
             "project_description": "Persisted at start test seed run".ljust(40, "x"),
-            "prompt_count": 2,
+            "prompt_count": 5,
         },
     )
     assert resp.status_code == 200
