@@ -352,38 +352,28 @@ class HeuristicScorer:
     ) -> float:
         """Faithfulness via asymmetrical projection metric.
 
-        If the optimized prompt expands the original (increasing length), the cosine
-        similarity organically drops due to added framing/reasoning tokens. This metric
-        projects the original vector mathematically into the expanded space using the
-        logarithmic length ratio, recovering the true faithfulness without penalizing
-        the length increase. Contractions (summaries) fall back to raw cosine, preserving
-        penalties for dropped constraints. Returns 5.0 (neutral) if embedding unavailable.
+        If the optimized prompt expands the original (increasing length), the similarity
+        organically drops due to added framing/reasoning tokens. This metric uses a 
+        High-Precision Cross-Encoder (Reranker) to evaluate exact textual entailment 
+        and applies an asymmetrical length projection to recover true faithfulness without 
+        penalizing length increases.
         """
         if not original or not optimized:
             return 5.0
         try:
             import math
+            from app.services.reranker_service import RerankerService
 
-            import numpy as np
-
-            from app.services.embedding_service import EmbeddingError, EmbeddingService
-            svc = EmbeddingService()
-            orig_vec = svc.embed_single(original)
-            opt_vec = svc.embed_single(optimized)
-            similarity = float(
-                np.dot(orig_vec, opt_vec)
-                / (np.linalg.norm(orig_vec) * np.linalg.norm(opt_vec) + 1e-9)
-            )
+            reranker = RerankerService()
+            similarity = reranker.score_batch(original, [optimized])[0]
 
             # Asymmetrical inclusion projection
             l1 = max(40, len(original))
             l2 = max(40, len(optimized))
-            projection = similarity * (math.log(max(l1, l2)) / math.log(l1))
+            projection = float(similarity) * (math.log(max(l1, l2)) / math.log(l1))
             projection = min(1.0, projection)
 
             # Map projection (0-1) to score (1-10).
-            # Because expansions are log-boosted back to high projections (~0.85-1.0),
-            # this piecewise function organically outputs high faithfulness (8-10) for them.
             if projection >= 0.85:
                 score = min(10.0, 9.0 + (projection - 0.85) * 6.67)
             elif projection >= 0.50:
@@ -394,8 +384,9 @@ class HeuristicScorer:
                 score = max(1.0, projection * 13.3)
 
             return round(max(1.0, min(10.0, score)), 2)
-        except (ImportError, EmbeddingError, ValueError, MemoryError):
-            logger.debug("Embedding unavailable for faithfulness heuristic — returning neutral score")
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("Embedding unavailable for faithfulness heuristic — returning neutral score: %s", exc)
             return 5.0
 
     # ------------------------------------------------------------------

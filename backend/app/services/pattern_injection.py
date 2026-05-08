@@ -626,6 +626,45 @@ async def auto_inject_patterns(
         logger.warning("GlobalPattern injection failed (non-fatal): %s trace_id=%s", gp_exc, trace_id)
 
     # ------------------------------------------------------------------
+    # High-Precision Reranking via Cross-Encoder (Tiered Architecture)
+    # ------------------------------------------------------------------
+    if injected:
+        try:
+            import asyncio
+            from app.services.reranker_service import RerankerService
+            
+            reranker_svc = RerankerService()
+            texts = [ip.pattern_text for ip in injected]
+            
+            # Defer the CPU-bound reranking forward pass to a thread
+            scores = await asyncio.to_thread(reranker_svc.score_batch, raw_prompt, texts)
+            
+            valid_injections = []
+            for ip, score in zip(injected, scores):
+                rerank_score = float(score)
+                # Update provenance similarities from the cross-encoder for precision 
+                ip.similarity = round(rerank_score, 2)
+                
+                # Compositional culling gate
+                # If similarity drops severely, it's likely a negation or role reversal
+                if rerank_score >= 0.15:
+                    valid_injections.append(ip)
+                    
+            valid_injections.sort(key=lambda x: x.similarity, reverse=True)
+            
+            # Keep only the strongest compositionally validated patterns
+            injected = valid_injections[:15]
+            
+        except Exception as rerank_exc:
+            logger.warning(
+                "Cross-encoder reranking failed (falling back to bi-encoder rankings): %s trace_id=%s", 
+                rerank_exc, trace_id
+            )
+            # Fall back to sorting by the bi-encoder similarity anyway
+            injected.sort(key=lambda x: x.similarity, reverse=True)
+            injected = injected[:15]
+
+    # ------------------------------------------------------------------
     # Persist injection provenance when optimization_id is available AND
     # the caller is recording in-line. Internal/sampling pipelines call
     # us BEFORE the parent Optimization is committed (the patterns need
