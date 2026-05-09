@@ -62,7 +62,7 @@ def _make_embedding_service(should_raise=False):
     if should_raise:
         es.embed_single.side_effect = RuntimeError("model not loaded")
     else:
-        zero_vec = np.zeros(384, dtype=np.float32)
+        zero_vec = np.zeros(768, dtype=np.float32)
         es.embed_single.return_value = zero_vec
         es.cosine_search.return_value = [(0, 0.95), (1, 0.80)]
     return es
@@ -221,8 +221,8 @@ async def test_explore_uses_cache(tmp_path):
     gc.get_file_content = AsyncMock(return_value="def main(): pass")
 
     es = MagicMock()
-    es.aembed_single = AsyncMock(return_value=np.zeros(384))
-    es.aembed_texts = AsyncMock(return_value=[np.zeros(384)])
+    es.aembed_single = AsyncMock(return_value=np.zeros(768))
+    es.aembed_texts = AsyncMock(return_value=[np.zeros(768)])
     es.cosine_search = MagicMock(return_value=[(0, 0.9)])
 
     provider = AsyncMock()
@@ -280,9 +280,9 @@ async def test_explore_logs_budget_utilization(tmp_path, caplog):
         file_contents="def fn():\n    return 42\n",
     )
     es = _make_embedding_service()
-    es.aembed_single = AsyncMock(return_value=np.zeros(384, dtype=np.float32))
+    es.aembed_single = AsyncMock(return_value=np.zeros(768, dtype=np.float32))
     es.aembed_texts = AsyncMock(
-        return_value=[np.zeros(384, dtype=np.float32) for _ in range(5)]
+        return_value=[np.zeros(768, dtype=np.float32) for _ in range(5)]
     )
     es.cosine_search.return_value = [(i, 0.9 - i * 0.01) for i in range(5)]
 
@@ -363,9 +363,9 @@ async def test_explore_emits_trace_entry(tmp_path):
         ]
     )
     es = _make_embedding_service()
-    es.aembed_single = AsyncMock(return_value=np.zeros(384, dtype=np.float32))
+    es.aembed_single = AsyncMock(return_value=np.zeros(768, dtype=np.float32))
     es.aembed_texts = AsyncMock(
-        return_value=[np.zeros(384, dtype=np.float32) for _ in range(2)]
+        return_value=[np.zeros(768, dtype=np.float32) for _ in range(2)]
     )
     provider = _make_provider(context_text="Synthesized overview")
     provider.last_usage = TokenUsage(
@@ -420,9 +420,9 @@ async def test_explore_trace_failure_does_not_break_synthesis(tmp_path):
     loader = _make_prompt_loader(tmp_path)
     gc = _make_github_client()
     es = _make_embedding_service()
-    es.aembed_single = AsyncMock(return_value=np.zeros(384, dtype=np.float32))
+    es.aembed_single = AsyncMock(return_value=np.zeros(768, dtype=np.float32))
     es.aembed_texts = AsyncMock(
-        return_value=[np.zeros(384, dtype=np.float32) for _ in range(2)]
+        return_value=[np.zeros(768, dtype=np.float32) for _ in range(2)]
     )
     provider = _make_provider()
 

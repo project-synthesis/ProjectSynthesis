@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import PromptCluster
 from app.services.taxonomy.family_ops import assign_cluster, score_to_centroid_weight
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 def _unit_vec(seed: int) -> np.ndarray:
@@ -27,7 +27,7 @@ def _unit_vec(seed: int) -> np.ndarray:
     return v / np.linalg.norm(v)
 
 
-def _close_vec(base: np.ndarray, offset_seed: int, scale: float = 0.05) -> np.ndarray:
+def _close_vec(base: np.ndarray, offset_seed: int, scale: float = 0.01) -> np.ndarray:
     """Create a unit vector close to *base* (high cosine similarity)."""
     rng = np.random.RandomState(offset_seed)
     noise = rng.randn(EMBEDDING_DIM).astype(np.float32) * scale

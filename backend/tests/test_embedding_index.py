@@ -7,10 +7,10 @@ from app.services.taxonomy.embedding_index import EmbeddingIndex
 
 @pytest.fixture
 def index():
-    return EmbeddingIndex(dim=384)
+    return EmbeddingIndex(dim=768)
 
 
-def _rand_emb(dim=384):
+def _rand_emb(dim=768):
     v = np.random.randn(dim).astype(np.float32)
     return v / np.linalg.norm(v)
 
@@ -110,7 +110,7 @@ async def test_pairwise_threshold_filtering(index):
     """Random vectors should mostly be below high threshold."""
     for i in range(10):
         await index.upsert(f"c{i}", _rand_emb())
-    # Very high threshold should yield few or no edges (random 384-dim vectors)
+    # Very high threshold should yield few or no edges (random 768-dim vectors)
     pairs = index.pairwise_similarities(threshold=0.95, k=100)
     for _, _, score in pairs:
         assert score >= 0.95
@@ -122,7 +122,7 @@ async def test_pairwise_k_truncation(index):
     emb = _rand_emb()
     # Insert 5 near-identical vectors
     for i in range(5):
-        noise = np.random.randn(384).astype(np.float32) * 0.01
+        noise = np.random.randn(768).astype(np.float32) * 0.01
         await index.upsert(f"c{i}", emb + noise)
     # 5 items = 10 upper-triangle pairs; request k=3
     pairs = index.pairwise_similarities(threshold=0.0, k=3)
@@ -134,8 +134,8 @@ async def test_pairwise_sorted_descending(index):
     """Edges are sorted by similarity descending."""
     emb = _rand_emb()
     await index.upsert("a", emb)
-    await index.upsert("b", emb + np.random.randn(384).astype(np.float32) * 0.01)
-    await index.upsert("c", emb + np.random.randn(384).astype(np.float32) * 0.5)
+    await index.upsert("b", emb + np.random.randn(768).astype(np.float32) * 0.01)
+    await index.upsert("c", emb + np.random.randn(768).astype(np.float32) * 0.5)
     pairs = index.pairwise_similarities(threshold=0.0, k=100)
     scores = [s for _, _, s in pairs]
     assert scores == sorted(scores, reverse=True)

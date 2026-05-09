@@ -8,7 +8,7 @@ import pytest
 from app.services.taxonomy.optimized_index import OptimizedEmbeddingIndex
 
 
-def _rand_emb(dim: int = 384, seed: int | None = None) -> np.ndarray:
+def _rand_emb(dim: int = 768, seed: int | None = None) -> np.ndarray:
     rng = np.random.RandomState(seed)
     v = rng.randn(dim).astype(np.float32)
     return v / np.linalg.norm(v)
@@ -16,7 +16,7 @@ def _rand_emb(dim: int = 384, seed: int | None = None) -> np.ndarray:
 
 @pytest.fixture
 def index() -> OptimizedEmbeddingIndex:
-    return OptimizedEmbeddingIndex(dim=384)
+    return OptimizedEmbeddingIndex(dim=768)
 
 
 @pytest.mark.asyncio
@@ -33,7 +33,7 @@ async def test_save_and_load_cache_round_trip(
     await index.save_cache(cache_path)
     assert cache_path.exists()
 
-    fresh = OptimizedEmbeddingIndex(dim=384)
+    fresh = OptimizedEmbeddingIndex(dim=768)
     loaded = await fresh.load_cache(cache_path)
     assert loaded is True
     assert fresh.size == 2
@@ -52,7 +52,7 @@ async def test_load_cache_rejects_stale(
     cache_path = tmp_path / "optimized_index.pkl"
     await index.save_cache(cache_path)
 
-    fresh = OptimizedEmbeddingIndex(dim=384)
+    fresh = OptimizedEmbeddingIndex(dim=768)
     loaded = await fresh.load_cache(cache_path, max_age_seconds=0)
     assert loaded is False
     assert fresh.size == 0

@@ -7,7 +7,7 @@ from app.models import PromptCluster
 
 
 def _centroid() -> bytes:
-    v = np.random.RandomState(42).randn(384).astype(np.float32)
+    v = np.random.RandomState(42).randn(768).astype(np.float32)
     v = v / np.linalg.norm(v)
     return v.tobytes()
 

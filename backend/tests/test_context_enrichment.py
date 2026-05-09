@@ -1338,9 +1338,9 @@ class TestRepoRelevanceGate:
 
         mock_es = AsyncMock()
         # Near-orthogonal vectors — cosine stays below 0.15 floor
-        prompt_vec = np.zeros(384, dtype=np.float32)
+        prompt_vec = np.zeros(768, dtype=np.float32)
         prompt_vec[0] = 1.0
-        synth_vec = np.zeros(384, dtype=np.float32)
+        synth_vec = np.zeros(768, dtype=np.float32)
         synth_vec[1] = 1.0
         mock_es.aembed_single = AsyncMock(side_effect=[prompt_vec, synth_vec])
 
@@ -1384,9 +1384,9 @@ class TestRepoRelevanceGate:
 
         mock_es = AsyncMock()
         rng = np.random.default_rng(42)
-        base = rng.random(384).astype(np.float32)
+        base = rng.random(768).astype(np.float32)
         base /= np.linalg.norm(base)
-        noise = rng.random(384).astype(np.float32) * 0.3
+        noise = rng.random(768).astype(np.float32) * 0.3
         vec2 = base + noise
         vec2 /= np.linalg.norm(vec2)
         mock_es.aembed_single = AsyncMock(side_effect=[base, vec2])
@@ -1558,9 +1558,9 @@ class TestHybridRelevance:
         import numpy as np
 
         mock_es = AsyncMock()
-        prompt_vec = np.zeros(384, dtype=np.float32)
+        prompt_vec = np.zeros(768, dtype=np.float32)
         prompt_vec[0] = 1.0
-        synth_vec = np.zeros(384, dtype=np.float32)
+        synth_vec = np.zeros(768, dtype=np.float32)
         synth_vec[1] = 1.0
         mock_es.aembed_single = AsyncMock(side_effect=[prompt_vec, synth_vec])
 
@@ -1581,9 +1581,9 @@ class TestHybridRelevance:
         mock_es = AsyncMock()
         # Create vectors with moderate similarity (~0.5), well above the 0.15 floor
         rng = np.random.default_rng(42)
-        base = rng.random(384).astype(np.float32)
+        base = rng.random(768).astype(np.float32)
         base /= np.linalg.norm(base)
-        noise = rng.random(384).astype(np.float32) * 0.8
+        noise = rng.random(768).astype(np.float32) * 0.8
         vec2 = base + noise
         vec2 /= np.linalg.norm(vec2)
         mock_es.aembed_single = AsyncMock(side_effect=[base, vec2])
@@ -1613,9 +1613,9 @@ class TestHybridRelevance:
         import numpy as np
 
         mock_es = AsyncMock()
-        vec = np.random.default_rng(42).random(384).astype(np.float32)
+        vec = np.random.default_rng(42).random(768).astype(np.float32)
         vec /= np.linalg.norm(vec)
-        noise = np.random.default_rng(99).random(384).astype(np.float32) * 0.1
+        noise = np.random.default_rng(99).random(768).astype(np.float32) * 0.1
         vec2 = vec + noise
         vec2 /= np.linalg.norm(vec2)
         mock_es.aembed_single = AsyncMock(side_effect=[vec, vec2])
@@ -1637,9 +1637,9 @@ class TestHybridRelevance:
 
         mock_es = AsyncMock()
         rng = np.random.default_rng(42)
-        base = rng.random(384).astype(np.float32)
+        base = rng.random(768).astype(np.float32)
         base /= np.linalg.norm(base)
-        noise = rng.random(384).astype(np.float32) * 0.3
+        noise = rng.random(768).astype(np.float32) * 0.3
         vec2 = base + noise
         vec2 /= np.linalg.norm(vec2)
         mock_es.aembed_single = AsyncMock(side_effect=[base, vec2])
@@ -1665,9 +1665,9 @@ class TestHybridRelevance:
         import numpy as np
 
         mock_es = AsyncMock()
-        prompt_vec = np.zeros(384, dtype=np.float32)
+        prompt_vec = np.zeros(768, dtype=np.float32)
         prompt_vec[0] = 1.0
-        synth_vec = np.zeros(384, dtype=np.float32)
+        synth_vec = np.zeros(768, dtype=np.float32)
         synth_vec[0] = 1.0  # match for a pass
         mock_es.aembed_single = AsyncMock(side_effect=[prompt_vec, synth_vec])
 
@@ -1690,9 +1690,9 @@ class TestHybridRelevance:
         import numpy as np
 
         mock_es = AsyncMock()
-        prompt_vec = np.zeros(384, dtype=np.float32)
+        prompt_vec = np.zeros(768, dtype=np.float32)
         prompt_vec[0] = 1.0
-        synth_vec = np.zeros(384, dtype=np.float32)
+        synth_vec = np.zeros(768, dtype=np.float32)
         synth_vec[0] = 1.0
         mock_es.aembed_single = AsyncMock(side_effect=[prompt_vec, synth_vec])
 
@@ -1793,9 +1793,9 @@ class TestRepoRelevanceAnchorEnrichment:
         import numpy as np
 
         mock_es = AsyncMock()
-        prompt_vec = np.zeros(384, dtype=np.float32)
+        prompt_vec = np.zeros(768, dtype=np.float32)
         prompt_vec[0] = 1.0
-        synth_vec = np.zeros(384, dtype=np.float32)
+        synth_vec = np.zeros(768, dtype=np.float32)
         synth_vec[0] = 1.0
         mock_es.aembed_single = AsyncMock(side_effect=[prompt_vec, synth_vec])
 
@@ -1822,7 +1822,7 @@ class TestRepoRelevanceAnchorEnrichment:
         import numpy as np
 
         mock_es = AsyncMock()
-        vec = np.zeros(384, dtype=np.float32)
+        vec = np.zeros(768, dtype=np.float32)
         vec[0] = 1.0
         mock_es.aembed_single = AsyncMock(side_effect=[vec, vec])
 
@@ -1855,7 +1855,7 @@ class TestRepoRelevanceAnchorEnrichment:
         import numpy as np
 
         mock_es = AsyncMock()
-        vec = np.zeros(384, dtype=np.float32)
+        vec = np.zeros(768, dtype=np.float32)
         vec[0] = 1.0
         mock_es.aembed_single = AsyncMock(side_effect=[vec, vec])
 
@@ -1877,9 +1877,9 @@ class TestRepoRelevanceAnchorEnrichment:
 
         mock_es = AsyncMock()
         rng = np.random.default_rng(42)
-        base = rng.random(384).astype(np.float32)
+        base = rng.random(768).astype(np.float32)
         base /= np.linalg.norm(base)
-        noise = rng.random(384).astype(np.float32) * 0.3
+        noise = rng.random(768).astype(np.float32) * 0.3
         vec2 = base + noise
         vec2 /= np.linalg.norm(vec2)
         mock_es.aembed_single = AsyncMock(side_effect=[base, vec2])

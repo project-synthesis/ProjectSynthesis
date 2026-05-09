@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models import Base, Optimization, OptimizationPattern, PromptCluster, PromptTemplate
 from app.services.prompt_lifecycle import PromptLifecycleService
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 def _utcnow() -> datetime:

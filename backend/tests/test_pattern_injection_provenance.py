@@ -10,7 +10,7 @@ failure only rolls back the savepoint, not the outer transaction.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -326,6 +326,12 @@ class TestProvenanceErrorIsolation:
 
 
 class TestRecordInjectionProvenancePostCommit:
+
+    @pytest.fixture(autouse=True)
+    def patch_reranker_for_provenance(self):
+        with patch('app.services.reranker_service.RerankerService.score_batch', side_effect=Exception('Test reranker offline')):
+            yield
+
     """B5 (2026-04-25): the internal/sampling pipelines call
     ``auto_inject_patterns`` BEFORE the parent ``Optimization`` row is
     committed (the patterns need to flow into the optimizer prompt).

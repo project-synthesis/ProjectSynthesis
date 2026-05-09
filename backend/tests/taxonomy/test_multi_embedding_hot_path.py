@@ -37,7 +37,7 @@ async def test_prompt_cluster_has_weighted_member_sum(db: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_embeddings_store_and_load(db: AsyncSession):
-    emb = np.random.randn(384).astype(np.float32)
+    emb = np.random.randn(768).astype(np.float32)
     opt = Optimization(
         raw_prompt="test", optimized_prompt="optimized", status="completed",
         optimized_embedding=emb.tobytes(),
@@ -48,7 +48,7 @@ async def test_embeddings_store_and_load(db: AsyncSession):
     loaded = (await db.execute(select(Optimization).where(Optimization.id == opt.id))).scalar_one()
     assert loaded.optimized_embedding is not None
     vec = np.frombuffer(loaded.optimized_embedding, dtype=np.float32)
-    assert vec.shape == (384,)
+    assert vec.shape == (768,)
 
 
 @pytest.mark.asyncio
@@ -60,7 +60,7 @@ async def test_process_optimization_stores_optimized_embedding(db: AsyncSession)
         nonlocal call_count
         call_count += 1
         rng = np.random.RandomState(call_count)
-        vec = rng.randn(384).astype(np.float32)
+        vec = rng.randn(768).astype(np.float32)
         return vec / np.linalg.norm(vec)
     mock_emb_svc.aembed_single = _embed
     mock_emb_svc.cosine_search = lambda *a, **kw: []

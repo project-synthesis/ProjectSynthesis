@@ -15,7 +15,7 @@ def svc() -> EmbeddingService:
 def test_embed_single(svc: EmbeddingService) -> None:
     vec = svc.embed_single("Hello world")
     assert isinstance(vec, np.ndarray)
-    assert vec.shape == (384,)
+    assert vec.shape == (768,)
 
 
 def test_embed_texts_batch(svc: EmbeddingService) -> None:
@@ -24,7 +24,7 @@ def test_embed_texts_batch(svc: EmbeddingService) -> None:
     assert len(vecs) == 3
     for v in vecs:
         assert isinstance(v, np.ndarray)
-        assert v.shape == (384,)
+        assert v.shape == (768,)
 
 
 def test_cosine_search(svc: EmbeddingService) -> None:

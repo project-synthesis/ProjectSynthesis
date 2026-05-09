@@ -257,7 +257,7 @@ def test_qualifier_embedding_cache_hit():
     import numpy as np
 
     loader = DomainSignalLoader()
-    vec = np.random.randn(384).astype(np.float32)
+    vec = np.random.randn(768).astype(np.float32)
     loader.cache_qualifier_embedding("growth|metrics|kpi", vec)
 
     result = loader.get_cached_qualifier_embedding("growth|metrics|kpi")
@@ -277,7 +277,7 @@ def test_qualifier_embedding_cache_invalidation():
 
     loader = DomainSignalLoader()
     loader.refresh_qualifiers("saas", {"growth": ["metrics", "kpi"]})
-    vec = np.random.randn(384).astype(np.float32)
+    vec = np.random.randn(768).astype(np.float32)
     loader.cache_qualifier_embedding("growth|metrics|kpi", vec)
 
     # Refresh invalidates cache

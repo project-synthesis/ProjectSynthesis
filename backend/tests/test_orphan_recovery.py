@@ -15,11 +15,11 @@ from app.services.orphan_recovery import OrphanRecoveryService
 # Helpers
 # ---------------------------------------------------------------------------
 
-_DIM = 384
+_DIM = 768
 
 
 def _fake_embedding(seed: float = 1.0) -> np.ndarray:
-    """Return a deterministic 384-dim float32 vector with distinct direction per seed."""
+    """Return a deterministic 768-dim float32 vector with distinct direction per seed."""
     rng = np.random.RandomState(int(seed * 1000))
     vec = rng.randn(_DIM).astype(np.float32)
     norm = np.linalg.norm(vec)

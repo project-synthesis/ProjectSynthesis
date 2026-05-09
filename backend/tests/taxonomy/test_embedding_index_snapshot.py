@@ -23,7 +23,7 @@ from app.services.taxonomy.embedding_index import EmbeddingIndex, IndexSnapshot
 # ---------------------------------------------------------------------------
 
 
-def _rand_emb(dim: int = 384, seed: int | None = None) -> np.ndarray:
+def _rand_emb(dim: int = 768, seed: int | None = None) -> np.ndarray:
     rng = np.random.RandomState(seed)
     v = rng.randn(dim).astype(np.float32)
     return v / np.linalg.norm(v)
@@ -31,7 +31,7 @@ def _rand_emb(dim: int = 384, seed: int | None = None) -> np.ndarray:
 
 @pytest.fixture
 def index() -> EmbeddingIndex:
-    return EmbeddingIndex(dim=384)
+    return EmbeddingIndex(dim=768)
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ async def test_snapshot_of_empty_index(index: EmbeddingIndex):
     """Snapshot of an empty index returns empty matrix and ids."""
     snap = await index.snapshot()
     assert isinstance(snap, IndexSnapshot)
-    assert snap.matrix.shape == (0, 384)
+    assert snap.matrix.shape == (0, 768)
     assert snap.ids == []
 
 
@@ -99,7 +99,7 @@ async def test_snapshot_copies_matrix(index: EmbeddingIndex):
     await index.upsert("b", _rand_emb(seed=2))
 
     # Snapshot must still reflect the original single-entry state
-    assert snap.matrix.shape == (1, 384)
+    assert snap.matrix.shape == (1, 768)
     assert snap.ids == ["a"]
 
 
@@ -139,12 +139,12 @@ async def test_snapshot_matrix_independence(index: EmbeddingIndex):
 async def test_restore_empty_snapshot(index: EmbeddingIndex):
     """Restoring an empty snapshot clears the index."""
     await index.upsert("a", _rand_emb(seed=1))
-    empty_snap = IndexSnapshot(matrix=np.empty((0, 384), dtype=np.float32), ids=[])
+    empty_snap = IndexSnapshot(matrix=np.empty((0, 768), dtype=np.float32), ids=[])
     await index.restore(empty_snap)
 
     assert index.size == 0
     assert index._ids == []
-    assert index._matrix.shape == (0, 384)
+    assert index._matrix.shape == (0, 768)
 
 
 @pytest.mark.asyncio
@@ -182,7 +182,7 @@ async def test_roundtrip_upsert(index: EmbeddingIndex):
 
     # Capture snapshot
     snap = await index.snapshot()
-    assert snap.matrix.shape == (2, 384)
+    assert snap.matrix.shape == (2, 768)
     assert set(snap.ids) == {"a", "b"}
 
     # Mutate: add more entries
@@ -196,7 +196,7 @@ async def test_roundtrip_upsert(index: EmbeddingIndex):
     # Verify original shape
     assert index.size == 2
     assert set(index._ids) == {"a", "b"}
-    assert index._matrix.shape == (2, 384)
+    assert index._matrix.shape == (2, 768)
 
 
 @pytest.mark.asyncio
@@ -281,7 +281,7 @@ async def test_search_after_restore(index: EmbeddingIndex):
 @pytest.mark.asyncio
 async def test_snapshot_and_upsert_do_not_interleave():
     """snapshot() and upsert() serialize correctly under concurrent calls."""
-    index = EmbeddingIndex(dim=384)
+    index = EmbeddingIndex(dim=768)
     for i in range(10):
         await index.upsert(f"c{i}", _rand_emb(seed=i))
 
@@ -297,7 +297,7 @@ async def test_snapshot_and_upsert_do_not_interleave():
 
     # Snapshot must reflect a consistent point in time (10 or 15 entries, not partial)
     assert snap.matrix.shape[0] == len(snap.ids)
-    assert snap.matrix.shape[1] == 384
+    assert snap.matrix.shape[1] == 768
     # All snapshot ids are consistent
     for idx, cid in enumerate(snap.ids):
-        assert snap.matrix[idx].shape == (384,)
+        assert snap.matrix[idx].shape == (768,)

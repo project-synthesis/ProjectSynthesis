@@ -354,16 +354,16 @@ class TaxonomyEngine:
         self._provider_direct: LLMProvider | None = provider
         self._provider_resolver = provider_resolver
         self._prompt_loader = PromptLoader(PROMPTS_DIR)
-        self._embedding_index = EmbeddingIndex(dim=384)
+        self._embedding_index = EmbeddingIndex(dim=self._embedding.dimension)
         # Post-generation vocabulary quality scores — observability only.
         # Populated by vocab generation pass; read by health endpoint (Task 5).
         self._vocab_quality_scores: deque[float] = deque(maxlen=_VOCAB_QUALITY_SCORES_MAXLEN)
         from app.services.taxonomy.transformation_index import TransformationIndex
-        self._transformation_index = TransformationIndex(dim=384)
+        self._transformation_index = TransformationIndex(dim=self._embedding.dimension)
         from app.services.taxonomy.qualifier_index import QualifierIndex
-        self._qualifier_index = QualifierIndex(dim=384)
+        self._qualifier_index = QualifierIndex(dim=self._embedding.dimension)
         from app.services.taxonomy.optimized_index import OptimizedEmbeddingIndex
-        self._optimized_index = OptimizedEmbeddingIndex(dim=384)
+        self._optimized_index = OptimizedEmbeddingIndex(dim=self._embedding.dimension)
         # Lock gates concurrent hot-path writes to shared centroid state.
         self._lock: asyncio.Lock = asyncio.Lock()
         # Separate lock for warm/cold path deduplication (Spec Section 2.6).

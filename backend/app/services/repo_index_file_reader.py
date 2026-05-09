@@ -46,7 +46,7 @@ class ProcessedFile:
     item: dict  # original tree entry {"path", "sha", "size"}
     content: str
     outline: FileOutline
-    embedding: np.ndarray  # 384-dim float32
+    embedding: np.ndarray  # 768-dim float32
     content_sha: str = ""  # SHA-256 of embed_text — dedup key
 
 
@@ -231,7 +231,7 @@ async def read_and_embed_files(
 
     # Map cache-miss results back to their position in ``valid``.
     miss_vec_by_pos: dict[int, np.ndarray] = {}
-    zero_vec = np.zeros(384, dtype=np.float32)
+    zero_vec = np.zeros(768, dtype=np.float32)
     for slot, pos in enumerate(miss_indices):
         vec = miss_embeddings[slot] if slot < len(miss_embeddings) else zero_vec
         miss_vec_by_pos[pos] = vec.astype(np.float32)

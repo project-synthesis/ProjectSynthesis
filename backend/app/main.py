@@ -575,7 +575,7 @@ async def lifespan(app: FastAPI):
                                     _emb = _np.frombuffer(
                                         _c.centroid_embedding, dtype=_np.float32
                                     )
-                                    if _emb.shape[0] == 384:
+                                    if _emb.shape[0] == 768:
                                         _centroids[_c.id] = _emb
                                 except (ValueError, TypeError):
                                     continue

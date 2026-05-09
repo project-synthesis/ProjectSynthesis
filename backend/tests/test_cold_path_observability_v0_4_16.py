@@ -31,7 +31,7 @@ import pytest
 
 from app.models import PromptCluster, TaxonomySnapshot
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 # ---------------------------------------------------------------------------

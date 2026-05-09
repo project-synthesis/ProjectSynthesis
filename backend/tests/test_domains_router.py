@@ -69,7 +69,7 @@ class TestListDomains:
         db_session.add(PromptCluster(
             id="non-domain", label="active cluster", state="active",
             domain="backend", task_type="coding",
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         ))
         await db_session.commit()
 
@@ -145,7 +145,7 @@ class TestListDomainsPerProject:
             domain="backend",
             task_type="coding",
             member_count=3,
-            centroid_embedding=b"\x00" * 384,
+            centroid_embedding=b"\x00" * 768,
         )
         db_session.add(cluster)
         await db_session.flush()
@@ -194,7 +194,7 @@ class TestListDomainsPerProject:
             domain="backend",
             task_type="coding",
             member_count=2,
-            centroid_embedding=b"\x00" * 384,
+            centroid_embedding=b"\x00" * 768,
         )
         db_session.add(cluster)
         await db_session.flush()
@@ -249,7 +249,7 @@ class TestListDomainsPerProject:
             domain="security",
             task_type="coding",
             member_count=5,
-            centroid_embedding=b"\x00" * 384,
+            centroid_embedding=b"\x00" * 768,
         )
         db_session.add(cluster)
         await db_session.flush()
@@ -286,7 +286,7 @@ class TestPromoteToDomain:
         cluster = PromptCluster(
             id="eligible-1", label="my-new-domain", state="active",
             domain="backend", task_type="coding", member_count=10,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -312,7 +312,7 @@ class TestPromoteToDomain:
         cluster = PromptCluster(
             id="mature-1", label="mature-domain", state="mature",
             domain="frontend", task_type="writing", member_count=8,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -326,7 +326,7 @@ class TestPromoteToDomain:
         cluster = PromptCluster(
             id="small-1", label="small-cluster", state="active",
             domain="backend", task_type="coding", member_count=3,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -342,7 +342,7 @@ class TestPromoteToDomain:
         cluster = PromptCluster(
             id="cand-1", label="candidate-cluster", state="candidate",
             domain="backend", task_type="coding", member_count=10,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -357,7 +357,7 @@ class TestPromoteToDomain:
         cluster = PromptCluster(
             id="arch-1", label="archived-cluster", state="archived",
             domain="backend", task_type="coding", member_count=10,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -377,7 +377,7 @@ class TestPromoteToDomain:
         cluster = PromptCluster(
             id="dom-1", label="existing-domain", state="domain",
             domain="general", task_type="general", member_count=20,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -393,7 +393,7 @@ class TestPromoteToDomain:
         cluster = PromptCluster(
             id="dup-1", label="backend", state="active",
             domain="backend", task_type="coding", member_count=10,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -408,7 +408,7 @@ class TestPromoteToDomain:
         cluster = PromptCluster(
             id="dom-set-1", label="new-domain-label", state="active",
             domain="general", task_type="coding", member_count=6,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -425,7 +425,7 @@ class TestPromoteToDomain:
         cluster = PromptCluster(
             id="color-1", label="color-test-domain", state="active",
             domain="backend", task_type="coding", member_count=7,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -567,7 +567,7 @@ class TestRebuildSubDomainsEndpoint:
             domain="backend",
             task_type="coding",
             member_count=5,
-            centroid_embedding=b"\x00" * 384,
+            centroid_embedding=b"\x00" * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -680,7 +680,7 @@ class TestRebuildSubDomainsEndpoint:
             parent_id=seed.id,
             persistence=1.0,
             color_hex="#aabbcc",
-            centroid_embedding=b"\x00" * 384,
+            centroid_embedding=b"\x00" * 768,
         )
         db_session.add(sub)
         await db_session.flush()
@@ -694,7 +694,7 @@ class TestRebuildSubDomainsEndpoint:
                 domain="backend",
                 task_type="coding",
                 member_count=5,
-                centroid_embedding=b"\x00" * 384,
+                centroid_embedding=b"\x00" * 768,
                 parent_id=seed.id,
             )
             db_session.add(cluster)
@@ -705,7 +705,7 @@ class TestRebuildSubDomainsEndpoint:
                     status="completed",
                     cluster_id=cluster.id,
                     domain_raw="backend: audit",
-                    embedding=b"\x00" * (4 * 384),
+                    embedding=b"\x00" * (4 * 768),
                 ))
         await db_session.commit()
 

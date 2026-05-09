@@ -33,7 +33,7 @@ async def test_global_view_returns_all_meta_patterns(app_client, db_session):
         state="active",
         domain="backend",
         task_type="coding",
-        centroid_embedding=b"\x00" * 384,
+        centroid_embedding=b"\x00" * 768,
     )
     db_session.add(cluster)
     await db_session.flush()
@@ -76,12 +76,12 @@ async def test_project_scoped_filters_by_optimization_provenance(
     cluster_a = PromptCluster(
         id="c-a", label="A cluster", state="active",
         domain="backend", task_type="coding",
-        centroid_embedding=b"\x00" * 384,
+        centroid_embedding=b"\x00" * 768,
     )
     cluster_b = PromptCluster(
         id="c-b", label="B cluster", state="active",
         domain="frontend", task_type="coding",
-        centroid_embedding=b"\x00" * 384,
+        centroid_embedding=b"\x00" * 768,
     )
     db_session.add_all([cluster_a, cluster_b])
     await db_session.flush()
@@ -210,7 +210,7 @@ async def test_limit_query_param(app_client, db_session):
     cluster = PromptCluster(
         id="c-limit", label="limit", state="active",
         domain="backend", task_type="coding",
-        centroid_embedding=b"\x00" * 384,
+        centroid_embedding=b"\x00" * 768,
     )
     db_session.add(cluster)
     await db_session.flush()

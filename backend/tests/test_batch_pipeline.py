@@ -161,7 +161,7 @@ def mock_provider() -> AsyncMock:
 @pytest.fixture
 def mock_embedding_service() -> AsyncMock:
     svc = AsyncMock()
-    svc.aembed_single = AsyncMock(return_value=np.zeros(384, dtype="float32"))
+    svc.aembed_single = AsyncMock(return_value=np.zeros(768, dtype="float32"))
     return svc
 
 

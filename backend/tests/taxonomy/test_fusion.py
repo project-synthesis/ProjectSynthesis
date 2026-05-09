@@ -31,7 +31,7 @@ from app.services.taxonomy.fusion import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-DIM = 384
+DIM = 768
 
 
 def _rand_unit(dim: int = DIM, seed: int = 42) -> np.ndarray:

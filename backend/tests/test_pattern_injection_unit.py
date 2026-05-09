@@ -42,7 +42,7 @@ from app.services.pattern_injection import (
 # Helpers shared with the existing cross-cluster suite
 # ---------------------------------------------------------------------------
 
-def _rand_emb(dim: int = 384) -> np.ndarray:
+def _rand_emb(dim: int = 768) -> np.ndarray:
     v = np.random.randn(dim).astype(np.float32)
     return v / np.linalg.norm(v)
 
@@ -180,7 +180,7 @@ class TestGlobalPatternInjection:
         # the CROSS_CLUSTER_RELEVANCE_FLOOR even when raw cosine would sit
         # just below it.
         prompt_emb = _rand_emb()
-        gp_emb = prompt_emb + np.random.randn(384).astype(np.float32) * 0.05
+        gp_emb = prompt_emb + np.random.randn(768).astype(np.float32) * 0.05
         gp_emb = gp_emb / np.linalg.norm(gp_emb)
 
         gp = GlobalPattern(
@@ -218,7 +218,7 @@ class TestGlobalPatternInjection:
     async def test_inactive_global_patterns_are_skipped(self, db_session):
         """Only ``state='active'`` globals participate in injection."""
         prompt_emb = _rand_emb()
-        near = prompt_emb + np.random.randn(384).astype(np.float32) * 0.02
+        near = prompt_emb + np.random.randn(768).astype(np.float32) * 0.02
         near = near / np.linalg.norm(near)
 
         db_session.add(GlobalPattern(
@@ -253,7 +253,7 @@ class TestGlobalPatternInjection:
 class TestInjectionProvenance:
     async def test_global_pattern_provenance_row_is_written(self, db_session):
         prompt_emb = _rand_emb()
-        near = prompt_emb + np.random.randn(384).astype(np.float32) * 0.05
+        near = prompt_emb + np.random.randn(768).astype(np.float32) * 0.05
         near = near / np.linalg.norm(near)
 
         # Need a real Optimization row for the FK to hold.

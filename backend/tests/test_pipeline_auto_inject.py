@@ -16,7 +16,7 @@ from app.services.pipeline import PipelineOrchestrator
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _rand_emb(dim: int = 384) -> np.ndarray:
+def _rand_emb(dim: int = 768) -> np.ndarray:
     v = np.random.randn(dim).astype(np.float32)
     return v / np.linalg.norm(v)
 

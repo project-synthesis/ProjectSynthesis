@@ -29,7 +29,7 @@ from app.services.taxonomy._constants import (
 )
 from app.services.taxonomy.cluster_meta import write_meta
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 def _emb(seed: int) -> bytes:

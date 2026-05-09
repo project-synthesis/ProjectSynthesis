@@ -20,6 +20,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -33,11 +34,6 @@ from app.services.divergence_detector import (
     detect_divergences,
 )
 from app.services.heuristic_analyzer import HeuristicAnalysis, HeuristicAnalyzer
-from app.services.pipeline_constants import (
-    PROSE_OUTPUT_CUES,
-    WRITING_CODE_CONTEXT_CAP_CHARS,
-    WRITING_LEAD_VERBS,
-)
 from app.services.repo_relevance import (
     compute_repo_relevance,
     extract_domain_vocab,
@@ -46,10 +42,7 @@ from app.services.strategy_intelligence import (
     resolve_performance_signals,
     resolve_strategy_intelligence,
 )
-from app.services.task_type_classifier import (
-    extract_first_sentence,
-    has_technical_nouns,
-)
+from app.services.task_type_classifier import has_technical_nouns
 from app.services.workspace_intelligence import WorkspaceIntelligence
 
 logger = logging.getLogger(__name__)
@@ -63,10 +56,6 @@ PROFILE_KNOWLEDGE_WORK = "knowledge_work"
 PROFILE_COLD_START = "cold_start"
 
 _COLD_START_THRESHOLD = 10  # optimization count below which cold-start profile activates
-
-# B5+ writing-about-code path vocab is shared with ``pipeline_phases`` via
-# ``pipeline_constants`` — the post-LLM task-type lock and the codebase trim
-# must agree on the same set of prompts.
 # I-6: if meta_patterns exist from prior seeding/import, the pattern tier is
 # warm enough to unlock strategy intelligence + pattern injection even on a
 # freshly-reset optimization table. Threshold is deliberately permissive —
@@ -493,52 +482,21 @@ class ContextEnrichmentService:
         # B2: compute technical-signal escape so analysis/creative/general
         # prompts about a linked codebase still get code_aware context. The
         # first sentence is extracted the same way the heuristic classifier
-        # does it (via the shared ``extract_first_sentence`` helper — code
-        # fences / markdown tables stripped, then ``.?!`` terminator split)
-        # so signals align with the analyzer's view of the prompt.
-        _first_sentence = extract_first_sentence(raw_prompt.lower())
+        # does it so signals align with the analyzer's view of the prompt.
+        _first_sentence = re.split(r"[.?!]", raw_prompt.lower(), maxsplit=1)[0]
         _tech_signals = has_technical_nouns(_first_sentence)
-
-        # B5 (cycle 9 finding): writing/creative tasks ABOUT the codebase
-        # need codebase grounding too.  The first-sentence check is right
-        # for analysis prompts (which lead with a question and put tech
-        # anchors in the question), but wrong for writing prompts that put
-        # the framing first and the technical content in the body.  Live
-        # regression: ``Draft a CHANGELOG entry for v0.4.7. Summarize:
-        # Bug A repo-relevance gate, Bug B sub-domain consistency, ...``
-        # — first sentence ``Draft a CHANGELOG entry for v0.4.7`` has no
-        # technical nouns; the entire technical payload is in the
-        # ``Summarize:`` body.  Scan the FULL prompt for writing/creative
-        # tasks with a linked repo so CHANGELOG / release-notes /
-        # documentation drafts get the codebase context they need to
-        # avoid hallucinating change descriptions.  Only fires when
-        # first-sentence check missed and task is writing/creative —
-        # other task types are already covered by the first-sentence path
-        # with proper false-positive guards.
-        _full_prompt_tech = False
-        if (
-            not _tech_signals
-            and repo_full_name
-            and (task_type or "general") in ("writing", "creative")
-        ):
-            _full_prompt_tech = has_technical_nouns(raw_prompt.lower())
-
         profile = select_enrichment_profile(
             task_type or "general",
             repo_full_name is not None,
             opt_count,
             meta_pattern_count=meta_pattern_count,
-            technical_signals=_tech_signals or _full_prompt_tech,
+            technical_signals=_tech_signals,
         )
         enrichment_meta_dict: dict[str, Any] = {"enrichment_profile": profile}
         if _tech_signals:
             # Record the rescue so inspectors can see why code_aware fired
             # on a non-coding task_type.
             enrichment_meta_dict["technical_signals_detected"] = True
-        if _full_prompt_tech:
-            # B5 — distinguish from B2 first-sentence rescue so observatory
-            # tooling can show "writing-about-code" cases distinctly.
-            enrichment_meta_dict["full_prompt_technical_rescue"] = True
         if _disambiguation_info:
             enrichment_meta_dict["heuristic_disambiguation"] = _disambiguation_info
         if analysis and analysis.domain_scores:
@@ -587,61 +545,6 @@ class ContextEnrichmentService:
             db=db,
             enrichment_meta_dict=enrichment_meta_dict,
         )
-
-        # B5+ trim: writing/creative tasks ABOUT a linked codebase need
-        # SOME codebase grounding (to verify identifier references) but
-        # NOT the full 80K — too much noise dilutes accuracy and tempts
-        # the optimizer to fish for plausible-but-wrong details.
-        # Live regression: cycle-10 prompt 1 (CHANGELOG) scored 0.35
-        # lower than cycle-9 prompt 5 (same prompt without codebase)
-        # because a detail was hallucinated from related-but-wrong code
-        # context (``taxonomy_activity`` vs the actual ``taxonomy_changed``).
-        # Trimming to ~15K forces the optimizer to be more selective.
-        #
-        # Trigger: heuristic OR LEAD-VERB classification as
-        # writing/creative, with a linked repo, having landed code_aware
-        # via either rescue path.  ``enrich()`` runs BEFORE the LLM
-        # analyzer (which can flip task_type via post-LLM rescue), so
-        # we can't read the post-lock task_type here — use the heuristic
-        # OR the user's lead verb, which is the most reliable user-intent
-        # signal. Same lead-verb set as ``pipeline_phases`` B5+
-        # task-type lock so the two layers agree on the same prompts.
-        # Cycle-11 specifically: heuristic said "analysis" (technical-
-        # noun density beat the writing keyword), so a task-type-only
-        # check missed; the lead-verb path catches it.
-        _heuristic_writing = (task_type or "general") in ("writing", "creative")
-        _lead_verb_writing = False
-        if raw_prompt.strip():
-            _first_word = raw_prompt.strip().split()[0].lower().strip(".,;:!?")
-            if _first_word in WRITING_LEAD_VERBS:
-                if _first_word == "write":
-                    _first_sentence_lc = (
-                        raw_prompt.split(".")[0] if "." in raw_prompt else raw_prompt
-                    ).lower()
-                    _lead_verb_writing = any(
-                        cue in _first_sentence_lc for cue in PROSE_OUTPUT_CUES
-                    )
-                else:
-                    _lead_verb_writing = True
-        _writing_about_code = (
-            (_heuristic_writing or _lead_verb_writing)
-            and repo_full_name is not None
-            and (_tech_signals or _full_prompt_tech)
-        )
-        if (
-            _writing_about_code
-            and codebase_context
-            and len(codebase_context) > WRITING_CODE_CONTEXT_CAP_CHARS
-        ):
-            codebase_context = codebase_context[:WRITING_CODE_CONTEXT_CAP_CHARS]
-            enrichment_meta_dict["codebase_context_trimmed_for_writing"] = {
-                "original_chars": enrichment_meta_dict.get(
-                    "combined_context_chars",
-                ) or 0,
-                "trimmed_chars": WRITING_CODE_CONTEXT_CAP_CHARS,
-                "rescue_path": "B5_full_prompt" if _full_prompt_tech else "B2_first_sentence",
-                "trigger": "lead_verb" if _lead_verb_writing and not _heuristic_writing else "heuristic_task_type",
-            }
 
         # 3. Divergence detection — compare prompt tech vs codebase stack.
         #    When profile=knowledge_work skips codebase context but a repo IS linked,

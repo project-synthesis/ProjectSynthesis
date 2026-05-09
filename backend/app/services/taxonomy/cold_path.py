@@ -2068,7 +2068,7 @@ async def _phase_4_repair(phase_ctx: dict[str, Any]) -> None:
     for n in active_after:
         try:
             emb = np.frombuffer(n.centroid_embedding, dtype=np.float32)
-            if emb.shape[0] == 384:
+            if emb.shape[0] == 768:
                 index_centroids[n.id] = emb
         except (ValueError, TypeError) as _idx_exc:
             logger.warning(

@@ -53,7 +53,7 @@ async def test_split_children_inherit_parent_domain(db):
 
     parent = PromptCluster(
         label="api-patterns", state="active", domain="backend",
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         member_count=10,
     )
     db.add(parent)
@@ -65,7 +65,7 @@ async def test_split_children_inherit_parent_domain(db):
     child_ids_2 = []
     child_embeddings_2 = []
     for i in range(6):
-        emb = np.random.randn(384).astype(np.float32)
+        emb = np.random.randn(768).astype(np.float32)
         emb = emb / np.linalg.norm(emb)
         c = PromptCluster(
             label=f"child-{i}", state="active", domain="backend",
@@ -102,7 +102,7 @@ async def test_split_domain_node_children_inherit_label(db):
 
     parent = PromptCluster(
         label="backend", state="domain", domain="backend",
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         member_count=10, persistence=1.0,
     )
     db.add(parent)
@@ -111,7 +111,7 @@ async def test_split_domain_node_children_inherit_label(db):
     child_ids = []
     child_embeddings = []
     for i in range(6):
-        emb = np.random.randn(384).astype(np.float32)
+        emb = np.random.randn(768).astype(np.float32)
         emb = emb / np.linalg.norm(emb)
         c = PromptCluster(
             label=f"child-{i}", state="active", domain="backend",
@@ -143,7 +143,7 @@ async def test_attempt_retire_domain_node_raises(db):
 
     domain_node = PromptCluster(
         label="backend", state="domain", domain="backend", persistence=1.0,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         member_count=0,
     )
     db.add(domain_node)
@@ -160,12 +160,12 @@ async def test_attempt_merge_domain_node_a_raises(db):
 
     domain_node = PromptCluster(
         label="backend", state="domain", domain="backend", persistence=1.0,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         member_count=5,
     )
     regular_node = PromptCluster(
         label="other", state="active", domain="backend",
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         member_count=3,
     )
     db.add(domain_node)
@@ -183,12 +183,12 @@ async def test_attempt_merge_domain_node_b_raises(db):
 
     regular_node = PromptCluster(
         label="other", state="active", domain="backend",
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         member_count=3,
     )
     domain_node = PromptCluster(
         label="frontend", state="domain", domain="frontend", persistence=1.0,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         member_count=5,
     )
     db.add(regular_node)
@@ -208,7 +208,7 @@ async def test_emerge_node_inherits_majority_domain(db):
     member_ids = []
     embeddings = []
     for i in range(4):
-        emb = np.random.randn(384).astype(np.float32)
+        emb = np.random.randn(768).astype(np.float32)
         emb = emb / np.linalg.norm(emb)
         c = PromptCluster(
             label=f"backend-cluster-{i}", state="active", domain="backend",
@@ -219,7 +219,7 @@ async def test_emerge_node_inherits_majority_domain(db):
         member_ids.append(c.id)
         embeddings.append(emb)
     for i in range(2):
-        emb = np.random.randn(384).astype(np.float32)
+        emb = np.random.randn(768).astype(np.float32)
         emb = emb / np.linalg.norm(emb)
         c = PromptCluster(
             label=f"frontend-cluster-{i}", state="active", domain="frontend",

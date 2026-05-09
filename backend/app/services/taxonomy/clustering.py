@@ -145,7 +145,7 @@ def blend_embeddings(
 ) -> np.ndarray:
     """Blend raw + optimized + transformation + qualifier embeddings for HDBSCAN clustering.
 
-    Produces a single 384-dim L2-normalized vector that captures topic (raw),
+    Produces a single 768-dim L2-normalized vector that captures topic (raw),
     output quality (optimized), technique direction (transformation), and
     domain qualifier signal (qualifier).
     When a signal is missing (None or near-zero norm), its weight is
@@ -166,7 +166,7 @@ def blend_embeddings(
         w_qualifier: Weight for the qualifier signal.
 
     Returns:
-        L2-normalized 384-dim float32 blended embedding.
+        L2-normalized 768-dim float32 blended embedding.
         Falls back to L2-normalized raw if all other signals are absent.
     """
     raw_vec = raw.astype(np.float32).ravel()

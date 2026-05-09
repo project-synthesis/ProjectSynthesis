@@ -27,7 +27,7 @@ async def test_reset_force_prunes_zero_member_archived_regardless_of_age(
     fresh_archived = str(uuid.uuid4())
     db_session.add(PromptCluster(
         id=fresh_archived, label="debris", state="archived",
-        member_count=0, centroid_embedding=b"\x00" * 384,
+        member_count=0, centroid_embedding=b"\x00" * 768,
     ))
     await db_session.commit()
 
@@ -77,7 +77,7 @@ async def test_reset_preserves_active_clusters(app_client, db_session):
     active_id = str(uuid.uuid4())
     db_session.add(PromptCluster(
         id=active_id, label="live", state="active", member_count=0,
-        centroid_embedding=b"\x00" * 384,
+        centroid_embedding=b"\x00" * 768,
     ))
     await db_session.commit()
 

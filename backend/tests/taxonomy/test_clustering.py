@@ -56,14 +56,14 @@ class TestBatchCluster:
     def test_noise_handling(self):
         """Random noise should produce mostly noise labels (-1)."""
         rng = np.random.RandomState(42)
-        noise = [rng.randn(384).astype(np.float32) for _ in range(20)]
+        noise = [rng.randn(768).astype(np.float32) for _ in range(20)]
         result = batch_cluster(noise, min_cluster_size=5)
         # Most points should be noise with random embeddings
         assert result.noise_count > 0
 
     def test_too_few_points(self):
         """Less than min_cluster_size should return all noise."""
-        embeddings = [np.random.randn(384).astype(np.float32) for _ in range(2)]
+        embeddings = [np.random.randn(768).astype(np.float32) for _ in range(2)]
         result = batch_cluster(embeddings, min_cluster_size=5)
         assert result.n_clusters == 0
         assert result.noise_count == 2
@@ -100,7 +100,7 @@ class TestComputePairwiseCoherence:
         rng = np.random.RandomState(42)
         a = rng.randn(EMBEDDING_DIM).astype(np.float32)
         b = rng.randn(EMBEDDING_DIM).astype(np.float32)
-        # In 384-dim, random vectors are nearly orthogonal
+        # In 768-dim, random vectors are nearly orthogonal
         result = compute_pairwise_coherence([a, b])
         assert abs(result) < 0.2
 
@@ -194,10 +194,10 @@ def test_cluster_result_has_silhouette():
     rng = np.random.RandomState(42)
     clusters = []
     for center_seed in [0.0, 3.0, 6.0]:
-        center = np.zeros(384, dtype=np.float32)
+        center = np.zeros(768, dtype=np.float32)
         center[0] = center_seed
         for _ in range(5):
-            point = center + rng.randn(384).astype(np.float32) * 0.1
+            point = center + rng.randn(768).astype(np.float32) * 0.1
             clusters.append(point / np.linalg.norm(point))
 
     result = batch_cluster(clusters, min_cluster_size=3)
@@ -216,7 +216,7 @@ def test_silhouette_zero_for_single_cluster():
     # Tight single blob — HDBSCAN should find 1 cluster or all noise
     points = []
     for _ in range(10):
-        v = rng.randn(384).astype(np.float32)
+        v = rng.randn(768).astype(np.float32)
         points.append(v / np.linalg.norm(v))
 
     result = batch_cluster(points, min_cluster_size=5)
@@ -226,6 +226,6 @@ def test_silhouette_zero_for_single_cluster():
 def test_silhouette_zero_for_too_few_points():
     """Silhouette is 0.0 when too few points to cluster."""
     from app.services.taxonomy.clustering import batch_cluster
-    v = np.random.randn(384).astype(np.float32)
+    v = np.random.randn(768).astype(np.float32)
     result = batch_cluster([v, v], min_cluster_size=3)
     assert result.silhouette == 0.0

@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # --- Embedding ---
     EMBEDDING_MODEL: str = Field(
-        default="all-MiniLM-L6-v2", description="Sentence-transformers model for 384-dim embeddings.",
+        default="BAAI/bge-base-en-v1.5", description="Sentence-transformers model for 768-dim embeddings.",
     )
 
     # --- Rate Limiting ---

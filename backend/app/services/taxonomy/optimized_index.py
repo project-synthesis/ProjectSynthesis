@@ -6,7 +6,7 @@ Used by few-shot retrieval (output-similarity search) and composite query
 Signal 3 (output direction) to steer new optimizations toward successful outputs.
 
 Thread-safe: mutations gated by asyncio.Lock. Reads operate on immutable
-snapshots (copy-on-write). At 2000 clusters (384-dim), search is ~3ms.
+snapshots (copy-on-write). At 2000 clusters (768-dim), search is ~3ms.
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
@@ -42,7 +42,7 @@ class OptimizedEmbeddingIndex:
     finds clusters whose historical output direction is most similar.
     """
 
-    def __init__(self, dim: int = 384):
+    def __init__(self, dim: int = 768):
         self._dim = dim
         self._lock = asyncio.Lock()
         # Immutable snapshots — replaced atomically on mutation

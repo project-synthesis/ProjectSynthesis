@@ -13,7 +13,7 @@ from app.services.taxonomy._constants import (
 )
 from app.services.taxonomy.clustering import blend_embeddings
 
-DIM = 384
+DIM = 768
 
 
 def _random_unit(seed: int) -> np.ndarray:

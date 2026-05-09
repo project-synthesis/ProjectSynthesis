@@ -18,22 +18,22 @@ def projector():
 class TestUMAPProjector:
     def test_fit_returns_3d(self, projector):
         """UMAP should produce 3-component output."""
-        embeddings = [np.random.randn(384).astype(np.float32) for _ in range(20)]
+        embeddings = [np.random.randn(768).astype(np.float32) for _ in range(20)]
         positions = projector.fit(embeddings)
         assert positions.shape == (20, 3)
 
     def test_transform_incremental(self, projector):
         """Incremental transform should be fast and consistent."""
-        base = [np.random.randn(384).astype(np.float32) for _ in range(20)]
+        base = [np.random.randn(768).astype(np.float32) for _ in range(20)]
         projector.fit(base)
 
-        new = [np.random.randn(384).astype(np.float32) for _ in range(3)]
+        new = [np.random.randn(768).astype(np.float32) for _ in range(3)]
         positions = projector.transform(new)
         assert positions.shape == (3, 3)
 
     def test_fit_too_few_points(self, projector):
         """Should handle < 5 points gracefully (UMAP needs minimum)."""
-        embeddings = [np.random.randn(384).astype(np.float32) for _ in range(3)]
+        embeddings = [np.random.randn(768).astype(np.float32) for _ in range(3)]
         positions = projector.fit(embeddings)
         # Fallback to PCA or random placement for small sets
         assert positions.shape == (3, 3)
@@ -67,7 +67,7 @@ class TestInterpolatePosition:
     """Tests for interpolate_position() — pure function, no DB."""
 
     @staticmethod
-    def _unit_vec(dim: int = 384, seed: int = 0) -> np.ndarray:
+    def _unit_vec(dim: int = 768, seed: int = 0) -> np.ndarray:
         """Create a deterministic unit-norm vector."""
         rng = np.random.RandomState(seed)
         v = rng.randn(dim).astype(np.float32)
@@ -103,7 +103,7 @@ class TestInterpolatePosition:
         # Near-identical sibling at position (10, 0, 0)
         similar_sib = self._unit_vec(seed=1)
         # Orthogonal sibling at position (0, 10, 0)
-        ortho_sib = np.zeros(384, dtype=np.float32)
+        ortho_sib = np.zeros(768, dtype=np.float32)
         ortho_sib[0] = 1.0  # arbitrary unit vector, likely ~0 sim with centroid
 
         result = interpolate_position(
@@ -122,10 +122,10 @@ class TestInterpolatePosition:
     def test_all_negative_similarity_fallback(self):
         """When all cosine similarities are negative, equal-weight fallback."""
         # Create a centroid and siblings with negative cosine similarity
-        centroid = np.zeros(384, dtype=np.float32)
+        centroid = np.zeros(768, dtype=np.float32)
         centroid[0] = 1.0
 
-        neg_sib = np.zeros(384, dtype=np.float32)
+        neg_sib = np.zeros(768, dtype=np.float32)
         neg_sib[0] = -1.0  # anti-parallel → cosine = -1
 
         result = interpolate_position(

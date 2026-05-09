@@ -1,6 +1,6 @@
 """Singleton sentence-transformers embedding service.
 
-Model: all-MiniLM-L6-v2 (384 dimensions, CPU-only).
+Model: all-MiniLM-L6-v2 (768 dimensions, CPU-only).
 Lazy-loaded on first use. Async wrappers via asyncio.to_thread().
 """
 
@@ -96,9 +96,9 @@ class EmbeddingService:
             raise ValueError("Cannot embed None — expected a string")
         if not text.strip():
             # Return zero vector for empty/whitespace strings
-            return np.zeros(self.dimension or 384, dtype=np.float32)
+            return np.zeros(self.dimension or 768, dtype=np.float32)
         try:
-            return self.model.encode(text, convert_to_numpy=True)
+            return self.model.encode(text, convert_to_numpy=True, normalize_embeddings=True)
         except Exception as exc:
             raise EmbeddingError(f"Failed to embed text ({len(text)} chars): {exc}") from exc
 
@@ -118,7 +118,7 @@ class EmbeddingService:
         # Replace empty strings with placeholder (model may struggle with empty)
         cleaned = [t if t.strip() else " " for t in texts]
         try:
-            embeddings = self.model.encode(cleaned, convert_to_numpy=True)
+            embeddings = self.model.encode(cleaned, convert_to_numpy=True, normalize_embeddings=True)
             return [embeddings[i] for i in range(len(texts))]
         except Exception as exc:
             raise EmbeddingError(

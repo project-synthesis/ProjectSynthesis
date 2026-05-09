@@ -34,7 +34,7 @@ from sqlalchemy import event as sa_event
 
 from app.models import PromptCluster, TaxonomySnapshot
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 # ---------------------------------------------------------------------------

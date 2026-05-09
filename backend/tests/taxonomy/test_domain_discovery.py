@@ -32,7 +32,7 @@ async def test_propose_domains_creates_domain_node(db, mock_embedding):
         cluster = PromptCluster(
             label=f"marketing-emails-{ci}", state="active", domain="general",
             parent_id=general.id, member_count=4, coherence=0.75,
-            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+            centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         )
         db.add(cluster)
         await db.flush()
@@ -73,7 +73,7 @@ async def test_propose_domains_skips_below_member_threshold(db, mock_embedding):
     cluster = PromptCluster(
         label="tiny", state="active", domain="general",
         parent_id=general.id, member_count=3, coherence=0.8,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(cluster)
     await db.commit()
@@ -93,7 +93,7 @@ async def test_propose_domains_skips_inconsistent_primaries(db, mock_embedding):
     cluster = PromptCluster(
         label="mixed", state="active", domain="general",
         parent_id=general.id, member_count=6, coherence=0.7,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(cluster)
     await db.flush()
@@ -130,7 +130,7 @@ async def test_propose_domains_skips_existing_domain(db, mock_embedding):
     cluster = PromptCluster(
         label="api-stuff", state="active", domain="general",
         parent_id=general.id, member_count=8, coherence=0.7,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(cluster)
     await db.flush()
@@ -166,7 +166,7 @@ async def test_re_promoted_seed_label_reclaims_brand_color(db, mock_embedding):
         cluster = PromptCluster(
             label=f"api-middleware-{ci}", state="active", domain="general",
             parent_id=general.id, member_count=4, coherence=0.75,
-            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+            centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         )
         db.add(cluster)
         await db.flush()
@@ -211,7 +211,7 @@ async def test_novel_domain_still_uses_max_distance(db, mock_embedding):
         cluster = PromptCluster(
             label=f"campaign-copy-{ci}", state="active", domain="general",
             parent_id=general.id, member_count=4, coherence=0.75,
-            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+            centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         )
         db.add(cluster)
         await db.flush()
@@ -259,7 +259,7 @@ async def test_propose_domains_pools_fragmented_clusters(db, mock_embedding):
         c = PromptCluster(
             label=f"fragment-{i}", state="active", domain="general",
             parent_id=general.id, member_count=1, coherence=0.5,
-            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+            centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         )
         db.add(c)
         await db.flush()
@@ -303,7 +303,7 @@ async def test_pooled_pass_skips_inconsistent_cluster(db, mock_embedding):
     c1 = PromptCluster(
         label="consistent", state="active", domain="general",
         parent_id=general.id, member_count=1, coherence=0.5,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(c1)
     await db.flush()
@@ -316,7 +316,7 @@ async def test_pooled_pass_skips_inconsistent_cluster(db, mock_embedding):
     c2 = PromptCluster(
         label="mixed", state="active", domain="general",
         parent_id=general.id, member_count=2, coherence=0.5,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(c2)
     await db.flush()
@@ -359,7 +359,7 @@ async def test_pooled_pass_respects_ceiling(db, mock_embedding):
         c = PromptCluster(
             label=f"fragment-{i}", state="active", domain="general",
             parent_id=general.id, member_count=1, coherence=0.5,
-            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+            centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         )
         db.add(c)
         await db.flush()
@@ -386,7 +386,7 @@ async def test_pooled_does_not_duplicate_per_cluster_pass(db, mock_embedding):
     big = PromptCluster(
         label="big-backend", state="active", domain="general",
         parent_id=general.id, member_count=8, coherence=0.75,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(big)
     await db.flush()
@@ -401,7 +401,7 @@ async def test_pooled_does_not_duplicate_per_cluster_pass(db, mock_embedding):
         c = PromptCluster(
             label=f"small-{i}", state="active", domain="general",
             parent_id=general.id, member_count=1, coherence=0.5,
-            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+            centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         )
         db.add(c)
         await db.flush()
@@ -447,7 +447,7 @@ async def test_bootstrap_threshold_relaxes_when_db_sparse(db, mock_embedding):
         cluster = PromptCluster(
             label=f"small-but-consistent-{ci}", state="active", domain="general",
             parent_id=general.id, member_count=2, coherence=0.7,
-            centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+            centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         )
         db.add(cluster)
         await db.flush()
@@ -480,7 +480,7 @@ async def test_adaptive_threshold_restores_at_scale(db, mock_embedding):
     decoy = PromptCluster(
         label="decoy", state="active", domain="general",
         parent_id=general.id, member_count=25, coherence=0.5,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(decoy)
     await db.flush()
@@ -494,7 +494,7 @@ async def test_adaptive_threshold_restores_at_scale(db, mock_embedding):
     cluster = PromptCluster(
         label="two-backend", state="active", domain="general",
         parent_id=general.id, member_count=2, coherence=0.7,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(cluster)
     await db.flush()
@@ -531,7 +531,7 @@ async def test_domain_ceiling_blocks_discovery(db, mock_embedding):
     cluster = PromptCluster(
         label="should-not-emerge", state="active", domain="general",
         parent_id=general.id, member_count=10, coherence=0.8,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(cluster)
     await db.flush()
@@ -579,12 +579,12 @@ async def test_extract_domain_keywords_aggregates_descendants_for_domain_node(
     cluster_a = PromptCluster(
         label="audit-things", state="active", domain="backend",
         parent_id=backend.id, member_count=3, coherence=0.8,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     cluster_b = PromptCluster(
         label="cache-things", state="mature", domain="backend",
         parent_id=backend.id, member_count=3, coherence=0.8,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add_all([cluster_a, cluster_b])
     await db.flush()
@@ -641,7 +641,7 @@ async def test_extract_domain_keywords_regular_cluster_unchanged(
     cluster = PromptCluster(
         label="seed-cluster", state="active", domain="general",
         member_count=4, coherence=0.8,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(cluster)
     await db.flush()
@@ -706,7 +706,7 @@ async def test_extract_domain_keywords_walks_sub_domain_descendants(
     nested = PromptCluster(
         label="nested-cluster", state="active", domain="backend",
         parent_id=audit_sub.id, member_count=2, coherence=0.8,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(nested)
     await db.flush()

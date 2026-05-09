@@ -6,7 +6,7 @@ specialization signal of a cluster. Used by Phase 2 composite query construction
 to steer new optimizations toward clusters with matching qualifier vocabulary.
 
 Thread-safe: mutations gated by asyncio.Lock. Reads operate on immutable
-snapshots (copy-on-write). At 2000 clusters (384-dim), search is ~3ms.
+snapshots (copy-on-write). At 2000 clusters (768-dim), search is ~3ms.
 """
 
 import asyncio
@@ -41,7 +41,7 @@ class QualifierIndex:
     specialization signal is most similar.
     """
 
-    def __init__(self, dim: int = 384):
+    def __init__(self, dim: int = 768):
         self._dim = dim
         self._lock = asyncio.Lock()
         # Immutable snapshots — replaced atomically on mutation

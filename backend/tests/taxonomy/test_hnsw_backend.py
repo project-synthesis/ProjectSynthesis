@@ -192,9 +192,9 @@ class TestSearch:
         assert scores == sorted(scores, reverse=True)
 
     def test_search_with_filter_fn(self):
-        # Use dim=384 and enough vectors so the HNSW graph has
+        # Use dim=768 and enough vectors so the HNSW graph has
         # sufficient connectivity for filtered knn_query to succeed.
-        dim = 384
+        dim = 768
         hnsw = _HnswBackend(dim=dim)
         rng = np.random.RandomState(42)
         n = 50

@@ -27,7 +27,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _random_emb(dim=384, seed=None):
+def _random_emb(dim=768, seed=None):
     rng = np.random.RandomState(seed)
     v = rng.randn(dim).astype(np.float32)
     return v / np.linalg.norm(v)
@@ -36,7 +36,7 @@ def _random_emb(dim=384, seed=None):
 @pytest.mark.asyncio
 async def test_numpy_and_hnsw_return_same_results():
     """Search results must be identical regardless of backend."""
-    dim = 384
+    dim = 768
     n_clusters = 50
     np.random.seed(42)
 

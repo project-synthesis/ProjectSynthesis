@@ -41,7 +41,7 @@ from app.services.taxonomy.event_logger import (
     set_event_logger,
 )
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 def _random_embedding(seed: int = 0) -> bytes:

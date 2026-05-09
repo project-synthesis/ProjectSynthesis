@@ -71,14 +71,14 @@ class TestPatternDensityRouter:
             id=str(uuid.uuid4()), label="cA", state="active", domain="ZZZ_obs_test_A",
             task_type="coding", color_hex="#00e5ff", persistence=0.7,
             member_count=5, usage_count=1, prune_flag_count=0,
-            centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
+            centroid_embedding=np.random.rand(768).astype(np.float32).tobytes(),
             parent_id=d_a.id, created_at=datetime.now(timezone.utc),
         )
         c_b = PromptCluster(
             id=str(uuid.uuid4()), label="cB", state="active", domain="ZZZ_obs_test_B",
             task_type="coding", color_hex="#ff4895", persistence=0.7,
             member_count=5, usage_count=1, prune_flag_count=0,
-            centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
+            centroid_embedding=np.random.rand(768).astype(np.float32).tobytes(),
             parent_id=d_b.id, created_at=datetime.now(timezone.utc),
         )
         db_session.add(d_a)
@@ -89,12 +89,12 @@ class TestPatternDensityRouter:
             db_session.add(MetaPattern(
                 id=str(uuid.uuid4()), cluster_id=c_a.id, pattern_text="p",
                 source_count=1, global_source_count=0,
-                embedding=np.random.rand(384).astype(np.float32).tobytes(),
+                embedding=np.random.rand(768).astype(np.float32).tobytes(),
             ))
         db_session.add(MetaPattern(
             id=str(uuid.uuid4()), cluster_id=c_b.id, pattern_text="p",
             source_count=1, global_source_count=0,
-            embedding=np.random.rand(384).astype(np.float32).tobytes(),
+            embedding=np.random.rand(768).astype(np.float32).tobytes(),
         ))
         await db_session.commit()
 

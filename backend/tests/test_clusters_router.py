@@ -26,7 +26,7 @@ class TestClusterTree:
         cluster = PromptCluster(
             id="c1", label="Test", state="active", domain="backend",
             task_type="coding", member_count=3, persistence=0.8,
-            centroid_embedding=b'\x00' * 384,
+            centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -47,11 +47,11 @@ class TestClusterTree:
         """GET /api/clusters/tree respects min_persistence filter."""
         c1 = PromptCluster(
             id="c1", label="High", state="active", domain="backend",
-            task_type="coding", persistence=0.9, centroid_embedding=b'\x00' * 384,
+            task_type="coding", persistence=0.9, centroid_embedding=b'\x00' * 768,
         )
         c2 = PromptCluster(
             id="c2", label="Low", state="active", domain="backend",
-            task_type="coding", persistence=0.2, centroid_embedding=b'\x00' * 384,
+            task_type="coding", persistence=0.2, centroid_embedding=b'\x00' * 768,
         )
         db_session.add_all([c1, c2])
         await db_session.commit()
@@ -94,7 +94,7 @@ class TestClusterDetail:
         """GET /api/clusters/{id} returns cluster detail with meta_patterns."""
         import numpy as np
 
-        embedding = np.zeros(384, dtype=np.float32).tobytes()
+        embedding = np.zeros(768, dtype=np.float32).tobytes()
         cluster = PromptCluster(
             id="c1", label="Test Cluster", state="active", domain="backend",
             task_type="coding", member_count=5, coherence=0.8, separation=0.9,
@@ -126,7 +126,7 @@ class TestClusterUpdate:
         """PATCH /api/clusters/{id} updates label."""
         cluster = PromptCluster(
             id="c1", label="old", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -150,7 +150,7 @@ class TestClusterUpdate:
         """
         cluster = PromptCluster(
             id="c2", label="test", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -169,7 +169,7 @@ class TestClusterUpdate:
         """
         cluster = PromptCluster(
             id="c3-promote-ok", label="test", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
             member_count=5, avg_score=7.5, usage_count=2,
         )
         db_session.add(cluster)
@@ -189,7 +189,7 @@ class TestClusterUpdate:
         """
         cluster = PromptCluster(
             id="c4-low-score", label="low-score", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
             member_count=5, avg_score=4.0, usage_count=2,
         )
         db_session.add(cluster)
@@ -209,7 +209,7 @@ class TestClusterUpdate:
         """
         cluster = PromptCluster(
             id="c5-no-members", label="empty", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
             member_count=1, avg_score=8.0, usage_count=0,
         )
         db_session.add(cluster)
@@ -231,7 +231,7 @@ class TestClusterUpdate:
         """PATCH /api/clusters/{id} returns 422 when no fields provided."""
         cluster = PromptCluster(
             id="c4", label="test", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
         await db_session.commit()
@@ -552,7 +552,7 @@ class TestClusterTemplates:
         """GET /api/clusters/templates always returns 410 regardless of DB state."""
         c1 = PromptCluster(
             id="t1", label="Template", state="template", domain="backend",
-            task_type="coding", avg_score=8.5, centroid_embedding=b'\x00' * 384,
+            task_type="coding", avg_score=8.5, centroid_embedding=b'\x00' * 768,
         )
         db_session.add(c1)
         await db_session.commit()
@@ -579,11 +579,11 @@ class TestSimilarityEdges:
         from app.services.taxonomy.embedding_index import EmbeddingIndex
 
         # Build a small index with near-identical embeddings
-        idx = EmbeddingIndex(dim=384)
-        emb = np.random.randn(384).astype(np.float32)
+        idx = EmbeddingIndex(dim=768)
+        emb = np.random.randn(768).astype(np.float32)
         emb /= np.linalg.norm(emb)
         await idx.upsert("c1", emb)
-        await idx.upsert("c2", emb + np.random.randn(384).astype(np.float32) * 0.01)
+        await idx.upsert("c2", emb + np.random.randn(768).astype(np.float32) * 0.01)
 
         mock_engine = MagicMock()
         mock_engine.embedding_index = idx
@@ -637,11 +637,11 @@ class TestInjectionEdges:
         # Create source and target clusters
         source = PromptCluster(
             id="src-1", label="Source Cluster", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
         )
         target = PromptCluster(
             id="tgt-1", label="Target Cluster", state="active", domain="frontend",
-            task_type="writing", centroid_embedding=b'\x00' * 384,
+            task_type="writing", centroid_embedding=b'\x00' * 768,
         )
         db_session.add_all([source, target])
 
@@ -683,11 +683,11 @@ class TestInjectionEdges:
 
         active = PromptCluster(
             id="active-1", label="Active", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
         )
         archived = PromptCluster(
             id="archived-1", label="Archived", state="archived", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
         )
         db_session.add_all([active, archived])
 
@@ -715,7 +715,7 @@ class TestInjectionEdges:
 
         cluster = PromptCluster(
             id="self-1", label="Self", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
         )
         db_session.add(cluster)
 
@@ -742,11 +742,11 @@ class TestInjectionEdges:
 
         source = PromptCluster(
             id="src-2", label="Source", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
         )
         target = PromptCluster(
             id="tgt-2", label="Target", state="active", domain="frontend",
-            task_type="writing", centroid_embedding=b'\x00' * 384,
+            task_type="writing", centroid_embedding=b'\x00' * 768,
         )
         db_session.add_all([source, target])
 
@@ -774,7 +774,7 @@ class TestInjectionEdges:
 
         source = PromptCluster(
             id="src-3", label="Source", state="active", domain="backend",
-            task_type="coding", centroid_embedding=b'\x00' * 384,
+            task_type="coding", centroid_embedding=b'\x00' * 768,
         )
         db_session.add(source)
 

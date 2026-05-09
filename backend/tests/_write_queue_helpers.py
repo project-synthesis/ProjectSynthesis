@@ -12,7 +12,7 @@ Helpers:
   (overall_score >= 5.0). ``with_embedding`` (cycle 3+) populates
   ``embedding``/``optimized_embedding``/``transformation_embedding`` with
   zero-vector bytes so taxonomy-assign callers don't repeat the inline
-  ``np.zeros(384, ...).tobytes()`` construction.
+  ``np.zeros(768, ...).tobytes()`` construction.
 * ``_make_failing_pending`` — build a ``PendingOptimization`` whose score
   the quality gate must reject. Used by stress tests verifying the
   rejection still fires under concurrent load.
@@ -51,7 +51,7 @@ def _make_passing_pending(
     so two parallel ``bulk_persist`` calls collide on the same primary key.
 
     ``with_embedding`` (cycle 3+) populates the three embedding fields with
-    a zero-vector ``bytes`` payload (384-dim, float32). ``batch_taxonomy_assign``
+    a zero-vector ``bytes`` payload (768-dim, float32). ``batch_taxonomy_assign``
     filters on ``r.embedding`` truthiness, so taxonomy-assign tests need
     this set to avoid silent skip. Defaulting to ``False`` keeps every cycle
     1-2 caller's behavior unchanged.
@@ -59,7 +59,7 @@ def _make_passing_pending(
     from app.services.batch_pipeline import PendingOptimization
     embedding_bytes: bytes | None = None
     if with_embedding:
-        embedding_bytes = np.zeros(384, dtype=np.float32).tobytes()
+        embedding_bytes = np.zeros(768, dtype=np.float32).tobytes()
     return PendingOptimization(
         id=opt_id or str(_uuid.uuid4()),
         trace_id=str(_uuid.uuid4()),

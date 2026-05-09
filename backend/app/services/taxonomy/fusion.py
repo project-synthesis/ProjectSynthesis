@@ -564,7 +564,7 @@ async def build_composite_query(
     Returns:
         CompositeQuery with five signal vectors (some may be zero).
     """
-    dim = getattr(embedding_service, "dimension", 384) or 384
+    dim = getattr(embedding_service, "dimension", 768) or 768
 
     # Signal 1: Topic (embed raw_prompt)
     if topic_embedding is not None:

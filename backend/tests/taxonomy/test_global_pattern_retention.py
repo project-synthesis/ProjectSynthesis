@@ -25,9 +25,9 @@ from app.services.taxonomy.global_patterns import _enforce_retention_cap
 # ---------------------------------------------------------------------------
 
 def _unit_vec(seed: int = 42) -> np.ndarray:
-    """Deterministic L2-normalised 384-dim float32 vector."""
+    """Deterministic L2-normalised 768-dim float32 vector."""
     rng = np.random.RandomState(seed)
-    v = rng.randn(384).astype(np.float32)
+    v = rng.randn(768).astype(np.float32)
     return v / (np.linalg.norm(v) + 1e-9)
 
 

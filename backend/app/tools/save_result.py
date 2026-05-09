@@ -130,14 +130,10 @@ async def handle_save_result(
         # Generate heuristic suggestions (zero-LLM)
         from app.services.heuristic_analyzer import HeuristicAnalyzer
         from app.tools._shared import get_routing
-        try:
-            _routing = get_routing()
-            _provider = _routing.state.provider
-        except ValueError:
-            _provider = None
+        _routing = get_routing()
         _analyzer = HeuristicAnalyzer()
         raw_for_analysis = opt.raw_prompt if opt and opt.raw_prompt else ""
-        _analysis = await _analyzer.analyze(raw_for_analysis, db, provider=_provider)
+        _analysis = await _analyzer.analyze(raw_for_analysis, db, provider=_routing.state.provider)
         suggestions = generate_heuristic_suggestions(
             dimension_scores=final_scores,
             weaknesses=_analysis.weaknesses,

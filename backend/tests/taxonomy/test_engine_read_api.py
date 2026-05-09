@@ -195,14 +195,14 @@ async def test_get_stats_cache_isolated_per_project_scope(
     project_a = PromptCluster(
         label="project-a",
         state="project",
-        centroid_embedding=np.ones(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.ones(768, dtype=np.float32).tobytes(),
         member_count=0,
         coherence=0.0,
     )
     project_b = PromptCluster(
         label="project-b",
         state="project",
-        centroid_embedding=np.ones(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.ones(768, dtype=np.float32).tobytes(),
         member_count=0,
         coherence=0.0,
     )

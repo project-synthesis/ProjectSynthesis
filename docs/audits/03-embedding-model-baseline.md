@@ -92,4 +92,9 @@ Following the baseline failure validation, a **Dual-Tiered Reranker Architecture
 2. **`pattern_injection.py` upgraded**: The fast Bi-Encoder retrieves the top injection candidates (High-Recall), which are then asynchronously handed to the Cross-Encoder (High-Precision). Injections scoring `=< 0.15` STS confidence are automatically culled to guarantee zero contradictory patterns inject into the prompt.
 3. **`heuristic_scorer.py` upgraded**: Faithfulness scoring was detached completely from the 384d bi-encoder. It now utilizes the STS Cross-Encoder to guarantee exact entailment metrics before applying the asymmetrical length projection.
 
-This definitively resolves the compositional blindness vulnerability on the most critical paths.
+### Secondary Optimizations & Bi-Encoder Expansion
+To simultaneously address the structural findings in Audit #2 and expand the scope:
+1. **Upgraded Bi-Encoder Base Model:** The `config.py` default `EMBEDDING_MODEL` was bumped to `BAAI/bge-base-en-v1.5` (768-dimensions) which permanently relieves the 384-dimensional squeeze acting as a bottleneck.
+2. **Native Encoding Normalization:** The `EmbeddingService.encode()` calls were instructed to output natively normalized embeddings (`normalize_embeddings=True`), eliminating repeated costly cosine normalizations. 
+
+With both a heavier 768d retriever for base recall, and a DistilRoBERTa cross-encoder for precision, the core pipelines are definitively immune to structural compositional slippage.

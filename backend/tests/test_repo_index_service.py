@@ -58,7 +58,7 @@ async def test_build_index_creates_meta(db_session):
     gc.get_file_content.return_value = "def main():\n    pass\n"
 
     es = MagicMock()
-    zero_vec = np.zeros(384, dtype=np.float32)
+    zero_vec = np.zeros(768, dtype=np.float32)
     es.embed_texts.return_value = [zero_vec]
     es.aembed_texts = AsyncMock(return_value=[zero_vec])
 
@@ -81,7 +81,7 @@ async def test_build_index_creates_meta(db_session):
 
 @pytest.mark.asyncio
 async def test_query_relevant_files(db_session):
-    zero_vec = np.zeros(384, dtype=np.float32)
+    zero_vec = np.zeros(768, dtype=np.float32)
 
     # Pre-insert a RepoFileIndex entry
     entry = RepoFileIndex(
@@ -244,8 +244,8 @@ class TestCuratedRetrieval:
         )
         db_session.add(meta)
 
-        vec1 = np.random.randn(384).astype(np.float32)
-        vec2 = np.random.randn(384).astype(np.float32)
+        vec1 = np.random.randn(768).astype(np.float32)
+        vec2 = np.random.randn(768).astype(np.float32)
         db_session.add(RepoFileIndex(
             repo_full_name="owner/repo", branch="main",
             file_path="backend/app/auth.py", file_sha="a1",
@@ -262,7 +262,7 @@ class TestCuratedRetrieval:
 
         gc = AsyncMock()
         es = MagicMock()
-        query_vec = np.random.randn(384).astype(np.float32)
+        query_vec = np.random.randn(768).astype(np.float32)
         es.aembed_single = AsyncMock(return_value=query_vec)
         es.cosine_search = MagicMock(return_value=[(0, 0.85), (1, 0.72)])
 
@@ -282,7 +282,7 @@ class TestCuratedRetrieval:
         )
         db_session.add(meta)
 
-        vec = np.ones(384, dtype=np.float32) * 0.5
+        vec = np.ones(768, dtype=np.float32) * 0.5
         db_session.add(RepoFileIndex(
             repo_full_name="owner/repo", branch="main",
             file_path="backend/app/service.py", file_sha="a1",
@@ -318,7 +318,7 @@ class TestCuratedRetrieval:
         )
         db_session.add(meta)
 
-        vec = np.ones(384, dtype=np.float32) * 0.5
+        vec = np.ones(768, dtype=np.float32) * 0.5
         # Create 3 files with outlines of ~100 chars each
         for i in range(3):
             db_session.add(RepoFileIndex(
@@ -410,8 +410,8 @@ async def test_concurrent_get_or_create_meta(db_session):
 @pytest.mark.asyncio
 async def test_get_embeddings_by_paths_returns_matching(db_session):
     """Returns embeddings only for paths that exist in the index."""
-    vec_a = np.random.randn(384).astype(np.float32)
-    vec_b = np.random.randn(384).astype(np.float32)
+    vec_a = np.random.randn(768).astype(np.float32)
+    vec_b = np.random.randn(768).astype(np.float32)
 
     db_session.add_all([
         RepoFileIndex(
@@ -426,7 +426,7 @@ async def test_get_embeddings_by_paths_returns_matching(db_session):
     await db_session.commit()
 
     es = MagicMock()
-    es.dimension = 384
+    es.dimension = 768
     svc = _make_svc(db_session, embedding_service=es)
     result = await svc.get_embeddings_by_paths(
         "o/r", "main", ["src/a.py", "src/b.py", "src/missing.py"],
@@ -441,7 +441,7 @@ async def test_get_embeddings_by_paths_returns_matching(db_session):
 async def test_get_embeddings_by_paths_empty_input(db_session):
     """Empty path list returns empty dict without querying DB."""
     es = MagicMock()
-    es.dimension = 384
+    es.dimension = 768
     svc = _make_svc(db_session, embedding_service=es)
     result = await svc.get_embeddings_by_paths("o/r", "main", [])
     assert result == {}
@@ -457,7 +457,7 @@ async def test_get_embeddings_by_paths_skips_null_embeddings(db_session):
     await db_session.commit()
 
     es = MagicMock()
-    es.dimension = 384
+    es.dimension = 768
     svc = _make_svc(db_session, embedding_service=es)
     result = await svc.get_embeddings_by_paths("o/r", "main", ["src/no_embed.py"])
     assert result == {}
@@ -474,7 +474,7 @@ async def test_get_embeddings_by_paths_skips_wrong_dimension(db_session):
     await db_session.commit()
 
     es = MagicMock()
-    es.dimension = 384
+    es.dimension = 768
     svc = _make_svc(db_session, embedding_service=es)
     result = await svc.get_embeddings_by_paths("o/r", "main", ["src/bad.py"])
     assert result == {}
@@ -483,7 +483,7 @@ async def test_get_embeddings_by_paths_skips_wrong_dimension(db_session):
 @pytest.mark.asyncio
 async def test_get_embeddings_by_paths_isolates_repo_branch(db_session):
     """Embeddings from other repos/branches are not returned."""
-    vec = np.random.randn(384).astype(np.float32)
+    vec = np.random.randn(768).astype(np.float32)
     db_session.add(RepoFileIndex(
         repo_full_name="other/repo", branch="dev", file_path="src/a.py",
         file_sha="sha1", embedding=vec.tobytes(),
@@ -491,7 +491,7 @@ async def test_get_embeddings_by_paths_isolates_repo_branch(db_session):
     await db_session.commit()
 
     es = MagicMock()
-    es.dimension = 384
+    es.dimension = 768
     svc = _make_svc(db_session, embedding_service=es)
     result = await svc.get_embeddings_by_paths("o/r", "main", ["src/a.py"])
     assert result == {}
@@ -533,11 +533,11 @@ def _make_incremental_svc(
     gc.get_file_content = AsyncMock(side_effect=_read_content)
 
     es = MagicMock()
-    zero_vec = np.zeros(384, dtype=np.float32)
+    zero_vec = np.zeros(768, dtype=np.float32)
     es.aembed_texts = AsyncMock(
         side_effect=lambda texts: [zero_vec for _ in texts]
     )
-    es.dimension = 384
+    es.dimension = 768
 
     return RepoIndexService(db=db, github_client=gc, embedding_service=es)
 
@@ -581,7 +581,7 @@ class TestIncrementalUpdate:
     @pytest.mark.asyncio
     async def test_detects_changed_files(self, db_session):
         """Changed files (SHA mismatch) are re-embedded."""
-        vec = np.zeros(384, dtype=np.float32)
+        vec = np.zeros(768, dtype=np.float32)
         db_session.add(RepoIndexMeta(
             repo_full_name="o/r", branch="main",
             status="ready", file_count=1, head_sha="old_sha",
@@ -654,7 +654,7 @@ class TestIncrementalUpdate:
     @pytest.mark.asyncio
     async def test_detects_removed_files(self, db_session):
         """Files absent from tree are deleted from the index."""
-        vec = np.zeros(384, dtype=np.float32)
+        vec = np.zeros(768, dtype=np.float32)
         db_session.add(RepoIndexMeta(
             repo_full_name="o/r", branch="main",
             status="ready", file_count=1, head_sha="old_sha",
@@ -695,7 +695,7 @@ class TestIncrementalUpdate:
     @pytest.mark.asyncio
     async def test_mixed_changes(self, db_session):
         """Handles changed + added + removed in a single pass."""
-        vec = np.zeros(384, dtype=np.float32)
+        vec = np.zeros(768, dtype=np.float32)
         db_session.add(RepoIndexMeta(
             repo_full_name="o/r", branch="main",
             status="ready", file_count=2, head_sha="old_sha",
@@ -749,7 +749,7 @@ class TestIncrementalUpdate:
     @pytest.mark.asyncio
     async def test_head_changed_but_no_file_diffs(self, db_session):
         """Commit with no file changes (e.g. merge commit) just updates SHA."""
-        vec = np.zeros(384, dtype=np.float32)
+        vec = np.zeros(768, dtype=np.float32)
         db_session.add(RepoIndexMeta(
             repo_full_name="o/r", branch="main",
             status="ready", file_count=1, head_sha="old_sha",
@@ -961,7 +961,7 @@ class TestIncrementalUpdateErrors:
         gc.get_file_content = AsyncMock(side_effect=_read)
 
         es = MagicMock()
-        zero_vec = np.zeros(384, dtype=np.float32)
+        zero_vec = np.zeros(768, dtype=np.float32)
         es.aembed_texts = AsyncMock(return_value=[zero_vec])
 
         svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
@@ -1012,7 +1012,7 @@ class TestIncrementalUpdateErrors:
         assert row.file_sha == "sha1"
         # Embedding should be a zero vector (fallback)
         vec = np.frombuffer(row.embedding, dtype=np.float32)
-        np.testing.assert_array_equal(vec, np.zeros(384, dtype=np.float32))
+        np.testing.assert_array_equal(vec, np.zeros(768, dtype=np.float32))
 
     @pytest.mark.asyncio
     async def test_file_count_never_negative(self, db_session):
@@ -1022,7 +1022,7 @@ class TestIncrementalUpdateErrors:
             status="ready", file_count=0,  # Already 0
             head_sha="old",
         ))
-        vec = np.zeros(384, dtype=np.float32)
+        vec = np.zeros(768, dtype=np.float32)
         db_session.add(RepoFileIndex(
             repo_full_name="o/r", branch="main",
             file_path="src/orphan.py", file_sha="dead",
@@ -1157,7 +1157,7 @@ def _setup_curated_files(db_session, files, meta_kwargs=None):
         meta_kw.update(meta_kwargs)
     db_session.add(RepoIndexMeta(**meta_kw))
 
-    vec = np.ones(384, dtype=np.float32) * 0.5
+    vec = np.ones(768, dtype=np.float32) * 0.5
     cosine_return = []
     for i, (path, body, score) in enumerate(files):
         # If body is long, treat as content; otherwise as outline only
@@ -1341,7 +1341,7 @@ class TestCuratedMarkdownExpansion:
         )
         db_session.add(meta)
 
-        vec = np.ones(384, dtype=np.float32) * 0.5
+        vec = np.ones(768, dtype=np.float32) * 0.5
         db_session.add(RepoFileIndex(
             repo_full_name="o/r", branch="main",
             file_path="docs/plans/scheduler.md", file_sha="s1",
@@ -1405,7 +1405,7 @@ class TestCuratedCodeDominatedRegression:
         )
         db_session.add(meta)
 
-        vec = np.ones(384, dtype=np.float32) * 0.5
+        vec = np.ones(768, dtype=np.float32) * 0.5
         db_session.add(RepoFileIndex(
             repo_full_name="o/r", branch="main",
             file_path="backend/app/services/main_svc.py", file_sha="s1",
@@ -1530,7 +1530,7 @@ async def test_build_index_writes_phase_transitions(db_session):
     gc.get_file_content.return_value = "def main():\n    pass\n"
 
     es = MagicMock()
-    zero_vec = np.zeros(384, dtype=np.float32)
+    zero_vec = np.zeros(768, dtype=np.float32)
     es.embed_texts.return_value = [zero_vec]
     es.aembed_texts = AsyncMock(return_value=[zero_vec])
 
@@ -1596,7 +1596,7 @@ async def test_build_index_publishes_phase_change_events(db_session):
         gc.get_file_content.return_value = "def main():\n    pass\n"
 
         es = MagicMock()
-        zero_vec = np.zeros(384, dtype=np.float32)
+        zero_vec = np.zeros(768, dtype=np.float32)
         es.embed_texts.return_value = [zero_vec]
         es.aembed_texts = AsyncMock(return_value=[zero_vec])
 
@@ -1639,7 +1639,7 @@ async def test_incremental_update_invalidates_curated_cache_on_file_change(db_se
     from app.services.repo_index_service import _curated_cache
 
     # Seed: existing index with one file on old SHA, plus a cached retrieval.
-    vec = np.zeros(384, dtype=np.float32)
+    vec = np.zeros(768, dtype=np.float32)
     db_session.add(RepoIndexMeta(
         repo_full_name="o/r", branch="main",
         status="ready", file_count=1, head_sha="old_sha",
@@ -1678,7 +1678,7 @@ async def test_incremental_update_invalidates_curated_cache_on_file_removed(db_s
     """
     from app.services.repo_index_service import _curated_cache
 
-    vec = np.zeros(384, dtype=np.float32)
+    vec = np.zeros(768, dtype=np.float32)
     db_session.add(RepoIndexMeta(
         repo_full_name="o/r", branch="main",
         status="ready", file_count=1, head_sha="old_sha",
@@ -1749,7 +1749,7 @@ async def test_build_index_persists_tree_etag(db_session):
     gc.get_file_content.return_value = "def main(): pass"
 
     es = MagicMock()
-    zero_vec = np.zeros(384, dtype=np.float32)
+    zero_vec = np.zeros(768, dtype=np.float32)
     es.embed_texts.return_value = [zero_vec]
     es.aembed_texts = AsyncMock(return_value=[zero_vec])
 
@@ -1771,7 +1771,7 @@ async def test_build_index_sends_stored_etag_and_short_circuits_on_304(db_sessio
     MUST send If-None-Match. On 304, it MUST skip delete+re-embed and leave
     the file rows intact.
     """
-    vec = np.zeros(384, dtype=np.float32)
+    vec = np.zeros(768, dtype=np.float32)
     db_session.add(RepoIndexMeta(
         repo_full_name="o/r", branch="main",
         status="ready", file_count=1,
@@ -1837,7 +1837,7 @@ async def test_build_index_fresh_build_sends_no_etag(db_session):
     gc.get_file_content.return_value = "content"
 
     es = MagicMock()
-    zero_vec = np.zeros(384, dtype=np.float32)
+    zero_vec = np.zeros(768, dtype=np.float32)
     es.embed_texts.return_value = [zero_vec]
     es.aembed_texts = AsyncMock(return_value=[zero_vec])
 
@@ -1853,7 +1853,7 @@ async def test_incremental_update_persists_tree_etag(db_session):
     """incremental_update must capture the new ETag from the tree response
     on a 200 OK so subsequent fetches can leverage 304.
     """
-    vec = np.zeros(384, dtype=np.float32)
+    vec = np.zeros(768, dtype=np.float32)
     db_session.add(RepoIndexMeta(
         repo_full_name="o/r", branch="main",
         status="ready", file_count=1,
@@ -1889,7 +1889,7 @@ async def test_incremental_update_skips_on_304_and_updates_head(db_session):
       - update meta.head_sha to the fresh value, and
       - leave meta.tree_etag untouched.
     """
-    vec = np.zeros(384, dtype=np.float32)
+    vec = np.zeros(768, dtype=np.float32)
     db_session.add(RepoIndexMeta(
         repo_full_name="o/r", branch="main",
         status="ready", file_count=1,
@@ -1951,7 +1951,7 @@ async def test_embedding_reuses_cached_content_sha(db_session):
     from app.services.repo_index_service import _build_content_sha
 
     # Pre-seed: a file with known content + its embedding, content_sha set.
-    cached_vec = np.ones(384, dtype=np.float32) * 0.5  # distinctive fingerprint
+    cached_vec = np.ones(768, dtype=np.float32) * 0.5  # distinctive fingerprint
     content = "def cached(): return 42\n"
     path = "src/cached.py"
     outline = _extract_structured_outline(path, content)
@@ -1978,7 +1978,7 @@ async def test_embedding_reuses_cached_content_sha(db_session):
     gc.get_file_content = AsyncMock(return_value=content)
 
     es = MagicMock()
-    zero_vec = np.zeros(384, dtype=np.float32)
+    zero_vec = np.zeros(768, dtype=np.float32)
     es.aembed_texts = AsyncMock(return_value=[zero_vec])
 
     svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
@@ -2004,7 +2004,7 @@ async def test_embedding_partial_cache_hit(db_session):
     """Mixed batch: cached files reuse vectors; only misses go to the embedder."""
     from app.services.repo_index_service import _build_content_sha
 
-    cached_vec = np.ones(384, dtype=np.float32) * 0.3
+    cached_vec = np.ones(768, dtype=np.float32) * 0.3
     content_cached = "def cached(): return 1\n"
     path_cached = "src/cached.py"
     outline_cached = _extract_structured_outline(path_cached, content_cached)
@@ -2041,7 +2041,7 @@ async def test_embedding_partial_cache_hit(db_session):
     gc.get_file_content = AsyncMock(side_effect=_read)
 
     es = MagicMock()
-    new_vec = np.ones(384, dtype=np.float32) * 0.9
+    new_vec = np.ones(768, dtype=np.float32) * 0.9
     es.aembed_texts = AsyncMock(return_value=[new_vec])
 
     svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
@@ -2081,7 +2081,7 @@ async def test_embedding_persists_content_sha_on_fresh_build(db_session):
     gc.get_file_content = AsyncMock(return_value=content)
 
     es = MagicMock()
-    es.aembed_texts = AsyncMock(return_value=[np.zeros(384, dtype=np.float32)])
+    es.aembed_texts = AsyncMock(return_value=[np.zeros(768, dtype=np.float32)])
 
     svc = RepoIndexService(db=db_session, github_client=gc, embedding_service=es)
     await svc.build_index("o/r", "main", "tok")
@@ -2236,7 +2236,7 @@ async def test_shared_content_sha_embeddings_are_independent(db_session):
     content = "shared body"
     outline_a = _extract_structured_outline(path_a, content)
     outline_b = _extract_structured_outline(path_b, content)
-    cached_vec = np.ones(384, dtype=np.float32) * 0.42
+    cached_vec = np.ones(768, dtype=np.float32) * 0.42
     sha_a = _build_content_sha(path_a, outline_a)
     sha_b = _build_content_sha(path_b, outline_b)
 
@@ -2319,7 +2319,7 @@ async def test_stale_null_embedding_row_does_not_poison_dedup(db_session):
     gc.get_tree_with_cache = AsyncMock(return_value=(tree_items, None))
     gc.get_file_content = AsyncMock(return_value=content)
 
-    fresh_vec = np.ones(384, dtype=np.float32) * 0.77
+    fresh_vec = np.ones(768, dtype=np.float32) * 0.77
     es = MagicMock()
     es.aembed_texts = AsyncMock(return_value=[fresh_vec])
 

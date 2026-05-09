@@ -267,7 +267,7 @@ def _make_diverse_embeddings(n_topics: int, per_topic: int, rng: np.random.Rando
     """Generate embeddings for n_topics distinct clusters.
 
     Each topic gets a random center with tight samples (spread=0.02).
-    Inter-topic similarity is low because random 384-dim vectors are
+    Inter-topic similarity is low because random 768-dim vectors are
     nearly orthogonal.
     """
     all_embs: list[np.ndarray] = []
@@ -350,7 +350,8 @@ async def test_warm_path_recomputes_nonzero_coherence(session_factory, mock_embe
     rng = np.random.RandomState(99)
 
     # Create a tight 5-member cluster — actual coherence should be high
-    tight_embs = make_cluster_distribution("tight cluster test", 5, spread=0.03, rng=rng)
+    # Spread reduced from 0.03 to 0.015 for 768-dim embeddings to maintain high coherence
+    tight_embs = make_cluster_distribution("tight cluster test", 5, spread=0.015, rng=rng)
 
     center = np.mean(tight_embs, axis=0).astype(np.float32)
     center /= np.linalg.norm(center) + 1e-9

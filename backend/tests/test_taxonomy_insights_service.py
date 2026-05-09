@@ -69,7 +69,7 @@ async def test_cluster_count_filters_to_active_mature_candidate(db: AsyncSession
             id=str(uuid.uuid4()), label=f"c{i}", state=state, domain="backend",
             task_type="coding", color_hex="#b44aff", persistence=0.7,
             member_count=5, usage_count=1, prune_flag_count=0,
-            centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
+            centroid_embedding=np.random.rand(768).astype(np.float32).tobytes(),
             parent_id=dom.id,
             created_at=datetime.now(timezone.utc),
         ))
@@ -98,21 +98,21 @@ async def test_meta_pattern_count_and_avg_score(db: AsyncSession):
         id=str(uuid.uuid4()), label="cA", state="active", domain="backend",
         task_type="coding", color_hex="#b44aff", persistence=0.8,
         member_count=6, usage_count=1, prune_flag_count=0, avg_score=7.0,
-        centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
+        centroid_embedding=np.random.rand(768).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
     cluster_b = PromptCluster(
         id=str(uuid.uuid4()), label="cB", state="active", domain="backend",
         task_type="coding", color_hex="#b44aff", persistence=0.8,
         member_count=4, usage_count=1, prune_flag_count=0, avg_score=8.0,
-        centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
+        centroid_embedding=np.random.rand(768).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
     cluster_c = PromptCluster(
         id=str(uuid.uuid4()), label="cC", state="active", domain="backend",
         task_type="coding", color_hex="#b44aff", persistence=0.8,
         member_count=1, usage_count=0, prune_flag_count=0, avg_score=1.0,
-        centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
+        centroid_embedding=np.random.rand(768).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
     db.add(cluster_a)
@@ -122,7 +122,7 @@ async def test_meta_pattern_count_and_avg_score(db: AsyncSession):
         db.add(MetaPattern(
             id=str(uuid.uuid4()), cluster_id=cluster_id,
             pattern_text="p", source_count=1, global_source_count=0,
-            embedding=np.random.rand(384).astype(np.float32).tobytes(),
+            embedding=np.random.rand(768).astype(np.float32).tobytes(),
         ))
     await db.commit()
 
@@ -151,14 +151,14 @@ async def test_global_pattern_count_via_containment(db: AsyncSession):
         id=str(uuid.uuid4()), label="c1", state="active", domain="backend",
         task_type="coding", color_hex="#b44aff", persistence=0.8,
         member_count=3, usage_count=1, prune_flag_count=0,
-        centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
+        centroid_embedding=np.random.rand(768).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
     c2 = PromptCluster(
         id=str(uuid.uuid4()), label="c2", state="active", domain="backend",
         task_type="coding", color_hex="#b44aff", persistence=0.8,
         member_count=3, usage_count=1, prune_flag_count=0,
-        centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
+        centroid_embedding=np.random.rand(768).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
     db.add(c1)
@@ -167,20 +167,20 @@ async def test_global_pattern_count_via_containment(db: AsyncSession):
         id=str(uuid.uuid4()), pattern_text="gp1",
         source_cluster_ids=[c1.id], source_project_ids=[],
         cross_project_count=1, global_source_count=1, avg_cluster_score=7.5,
-        embedding=np.random.rand(384).astype(np.float32).tobytes(),
+        embedding=np.random.rand(768).astype(np.float32).tobytes(),
     ))
     db.add(GlobalPattern(
         id=str(uuid.uuid4()), pattern_text="gp2",
         source_cluster_ids=[c1.id, c2.id], source_project_ids=[],
         cross_project_count=1, global_source_count=2, avg_cluster_score=8.0,
-        embedding=np.random.rand(384).astype(np.float32).tobytes(),
+        embedding=np.random.rand(768).astype(np.float32).tobytes(),
     ))
     db.add(GlobalPattern(
         id=str(uuid.uuid4()), pattern_text="gp3",
         source_cluster_ids=[str(uuid.uuid4())],  # unrelated cluster
         source_project_ids=[],
         cross_project_count=1, global_source_count=1, avg_cluster_score=6.0,
-        embedding=np.random.rand(384).astype(np.float32).tobytes(),
+        embedding=np.random.rand(768).astype(np.float32).tobytes(),
     ))
     await db.commit()
 
@@ -205,7 +205,7 @@ async def test_injection_rate_filters_to_period(db: AsyncSession):
         id=str(uuid.uuid4()), label="c", state="active", domain="backend",
         task_type="coding", color_hex="#b44aff", persistence=0.8,
         member_count=3, usage_count=1, prune_flag_count=0,
-        centroid_embedding=np.random.rand(384).astype(np.float32).tobytes(),
+        centroid_embedding=np.random.rand(768).astype(np.float32).tobytes(),
         parent_id=dom.id, created_at=datetime.now(timezone.utc),
     )
     db.add(dom)

@@ -10,7 +10,7 @@ from app.services.taxonomy.clustering import ClusterResult, spectral_split
 def _make_groups(
     n_groups: int,
     members_per_group: int,
-    dim: int = 384,
+    dim: int = 768,
     spread: float = 0.05,
     seed: int = 42,
 ) -> np.ndarray:
@@ -63,7 +63,7 @@ class TestSpectralSplitClearGroups:
 class TestSpectralSplitRejection:
     def test_uniform_noise_returns_none(self) -> None:
         rng = np.random.RandomState(99)
-        embeddings = rng.randn(30, 384).astype(np.float32)
+        embeddings = rng.randn(30, 768).astype(np.float32)
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         embeddings = embeddings / norms
         result, sils = spectral_split(embeddings, silhouette_gate=0.55)
@@ -71,7 +71,7 @@ class TestSpectralSplitRejection:
 
     def test_identical_embeddings_rejected(self) -> None:
         """Identical embeddings should be rejected (None) or produce degenerate clusters."""
-        vec = np.ones(384, dtype=np.float32)
+        vec = np.ones(768, dtype=np.float32)
         vec = vec / np.linalg.norm(vec)
         embeddings = np.tile(vec, (20, 1))
         result, _ = spectral_split(embeddings)
@@ -83,7 +83,7 @@ class TestSpectralSplitRejection:
 
     def test_too_few_points_returns_none(self) -> None:
         rng = np.random.RandomState(7)
-        embeddings = rng.randn(5, 384).astype(np.float32)
+        embeddings = rng.randn(5, 768).astype(np.float32)
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         embeddings = embeddings / norms
         result, sils = spectral_split(embeddings)
@@ -95,7 +95,7 @@ class TestSpectralSplitGroupSizeFilter:
     def test_rejects_k_with_small_group(self) -> None:
         rng = np.random.RandomState(42)
         groups = _make_groups(2, 10, spread=0.02, seed=42)
-        outlier = rng.randn(384).astype(np.float32)
+        outlier = rng.randn(768).astype(np.float32)
         outlier = (outlier / np.linalg.norm(outlier)).reshape(1, -1)
         embeddings = np.vstack([groups, outlier])
         result, _ = spectral_split(embeddings, k_range=(2, 3))

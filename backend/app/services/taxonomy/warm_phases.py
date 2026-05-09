@@ -3316,7 +3316,7 @@ async def phase_retire(
                     "Corrupt embedding in dissolution, defaulting to zeros: %s",
                     _de_exc,
                 )
-                opt_embs.append(np.zeros(384, dtype=np.float32))
+                opt_embs.append(np.zeros(768, dtype=np.float32))
 
         # Reassign members to nearest active cluster (exclude self).
         # ADR-005 C1c — per-opt same-project preference (the default) is used
@@ -3880,7 +3880,7 @@ async def phase_refresh(
             for mp in all_meta_patterns:
                 try:
                     emb = np.frombuffer(mp.embedding, dtype=np.float32).copy()  # type: ignore[arg-type]
-                    if emb.shape[0] == 384:
+                    if emb.shape[0] == 768:
                         pattern_embs.append(emb)
                         pattern_cluster_ids.append(mp.cluster_id)
                         valid_patterns.append(mp)

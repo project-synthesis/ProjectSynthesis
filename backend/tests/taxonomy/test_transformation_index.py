@@ -26,7 +26,7 @@ from app.services.taxonomy.transformation_index import (
 # ---------------------------------------------------------------------------
 
 
-def _rand_emb(dim: int = 384, seed: int | None = None) -> np.ndarray:
+def _rand_emb(dim: int = 768, seed: int | None = None) -> np.ndarray:
     rng = np.random.RandomState(seed)
     v = rng.randn(dim).astype(np.float32)
     return v / np.linalg.norm(v)
@@ -34,7 +34,7 @@ def _rand_emb(dim: int = 384, seed: int | None = None) -> np.ndarray:
 
 @pytest.fixture
 def index() -> TransformationIndex:
-    return TransformationIndex(dim=384)
+    return TransformationIndex(dim=768)
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ async def test_snapshot_empty_index(index: TransformationIndex):
     """Snapshot of empty index has empty matrix and ids."""
     snap = await index.snapshot()
     assert isinstance(snap, TransformationSnapshot)
-    assert snap.matrix.shape == (0, 384)
+    assert snap.matrix.shape == (0, 768)
     assert snap.ids == []
 
 
@@ -219,7 +219,7 @@ async def test_snapshot_is_deep_copy(index: TransformationIndex):
 
     await index.upsert("b", _rand_emb(seed=2))
 
-    assert snap.matrix.shape == (1, 384)
+    assert snap.matrix.shape == (1, 768)
     assert snap.ids == ["a"]
 
 
@@ -232,7 +232,7 @@ async def test_restore_recovers_state(index: TransformationIndex):
     await index.upsert("b", emb_b)
 
     snap = await index.snapshot()
-    assert snap.matrix.shape == (2, 384)
+    assert snap.matrix.shape == (2, 768)
 
     # Mutate
     await index.upsert("c", _rand_emb(seed=102))
@@ -244,7 +244,7 @@ async def test_restore_recovers_state(index: TransformationIndex):
 
     assert index.size == 2
     assert set(index._ids) == {"a", "b"}
-    assert index._matrix.shape == (2, 384)
+    assert index._matrix.shape == (2, 768)
 
 
 @pytest.mark.asyncio
@@ -369,7 +369,7 @@ async def test_rebuild_empty_dict_clears_index(index: TransformationIndex):
 
     assert index.size == 0
     assert index._ids == []
-    assert index._matrix.shape == (0, 384)
+    assert index._matrix.shape == (0, 768)
 
 
 @pytest.mark.asyncio
@@ -390,7 +390,7 @@ async def test_rebuild_replaces_existing_content(index: TransformationIndex):
 @pytest.mark.asyncio
 async def test_rebuild_zero_norm_vector_is_stored_as_zeros(index: TransformationIndex):
     """rebuild() handles zero-norm vectors without crashing (stores zero row)."""
-    zero_vec = np.zeros(384, dtype=np.float32)
+    zero_vec = np.zeros(768, dtype=np.float32)
     normal_vec = _rand_emb(seed=99)
 
     await index.rebuild({"zero": zero_vec, "normal": normal_vec})
@@ -409,7 +409,7 @@ async def test_rebuild_zero_norm_vector_is_stored_as_zeros(index: Transformation
 @pytest.mark.asyncio
 async def test_concurrent_upserts_do_not_corrupt():
     """Concurrent upserts do not corrupt the index state."""
-    index = TransformationIndex(dim=384)
+    index = TransformationIndex(dim=768)
 
     async def do_upsert(i: int):
         await index.upsert(f"c{i}", _rand_emb(seed=i))
@@ -418,7 +418,7 @@ async def test_concurrent_upserts_do_not_corrupt():
 
     assert index.size == 20
     # Matrix rows must equal ids length
-    assert index._matrix.shape == (20, 384)
+    assert index._matrix.shape == (20, 768)
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +438,7 @@ async def test_save_and_load_cache_round_trip(index: TransformationIndex, tmp_pa
     await index.save_cache(cache_path)
     assert cache_path.exists()
 
-    fresh = TransformationIndex(dim=384)
+    fresh = TransformationIndex(dim=768)
     loaded = await fresh.load_cache(cache_path)
     assert loaded is True
     assert fresh.size == 2
@@ -455,7 +455,7 @@ async def test_load_cache_rejects_stale(index: TransformationIndex, tmp_path: Pa
     cache_path = tmp_path / "transformation_index.pkl"
     await index.save_cache(cache_path)
 
-    fresh = TransformationIndex(dim=384)
+    fresh = TransformationIndex(dim=768)
     loaded = await fresh.load_cache(cache_path, max_age_seconds=0)
     assert loaded is False
     assert fresh.size == 0

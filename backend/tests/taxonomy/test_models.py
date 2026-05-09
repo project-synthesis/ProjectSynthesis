@@ -39,7 +39,7 @@ def tmp_engine():
 @pytest.mark.asyncio
 async def test_prompt_cluster_roundtrip(db: AsyncSession):
     """Create, persist, and read back a PromptCluster."""
-    embedding = np.random.randn(384).astype(np.float32).tobytes()
+    embedding = np.random.randn(768).astype(np.float32).tobytes()
     cluster = PromptCluster(
         label="API Architecture",
         centroid_embedding=embedding,
@@ -73,7 +73,7 @@ async def test_prompt_cluster_parent_child(db: AsyncSession):
     """Verify parent-child relationship works."""
     parent = PromptCluster(
         label="Infrastructure",
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         state="active",
         domain="general",
     )
@@ -83,7 +83,7 @@ async def test_prompt_cluster_parent_child(db: AsyncSession):
     child = PromptCluster(
         label="Backend APIs",
         parent_id=parent.id,
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
         state="candidate",
         domain="backend",
     )
@@ -149,7 +149,7 @@ async def test_meta_pattern_links_to_cluster(db: AsyncSession):
         label="test cluster",
         state="active",
         domain="general",
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(cluster)
     await db.flush()
@@ -173,7 +173,7 @@ async def test_optimization_pattern_links_to_cluster(db: AsyncSession):
         label="test cluster",
         state="active",
         domain="general",
-        centroid_embedding=np.zeros(384, dtype=np.float32).tobytes(),
+        centroid_embedding=np.zeros(768, dtype=np.float32).tobytes(),
     )
     db.add(cluster)
     await db.flush()

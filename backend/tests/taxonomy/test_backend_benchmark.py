@@ -44,7 +44,7 @@ requires_hnswlib = pytest.mark.skipif(
     reason="hnswlib is not functional on this platform",
 )
 
-DIM = 384  # realistic dimension for MiniLM embeddings
+DIM = 768  # realistic dimension for MiniLM embeddings
 
 
 def _make_matrix(n: int, seed: int = 42) -> np.ndarray:

@@ -542,7 +542,7 @@ async def split_cluster(
                     "Corrupt child centroid in separation computation, cluster='%s': %s",
                     ch.label, _cc_exc,
                 )
-                child_centroids.append(np.zeros(384, dtype=np.float32))
+                child_centroids.append(np.zeros(768, dtype=np.float32))
         for i, ch in enumerate(new_children):
             min_dist = 1.0
             for j, other_c in enumerate(child_centroids):
@@ -570,7 +570,7 @@ async def split_cluster(
             for (oe_bytes,) in oe_q.all():
                 try:
                     oe = np.frombuffer(oe_bytes, dtype=np.float32)
-                    if oe.shape[0] == 384:
+                    if oe.shape[0] == 768:
                         opt_embs.append(oe / max(float(np.linalg.norm(oe)), 1e-9))
                 except (ValueError, TypeError):
                     continue

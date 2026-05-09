@@ -36,7 +36,7 @@ from app.models import RepoFileIndex, RepoIndexMeta
 from app.services.repo_index_file_reader import ProcessedFile
 from app.services.repo_index_outlines import FileOutline
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 BACKEND_TESTS_DIR = Path(__file__).resolve().parent
 
 

@@ -188,7 +188,7 @@ class EmbeddingIndex:
     Stable label mapping prevents index corruption from remove().
     """
 
-    def __init__(self, dim: int = 384):
+    def __init__(self, dim: int = 768):
         self._dim = dim
         self._lock = asyncio.Lock()
         self._backend: _NumpyBackend | _HnswBackend = _NumpyBackend(dim=dim)

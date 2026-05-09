@@ -56,10 +56,10 @@ async def test_map_domain_bayesian_blend(db, mock_embedding, mock_provider):
     # Construct controlled geometry:
     #   api_vec along dim 0, query_vec tilted ~80° away (cosine ~0.17)
     #   After 70/30 blend with api_vec, cosine to api_vec ≈ 0.47 > 0.35
-    api_vec = np.zeros(384, dtype=np.float32)
+    api_vec = np.zeros(768, dtype=np.float32)
     api_vec[0] = 1.0
 
-    query_vec = np.zeros(384, dtype=np.float32)
+    query_vec = np.zeros(768, dtype=np.float32)
     query_vec[0] = 0.17  # small component along api
     query_vec[1] = 0.98
     query_vec /= np.linalg.norm(query_vec)
@@ -124,7 +124,7 @@ async def test_map_domain_below_floor_returns_unmapped(db, mock_embedding, mock_
     emb_query = mock_embedding.embed_single("quantum physics simulation")
     # Manufacture an orthogonal vector
     rng = np.random.RandomState(9999)
-    perp = rng.randn(384).astype(np.float32)
+    perp = rng.randn(768).astype(np.float32)
     # Project out the query component so it's orthogonal
     perp -= np.dot(perp, emb_query) * emb_query
     norm = np.linalg.norm(perp)

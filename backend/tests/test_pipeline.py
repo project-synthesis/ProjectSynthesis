@@ -662,5 +662,5 @@ class TestPipelinePerformanceParams:
         # Second call is optimize — goes through complete_parsed_streaming
         optimize_call = mock_provider.complete_parsed_streaming.call_args_list[0]
         assert optimize_call.kwargs["effort"] == "high"
-        # Dynamic max_tokens should be >= 16384
-        assert optimize_call.kwargs["max_tokens"] >= 16384
+        # Dynamic max_tokens should be >= 16768
+        assert optimize_call.kwargs["max_tokens"] >= 16768

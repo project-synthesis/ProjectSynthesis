@@ -24,7 +24,7 @@ def _make_engine():
         import hashlib
 
         h = hashlib.md5(text.encode()).digest()
-        vec = np.frombuffer(h * 24, dtype=np.float32)[:384]
+        vec = np.frombuffer(h * 24, dtype=np.float32)[:768]
         return vec / (np.linalg.norm(vec) + 1e-9)
 
     engine._embedding.aembed_single = _embed
@@ -93,7 +93,7 @@ async def test_global_source_count_computed_for_similar_patterns(db: AsyncSessio
     await db.flush()
 
     # Same embedding for all 3 (identical pattern)
-    shared_emb = np.random.RandomState(42).randn(384).astype(np.float32)
+    shared_emb = np.random.RandomState(42).randn(768).astype(np.float32)
     shared_emb = shared_emb / np.linalg.norm(shared_emb)
 
     for c in clusters:
@@ -107,7 +107,7 @@ async def test_global_source_count_computed_for_similar_patterns(db: AsyncSessio
         db.add(mp)
 
     # Unique pattern in cluster 0 with a very different embedding
-    unique_emb = np.zeros(384, dtype=np.float32)
+    unique_emb = np.zeros(768, dtype=np.float32)
     unique_emb[0] = 1.0  # orthogonal to shared
     unique = MetaPattern(
         cluster_id=clusters[0].id,
@@ -146,7 +146,7 @@ async def test_global_source_count_single_pattern(db: AsyncSession):
     db.add(c)
     await db.flush()
 
-    emb = np.random.RandomState(99).randn(384).astype(np.float32)
+    emb = np.random.RandomState(99).randn(768).astype(np.float32)
     emb = emb / np.linalg.norm(emb)
     mp = MetaPattern(
         cluster_id=c.id,

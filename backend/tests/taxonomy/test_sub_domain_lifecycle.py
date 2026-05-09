@@ -24,7 +24,7 @@ from app.services.taxonomy._constants import (
 )
 from app.services.taxonomy.cluster_meta import read_meta, write_meta
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 def _random_embedding(seed: int = 0) -> bytes:
@@ -409,7 +409,7 @@ class TestSubDomainCreationGuard:
             cluster = PromptCluster(
                 label=f"Query Cluster {i}", state="active", domain="database",
                 parent_id=sub.id, color_hex="#ff0000", member_count=3,
-                centroid_embedding=np.random.randn(384).astype(np.float32).tobytes(),
+                centroid_embedding=np.random.randn(768).astype(np.float32).tobytes(),
             )
             db.add(cluster)
         # Add clusters directly under the domain (not under sub-domain)
@@ -417,7 +417,7 @@ class TestSubDomainCreationGuard:
             cluster = PromptCluster(
                 label=f"Migration Cluster {i}", state="active", domain="database",
                 parent_id=domain.id, color_hex="#ff0000", member_count=3,
-                centroid_embedding=np.random.randn(384).astype(np.float32).tobytes(),
+                centroid_embedding=np.random.randn(768).astype(np.float32).tobytes(),
             )
             db.add(cluster)
         await db.commit()
@@ -708,7 +708,7 @@ class TestSignalDrivenCreation:
             cluster = PromptCluster(
                 label=f"SaaS Cluster {i}", state="active", domain="saas",
                 parent_id=domain.id, color_hex="#ff0000", member_count=3,
-                centroid_embedding=np.random.randn(384).astype(np.float32).tobytes(),
+                centroid_embedding=np.random.randn(768).astype(np.float32).tobytes(),
             )
             db.add(cluster)
             await db.flush()
@@ -3722,7 +3722,7 @@ class TestDomainDissolution:
             cluster = PromptCluster(
                 label=f"Backend Cluster {i}", state="active", domain="backend",
                 parent_id=domain.id, color_hex="#ff0000", member_count=3,
-                centroid_embedding=np.random.randn(384).astype(np.float32).tobytes(),
+                centroid_embedding=np.random.randn(768).astype(np.float32).tobytes(),
             )
             db.add(cluster)
         await db.commit()
@@ -3758,7 +3758,7 @@ class TestDomainDissolution:
             cluster = PromptCluster(
                 label=f"Misc Cluster {i}", state="active", domain="devops",
                 parent_id=domain.id, color_hex="#ff0000", member_count=3,
-                centroid_embedding=np.random.randn(384).astype(np.float32).tobytes(),
+                centroid_embedding=np.random.randn(768).astype(np.float32).tobytes(),
             )
             db.add(cluster)
             await db.flush()

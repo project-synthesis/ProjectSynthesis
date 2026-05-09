@@ -14,7 +14,7 @@ from app.services.pipeline_constants import (
 )
 
 
-def _rand_emb(seed: int = 42, dim: int = 384) -> np.ndarray:
+def _rand_emb(seed: int = 42, dim: int = 768) -> np.ndarray:
     rng = np.random.RandomState(seed)
     vec = rng.randn(dim).astype(np.float32)
     return vec / np.linalg.norm(vec)

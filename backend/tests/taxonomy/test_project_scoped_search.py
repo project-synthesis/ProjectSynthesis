@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import PromptCluster
 from app.services.taxonomy.engine import TaxonomyEngine
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 def _unit_vec(seed: int) -> np.ndarray:

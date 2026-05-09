@@ -14,12 +14,17 @@ import numpy as np
 import pytest
 
 from app.services.pattern_injection import auto_inject_patterns
+@pytest.fixture(autouse=True)
+def patch_reranker():
+    with patch('app.services.reranker_service.RerankerService.score_batch', side_effect=Exception('Reranker offline')):
+        yield
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _rand_emb(dim: int = 384) -> np.ndarray:
+def _rand_emb(dim: int = 768) -> np.ndarray:
     v = np.random.randn(dim).astype(np.float32)
     return v / np.linalg.norm(v)
 
@@ -121,10 +126,10 @@ class TestCrossClusterInjection:
     async def test_relevance_floor_filters_low_relevance(self, db_session):
         """Patterns with relevance below CROSS_CLUSTER_RELEVANCE_FLOOR are excluded."""
         # Create an embedding that's orthogonal to the query -> low similarity
-        orthogonal_emb = np.zeros(384, dtype=np.float32)
+        orthogonal_emb = np.zeros(768, dtype=np.float32)
         orthogonal_emb[0] = 1.0  # unit vector in one dimension
         # Make prompt_emb orthogonal to it
-        prompt_emb_orth = np.zeros(384, dtype=np.float32)
+        prompt_emb_orth = np.zeros(768, dtype=np.float32)
         prompt_emb_orth[1] = 1.0  # orthogonal to orthogonal_emb
 
         engine = _make_taxonomy_engine(size=0)
@@ -214,7 +219,7 @@ class TestCrossClusterInjection:
         # Order: fusion, cluster meta, parent lookup, meta-patterns (topic), cross-cluster
         db_session.execute = AsyncMock(side_effect=[
             mock_fusion_result,
-            mock_cluster_result, mock_parent_result, mock_pattern_result, mock_cc_result,
+            mock_cluster_result, mock_parent_result, mock_pattern_result, mock_cc_result, MagicMock(),
         ])
 
         with patch(
@@ -494,7 +499,7 @@ class TestCrossClusterIntegration:
             global_source_count=1,
         )
         # Slightly perturb for pattern_b to ensure it's different but still similar
-        perturbed = base_emb + np.random.randn(384).astype(np.float32) * 0.01
+        perturbed = base_emb + np.random.randn(768).astype(np.float32) * 0.01
         perturbed = (perturbed / np.linalg.norm(perturbed)).astype(np.float32)
         pattern_b = MetaPattern(
             cluster_id=cluster_b.id,
@@ -557,7 +562,7 @@ class TestCrossClusterIntegration:
         patterns = []
         for i, cluster in enumerate(clusters):
             # Add tiny noise so embeddings aren't identical but stay very similar
-            noisy = universal_emb + np.random.randn(384).astype(np.float32) * 0.005
+            noisy = universal_emb + np.random.randn(768).astype(np.float32) * 0.005
             noisy = (noisy / np.linalg.norm(noisy)).astype(np.float32)
             mp = MetaPattern(
                 cluster_id=cluster.id,

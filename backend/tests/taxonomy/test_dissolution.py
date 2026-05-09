@@ -11,7 +11,7 @@ from sqlalchemy import select
 from app.models import Optimization, PromptCluster
 from app.services.taxonomy.event_logger import TaxonomyEventLogger, set_event_logger
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 def _make_embedding(seed: int = 0) -> bytes:

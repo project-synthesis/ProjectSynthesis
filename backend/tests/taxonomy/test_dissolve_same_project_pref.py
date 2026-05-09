@@ -20,7 +20,7 @@ from app.models import Optimization, PromptCluster
 from app.services.taxonomy.event_logger import TaxonomyEventLogger, set_event_logger
 from app.services.taxonomy.warm_phases import _reassign_to_active
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 def _unit(seed: int) -> np.ndarray:

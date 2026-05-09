@@ -56,15 +56,15 @@ def test_adaptive_blend_weight_invariant():
 def test_blend_embeddings_accepts_custom_weights():
     """blend_embeddings() works with non-default weights."""
     rng = np.random.RandomState(42)
-    raw = rng.randn(384).astype(np.float32)
-    opt = rng.randn(384).astype(np.float32)
-    trans = rng.randn(384).astype(np.float32)
+    raw = rng.randn(768).astype(np.float32)
+    opt = rng.randn(768).astype(np.float32)
+    trans = rng.randn(768).astype(np.float32)
 
     result = blend_embeddings(
         raw=raw, optimized=opt, transformation=trans,
         w_raw=0.77, w_optimized=0.08, w_transform=0.15,
     )
-    assert result.shape == (384,)
+    assert result.shape == (768,)
     assert np.linalg.norm(result) == pytest.approx(1.0, abs=1e-5)
 
 

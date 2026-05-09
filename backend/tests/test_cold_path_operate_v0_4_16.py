@@ -22,7 +22,7 @@ from app.models import PromptCluster
 
 pytestmark = pytest.mark.asyncio
 CI_LIGHT = os.getenv("CI_LIGHT") == "1"
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 # ---------------------------------------------------------------------------

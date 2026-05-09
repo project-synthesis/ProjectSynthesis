@@ -16,7 +16,7 @@ from app.models import Base
 from app.providers.base import LLMProvider
 from app.services.embedding_service import EmbeddingService
 
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 768
 
 
 @pytest_asyncio.fixture
@@ -117,7 +117,7 @@ def make_cluster_distribution(
         rng: Optional random state for reproducibility.
 
     Returns:
-        List of n unit-norm 384-dim float32 vectors.
+        List of n unit-norm 768-dim float32 vectors.
     """
     if rng is None:
         rng = np.random.RandomState(hash(center_text) % 2**31)

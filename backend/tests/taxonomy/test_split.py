@@ -8,7 +8,7 @@ from app.services.taxonomy._constants import SPLIT_SIBLING_SIMILARITY_CEILING
 from app.services.taxonomy.split import SplitResult, split_cluster
 
 
-def _rand_emb(dim: int = 384, seed: int = 0) -> bytes:
+def _rand_emb(dim: int = 768, seed: int = 0) -> bytes:
     rng = np.random.RandomState(seed)
     v = rng.randn(dim).astype(np.float32)
     v = v / np.linalg.norm(v)
