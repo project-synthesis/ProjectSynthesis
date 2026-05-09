@@ -5,9 +5,16 @@
   interface Props {
     open: boolean;
     onClose: () => void;
+    /**
+     * Foundation P3 (Cycle 15): when bound to a specific run id, the modal
+     * filters `seed-batch-progress` events so only matching `run_id` payloads
+     * update the progress display. `null`/`undefined` preserves pre-P3
+     * behavior (all events accepted — legacy global-progress contract).
+     */
+    runId?: string | null;
   }
 
-  let { open = $bindable(), onClose }: Props = $props();
+  let { open = $bindable(), onClose, runId = null }: Props = $props();
 
   // State
   let mode = $state<'generate' | 'provide'>('generate');
@@ -46,6 +53,9 @@
     if (!seeding) return;
     const handler = (e: Event) => {
       const data = (e as CustomEvent).detail;
+      // Cycle 15: filter by run_id when modal is bound to a specific run.
+      // null/undefined runId preserves pre-P3 behavior (accept all events).
+      if (runId && data?.run_id !== runId) return;
       if (data?.phase === 'optimize') {
         progress = {
           completed: data.completed ?? progress.completed,
