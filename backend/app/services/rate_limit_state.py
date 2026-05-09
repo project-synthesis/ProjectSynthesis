@@ -338,6 +338,104 @@ def get_rate_limit_store() -> RateLimitStateStore:
     return _store
 
 
+def publish_rate_limit_active(
+    provider_name: str,
+    *,
+    reset_at: datetime | None = None,
+    estimated_wait_seconds: int | float | None = None,
+    source: str = "provider",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Single-emitter helper for ``rate_limit_active`` SSE.
+
+    Publishes the SSE event AND records the limit in the persistent
+    state store in one atomic call. All rate-limit detection sites
+    SHOULD route through this helper instead of constructing their
+    own ``event_bus.publish("rate_limit_active", {...})`` payloads —
+    that way the SSE event, the persisted state, the health endpoint,
+    and the frontend ``rateLimitStore`` always agree.
+
+    Reactivity (2026-05-09): added to close the gap where rate-limit
+    detection during a normal user-triggered optimize / refine /
+    passthrough flow updated ``heuristic_flags.rate_limited=True`` on
+    the resulting Optimization row but never fired SSE — the frontend
+    only learned about the limit on the next 60-second health poll
+    or when the user manually refreshed. With this helper threaded
+    into every emit site, the ``RateLimitBanner`` shows up immediately
+    when the limit is detected, regardless of which surface (probe,
+    seed, refine, optimize) triggered it.
+
+    Parameters
+    ----------
+    provider_name : str
+        Identifier of the rate-limited provider (``claude_cli``,
+        ``anthropic_api``, etc.). Free-form strings are accepted; the
+        frontend renders an ``Anthropic API`` / ``Claude CLI`` label
+        for the canonical names and the raw string otherwise.
+    reset_at : datetime | None, keyword-only
+        When the limit is expected to clear. ``None`` if the provider
+        did not give a hint — the frontend then renders "retry shortly"
+        and the in-process store auto-clears after the default TTL
+        (5 minutes).
+    estimated_wait_seconds : int | float | None, keyword-only
+        Provider-supplied estimate. ``None`` accepted; preserved as-is
+        in the SSE payload for the frontend countdown.
+    source : str, keyword-only, default ``"provider"``
+        Free-form tag for telemetry — origin of the detection
+        (``"probe"``, ``"batch_pipeline"``, ``"startup_probe"``,
+        ``"call_provider_with_retry"``).
+    extra : dict[str, Any] | None, keyword-only
+        Additional payload keys merged into the SSE event (e.g.
+        ``run_id`` for probe correlation).
+
+    Notes
+    -----
+    Side effects:
+    1. Persists the limit via ``RateLimitStateStore.record``.
+    2. Publishes ``rate_limit_active`` on the in-process event bus
+       (which the SSE forwarder bridges to the frontend).
+    Both are wrapped in ``try/except`` — a failure in either does NOT
+    propagate, because rate-limit observability MUST NOT mask the
+    underlying provider error the caller is about to surface.
+    """
+    from app.services.event_bus import event_bus
+
+    reset_at_iso = reset_at.isoformat() if reset_at is not None else None
+    payload: dict[str, Any] = {
+        "provider": provider_name,
+        "reset_at_iso": reset_at_iso,
+        "estimated_wait_seconds": (
+            int(estimated_wait_seconds)
+            if estimated_wait_seconds is not None
+            else None
+        ),
+        "source": source,
+    }
+    if extra:
+        payload.update(extra)
+
+    try:
+        get_rate_limit_store().record(
+            provider=provider_name,
+            reset_at=reset_at,
+            estimated_wait_seconds=estimated_wait_seconds,
+            source=source,
+        )
+    except Exception:
+        logger.debug(
+            "rate-limit store record failed (non-fatal)",
+            exc_info=True,
+        )
+
+    try:
+        event_bus.publish("rate_limit_active", payload)
+    except Exception:
+        logger.debug(
+            "rate_limit_active publish failed (non-fatal)",
+            exc_info=True,
+        )
+
+
 async def probe_rate_limit(
     provider: Any | None,
     store: RateLimitStateStore | None = None,

@@ -102,6 +102,50 @@ describe('rate-limit store — applyActive / applyCleared', () => {
     expect(entry.seconds_remaining).toBeGreaterThan(0);
     expect(entry.seconds_remaining!).toBeLessThanOrEqual(30);
   });
+
+  it('threads source through applyActive into activeList entries', () => {
+    // Reactivity (2026-05-09): the SettingsPanel rate-limits card
+    // surfaces `Source` so operators can correlate which surface
+    // (call_provider_with_retry / probe / batch / heuristic_flags)
+    // caught the 429. Pin the threading.
+    rateLimitStore.applyActive({
+      provider: 'claude_cli',
+      reset_at_iso: FUTURE(),
+      estimated_wait_seconds: 60,
+      source: 'call_provider_with_retry',
+    });
+    const entry = rateLimitStore.activeList[0];
+    expect(entry.source).toBe('call_provider_with_retry');
+  });
+
+  it('preserves prior source on idempotent re-apply without source', () => {
+    // First emit carries the canonical source; subsequent emits from
+    // the same batch may omit it — preserve the original tag rather
+    // than blanking it.
+    rateLimitStore.applyActive({
+      provider: 'claude_cli',
+      reset_at_iso: FUTURE(),
+      source: 'probe',
+    });
+    rateLimitStore.applyActive({
+      provider: 'claude_cli',
+      reset_at_iso: FUTURE(),
+      // no source on this second emit
+    });
+    expect(rateLimitStore.activeList[0].source).toBe('probe');
+  });
+
+  it('exposes detected_at_ms in activeList for relative-time display', () => {
+    const before = Date.now();
+    rateLimitStore.applyActive({
+      provider: 'claude_cli',
+      reset_at_iso: FUTURE(),
+    });
+    const after = Date.now();
+    const entry = rateLimitStore.activeList[0];
+    expect(entry.detected_at_ms).toBeGreaterThanOrEqual(before);
+    expect(entry.detected_at_ms).toBeLessThanOrEqual(after);
+  });
 });
 
 describe('rate-limit store — applyHeuristicFlags', () => {
@@ -142,6 +186,15 @@ describe('rate-limit store — applyHeuristicFlags', () => {
     // applyActive runs but provider becomes "unknown" because typeof check fails
     expect(rateLimitStore.activeList[0].provider).toBe('unknown');
     expect(rateLimitStore.activeList[0].reset_at_iso).toBeNull();
+  });
+
+  it('tags the source as "heuristic_flags" so the UI can distinguish from SSE-driven detections', () => {
+    rateLimitStore.applyHeuristicFlags({
+      rate_limited: true,
+      provider: 'claude_cli',
+      reset_at_iso: FUTURE(),
+    });
+    expect(rateLimitStore.activeList[0].source).toBe('heuristic_flags');
   });
 });
 

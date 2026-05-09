@@ -157,6 +157,27 @@
           // can remove that row surgically without a round-trip.
           window.dispatchEvent(new CustomEvent('optimization-deleted', { detail: data }));
         }
+        // Reactivity (2026-05-09): backend publishes ``optimization_updated``
+        // (e.g. metadata edit, score recalc, refinement applied in-place) but
+        // it was never wired here — the history list silently went stale until
+        // a manual refresh. Route it through the same 'optimization-event' bus
+        // so HistoryPanel surgically re-fetches the affected row.
+        if (type === 'optimization_updated') {
+          window.dispatchEvent(new CustomEvent('optimization-event', { detail: data }));
+        }
+        // Reactivity (2026-05-09): ``repo_unlinked`` was published but never
+        // handled. The frontend used to wait for the cascading ``taxonomy_changed``
+        // event to invalidate cluster trees, but during the brief race window
+        // (unlink ⇒ taxonomy_changed propagates ~100ms later) the GitHubPanel
+        // would render stale ``linkedRepo`` state. Surgical clear on the
+        // dedicated event closes the gap.
+        if (type === 'repo_unlinked') {
+          githubStore.linkedRepo = null;
+          githubStore.fileTree = [];
+          githubStore.branches = [];
+          githubStore.indexStatus = null;
+          window.dispatchEvent(new CustomEvent('repo-unlinked', { detail: data }));
+        }
         if (type === 'taxonomy_activity') {
           clustersStore.pushActivityEvent(data as unknown as import('$lib/api/clusters').TaxonomyActivityEvent);
           // Candidate lifecycle toasts

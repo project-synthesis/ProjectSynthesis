@@ -320,6 +320,30 @@ async def call_provider_with_retry(
                         if est is not None else "unknown duration",
                         exc.provider_name, exc.reset_at,
                     )
+                    # Reactivity (2026-05-09): emit ``rate_limit_active``
+                    # SSE at the propagation boundary so the frontend
+                    # ``RateLimitBanner`` lights up immediately, regardless
+                    # of which surface (optimize / refine / passthrough /
+                    # batch / probe) triggered the call. Previously the
+                    # event was only emitted from the probe + (sometimes)
+                    # batch paths, so a rate-limit hit during a normal
+                    # user-triggered optimize stayed invisible until the
+                    # next 60-second health poll.
+                    try:
+                        from app.services.rate_limit_state import (
+                            publish_rate_limit_active,
+                        )
+                        publish_rate_limit_active(
+                            provider_name=exc.provider_name or provider.name,
+                            reset_at=exc.reset_at,
+                            estimated_wait_seconds=est,
+                            source="call_provider_with_retry",
+                        )
+                    except Exception:
+                        _logger.debug(
+                            "rate_limit_active emit failed (non-fatal)",
+                            exc_info=True,
+                        )
                     raise
             if attempt < max_retries:
                 delay = retry_delay
@@ -343,4 +367,25 @@ async def call_provider_with_retry(
                     attempt + 1, max_retries + 1, retry_delay, exc,
                 )
                 await asyncio.sleep(retry_delay)
+    # Retries exhausted. Emit ``rate_limit_active`` if the lingering
+    # error is a rate-limit (small-wait case where retries didn't clear
+    # within ``max_retries``). The wait>cap path already emits above;
+    # this catches the wait<=cap-with-still-throttled case so the UI is
+    # never left silent on a real limit.
+    if isinstance(last_exc, ProviderRateLimitError):
+        try:
+            from app.services.rate_limit_state import (
+                publish_rate_limit_active,
+            )
+            publish_rate_limit_active(
+                provider_name=last_exc.provider_name or provider.name,
+                reset_at=last_exc.reset_at,
+                estimated_wait_seconds=last_exc.estimated_wait_seconds,
+                source="call_provider_with_retry_exhausted",
+            )
+        except Exception:
+            _logger.debug(
+                "rate_limit_active emit failed (non-fatal)",
+                exc_info=True,
+            )
     raise last_exc  # type: ignore[misc]

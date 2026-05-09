@@ -578,6 +578,71 @@ class TestCallProviderWithRetryLogic:
         assert provider.complete_parsed.call_count == 2
         mock_sleep.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_emits_rate_limit_active_sse_when_wait_exceeds_cap(self):
+        # Reactivity regression (2026-05-09): when ProviderRateLimitError
+        # propagates out of call_provider_with_retry, the helper emits the
+        # rate_limit_active event so the frontend banner lights up
+        # immediately. Previously only the probe + (sometimes) batch path
+        # emitted; a rate-limit during a normal optimize was silent.
+        from app.providers.base import (
+            LLMProvider,
+            ProviderRateLimitError,
+            call_provider_with_retry,
+        )
+        provider = MagicMock(spec=LLMProvider)
+        provider.name = "anthropic_api"
+        exc = ProviderRateLimitError("rate limited", retry_after=120)
+        provider.complete_parsed = AsyncMock(side_effect=exc)
+
+        with patch(
+            "app.services.rate_limit_state.publish_rate_limit_active",
+        ) as mock_publish:
+            with pytest.raises(ProviderRateLimitError):
+                await call_provider_with_retry(
+                    provider,
+                    model="claude-opus-4-7",
+                    system_prompt="sys",
+                    user_message="msg",
+                    output_format=AnalysisResult,
+                )
+
+        # Single emit at the propagation boundary, with the right metadata.
+        mock_publish.assert_called_once()
+        kwargs = mock_publish.call_args.kwargs
+        assert kwargs["provider_name"] == "anthropic_api"
+        assert kwargs["estimated_wait_seconds"] == 120
+        assert kwargs["source"] == "call_provider_with_retry"
+
+    @pytest.mark.asyncio
+    async def test_emits_rate_limit_active_sse_when_unknown_wait(self):
+        # Reactivity regression — wait_seconds=None path also emits.
+        from app.providers.base import (
+            LLMProvider,
+            ProviderRateLimitError,
+            call_provider_with_retry,
+        )
+        provider = MagicMock(spec=LLMProvider)
+        provider.name = "claude_cli"
+        exc = ProviderRateLimitError("rate limited unknown")
+        provider.complete_parsed = AsyncMock(side_effect=exc)
+
+        with patch(
+            "app.services.rate_limit_state.publish_rate_limit_active",
+        ) as mock_publish:
+            with pytest.raises(ProviderRateLimitError):
+                await call_provider_with_retry(
+                    provider,
+                    model="claude-opus-4-7",
+                    system_prompt="sys",
+                    user_message="msg",
+                    output_format=AnalysisResult,
+                )
+
+        mock_publish.assert_called_once()
+        # provider_name resolves to provider.name when exc.provider_name is None
+        assert mock_publish.call_args.kwargs["provider_name"] == "claude_cli"
+
 
 # ---------------------------------------------------------------------------
 # ClaudeCLIProvider

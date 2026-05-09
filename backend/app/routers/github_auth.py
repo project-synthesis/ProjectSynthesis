@@ -410,6 +410,22 @@ async def github_me(
             _do_cleanup,
             operation_label="github_auth_me_revoke_cleanup",
         )
+        # Reactivity (2026-05-09): emit ``repo_unlinked`` so any open
+        # frontend session immediately clears its linked-repo cache and
+        # falls back to the device-flow auth branch. Previously the UI
+        # showed "connected" until the user's next file-browser action
+        # 401'd — confusing UX. The frontend handler in +page.svelte
+        # mirrors the cleanup (linkedRepo=null, fileTree=[], etc.).
+        try:
+            from app.services.event_bus import event_bus
+            event_bus.publish("repo_unlinked", {
+                "session_id": captured_session_id,
+                "reason": "token_revoked",
+            })
+        except Exception:
+            logger.debug(
+                "repo_unlinked publish failed (non-fatal)", exc_info=True,
+            )
         response.delete_cookie("session_id", path="/api")
         raise HTTPException(401, "GitHub token expired or revoked. Please reconnect.")
     # Update cached user info if it changed.

@@ -709,20 +709,25 @@ class TopicProbeGenerator:
         })
 
         # Global rate-limit signal for the frontend's rate-limit banner.
-        try:
-            event_bus.publish("rate_limit_active", {
-                "run_id": run_id,
-                "probe_id": run_id,
-                "provider": provider_name,
-                "reset_at_iso": reset_at_iso,
-                "estimated_wait_seconds": estimated_wait_seconds,
-                "source": "probe",
-            })
-        except Exception:
-            logger.debug(
-                "rate_limit_active publish failed (non-fatal)",
-                exc_info=True,
-            )
+        # Routed through the shared helper so the SSE event, the
+        # persistent rate-limit store, and the health endpoint stay in
+        # sync — see services/rate_limit_state.py::publish_rate_limit_active.
+        from datetime import datetime
+
+        from app.services.rate_limit_state import publish_rate_limit_active
+        reset_at_dt: datetime | None = None
+        if reset_at_iso:
+            try:
+                reset_at_dt = datetime.fromisoformat(reset_at_iso)
+            except (ValueError, TypeError):
+                reset_at_dt = None
+        publish_rate_limit_active(
+            provider_name=provider_name,
+            reset_at=reset_at_dt,
+            estimated_wait_seconds=estimated_wait_seconds,
+            source="probe",
+            extra={"run_id": run_id, "probe_id": run_id},
+        )
 
     # ------------------------------------------------------------------
     # Result builders

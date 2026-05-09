@@ -20,6 +20,27 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _reset_global_rate_limit_store() -> None:
+    """Reset the singleton rate-limit store between tests.
+
+    The store persists across the test run because it is a module-level
+    singleton (created once on first ``get_rate_limit_store()`` call).
+    Other suites — notably ``tests/test_topic_probe_generator.py`` —
+    exercise the real ``publish_rate_limit_active`` helper (after the
+    2026-05-09 refactor that pointed every emit site at the shared
+    helper), which writes provider entries via ``store.record(...)``.
+    Without an autouse reset, the order-dependent state pollution made
+    ``TestHealthRateLimitField::test_health_includes_rate_limit_clear``
+    flaky depending on suite execution order. Reset here keeps every
+    test in this file order-independent.
+    """
+    from app.services.rate_limit_state import get_rate_limit_store
+    store = get_rate_limit_store()
+    store.clear()
+
+
 # ---------------------------------------------------------------------------
 # 1. RateLimitStateStore — persistent JSON-backed state
 # ---------------------------------------------------------------------------

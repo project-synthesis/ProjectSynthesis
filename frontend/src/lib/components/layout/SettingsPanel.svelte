@@ -83,6 +83,26 @@
     return `${h}h ${m % 60}m`;
   }
 
+  // Compact relative-time formatter for the "Detected" row in the
+  // rate-limit detail card. Mirrors the formatTimeAgo helper used in
+  // taxonomy-health utilities so the panel reads consistently.
+  function formatDetectedAgo(detected_at_ms: number): string {
+    const diff = Date.now() - detected_at_ms;
+    const secs = Math.max(0, Math.floor(diff / 1000));
+    if (secs < 60) return `${secs}s ago`;
+    const m = Math.floor(secs / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    return `${h}h ago`;
+  }
+
+  // One-line tooltip for the rate-limit accordion header — replaces the
+  // full-paragraph "Behavior" data-row that dominated the clear-state
+  // view. Brand: tooltips are *one technical line*; long-form
+  // descriptions belong in docs, not the IDE chrome.
+  const RATE_LIMIT_BEHAVIOR_TOOLTIP =
+    'On 429, prompts continue in passthrough (heuristic-only) until the limit clears. The banner above the editor shows live countdown.';
+
   // One-time prefetch on mount (best effort)
   let settingsLoaded = false;
   $effect(() => {
@@ -606,23 +626,35 @@
       {/if}
     </div>
 
-    <!-- Rate limits (collapsible) -- always visible so users have a
-         single place to check provider rate-limit state, even when no
-         limit is currently active. v0.4.12: SSE-driven via
-         rate_limit_active / rate_limit_cleared events. When a limit is
-         active, the workbench renders a global banner above the editor;
-         this card is the canonical detail surface. -->
+    <!-- Rate limits (collapsible). Brand alignment 2026-05-09:
+         - Replaced the full-paragraph "Behavior" data-row (visible
+           when limits are clear) with a one-line tooltip on the
+           accordion header — long-form descriptions are docs, not
+           chrome (Voice & Tone: tooltips = one technical line).
+         - Switched the accent from the non-canonical
+           ``--color-neon-amber`` literal to ``--color-neon-yellow``,
+           the warning emission color in the brand palette.
+         - Added ``Source`` and ``Detected`` rows when a limit is
+           active so operators can correlate which surface
+           (call_provider_with_retry / probe / batch / heuristic_flags)
+           caught the 429 — same key-value rhythm as the rest of the
+           panel (Active / Available / Tiers / Avg latency).
+         - Removed the cluttered ``↳ resets at`` indented sub-row in
+           favour of a peer-row ``Resets`` entry rendered as
+           HH:MM:SS so the column alignment matches PROVIDER /
+           DEFAULTS / SYSTEM card-terminal grids exactly. -->
     <div class="sub-section">
       <button
         class="accordion-heading"
         onclick={() => showRateLimits = !showRateLimits}
         aria-expanded={showRateLimits}
+        use:tooltip={RATE_LIMIT_BEHAVIOR_TOOLTIP}
       >
         <span class="accordion-arrow" class:accordion-arrow--open={showRateLimits}>&#x25B8;</span>
         <span class="sub-heading sub-heading--tier">Rate limits</span>
         <span class="accordion-summary">
           {#if rateLimitStore.isAnyActive}
-            <span style="color: var(--color-neon-amber, #f59e0b);">{rateLimitActiveCount} active</span>
+            <span style="color: var(--color-neon-yellow);">{rateLimitActiveCount} active</span>
           {:else}
             none
           {/if}
@@ -634,7 +666,7 @@
             {#each rateLimitStore.activeList as entry (entry.provider)}
               <div class="data-row">
                 <span class="data-label">{providerLabel(entry.provider)}</span>
-                <span class="data-value font-mono" style="color: var(--color-neon-amber, #f59e0b);">
+                <span class="data-value font-mono" style="color: var(--color-neon-yellow);">
                   {#if entry.seconds_remaining != null}
                     {formatRateLimitWait(entry.seconds_remaining)}
                   {:else}
@@ -644,16 +676,30 @@
               </div>
               {#if entry.reset_at_iso}
                 <div class="data-row">
-                  <span class="data-label" style="opacity: 0.6;">↳ resets at</span>
-                  <span class="data-value font-mono" style="opacity: 0.8;">
-                    {new Date(entry.reset_at_iso).toLocaleString()}
+                  <span class="data-label">Resets</span>
+                  <span class="data-value font-mono">
+                    {new Date(entry.reset_at_iso).toLocaleTimeString()}
                   </span>
                 </div>
               {/if}
+              <div class="data-row">
+                <span class="data-label">Detected</span>
+                <span class="data-value font-mono">
+                  {formatDetectedAgo(entry.detected_at_ms)}
+                </span>
+              </div>
+              {#if entry.source}
+                <div class="data-row">
+                  <span class="data-label">Source</span>
+                  <span class="data-value font-mono">{entry.source}</span>
+                </div>
+              {/if}
             {/each}
-            <div class="data-row" style="margin-top: 0.5em;">
+            <div class="data-row">
               <span class="data-label">Fallback</span>
-              <span class="data-value font-mono neon-yellow">passthrough (heuristic-only)</span>
+              <span class="data-value font-mono" style="color: var(--color-neon-yellow);">
+                passthrough · heuristic-only
+              </span>
             </div>
           {:else}
             <div class="data-row">
@@ -662,12 +708,10 @@
                 clear
               </span>
             </div>
-            <div class="data-row" style="opacity: 0.6;">
-              <span class="data-label">Behavior</span>
-              <span class="data-value">
-                When a provider returns 429 mid-batch, prompts continue in
-                passthrough mode (heuristic scoring) until the limit lifts.
-                Banner above the editor shows live countdown.
+            <div class="data-row">
+              <span class="data-label">Fallback</span>
+              <span class="data-value font-mono" style="color: var(--color-text-dim);">
+                inactive
               </span>
             </div>
           {/if}

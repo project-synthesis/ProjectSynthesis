@@ -30,6 +30,11 @@ interface RateLimitState {
     estimated_wait_seconds: number | null;
     detected_at_ms: number; // wall-clock ms when this limit was first observed
     last_event_at_ms: number; // most recent rate_limit_active event
+    // Free-form detection origin tag from the backend payload — surfaces
+    // in the SettingsPanel rate-limit detail rows so operators can tell
+    // whether the limit was caught by the call_provider_with_retry
+    // boundary, the probe path, batch_pipeline, or the startup probe.
+    source: string | null;
 }
 
 class RateLimitStore {
@@ -63,6 +68,8 @@ class RateLimitStore {
             provider: string;
             reset_at_iso: string | null;
             seconds_remaining: number | null;
+            detected_at_ms: number;
+            source: string | null;
         }> = [];
         for (const [provider, state] of this.active) {
             if (!this._isStillActive(state, _)) continue;
@@ -70,6 +77,8 @@ class RateLimitStore {
                 provider,
                 reset_at_iso: state.reset_at_iso,
                 seconds_remaining: this._secondsUntilReset(state, _),
+                detected_at_ms: state.detected_at_ms,
+                source: state.source,
             });
         }
         // Stable ordering: longest wait first.
@@ -90,6 +99,7 @@ class RateLimitStore {
         provider?: string;
         reset_at_iso?: string | null;
         estimated_wait_seconds?: number | null;
+        source?: string | null;
     }): void {
         const provider = payload.provider || 'unknown';
         const existing = this.active.get(provider);
@@ -99,6 +109,7 @@ class RateLimitStore {
             estimated_wait_seconds: payload.estimated_wait_seconds ?? null,
             detected_at_ms: existing?.detected_at_ms ?? Date.now(),
             last_event_at_ms: Date.now(),
+            source: payload.source ?? existing?.source ?? null,
         };
         // Trigger reactivity by replacing the Map (Svelte 5 tracks
         // .set() on Map but reassignment is the safe public-API
@@ -134,6 +145,7 @@ class RateLimitStore {
                 typeof flags.estimated_wait_seconds === 'number'
                     ? flags.estimated_wait_seconds
                     : null,
+            source: 'heuristic_flags',
         });
     }
 
