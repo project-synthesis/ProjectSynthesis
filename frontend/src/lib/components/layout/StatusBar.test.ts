@@ -508,13 +508,17 @@ describe('StatusBar', () => {
 
   it('renders SSE indicator (shows "SSE \u00D7" when disconnected)', () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
-    // Store starts disconnected by default.
+    // Default state is now ``connecting`` (the page-load transient \u2014 no
+    // \u00D7 marker). Force ``disconnected`` here so the
+    // disconnected-branch visual is asserted explicitly.
+    sseHealthStore.connectionState = 'disconnected';
     render(StatusBar);
     expect(screen.getByText('SSE \u00D7')).toBeInTheDocument();
   });
 
   it('SSE indicator uses red color when disconnected', () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    sseHealthStore.connectionState = 'disconnected';
     render(StatusBar);
     const el = screen.getByText('SSE \u00D7');
     expect(el.closest('.status-sse')?.getAttribute('style')).toContain('var(--color-neon-red)');
@@ -522,10 +526,34 @@ describe('StatusBar', () => {
 
   it('SSE indicator dot element is present', () => {
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    sseHealthStore.connectionState = 'disconnected';
     render(StatusBar);
     const sseEl = screen.getByText('SSE \u00D7').closest('.status-sse');
     const dot = sseEl?.querySelector('.status-sse-dot');
     expect(dot).toBeInTheDocument();
+  });
+
+  it('SSE indicator shows "SSE" (no \u00D7 marker) during the initial connecting transient', () => {
+    // Reactivity (2026-05-09): on a fresh page load the store starts in
+    // ``connecting`` rather than ``disconnected``. The brief window
+    // between mount and EventSource ``open`` should NOT flash the red
+    // \u00D7 marker \u2014 that emission is reserved for actual connection
+    // failure.
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    sseHealthStore.connectionState = 'connecting';
+    render(StatusBar);
+    expect(screen.queryByText('SSE \u00D7')).toBeNull();
+    const sseEls = screen.getAllByText('SSE');
+    expect(sseEls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('SSE indicator uses dim text color (not red) during connecting transient', () => {
+    mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
+    sseHealthStore.connectionState = 'connecting';
+    render(StatusBar);
+    const sseEl = screen.getAllByText('SSE')[0].closest('.status-sse');
+    expect(sseEl?.getAttribute('style')).toContain('var(--color-text-dim)');
+    expect(sseEl?.getAttribute('style')).not.toContain('var(--color-neon-red)');
   });
 
   it('SSE indicator shows "SSE" when healthy', () => {

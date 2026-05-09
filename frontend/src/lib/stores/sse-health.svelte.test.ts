@@ -23,6 +23,40 @@ describe('SSEHealthStore', () => {
     });
 
     // ------------------------------------------------------------------
+    // Initial state — the page-load transient
+    // ------------------------------------------------------------------
+
+    describe('initial state', () => {
+        it('starts in "connecting" — never "disconnected" — on a fresh boot', () => {
+            // Reactivity regression (2026-05-09): pre-fix the store
+            // defaulted to ``disconnected``, so the StatusBar flashed
+            // "SSE ×" red on every cold page load until the EventSource
+            // ``open`` event fired (~50–200ms). That visible flicker
+            // mis-signalled an error on a healthy connection. The
+            // ``connecting`` transient resolves to ``healthy`` on
+            // ``open`` and to ``disconnected`` only on a real error.
+            expect(sseHealthStore.connectionState).toBe('connecting');
+        });
+
+        it('connecting tooltip text reads "connecting" (not "disconnected")', () => {
+            expect(sseHealthStore.tooltipText).toBe('SSE stream — connecting');
+        });
+
+        it('connecting state has no retry counter or retryAt', () => {
+            // Connecting is a fresh state — not the post-error retry loop.
+            expect(sseHealthStore.retryCount).toBe(0);
+            expect(sseHealthStore.retryAt).toBeNull();
+            expect(sseHealthStore.retryCapped).toBe(false);
+        });
+
+        it('_reset returns to "connecting" — same contract as fresh init', () => {
+            sseHealthStore.connectionState = 'disconnected';
+            sseHealthStore._reset();
+            expect(sseHealthStore.connectionState).toBe('connecting');
+        });
+    });
+
+    // ------------------------------------------------------------------
     // Percentile computation
     // ------------------------------------------------------------------
 

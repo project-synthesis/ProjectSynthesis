@@ -42,7 +42,11 @@ export const JITTER_FACTOR = 0.2;
 // Types
 // ---------------------------------------------------------------------------
 
-export type ConnectionState = 'healthy' | 'degraded' | 'disconnected';
+export type ConnectionState =
+    | 'connecting'
+    | 'healthy'
+    | 'degraded'
+    | 'disconnected';
 
 type ReconnectCallback = () => void;
 
@@ -52,7 +56,14 @@ type ReconnectCallback = () => void;
 
 class SSEHealthStore {
     // --- Reactive state ---
-    connectionState = $state<ConnectionState>('disconnected');
+    // Default to ``connecting`` so a fresh page load doesn't render
+    // the "SSE ×" disconnected marker before the EventSource has even
+    // had a chance to open. Pre-fix the StatusBar flashed disconnected
+    // (red ×) on every cold boot — the user reported it was a visible
+    // jarring flicker even though the connection was healthy ~100ms
+    // later. ``connecting`` resolves to ``healthy`` on EventSource
+    // ``open`` and to ``disconnected`` only on a real error event.
+    connectionState = $state<ConnectionState>('connecting');
     lastEventAt = $state<number | null>(null);
     retryCount = $state(0);
     retryAt = $state<number | null>(null);
@@ -71,6 +82,12 @@ class SSEHealthStore {
 
     /** Dynamic tooltip text reflecting current health state. */
     tooltipText = $derived.by(() => {
+        if (this.connectionState === 'connecting') {
+            // Initial transient \u2014 shown briefly between page mount and
+            // EventSource ``open``. Distinct from disconnected (no error
+            // yet, no retry counter, no slow-poll fallback engaged).
+            return 'SSE stream \u2014 connecting';
+        }
         if (this.connectionState === 'healthy') {
             if (this._latencies.length === 0) return 'SSE stream \u2014 awaiting events';
             return [
@@ -213,7 +230,10 @@ class SSEHealthStore {
     _reset(): void {
         this._closeEventSource();
         this._clearTimers();
-        this.connectionState = 'disconnected';
+        // Mirror the constructor default — fresh state is "connecting",
+        // not "disconnected", so re-initialised tests see the same
+        // initial transient as a real page-load.
+        this.connectionState = 'connecting';
         this.lastEventAt = null;
         this.retryCount = 0;
         this.retryAt = null;

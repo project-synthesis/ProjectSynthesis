@@ -94,13 +94,18 @@
   const breadcrumbDomain = $derived(activeResult?.domain ?? null);
   const breadcrumbLabel = $derived(activeResult?.intent_label ?? null);
 
-  // SSE connection health indicator
+  // SSE connection health indicator. Brand: chromatic encoding \u2014
+  // ``connecting`` is the dimmed transient (not red, not green); the red
+  // \u00D7 marker is reserved for actual disconnect, not the page-load race
+  // window between mount and first ``open`` event.
   const sseColor = $derived(
     sseHealthStore.connectionState === 'healthy'
       ? 'var(--color-neon-cyan)'
       : sseHealthStore.connectionState === 'degraded'
         ? 'var(--color-neon-yellow)'
-        : 'var(--color-neon-red)'
+        : sseHealthStore.connectionState === 'connecting'
+          ? 'var(--color-text-dim)'
+          : 'var(--color-neon-red)'
   );
   const sseLabel = $derived(
     sseHealthStore.connectionState === 'disconnected' ? 'SSE \u00D7' : 'SSE'
