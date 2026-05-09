@@ -36,9 +36,9 @@ from app.models import (
     MetaPattern,
     Optimization,
     OptimizationPattern,
-    ProbeRun,
     PromptCluster,
     RefinementTurn,
+    RunRow,
 )
 from app.services.gc import (
     _gc_archived_zero_member_clusters,
@@ -405,14 +405,14 @@ class TestGCOrphanProbeRuns:
     """Foundation P3 (v0.4.18): ``_gc_orphan_probe_runs`` is a no-op stub.
 
     Superseded by ``_gc_orphan_runs`` which sweeps both ``topic_probe`` and
-    ``seed_agent`` mode rows in one pass. The legacy helper is preserved as
-    a no-op returning 0 so ``run_startup_gc._do_sweep`` can keep calling
-    both helpers without double-processing the same row set (the
-    ``ProbeRun`` Python alias selects ALL ``run_row`` rows regardless of
-    mode — STI discriminator absent). Deleted in PR2.
+    ``seed_agent`` mode rows in one pass. Pre-Cycle 14 the legacy helper had
+    to be a no-op specifically to avoid double-processing — the
+    Python-alias subclass selected ALL ``run_row`` rows regardless of mode
+    so a real implementation here plus ``_gc_orphan_runs`` would have
+    UPDATEd the same row set twice. Cycle 14 retired that alias; the no-op
+    body is now just a back-compat shim until the helper itself is deleted.
 
-    See ``test_gc_runs.py`` for the live contract on
-    ``_gc_orphan_runs``.
+    See ``test_gc_runs.py`` for the live contract on ``_gc_orphan_runs``.
     """
 
     async def test_legacy_helper_is_no_op_after_p3(self, db_session):
@@ -420,10 +420,15 @@ class TestGCOrphanProbeRuns:
         orphan rows are present. ``_gc_orphan_runs`` covers what it did."""
         old = datetime.now(timezone.utc) - timedelta(hours=2)
 
-        db_session.add(ProbeRun(
-            id="orphan-old", topic="x", scope="**/*",
-            intent_hint="explore", repo_full_name="o/r",
-            started_at=old, status="running",
+        db_session.add(RunRow(
+            id="orphan-old",
+            mode="topic_probe",
+            topic="x",
+            intent_hint="explore",
+            repo_full_name="o/r",
+            topic_probe_meta={"scope": "**/*", "commit_sha": None},
+            started_at=old,
+            status="running",
         ))
         await db_session.commit()
 

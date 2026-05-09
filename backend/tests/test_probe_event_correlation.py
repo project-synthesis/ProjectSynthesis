@@ -9,28 +9,33 @@ in ``services/taxonomy/event_logger.py::log_decision``.
 The C7 design (per spec sec 4.8 + plan sec Cycle 7) is:
 
 1. ``probe_event_correlation`` re-exports the ``current_probe_id`` ContextVar
-   declared in ``probe_service.py`` (per the C4<->C7 dependency resolution)
-   and exposes ``inject_probe_id(context: dict) -> dict``.
+   declared canonically in ``probe_common.py`` (Foundation P3 Cycle 14
+   moved the canonical home; pre-P3 it lived in ``probe_service.py``,
+   which now re-imports for backward-compat) and exposes
+   ``inject_probe_id(context: dict) -> dict``.
 2. ``log_decision`` calls ``inject_probe_id(context)`` BEFORE persisting,
    so any taxonomy event fired while a probe is in flight carries
    ``context.probe_id`` automatically (no per-call-site wiring).
 3. The accepted ``path: str`` values gain ``"probe"`` in the docstring.
 
-These RED-phase tests assert the POST-FIX behavior so they fail today
-(import error on the missing module + missing context.probe_id correlation)
-and flip green when the GREEN phase lands the helper + log_decision call.
+Foundation P3 Cycle 14 retired the ``ProbeService`` class entirely; its
+event-emission contract is now exercised by
+``tests/test_topic_probe_generator.py`` against ``TopicProbeGenerator``.
+The probe_* event coverage previously asserted here under
+``TestProbeEventsEmitViaLogDecision`` is fully covered there. This file
+keeps the ``inject_probe_id`` helper coverage which is independent of
+the orchestrator implementation.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from app.services.taxonomy.event_logger import (
     TaxonomyEventLogger,
     reset_event_logger,
-    set_event_logger,
 )
 
 # ---------------------------------------------------------------------------
@@ -63,125 +68,6 @@ def _reset_logger_singleton() -> None:
     reset_event_logger()
     yield
     reset_event_logger()
-
-
-# ---------------------------------------------------------------------------
-# AC-C7-1: All 6 probe_* events emit via log_decision
-# ---------------------------------------------------------------------------
-
-
-class TestProbeEventsEmitViaLogDecision:
-    """ProbeService.run() should drive the 6 documented probe_* events
-    through ``get_event_logger().log_decision(path='probe', ...)`` so they
-    land in the daily JSONL + ring buffer alongside hot/warm/cold events.
-
-    The 6 events per spec sec 4.8 are:
-      probe_started, probe_grounding, probe_generating,
-      probe_prompt_completed (per-prompt), probe_completed, probe_failed.
-    """
-
-    @pytest.mark.asyncio
-    async def test_six_probe_events_emit_via_log_decision(
-        self,
-        db_session,
-        local_logger: TaxonomyEventLogger,
-    ) -> None:
-        """ProbeService.run() routes probe_* events through log_decision(path='probe').
-
-        Counts log_decision calls with path='probe'. For an n_prompts=5 run
-        the floor is 6 distinct event ops covered: started + grounding +
-        generating + prompt_completed (per prompt) + completed. ``failed``
-        only fires on error and is exercised separately by C7's negative
-        path test below if extended in REFACTOR.
-        """
-        # Late import — probe_service imports event_logger module-internally,
-        # so the singleton must already be set.
-        set_event_logger(local_logger)
-        from app.schemas.probes import ProbeRunRequest
-        from app.services.probe_service import ProbeService
-
-        # Mock collaborators (mirrors test_probe_service.py fixtures).
-        provider = AsyncMock()
-        async def _complete_parsed(*args, **kwargs):
-            res = MagicMock()
-            res.prompts = [
-                "Audit `repo_index_service.invalidate` cache logic.",
-                "Compare `explore_cache.py` TTL vs curated cache.",
-                "Identify race conditions in `RepoIndexQuery.refresh`.",
-                "Review SHA collision handling in `repo_index_service.py`.",
-                "Find missing invalidation hooks for `file_rename` events.",
-            ]
-            res.model = "claude-haiku-4-5"
-            return res
-        provider.complete_parsed = AsyncMock(side_effect=_complete_parsed)
-        provider.complete_parsed_streaming = AsyncMock(
-            side_effect=_complete_parsed,
-        )
-
-        repo_query = MagicMock()
-        curated = MagicMock()
-        curated.selected_files = [
-            {"path": "backend/app/services/repo_index_service.py", "score": 0.9},
-        ]
-        curated.context_text = "Repo index uses SHA-keyed cache."
-        curated.explore_synthesis_excerpt = "Repo index uses SHA-keyed cache."
-        curated.dominant_stack = ["python"]
-        repo_query.query_curated_context = AsyncMock(return_value=curated)
-
-        ctx_service = MagicMock()
-        enriched = MagicMock()
-        enriched.codebase_context = ""
-        enriched.strategy_intelligence = ""
-        enriched.applied_patterns = []
-        enriched.divergence_alerts = ""
-        enriched.heuristic_analysis = MagicMock(
-            task_type="analysis", domain="backend",
-        )
-        enriched.enrichment_meta = {}
-        ctx_service.enrich = AsyncMock(return_value=enriched)
-
-        event_bus = MagicMock()
-        event_bus.publish = MagicMock()
-
-        svc = ProbeService(
-            db_session, provider, repo_query, ctx_service, event_bus,
-        )
-        request = ProbeRunRequest(
-            topic="embedding cache invalidation",
-            scope=None,
-            intent_hint=None,
-            n_prompts=5,
-            repo_full_name="owner/repo",
-        )
-
-        # Spy on log_decision so we can count path='probe' calls without
-        # depending on JSONL parsing or ring-buffer eviction order.
-        with patch.object(
-            local_logger, "log_decision", wraps=local_logger.log_decision,
-        ) as spy:
-            async for _ in svc.run(request, probe_id="p-c7-1"):
-                pass
-
-        probe_calls = [
-            c for c in spy.call_args_list
-            if c.kwargs.get("path") == "probe"
-        ]
-        # Floor: started + grounding + generating + 5*prompt_completed
-        # + completed = 8. Allow >= 8 so GREEN can add additional helpful
-        # decision events without churning this assertion.
-        assert len(probe_calls) >= 8, (
-            f"Expected >=8 log_decision(path='probe') calls, "
-            f"got {len(probe_calls)}: "
-            f"{[c.kwargs.get('op') for c in probe_calls]}"
-        )
-
-        # Verify the documented op set is covered.
-        ops = {c.kwargs.get("op") for c in probe_calls}
-        assert "probe_started" in ops
-        assert "probe_grounding" in ops
-        assert "probe_generating" in ops
-        assert "probe_prompt_completed" in ops
-        assert "probe_completed" in ops
 
 
 # ---------------------------------------------------------------------------

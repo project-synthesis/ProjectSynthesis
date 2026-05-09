@@ -37,7 +37,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.dependencies.probes import get_probe_service
 from app.dependencies.rate_limit import RateLimit
 from app.models import RunRow
 from app.schemas.pipeline_contracts import SCORING_FORMULA_VERSION
@@ -54,14 +53,11 @@ from app.schemas.runs import RunRequest
 from app.services.event_bus import event_bus
 from app.utils.sse import format_sse
 
-# Re-export ``get_probe_service`` so callers (including tests overriding
-# via ``app.dependency_overrides[...]``) can import it from either the
-# router module or the canonical ``app.dependencies.probes`` location.
-# Cycle 13 (MCP tool) imports from ``app.dependencies.probes`` to avoid
-# the router→service cross-layer import. Even after the Cycle 11 shim
-# refactor, the legacy ProbeService dispatch path is still wired in
-# tools/probe.py until Cycle 13 retires it.
-__all__ = ["router", "get_probe_service"]
+# Foundation P3 Cycle 14 (v0.4.18) — ``get_probe_service`` re-export
+# retired alongside the ``ProbeService`` class itself. The router now
+# dispatches via ``RunOrchestrator`` directly; tests no longer need a
+# ``Depends(...)`` factory to override.
+__all__ = ["router"]
 
 logger = logging.getLogger(__name__)
 

@@ -267,19 +267,18 @@ async def _gc_orphan_probe_runs(db: AsyncSession) -> int:
     """Legacy alias — superseded by ``_gc_orphan_runs`` in Foundation P3 (v0.4.18).
 
     Returns 0; the unified ``_gc_orphan_runs`` sweep covers both
-    ``topic_probe`` and ``seed_agent`` mode rows including legacy
-    probe-mode rows (table is the unified ``run_row``). This function
-    will be deleted in PR2 once all callers have migrated. The signature
-    is preserved (``db: AsyncSession) -> int``) so the helper composes
-    inside ``run_startup_gc._do_sweep`` without behavioural drift.
+    ``topic_probe`` and ``seed_agent`` mode rows on the unified
+    ``run_row`` table. The signature is preserved (``db: AsyncSession) -> int``)
+    so the helper still composes inside ``run_startup_gc._do_sweep`` without
+    behavioural drift, and one downstream test
+    (``tests/test_gc.py::TestGCOrphanProbeRuns``) still pins the no-op contract.
 
-    Note on double-processing: with the option (b) Python-alias
-    ``ProbeRun``, ``select(ProbeRun)`` returns ALL ``run_row`` rows
-    regardless of mode (no STI discriminator filter). If both this
-    helper (operating via ``select(ProbeRun)``) and ``_gc_orphan_runs``
-    (operating via ``select(RunRow)``) executed in ``_do_sweep``, they
-    would sweep the same row set twice — identical UPDATE statements.
-    The no-op body avoids that redundancy.
+    Pre-Cycle 14 (v0.4.18 PR1) this helper had to be a no-op specifically to
+    avoid double-processing — the Python-alias subclass ``ProbeRun`` selected
+    ALL ``run_row`` rows regardless of mode (no STI discriminator filter), so
+    a real implementation here plus ``_gc_orphan_runs`` would have UPDATEd the
+    same row set twice. PR2 retires the alias entirely; the no-op body is now
+    just a back-compat shim until the helper itself is deleted.
     """
     return 0
 

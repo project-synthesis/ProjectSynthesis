@@ -648,11 +648,9 @@ class RunRow(Base):
 
     # Deliberately NO polymorphic_on / polymorphic_identity — SQLAlchemy STI
     # is awkward when neither parent nor subclasses are routinely instantiated
-    # by mode-discriminator. PR1 uses option (b) from spec § 10.1: ProbeRun
-    # is a Python alias of RunRow with property accessors. select(ProbeRun)
-    # returns ALL run_row rows — but PR1 has zero seed_agent rows since the
-    # seed router/MCP path doesn't dispatch through RunOrchestrator until PR2.
-    # PR2 deletes the alias entirely before any seed_agent row exists.
+    # by mode-discriminator. PR1 used option (b) from spec § 10.1 (Python
+    # alias subclass with property accessors); PR2 Cycle 14 retires that
+    # alias and all in-tree callers use RunRow directly with mode filtering.
 
     __table_args__ = (
         Index("ix_run_row_mode_started", "mode", "started_at"),
@@ -660,45 +658,3 @@ class RunRow(Base):
         Index("ix_run_row_project_id", "project_id"),
         Index("ix_run_row_topic", "topic"),
     )
-
-
-class ProbeRun(RunRow):
-    """Backward-compat Python alias for RunRow with legacy kwarg extraction.
-
-    Defaults mode='topic_probe' and accepts legacy keyword arguments
-    `scope` and `commit_sha` (which existed as columns on the old probe_run
-    table) by extracting them into `topic_probe_meta` JSON before parent
-    __init__. Property accessors expose them back for legacy reads.
-
-    REQUIRED for PR1 backward-compat: ``probe_service.py`` instantiates
-    ProbeRun with ``scope=...`` and ``commit_sha=...`` kwargs (see the two
-    ``ProbeRun(...)`` call sites at the start of ``ProbeService.start_probe``).
-    The custom ``__init__`` below routes those into ``topic_probe_meta``.
-
-    Inherits __tablename__ = "run_row" from RunRow (no STI).
-    """
-
-    @property
-    def scope(self) -> str:
-        return (self.topic_probe_meta or {}).get("scope", "**/*")
-
-    @property
-    def commit_sha(self) -> str | None:
-        return (self.topic_probe_meta or {}).get("commit_sha")
-
-    def __init__(self, **kwargs: Any) -> None:
-        # Extract legacy kwargs that became JSON metadata in P3
-        scope = kwargs.pop("scope", None)
-        commit_sha = kwargs.pop("commit_sha", None)
-
-        if scope is not None or commit_sha is not None:
-            existing = kwargs.get("topic_probe_meta") or {}
-            if scope is not None:
-                existing["scope"] = scope
-            if commit_sha is not None:
-                existing["commit_sha"] = commit_sha
-            kwargs["topic_probe_meta"] = existing
-
-        # Default mode='topic_probe' for legacy callers
-        kwargs.setdefault("mode", "topic_probe")
-        super().__init__(**kwargs)

@@ -1,25 +1,25 @@
-"""Tests for ProbeRun SQLAlchemy alias + new RunRow substrate (Topic Probe Tier 1).
+"""Tests for the unified RunRow substrate at the topic_probe call site.
 
 Originally AC-C2-1 through AC-C2-4 per docs/specs/topic-probe-2026-04-29.md §8 Cycle 2.
 
 After Foundation P3 (v0.4.18), the legacy ``probe_run`` table was replaced by
 the unified ``run_row`` substrate (spec
 ``docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md``).
-``ProbeRun`` is now a Python subclass of ``RunRow`` per spec § 10.1 option (b):
+Cycle 14 retired the ``ProbeRun`` Python-alias entirely; all in-tree callers
+use ``RunRow`` directly with ``mode='topic_probe'`` filtering.
 
-  - Inherits ``__tablename__ = "run_row"`` (no STI / polymorphic identity).
-  - Defaults ``mode='topic_probe'`` in ``__init__``.
-  - Accepts legacy kwargs ``scope=`` / ``commit_sha=``, routing them into
-    ``topic_probe_meta`` JSON.
-  - Exposes legacy ``.scope`` / ``.commit_sha`` via property accessors.
+What this file pins:
 
-The legacy 17-column assertion was replaced by ``test_proberun_inherits_runrow_columns``,
-which verifies the alias contract directly against the new substrate (see
-``tests/test_run_row_model.py`` for full RunRow column/index coverage). The
-legacy ``test_migration_idempotent`` was rewritten as
-``test_run_row_migration_is_idempotent`` to exercise the NEW
-``58510d3f6b81_add_run_row_table_foundation_p3`` migration — partial-state
-abort coverage lives in ``tests/test_run_row_model.py::test_migration_aborts_on_partial_state``.
+  - ``RunRow.__tablename__ == "run_row"`` for topic_probe rows
+  - ``RunRow(...)`` accepts the topic_probe payload shape (``mode='topic_probe'``,
+    ``topic_probe_meta={...}``)
+  - ``RunRow.scope`` / ``RunRow.commit_sha`` accessed via JSON metadata, NOT
+    first-class columns (they moved into ``topic_probe_meta`` JSON)
+  - Migration ``58510d3f6b81_add_run_row_table_foundation_p3`` is idempotent
+
+Full RunRow column/index coverage lives in ``tests/test_run_row_model.py``;
+partial-state abort coverage in
+``tests/test_run_row_model.py::test_migration_aborts_on_partial_state``.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ProbeRun, RunRow
+from app.models import RunRow
 
 _BACKEND_DIR = Path(__file__).resolve().parents[1]  # …/backend
 _ALEMBIC_INI = _BACKEND_DIR / "alembic.ini"
@@ -88,58 +88,59 @@ def fresh_db(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-class TestProbeRunModel:
-    def test_proberun_inherits_runrow_columns(self):
-        """ProbeRun is a Python alias of RunRow with property accessors.
+class TestRunRowAtTopicProbeCallSite:
+    def test_topic_probe_runrow_columns_match_p3_substrate(self):
+        """RunRow with topic_probe payload — column set + JSON-routing contract.
 
         Replaces the legacy 17-column probe_run assertion (Foundation P3,
-        v0.4.18). Per spec § 10.1 option (b)
-        (``docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md``):
+        v0.4.18). Cycle 14 retired the ``ProbeRun`` Python alias; the
+        substrate-level guarantees are now asserted directly on ``RunRow``:
 
-        a) ProbeRun's underlying table is ``run_row`` (no STI / its own table).
-        b) Property accessors ``.scope`` and ``.commit_sha`` route through
-           ``topic_probe_meta`` JSON for legacy compatibility.
-        c) ``__init__`` defaults ``mode='topic_probe'`` and absorbs legacy
-           ``scope=`` / ``commit_sha=`` kwargs into ``topic_probe_meta``.
-        d) Substrate has the new mode-discriminator + ``seed_agent_meta``
+        a) Underlying table is ``run_row``.
+        b) ``scope`` and ``commit_sha`` live in ``topic_probe_meta`` JSON,
+           NOT as first-class columns (they were on the legacy probe_run).
+        c) Substrate has the new mode-discriminator + ``seed_agent_meta``
            columns absent from the old probe_run table.
-        e) Substrate lacks the legacy first-class ``scope`` / ``commit_sha``
-           columns (they moved into JSON metadata).
 
         Full RunRow column/index coverage lives in
         ``tests/test_run_row_model.py``.
         """
-        # (a) Underlying table is run_row (inherited from RunRow parent).
-        assert ProbeRun.__table__.name == "run_row"
-        assert ProbeRun.__table__ is RunRow.__table__, (
-            "ProbeRun must share RunRow's table — option (b) Python alias, no STI"
-        )
+        # (a) Underlying table.
+        assert RunRow.__tablename__ == "run_row"
 
-        # (b + c) Construction routes legacy kwargs through topic_probe_meta;
-        # property accessors read them back.
-        row = ProbeRun(
-            id="alias-1",
+        # (b) Construct a topic_probe RunRow exercising the JSON metadata
+        # routing path.
+        row = RunRow(
+            id="probe-1",
+            mode="topic_probe",
             started_at=datetime.now(timezone.utc),
-            scope="src/**/*.py",
-            commit_sha="abc123",
+            topic_probe_meta={"scope": "src/**/*.py", "commit_sha": "abc123"},
         )
-        assert row.mode == "topic_probe", "ProbeRun must default mode='topic_probe'"
-        assert row.topic_probe_meta == {"scope": "src/**/*.py", "commit_sha": "abc123"}
-        assert row.scope == "src/**/*.py"
-        assert row.commit_sha == "abc123"
+        assert row.mode == "topic_probe"
+        assert row.topic_probe_meta == {
+            "scope": "src/**/*.py", "commit_sha": "abc123",
+        }
+        # JSON extraction contract — no .scope / .commit_sha column accessor.
+        meta = row.topic_probe_meta or {}
+        assert meta.get("scope") == "src/**/*.py"
+        assert meta.get("commit_sha") == "abc123"
 
-        # Property defaults when topic_probe_meta is empty.
-        bare = ProbeRun(id="alias-bare", started_at=datetime.now(timezone.utc))
-        assert bare.scope == "**/*"
-        assert bare.commit_sha is None
+        # JSON metadata absent → JSON .get() returns None / default fallback.
+        bare = RunRow(
+            id="probe-bare",
+            mode="topic_probe",
+            started_at=datetime.now(timezone.utc),
+        )
+        assert (bare.topic_probe_meta or {}).get("scope") is None
+        assert (bare.topic_probe_meta or {}).get("commit_sha") is None
 
-        # (d) Substrate columns introduced by P3.
-        cols = {c.name for c in ProbeRun.__table__.columns}
+        # (c) Substrate columns introduced by P3.
+        cols = {c.name for c in RunRow.__table__.columns}
         for required in ("mode", "topic_probe_meta", "seed_agent_meta"):
             assert required in cols, f"Missing P3 column: {required}"
 
-        # (e) Legacy probe_run-only columns must NOT be first-class on run_row;
-        # they're now JSON metadata fields surfaced through property accessors.
+        # Legacy probe_run-only columns must NOT be first-class on run_row;
+        # they're now JSON metadata fields.
         for legacy in ("scope", "commit_sha"):
             assert legacy not in cols, (
                 f"{legacy} should be in topic_probe_meta JSON, not a column"
@@ -188,16 +189,16 @@ class TestProbeRunModel:
         )
 
     @pytest.mark.asyncio
-    async def test_proberun_round_trip(self, db_session: AsyncSession):
+    async def test_topic_probe_runrow_round_trip(self, db_session: AsyncSession):
         """AC-C2-3: Insert, query, JSON fields persist correctly."""
-        row = ProbeRun(
+        row = RunRow(
             id="test-probe-1",
+            mode="topic_probe",
             topic="embedding cache invalidation",
-            scope="**/*",
             intent_hint="audit",
             repo_full_name="owner/repo",
             project_id=None,
-            commit_sha="abc123",
+            topic_probe_meta={"scope": "**/*", "commit_sha": "abc123"},
             started_at=datetime.now(timezone.utc),
             prompts_generated=12,
             prompt_results=[{"prompt_idx": 0, "overall_score": 7.5}],
@@ -209,16 +210,21 @@ class TestProbeRunModel:
         db_session.add(row)
         await db_session.commit()
 
-        result = await db_session.get(ProbeRun, "test-probe-1")
+        result = await db_session.get(RunRow, "test-probe-1")
         assert result is not None
         assert result.topic == "embedding cache invalidation"
+        assert result.mode == "topic_probe"
+        assert (result.topic_probe_meta or {}).get("scope") == "**/*"
+        assert (result.topic_probe_meta or {}).get("commit_sha") == "abc123"
         assert result.prompt_results[0]["overall_score"] == 7.5
         assert result.aggregate["mean_overall"] == 7.4
         assert result.taxonomy_delta["domains_created"] == []
         assert result.status == "completed"
 
     @pytest.mark.asyncio
-    async def test_proberun_project_id_fk_enforced(self, enable_sqlite_foreign_keys):
+    async def test_topic_probe_runrow_project_id_fk_enforced(
+        self, enable_sqlite_foreign_keys,
+    ):
         """AC-C2-4: FK on project_id enforced — non-existent project_id raises IntegrityError.
 
         Uses the shared ``enable_sqlite_foreign_keys`` fixture (returns the
@@ -228,13 +234,14 @@ class TestProbeRunModel:
         """
         db_session = enable_sqlite_foreign_keys
 
-        row = ProbeRun(
+        row = RunRow(
             id="test-probe-2",
+            mode="topic_probe",
             topic="x",
-            scope="**/*",
             intent_hint="explore",
             repo_full_name="owner/repo",
             project_id="non-existent-project-id-xyz",  # invalid FK target
+            topic_probe_meta={"scope": "**/*", "commit_sha": None},
             started_at=datetime.now(timezone.utc),
             status="running",
         )

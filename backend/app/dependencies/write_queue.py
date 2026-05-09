@@ -3,7 +3,6 @@
 Centralizes the ``app.state.write_queue`` lookup so routers and any other
 FastAPI dependency needing to submit writes through the single-writer queue
 worker do not duplicate the resolution logic. Mirrors the pattern used by
-``app.dependencies.probes.get_probe_service`` and
 ``app.dependencies.rate_limit.RateLimit``.
 
 The queue itself is a process-level singleton constructed in the FastAPI

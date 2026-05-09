@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models import Base, ProbeRun, RunRow
+from app.models import Base, RunRow
 
 _BACKEND_DIR = Path(__file__).resolve().parents[1]  # …/backend
 _ALEMBIC_INI = _BACKEND_DIR / "alembic.ini"
@@ -125,36 +125,50 @@ async def test_run_row_seed_agent_meta_roundtrips(db: AsyncSession) -> None:
     assert fetched.seed_agent_meta == seed_meta
 
 
-async def test_probe_run_alias_default_mode_is_topic_probe(db: AsyncSession) -> None:
-    """ProbeRun(...) sets mode='topic_probe' by default (legacy-compat).
+async def test_run_row_topic_probe_mode_set_explicitly(db: AsyncSession) -> None:
+    """RunRow with ``mode='topic_probe'`` carries the topic_probe payload.
 
-    Per spec section 10.1 option (b): ProbeRun is a Python subclass of RunRow
-    that defaults mode='topic_probe' in __init__. PR1 has zero seed_agent
-    rows (the seed dispatch doesn't go through RunOrchestrator until PR2),
-    so the lack of select-time filter is safe transient.
+    Pre-Cycle 14 the legacy ``ProbeRun`` Python subclass defaulted
+    ``mode='topic_probe'`` in ``__init__``. Post-Cycle 14 callers pass
+    ``mode='topic_probe'`` explicitly — the discriminator is required at the
+    substrate level and the alias scaffolding is gone (spec § 8.3).
     """
     from datetime import datetime
 
-    row = ProbeRun(id="probe-default", started_at=datetime.utcnow(),
-                   topic_probe_meta={"scope": "**/*", "commit_sha": None})
+    row = RunRow(
+        id="probe-default",
+        mode="topic_probe",
+        started_at=datetime.utcnow(),
+        topic_probe_meta={"scope": "**/*", "commit_sha": None},
+    )
     assert row.mode == "topic_probe"
 
 
-async def test_probe_run_property_accessors_read_topic_probe_meta(db: AsyncSession) -> None:
-    """Legacy .scope / .commit_sha access paths work via property accessors."""
+async def test_run_row_topic_probe_meta_json_extraction(db: AsyncSession) -> None:
+    """Legacy ``.scope`` / ``.commit_sha`` accessors are gone — callers
+    extract from ``topic_probe_meta`` JSON directly.
+
+    Pre-Cycle 14 the ``ProbeRun`` alias exposed property accessors. Post-Cycle 14
+    every reader does a JSON .get() with a default fallback.
+    """
     from datetime import datetime
 
-    row = ProbeRun(
-        id="probe-props", started_at=datetime.utcnow(),
+    row = RunRow(
+        id="probe-props",
+        mode="topic_probe",
+        started_at=datetime.utcnow(),
         topic_probe_meta={"scope": "src/**/*.py", "commit_sha": "abc123"},
     )
-    assert row.scope == "src/**/*.py"
-    assert row.commit_sha == "abc123"
+    meta = row.topic_probe_meta or {}
+    assert meta.get("scope") == "src/**/*.py"
+    assert meta.get("commit_sha") == "abc123"
 
     # Defaults when topic_probe_meta is empty
-    bare = ProbeRun(id="probe-bare", started_at=datetime.utcnow())
-    assert bare.scope == "**/*"  # default fallback
-    assert bare.commit_sha is None
+    bare = RunRow(
+        id="probe-bare", mode="topic_probe", started_at=datetime.utcnow(),
+    )
+    assert (bare.topic_probe_meta or {}).get("scope") is None
+    assert (bare.topic_probe_meta or {}).get("commit_sha") is None
 
 
 def _write_temp_ini(tmp_path: Path, db_path: Path) -> Path:
