@@ -434,11 +434,21 @@ def taxonomy_event_capture(monkeypatch) -> Generator[_TaxonomyEventCapture, None
     real_logger_class = el_mod.TaxonomyEventLogger
     real_log = real_logger_class.log_decision
 
-    def _wrapped(self, path, op, decision, context):
+    def _wrapped(self, *, path, op, decision, context=None, **kwargs):
+        # ``log_decision`` is keyword-only on the real method
+        # (event_logger.py:130). Mirror that signature here so ordering
+        # interactions across test files (e.g., a prior test that
+        # initialised the real TaxonomyEventLogger via the MCP lifespan)
+        # don't break the fixture's wrap. Forward any optional fields
+        # (cluster_id, optimization_id, duration_ms) as kwargs to the
+        # real method.
         cap.decisions.append(_TaxDecision(
-            path=path, op=op, decision=decision, context=context,
+            path=path, op=op, decision=decision, context=context or {},
         ))
-        return real_log(self, path, op, decision, context)
+        return real_log(
+            self, path=path, op=op, decision=decision,
+            context=context, **kwargs,
+        )
 
     monkeypatch.setattr(real_logger_class, "log_decision", _wrapped)
     yield cap
