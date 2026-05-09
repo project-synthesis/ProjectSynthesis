@@ -133,6 +133,12 @@ def _ctx_supports_progress(ctx: Any) -> bool:
     return callable(fn)
 
 
+_TERMINAL_BRIDGE_EVENTS: frozenset[str] = frozenset({
+    "probe_completed",
+    "probe_failed",
+})
+
+
 async def _bridge_bus_to_ctx(subscription: Any, ctx: Any) -> None:
     """Forward ``probe_prompt_completed`` events into ``ctx.report_progress``.
 
@@ -145,19 +151,17 @@ async def _bridge_bus_to_ctx(subscription: Any, ctx: Any) -> None:
     ``ctx.report_progress`` (transport error, serialization failure, …)
     is swallowed with a debug log so a single bad forward cannot
     interrupt the rest of the bridge or the probe run itself.
+
+    The unsupported-ctx branch still drains the subscription to terminal
+    rather than returning early so any events buffered after the bridge
+    starts are flushed cleanly before ``handle_probe``'s ``finally``
+    closes the subscription. Subscription typed ``Any`` to avoid an
+    import cycle through ``event_bus._RunSubscription``.
     """
-    if not _ctx_supports_progress(ctx):
-        # Drain the subscription until terminal event so we don't leave
-        # events queued, but skip every forward. Cheaper than not
-        # subscribing at all because ``handle_probe`` already had to
-        # subscribe race-free before dispatch.
-        async for event in subscription:
-            if event.kind in ("probe_completed", "probe_failed"):
-                break
-        return
+    forward_progress = _ctx_supports_progress(ctx)
 
     async for event in subscription:
-        if event.kind == "probe_prompt_completed":
+        if forward_progress and event.kind == "probe_prompt_completed":
             payload = event.payload or {}
             current = payload.get("current")
             total = payload.get("total")
@@ -176,7 +180,7 @@ async def _bridge_bus_to_ctx(subscription: Any, ctx: Any) -> None:
                     "bus→ctx bridge: report_progress failed; continuing",
                     exc_info=True,
                 )
-        if event.kind in ("probe_completed", "probe_failed"):
+        if event.kind in _TERMINAL_BRIDGE_EVENTS:
             break
 
 
