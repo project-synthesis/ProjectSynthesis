@@ -26,7 +26,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.routers.preferences import router as preferences_router
-from app.services.event_bus import EventBus, event_bus
+from app.services.event_bus import event_bus
 
 
 @pytest.fixture()

@@ -366,8 +366,9 @@ class TestPreferencesChangedEvent:
         request only needs ``app.state.routing`` to be ``None`` (or absent),
         so we hand in a minimal stub.
         """
-        from app.services.event_bus import event_bus
         from types import SimpleNamespace
+
+        from app.services.event_bus import event_bus
 
         request_stub = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(routing=None)))
 
