@@ -11,9 +11,15 @@ export interface SeedRequest {
 }
 
 export interface SeedOutput {
-  status: 'completed' | 'partial' | 'failed';
-  batch_id: string;
-  tier: string;
+  // Foundation P3 (v0.4.18): includes 'running' for forward-compat with the
+  // unified RunRow substrate. POST /api/seed sync-mode currently only
+  // returns terminal states, but the underlying RunRow.status enum is
+  // shared with topic_probe and may surface 'running' on degraded paths.
+  status: 'running' | 'completed' | 'partial' | 'failed';
+  // batch_id and tier are nullable on the failed orchestrator-unavailable
+  // path (backend _build_failed_output returns batch_id=null, tier=null).
+  batch_id: string | null;
+  tier: string | null;
   prompts_generated: number;
   prompts_optimized: number;
   prompts_failed: number;
@@ -24,6 +30,11 @@ export interface SeedOutput {
   clusters_created: number;
   summary: string;
   duration_ms: number;
+  // Foundation P3 cycle 12 (v0.4.18) additive field. Maps to RunRow.id —
+  // callers can correlate the synchronous response with cross-channel SSE
+  // (`seed_batch_progress` events carry the same id) and GET /api/runs/{id}
+  // / GET /api/seed/{id} reads. null on degraded paths only.
+  run_id: string | null;
 }
 
 export interface SeedAgent {
