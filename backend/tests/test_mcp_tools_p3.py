@@ -14,13 +14,12 @@ Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-desi
 from __future__ import annotations
 
 import asyncio
-import uuid
 from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.models import Base, RunRow
+from app.models import Base
 from app.schemas.runs import RunRequest
 from app.services.generators.base import GeneratorResult
 
@@ -288,12 +287,12 @@ async def test_synthesis_seed_result_schema_with_run_id(
     stub_orchestrator: Any,
 ) -> None:
     """SeedOutput keys preserved + only additive change is run_id."""
-    from app.tools.seed import handle_seed
-
     # Provide a routing stub so the gate doesn't divert into early-failure;
     # the synthesis_seed shim must compute tier from routing and supply a
     # provider so SeedAgentGenerator's input-validation passes.
     from unittest.mock import MagicMock
+
+    from app.tools.seed import handle_seed
     routing = MagicMock()
     routing.resolve.return_value = MagicMock(
         tier="passthrough",

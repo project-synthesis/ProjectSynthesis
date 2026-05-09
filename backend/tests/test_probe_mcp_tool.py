@@ -32,7 +32,6 @@ from app.schemas.probes import ProbeError
 from app.schemas.runs import RunRequest
 from app.services.generators.base import GeneratorResult
 
-
 # ---------------------------------------------------------------------------
 # Stub generator + orchestrator wiring (mirrors test_mcp_tools_p3.py)
 # ---------------------------------------------------------------------------
