@@ -192,7 +192,21 @@ class WriteQueue:
 
     @property
     def worker_alive(self) -> bool:
-        return self._worker_task is not None and not self._worker_task.done() and not self._dead
+        # Hardening (2026-05-09): require a true ``asyncio.Task`` — not just
+        # any object with a ``done()`` method. ``submit()`` parks work on
+        # ``self._queue`` and awaits a Future; if no real task is consuming
+        # the queue (e.g. because ``asyncio.create_task`` was monkey-patched
+        # by a test fixture, or because a future runtime swap changes the
+        # spawn primitive), the await would block forever. The strict
+        # isinstance check makes the lifespan ``wq.submit()`` shutdown path
+        # fall through to the direct-write fallback when there is no real
+        # consumer — preventing an indefinite hang. Production behaviour
+        # is unchanged: ``asyncio.create_task`` returns ``asyncio.Task``.
+        return (
+            isinstance(self._worker_task, asyncio.Task)
+            and not self._worker_task.done()
+            and not self._dead
+        )
 
     def metrics_snapshot(self) -> WriteQueueMetrics:
         return self._metrics.snapshot(

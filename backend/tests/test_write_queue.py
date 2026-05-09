@@ -203,6 +203,48 @@ class TestLifecycle:
         assert queue.worker_alive
         await queue.stop()
 
+    def test_worker_alive_false_when_worker_task_is_none(self, writer_engine_inmem):
+        # Regression (2026-05-09): ``worker_alive`` must return False before
+        # ``start()`` runs. A True reading would mislead lifespan shutdown
+        # into ``await wq.submit(...)`` against a non-existent worker.
+        from app.services.write_queue import WriteQueue
+        queue = WriteQueue(writer_engine_inmem)
+        assert queue.worker_alive is False
+
+    def test_worker_alive_false_for_non_task_object(self, writer_engine_inmem):
+        # Regression (2026-05-09, lifespan-hang fix): ``worker_alive`` must
+        # require a real ``asyncio.Task`` — not just any object with a
+        # ``done()`` method. ``test_main.py::test_lifespan_*`` patch
+        # ``asyncio.create_task`` with a ``DummyTask`` whose ``done()``
+        # returns False; the previous implementation reported True for
+        # those, causing ``main.py:1704 await wq.submit(...)`` to park
+        # work on a queue that no real worker was consuming → 60s+ hang
+        # against a non-existent consumer.
+        from app.services.write_queue import WriteQueue
+        queue = WriteQueue(writer_engine_inmem)
+
+        class FakeTask:
+            def done(self) -> bool:
+                return False
+
+            def cancel(self) -> None:
+                pass
+
+        queue._worker_task = FakeTask()  # type: ignore[assignment]
+        assert queue.worker_alive is False
+
+    @pytest.mark.asyncio
+    async def test_worker_alive_true_only_after_real_start(self, writer_engine_inmem):
+        # Companion to ``test_worker_alive_false_*`` — confirms the strict
+        # isinstance check still recognises the production path.
+        from app.services.write_queue import WriteQueue
+        queue = WriteQueue(writer_engine_inmem)
+        assert queue.worker_alive is False
+        await queue.start()
+        assert queue.worker_alive is True
+        await queue.stop()
+        assert queue.worker_alive is False
+
     @pytest.mark.asyncio
     async def test_concurrent_stop_calls_serialize(self, writer_engine_inmem):
         from app.services.write_queue import WriteQueue
