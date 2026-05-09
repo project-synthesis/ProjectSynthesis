@@ -8,7 +8,7 @@ Living document tracking planned improvements. Items are prioritized but not sch
 - ~~P1 SQLite-debt closure~~ — **SHIPPED v0.4.16 (2026-05-05)**: cold-path commit chunking (P1a) + `_bg_index`/`build_index` per-batch chunking (P1b)
 - ~~P2 Path A probe internals cleanup~~ — **SHIPPED v0.4.17 (2026-05-06)**: 9 module-level helpers + `current_probe_id` ContextVar relocated to `probe_common.py` / `probe_phases.py` / `probe_phase_5.py`. ProbeService class methods + `_run_impl()` body untouched. ~12% LOC shrink. **P2 Path B (Phase 3 body extraction) deferred** — see "Probe Phase 3 body extraction — deferred" entry under Exploring for the architectural questions to resolve.
 - ~~P3 Substrate unification~~ — **SHIPPED v0.4.18 (2026-05-09)**: `RunRow` ORM (18 columns, 4 indexes, 4-value status) replaces `ProbeRun`; `RunOrchestrator` is the only legitimate writer (owns `current_run_id` ContextVar, `WriteQueue.submit` lifecycle, cancellation under `asyncio.shield()`); `TopicProbeGenerator` + `SeedAgentGenerator` conform to a `RunGenerator` Protocol; `event_bus.subscribe_for_run()` filtered iterator with 500ms ring-buffer replay; new `GET /api/runs` + `GET /api/seed` + `GET /api/seed/{run_id}` endpoints; backward-compat preserved across `POST /api/probes`, `POST /api/seed`, `synthesis_probe`, `synthesis_seed`. `ProbeService` + `ProbeRun` ORM class deleted; `probe_service.py` 2270→37 LOC re-export shim. PR #70.
-- **P4 Long-handler restructures** — re-allocated to v0.4.19 (originally bundled with v0.4.17 P2 but P2 alone shipped at the right size; P4 deserves its own cycle)
+- **P4 Long-handler restructures** — re-allocated to v0.4.20 (originally bundled with v0.4.17 P2; v0.4.19 became a cohesive stability/UX patch release — brand motion + 4 reactivity fixes + write-queue worker_alive + 80% frontend coverage baseline — leaving P4 to its own v0.4.20 cycle)
 
 With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate with no retroactive migration debt. See "Foundation phase" section below for ordering rationale + scope detail per phase.
 
@@ -83,17 +83,18 @@ With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate 
 | **P2 (Path A)** | **Probe internals cleanup — module-level helpers** (9 module-level free functions + `current_probe_id` ContextVar relocated to `probe_common.py` / `probe_phases.py` / `probe_phase_5.py`. ProbeService class + `_run_impl()` body untouched.) | **SHIPPED v0.4.17** (2026-05-06) | nothing | Pure code-move. probe_service.py 2493 → 2204 LOC (~12% shrink). 7 commits, both V1+V2 validators APPROVED-ZERO. PR #69 rebase-merged. |
 | **P2 (Path B — DEFERRED)** | **Phase 3 body extraction from `_run_impl()`** | **DEFERRED indefinitely** (no version target) | P2 Path A complete | Plan-validation round 1 caught structural defects spec missed: (a) `_run_impl` is `AsyncIterator`-returning + Phase 3 contains 3 `yield` statements — extraction signature must be redesigned as async-generator or callback-yield pattern; (b) 7 actual `self.X` captures (spec invented `target_score`/`read_failures`/`embed_failures` — none exist in source); (c) 8+ inline imports inside body need re-homing decisions; (d) 2 test sites use `patch.object(probe_service_mod, ...)` / `monkeypatch.setattr(ps_mod, ...)` patch-target drift. **T2-T4 do NOT depend on Path B** — they depend on P3 substrate unification only. Full architectural questions documented in "Probe Phase 3 body extraction — deferred" Exploring entry below. |
 | **P3** | **Substrate unification** — `RunRow` ORM (18 columns, 4 indexes, 4-value status `running/completed/failed/partial`) replaces `ProbeRun`; `RunOrchestrator` service is the only legitimate writer; pluggable `TopicProbeGenerator` + `SeedAgentGenerator` conform to a `RunGenerator` Protocol; backward-compat preserved across `/api/probes`, `/api/seed`, `synthesis_probe`, `synthesis_seed`; new `GET /api/runs` + `GET /api/seed` + `GET /api/seed/{id}` endpoints; the seed surface gains row-state persistence for the first time | **SHIPPED v0.4.18 (2026-05-09)** — PR #70, 95+ commits | P2 Path A (clean module boundaries simplified the migration surface) | Biggest single architectural commitment of foundation, executed in 16 cycles + 2 prework cycles + 1 follow-up cycle on `release/v0.4.18`. ~94 net new tests across 12 categories. `ProbeRun` ORM class deleted; `ProbeService` class deleted; `probe_service.py` 2270 → 37 LOC re-export shim. T4 ships by construction; T2/T3 features now build natively on the unified substrate with zero retroactive migration. See "Foundation P3 — Substrate unification" section below for the implementation summary. |
-| **P4** | **Long-handler restructures** (separate read/process/write phases in `tools/refine.py:50,:156`, `tools/save_result.py:85`, `tools/optimize.py:198` so the LLM call lives outside any session and persistence boundaries route through the queue) | **Planned, target v0.4.19** | nothing (probe-independent but bundled in foundation envelope) | Closes the final SQLite migration tail. Was originally bundled with v0.4.17 P2 ("if compatible scope"); P2 alone shipped at the right size, so P4 gets its own cycle at v0.4.19. Not probe-blocking but a cleanup-track release inside the foundation envelope. See dedicated "Foundation P4 — Long-handler restructures" section below. |
+| **P4** | **Long-handler restructures** (separate read/process/write phases in `tools/refine.py:50,:156`, `tools/save_result.py:85`, `tools/optimize.py:198` so the LLM call lives outside any session and persistence boundaries route through the queue) | **Planned, target v0.4.20** | nothing (probe-independent but bundled in foundation envelope) | Closes the final SQLite migration tail. Was originally bundled with v0.4.17 P2 ("if compatible scope"); P2 alone shipped at the right size, then v0.4.19 became a cohesive stability/UX patch release (brand motion + 4 reactivity fixes + write-queue worker_alive + 80% frontend coverage baseline), so P4 gets its own cycle at v0.4.20. Not probe-blocking but a cleanup-track release inside the foundation envelope. See dedicated "Foundation P4 — Long-handler restructures" section below. |
 
-**Release allocation (revised 2026-05-09 — P3 shipped, T2-T4 now sequenced on the unified substrate):**
+**Release allocation (revised 2026-05-09 second pass — v0.4.19 stability slot + Probe shift):**
 - **v0.4.15** (2026-05-04 retroactive) — HistoryPanel pagination correctness P0 fix — **SHIPPED**
 - **v0.4.16** (2026-05-05) — Foundation P1 (SQLite-debt closure: P1a cold-path chunking + P1b bg_index batching) — **SHIPPED**
 - **v0.4.17** (2026-05-06) — Foundation P2 Path A (probe internals — module-level helpers extraction) — **SHIPPED**
 - **v0.4.18** (2026-05-09) — Foundation P3 (substrate unification: `RunRow` + `RunOrchestrator` + 2 generators + lifespan-DDL consolidation + alembic drift cleanup) — **SHIPPED**
-- **v0.4.19** (next) — Foundation P4 (long-handler restructures: refine/save_result/optimize handlers) — **PLANNED**
-- **v0.4.20** — Probe Tier 2 (save-as-suite + replay + UI + regression alarm) — **PLANNED**
-- **v0.4.21** — Probe Tier 3 (release.sh CI + probe→seed promotion + drill-into-cluster) — **PLANNED**
-- **v0.4.22** — Probe Tier 4 (final UI consolidation — substrate already done in P3) — **PLANNED**
+- **v0.4.19** (next) — Stability/UX patch release: brand-driven motion personality + 4 SSE reactivity fixes (4-gap close, cold-boot flicker, tier-trigger consolidation) + write-queue `worker_alive` correctness + frontend coverage 80% baseline — **PLANNED**
+- **v0.4.20** — Foundation P4 (long-handler restructures: refine/save_result/optimize handlers) — **PLANNED**
+- **v0.4.21** — Probe Tier 2 (save-as-suite + replay + UI + regression alarm) — **PLANNED**
+- **v0.4.22** — Probe Tier 3 (release.sh CI + probe→seed promotion + drill-into-cluster) — **PLANNED**
+- **v0.4.23** — Probe Tier 4 (final UI consolidation — substrate already done in P3) — **PLANNED**
 - **TBD** — Foundation P2 Path B (Phase 3 body extraction — deferred indefinitely; needs fresh design cycle; not blocking T2-T4 because T2 builds on the unified substrate from P3, not on Phase 3 isolation)
 
 **Per-phase specs:** each phase gets its own spec → plan → strict 7-dispatch TDD cycle (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → spec-compliance reviewer → code-quality reviewer) per `feedback_tdd_protocol.md`. P1 brainstorm starts immediately after this ROADMAP update lands.
@@ -106,6 +107,8 @@ With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate 
 **P2 scope reduction (2026-05-06):** Path B (Phase 3 body extraction) deferred after spec round 5 + plan round 1 surfaced unresolved architectural questions. v0.4.17 P2 shipped Path A only (helpers extraction) — pure code-move, ~12% LOC shrink, zero risk. Path B re-design queued as an exploring item below ("Probe Phase 3 body extraction — deferred"). T2/T3/T4 do NOT depend on Path B; they depend on P3 substrate unification only.
 
 **P4 re-allocation (2026-05-06):** P4 was originally bundled with v0.4.17 P2 with the qualifier "if compatible scope". v0.4.17 P2 (Path A only) shipped at the right size as a focused cycle, so P4 moves to its own v0.4.19 release. Probe Tier 2-4 shift by one minor (T2=v0.4.20, T3=v0.4.21, T4=v0.4.22).
+
+**v0.4.19 stability slot + second P4 re-allocation (2026-05-09 second pass):** Between v0.4.18 (P3) shipping and the planned v0.4.19 P4 cycle starting, 7 cohesive commits accumulated on `main` covering brand-driven motion personality + 4 SSE reactivity fixes + write-queue test correctness + frontend coverage 80% baseline. Cutting these as v0.4.19 preserves a clean release boundary for the stability/UX work and keeps P4's diff focused on its own scope. P4 slips one minor to v0.4.20; Probe Tier 2-4 shift another minor (T2=v0.4.21, T3=v0.4.22, T4=v0.4.23).
 
 ---
 
@@ -210,7 +213,7 @@ MCP tools/
 | Q3 | POST /api/seed semantics | **Path 1: sync POST + global SSE bus.** Sync POST gained additive `run_id`; live UI updates flow through existing `/api/events` filtered by `run_id` via `event_bus.subscribe_for_run()`. No SSE on POST. |
 | Q4 | probe_run table fate | **Drop immediately** in same Alembic migration. No SQL VIEW. Alembic downgrade gives rollback safety. |
 | Q5 | Generator protocol | **Awaitable generators + bus events.** `async def run(request, *, run_id) -> GeneratorResult`. Probe's vestigial AsyncIterator retired; events publish directly to bus from generators. |
-| Q6 | Rollout | **Two PRs.** PR1 = dark substrate (RunRow + RunOrchestrator + generators + tests, no router wiring). PR2 = wire shims atomically + frontend `run_id` filter additive. Both delivered under PR #70. T4 (v0.4.22) does the unified UI. |
+| Q6 | Rollout | **Two PRs.** PR1 = dark substrate (RunRow + RunOrchestrator + generators + tests, no router wiring). PR2 = wire shims atomically + frontend `run_id` filter additive. Both delivered under PR #70. T4 (v0.4.23) does the unified UI. |
 
 **Spec doc:** `docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md` (V5 APPROVED-ZERO via 5 independent review cycles). **Plan doc:** `docs/superpowers/plans/2026-05-06-foundation-p3-substrate-unification.md` (~5400 LOC, 16 cycles + Cycle 3.5 fixture cycle, V5 APPROVED-ZERO via 5 independent review cycles).
 
@@ -218,7 +221,7 @@ MCP tools/
 
 ---
 
-### Foundation P4 — Long-handler restructures (target v0.4.19)
+### Foundation P4 — Long-handler restructures (target v0.4.20)
 **Status:** Planned. Detailed brainstorm pending.
 
 **Scope:** Split read/process/write phases in 3 long-running MCP tool handlers so each LLM call lives outside any DB session lifetime, and persistence boundaries route through the WriteQueue. Closes the final v0.4.13 SQLite migration tail (the 3 sites explicitly deferred at v0.4.14).
@@ -274,7 +277,7 @@ await write_queue.submit(_persist, operation_label="refine_persist")
 
 ### Post-foundation horizon (v0.5.x — exploring)
 
-After Foundation P3 + P4 + Probe T2-T4 ship (target window: v0.4.18-v0.4.22), the architecture is ready for a v0.5.0 major. Candidate themes (none yet committed):
+After Foundation P3 + P4 + Probe T2-T4 ship (target window: v0.4.18-v0.4.23), the architecture is ready for a v0.5.0 major. Candidate themes (none yet committed):
 
 | Theme | Surface | Status |
 |---|---|---|
@@ -296,7 +299,7 @@ The v0.5.0 major would either (a) ship one or two of these as the headline featu
 ---
 
 ### Topic Probe — agentic targeted exploration of a user-specified concern against the linked codebase
-**Status:** **Tier 1 SHIPPED** (v0.4.12, 2026-04-29). Tier 2 / Tier 3 / Tier 4 remain **Planned**, sequenced AFTER the foundation phase: T2=v0.4.20, T3=v0.4.21, T4=v0.4.22. **Substrate unification — originally scoped into T4 — SHIPPED early at v0.4.18 (Foundation P3, 2026-05-09)**, so T2/T3/T4 features now build natively on the unified `RunRow` substrate with zero retroactive migration debt. Tier 2 was bumped repeatedly through public releases — v0.4.13 → v0.4.14 → v0.4.15 → v0.4.20 — as architectural fixes (SQLite contention, SQLite migration finalization, HistoryPanel pagination, foundation phase) shipped first; see SHIPPED.md + the "Foundation phase" entry above for the complete rationale.
+**Status:** **Tier 1 SHIPPED** (v0.4.12, 2026-04-29). Tier 2 / Tier 3 / Tier 4 remain **Planned**, sequenced AFTER the foundation phase + v0.4.19 stability slot: T2=v0.4.21, T3=v0.4.22, T4=v0.4.23. **Substrate unification — originally scoped into T4 — SHIPPED early at v0.4.18 (Foundation P3, 2026-05-09)**, so T2/T3/T4 features now build natively on the unified `RunRow` substrate with zero retroactive migration debt. Tier 2 was bumped repeatedly through public releases — v0.4.13 → v0.4.14 → v0.4.15 → v0.4.20 → v0.4.21 — as architectural fixes (SQLite contention, SQLite migration finalization, HistoryPanel pagination, foundation phase, v0.4.19 stability slot) shipped first; see SHIPPED.md + the "Foundation phase" entry above for the complete rationale.
 
 **Tier 1 deliverables (SHIPPED):**
 - `POST /api/probes` (SSE), `GET /api/probes`, `GET /api/probes/{id}`
@@ -312,7 +315,7 @@ The v0.5.0 major would either (a) ship one or two of these as the headline featu
 - Spec: `docs/specs/topic-probe-2026-04-29.md` (gitignored)
 - Plan: `docs/plans/topic-probe-tier-1-2026-04-29.md` (gitignored)
 
-**Tier 2 (v0.4.20) — Planned. PREREQUISITES (all SHIPPED): SQLite writer-slot contention fix (v0.4.13) ✓ + finalization (v0.4.14) ✓ + Foundation P1 (cold-path chunking + bg_index batching, v0.4.16) ✓ + Foundation P2 Path A (probe internals split, v0.4.17) ✓ + Foundation P3 (unified `RunRow` substrate, v0.4.18) ✓. Tier 2's save-as-suite + replay regression detection now key off `RunRow.id` directly, so saved suites travel cleanly into T3/T4.**
+**Tier 2 (v0.4.21) — Planned. PREREQUISITES (all SHIPPED): SQLite writer-slot contention fix (v0.4.13) ✓ + finalization (v0.4.14) ✓ + Foundation P1 (cold-path chunking + bg_index batching, v0.4.16) ✓ + Foundation P2 Path A (probe internals split, v0.4.17) ✓ + Foundation P3 (unified `RunRow` substrate, v0.4.18) ✓. Plus pre-T2 sequencing: v0.4.19 stability slot + Foundation P4 (v0.4.20) long-handler restructures. Tier 2's save-as-suite + replay regression detection now key off `RunRow.id` directly, so saved suites travel cleanly into T3/T4.**
 - `POST /api/probes/{id}/save-as-suite` — fork a probe run into a `ValidationSuite` (frozen prompt fixture + assertions captured from the run's actual scores)
 - `POST /api/probes/{id}/replay` — re-run a saved suite against current code state (regression detection)
 - UI Navigator panel: "Topic Probe" tab in SeedModal + live taxonomy mini-view + final report card with copy-as-markdown
@@ -320,13 +323,13 @@ The v0.5.0 major would either (a) ship one or two of these as the headline featu
 - Topic-only mode (no codebase grounding) for non-developer verticals — drops Phase 1, generates from topic alone (ADR-006 follow-up)
 - Replace blocking SSE with 202 Accepted + `GET /api/probes/{id}` polling for client-timeout decoupling on long probes (>10 prompts)
 
-**Tier 3 (v0.4.21) — Planned:**
+**Tier 3 (v0.4.22) — Planned:**
 - `release.sh` CI hook: register critical probe topics as pre-release gates (fail = block release)
 - Probe → seed-agent promotion flow: a saved probe with consistently high scores can be promoted to `prompts/seed-agents/<topic-slug>.md`. P3 made this a clean `RunRow.mode` flip plus a metadata write — no cross-model migration.
 - "Drill into cluster" action on seed runs auto-launches a probe scoped to the cluster's intent_label
 - Cross-tier composition: probe-discovered prompts feed seed-agent few-shot context
 
-**Tier 4 (v0.4.22) — Planned (final UI consolidation):**
+**Tier 4 (v0.4.23) — Planned (final UI consolidation):**
 - Substrate unification was promoted out of T4 into Foundation P3 and **SHIPPED at v0.4.18 (2026-05-09)**. T4's remaining surface is the user-visible consolidation: SeedModal becomes one tab with two modes (template-driven / topic-driven) sharing the unified form scaffold. Single history surface backed by `RunRow` + the existing `GET /api/runs` endpoint. Final UI polish.
 
 **Vision:** A user-driven, codebase-aware seed mode where the user specifies a topic, concern, or feature and the agentic seed system organically populates the taxonomy with focused prompts anchored in the user's actual code. The system reads the linked GitHub repo, generates 10–20 prompts targeted at the topic with real code references (`engine.py:_compute_centroid`, `services/taxonomy/matching.py`, etc.), runs them through the optimization pipeline, watches the taxonomy emerge new domains/sub-domains organically as signal concentrates, and delivers a final report of what shipped — taxonomy changes, top-scoring outputs, extracted patterns, recommended follow-ups.
@@ -693,7 +696,7 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 
 **Files (estimated):** `backend/app/services/probe_event_correlation.py` (delete `current_probe_id` re-export), 1-2 test updates if any tests still import the old name.
 
-**Decision:** Bundle into a future cleanup-track release (likely v0.4.20+). Sub-1-hour change once trigger is met.
+**Decision:** Bundle into a future cleanup-track release (likely v0.4.21+). Sub-1-hour change once trigger is met.
 
 ---
 
@@ -712,21 +715,21 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 
 ---
 
-### `tools/refine.py` handler restructure → **Foundation P4 (v0.4.19)**
+### `tools/refine.py` handler restructure → **Foundation P4 (v0.4.20)**
 **Status:** SUPERSEDED by Foundation P4 entry above. Retained for cross-reference.
 **Context:** v0.4.14 deferred `tools/refine.py:50, :156` because the handler wraps `RefinementService` LLM call inside its own session — write-queue migration requires extracting the LLM call out of the session lifetime so the queued submit owns only the persistence boundary, not the multi-second LLM round-trip.
 **Files:** `backend/app/tools/refine.py`, `services/refinement_service.py` (session boundary refactor).
 
 ---
 
-### `tools/save_result.py` handler restructure → **Foundation P4 (v0.4.19)**
+### `tools/save_result.py` handler restructure → **Foundation P4 (v0.4.20)**
 **Status:** SUPERSEDED by Foundation P4 entry above. Retained for cross-reference.
 **Context:** v0.4.14 deferred `tools/save_result.py:85` because the handler wraps heuristic scoring + analyzer A4 LLM fallback inside its own session. Same restructure pattern as refine: extract LLM call from session lifetime, keep only persistence inside the queued submit.
 **Files:** `backend/app/tools/save_result.py`, scoring/analyzer call-site refactor.
 
 ---
 
-### `tools/optimize.py:198` orchestrator restructure → **Foundation P4 (v0.4.19)**
+### `tools/optimize.py:198` orchestrator restructure → **Foundation P4 (v0.4.20)**
 **Status:** SUPERSEDED by Foundation P4 entry above. Retained for cross-reference.
 **Context:** v0.4.14 deferred the `tools/optimize.py:198` site because the handler wraps the full `PipelineOrchestrator` 4-LLM SSE loop. The orchestrator must be split so each persistence boundary is a discrete `submit()` while the long LLM phases run outside any session.
 **Files:** `backend/app/tools/optimize.py`, `services/pipeline.py` (SSE persistence boundary extraction).
