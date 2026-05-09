@@ -94,7 +94,7 @@ def _row_to_probe_run_result(row: Any) -> ProbeRunResult:
         aggregate=agg,
         taxonomy_delta=delta,
         final_report=row.final_report or "",
-        status=row.status,  # type: ignore[arg-type]
+        status=row.status,
         suite_id=row.suite_id,
     )
 
