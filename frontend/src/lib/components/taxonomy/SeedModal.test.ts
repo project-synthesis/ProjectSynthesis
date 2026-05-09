@@ -16,11 +16,27 @@ vi.mock('$lib/api/seed', () => ({
     batch_id: 'test-batch-123',
     summary: 'ok',
     duration_ms: 5000,
+    // PR2: SeedOutput now carries the additive run_id from RunRow.id.
+    run_id: '11111111-2222-3333-4444-555555555555',
   }),
   listSeedAgents: vi.fn().mockResolvedValue([
     { name: 'code-explorer', description: 'Explores codebases', task_types: ['coding'], prompts_per_run: 10, enabled: true },
     { name: 'writer', description: 'Writing tasks', task_types: ['writing'], prompts_per_run: 5, enabled: true },
   ]),
+}));
+
+// PR2: stub the runs API so the inline "Recent Runs" hint doesn't need
+// the real backend; default returns 0 items so the chip stays hidden in
+// most tests, individual tests can re-mock to surface the hint.
+vi.mock('$lib/api/runs', () => ({
+  listRuns: vi.fn().mockResolvedValue({
+    total: 0,
+    count: 0,
+    offset: 0,
+    items: [],
+    has_more: false,
+    next_offset: null,
+  }),
 }));
 
 vi.mock('$lib/stores/clusters.svelte', () => ({
@@ -337,5 +353,151 @@ describe('SeedModal', () => {
       expect(screen.getByText(/4 \/ 12 completed/i)).toBeInTheDocument();
       expect(screen.getByText(/legacy emitter/i)).toBeInTheDocument();
     });
+  });
+
+  // --- PR2 (v0.4.18-p3-PR2): SeedOutput.run_id end-to-end + status badge ---
+  //
+  // The synchronous `seedTaxonomy()` POST resolves with a `run_id` (mapped
+  // from the new `RunRow.id`). The modal must:
+  //   1. Capture `result.run_id` and surface it as a click-to-copy chip
+  //      in the post-run result card.
+  //   2. Use the chromatic encoding from `runStatusColor()` for the
+  //      status badge in the result card (cyan/green/yellow/red for
+  //      running/completed/partial/failed).
+  //   3. Clear `currentRunId` on modal close so the next run isn't shown
+  //      with a stale id.
+  //
+  // Tests assert behavior, not pixel-perfect visuals. The component
+  // continues to honor the brand zero-effects directive.
+
+  /** Helper: drive a full submit cycle until the result card appears. */
+  async function submitGenerateRun() {
+    const user = userEvent.setup();
+    // Reset seedTaxonomy to its default mock (resolves with run_id).
+    const { seedTaxonomy } = await import('$lib/api/seed');
+    (seedTaxonomy as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'completed',
+      tier: 'internal',
+      prompts_generated: 10,
+      prompts_optimized: 10,
+      prompts_failed: 0,
+      estimated_cost_usd: 0.5,
+      clusters_created: 3,
+      domains_touched: ['backend', 'frontend'],
+      batch_id: 'batch-abc123def456',
+      summary: 'ok',
+      duration_ms: 5000,
+      run_id: 'run-abc123def456',
+    });
+    render(SeedModal, { props: { open: true, onClose: vi.fn() } });
+    await vi.waitFor(() => {
+      expect(screen.getByText('code-explorer')).toBeInTheDocument();
+    });
+    const desc = screen.getByLabelText(
+      /project description/i,
+    ) as HTMLTextAreaElement;
+    await user.type(desc, 'Sample description for v0.4.18 P3 wiring tests');
+    const startBtn = screen.getByRole('button', { name: /start seed/i });
+    await user.click(startBtn);
+    // Wait for the result card to render.
+    await vi.waitFor(() => {
+      expect(screen.getByText(/run\/run-abc1/i)).toBeInTheDocument();
+    });
+    return user;
+  }
+
+  it('renders run_id as a monospace chip in the result card after a successful run', async () => {
+    await submitGenerateRun();
+
+    // The chip uses a truncated 8-char prefix `run/<first8>` for compact density.
+    const chip = screen.getByLabelText(
+      /run id run-abc123def456 — click to copy/i,
+    );
+    expect(chip).toBeInTheDocument();
+    // Text content is the 8-char prefix form.
+    expect(chip.textContent).toMatch(/run\/run-abc1/);
+    // The chip is a button (click-to-copy) for keyboard accessibility.
+    expect(chip.tagName.toLowerCase()).toBe('button');
+  });
+
+  it('uses chromatic status encoding for the result-card status badge', async () => {
+    await submitGenerateRun();
+
+    // The "Completed" status badge applies neon-green via inline style.
+    const badge = screen.getByLabelText(/run status: completed/i);
+    expect(badge).toBeInTheDocument();
+    // Voice check: title-case label, not all-caps shouting.
+    expect(badge.textContent?.trim()).toBe('Completed');
+    // Chromatic encoding: completed → neon-green CSS variable.
+    expect(badge.getAttribute('style') ?? '').toMatch(
+      /var\(--color-neon-green\)/,
+    );
+  });
+
+  it('clears currentRunId when the modal closes so a subsequent run is not shown with a stale id', async () => {
+    const onClose = vi.fn();
+    const { rerender } = render(SeedModal, {
+      props: { open: true, onClose },
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByText('code-explorer')).toBeInTheDocument();
+    });
+
+    // Manually drive a seeding cycle so an SSE event captures a run_id.
+    const user = userEvent.setup();
+    const { seedTaxonomy } = await import('$lib/api/seed');
+    (seedTaxonomy as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(() => {}) /* never resolves */,
+    );
+    const desc = screen.getByLabelText(
+      /project description/i,
+    ) as HTMLTextAreaElement;
+    await user.type(desc, 'Stale run_id clearing regression check');
+    await user.click(screen.getByRole('button', { name: /start seed/i }));
+    await vi.waitFor(() => {
+      const labels = document.querySelectorAll('.seed-progress-label');
+      expect(labels.length).toBeGreaterThan(0);
+    });
+    window.dispatchEvent(
+      new CustomEvent('seed-batch-progress', {
+        detail: {
+          phase: 'optimize',
+          run_id: 'previous-run',
+          completed: 3,
+          total: 10,
+          current_prompt: 'prior run',
+        },
+      }),
+    );
+    await vi.waitFor(() => {
+      // The inline run-id chip shows the truncated form `run/previous`.
+      expect(screen.getByText(/run\/previous/i)).toBeInTheDocument();
+    });
+
+    // Close the modal then re-open. Per the modal's open-effect, currentRunId
+    // is reset, so no stale chip remains in the DOM.
+    await rerender({ open: false, onClose });
+    await rerender({ open: true, onClose });
+
+    // After reopen the inline chip from the prior run is gone.
+    expect(screen.queryByText(/run\/previous/i)).not.toBeInTheDocument();
+  });
+
+  it('captures result.run_id via the synchronous POST even when no SSE event arrived first', async () => {
+    // This protects against the degraded-path scenario where the run is
+    // very short / SSE didn't deliver mid-run events. The result chip
+    // must still surface from the POST response alone.
+    await submitGenerateRun();
+
+    // The lookup uses the post-resolve run_id from the mocked POST.
+    const chip = screen.getByLabelText(
+      /run id run-abc123def456 — click to copy/i,
+    );
+    expect(chip).toBeInTheDocument();
+    // The chip is in the result card (sibling of the status badge).
+    const statusBadge = screen.getByLabelText(/run status: completed/i);
+    const resultCard = statusBadge.closest('.seed-result');
+    expect(resultCard).not.toBeNull();
+    expect(resultCard?.contains(chip)).toBe(true);
   });
 });
