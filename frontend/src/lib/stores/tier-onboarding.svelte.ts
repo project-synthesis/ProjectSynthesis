@@ -1,10 +1,18 @@
 /**
- * Tier onboarding coordinator.
+ * Tier onboarding mux.
  *
- * Single entry point for all automatic guide triggers — startup detection
- * and runtime tier transitions.  Maps the resolved tier to the correct
- * guide store and calls ``show(true)`` (respectDismiss) so first-time
- * users see onboarding while returning users are not interrupted.
+ * Thin pass-through that maps an effective tier to the matching guide
+ * store and calls ``show(true)`` (respectDismiss). Dispatch only —
+ * no state.
+ *
+ * The same-tier dedup contract (don't re-pop a guide on the same
+ * effective tier) lives in the consuming ``$effect`` in
+ * ``frontend/src/routes/app/+page.svelte``. Keeping dedup at the
+ * consumer (component-scoped ``$state``) eliminates the module-level
+ * mutable that was previously here, removing an HMR-corruption risk
+ * (Svelte 5 dev mode preserves module-scope ``let`` across hot
+ * reloads in some configurations, leaving stale ``lastTriggeredTier``
+ * blocking legitimate triggers).
  *
  * Copyright 2025-2026 Project Synthesis contributors.
  */
@@ -14,10 +22,7 @@ import { internalGuide } from './internal-guide.svelte';
 import { samplingGuide } from './sampling-guide.svelte';
 import { passthroughGuide } from './passthrough-guide.svelte';
 
-/** Last tier for which a guide was triggered — prevents redundant opens. */
-let lastTriggeredTier: EffectiveTier | null = null;
-
-/** Tier → guide store lookup.  O(1) dispatch, no switch statement. */
+/** Tier → guide store lookup. O(1) dispatch, no switch. */
 const GUIDE_MAP: Record<EffectiveTier, { show(respectDismiss?: boolean): void }> = {
   internal: internalGuide,
   sampling: samplingGuide,
@@ -27,19 +32,11 @@ const GUIDE_MAP: Record<EffectiveTier, { show(respectDismiss?: boolean): void }>
 /**
  * Show the onboarding guide for the given tier (respectDismiss = true).
  *
- * Skips if the tier matches the last triggered tier — prevents duplicate
- * opens when health poll and SSE both fire for the same state.
+ * Idempotent against the same-tier flip via the consumer-side
+ * dedup; safe to call repeatedly.
  *
- * Call after the first health check and on every ``routing_state_changed``
- * SSE event.
+ * Call from the single tier-watching ``$effect`` in +page.svelte.
  */
 export function triggerTierGuide(tier: EffectiveTier): void {
-  if (tier === lastTriggeredTier) return;
-  lastTriggeredTier = tier;
   GUIDE_MAP[tier].show(true);
-}
-
-/** @internal Test-only: reset the last triggered tier for isolation. */
-export function _resetOnboarding(): void {
-  lastTriggeredTier = null;
 }

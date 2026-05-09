@@ -13,7 +13,7 @@
   import { getHealth } from '$lib/api/client';
   import type { HealthResponse } from '$lib/api/client';
   import { triggerTierGuide } from '$lib/stores/tier-onboarding.svelte';
-  import { routing } from '$lib/stores/routing.svelte';
+  import { routing, type EffectiveTier } from '$lib/stores/routing.svelte';
   import { updateStore } from '$lib/stores/update.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import { sseHealthStore } from '$lib/stores/sse-health.svelte';
@@ -24,7 +24,16 @@
   } from '$lib/stores/readiness-notifications.svelte';
 
   let backendError = $state<string | null>(null);
-  let firstHealthReceived = false;
+  // ROOT CAUSE FIX (2026-05-09 cold-boot trigger): ``firstHealthReceived``
+  // must be ``$state`` so the tier-watching ``$effect`` below subscribes
+  // to its flip. Pre-fix it was a plain ``let`` — flipping it inside
+  // ``applyHealth`` mutated the value but did NOT trigger Svelte 5
+  // reactivity, so the cold-boot effect's early-return path was a
+  // permanent dead-end on the very first run (the effect never read
+  // ``routing.tier`` past the gate, so it never subscribed to tier
+  // changes either). Promoting to ``$state`` plus reading ``routing.tier``
+  // before the gate (see ``$effect`` at line ~457) restores the trigger.
+  let firstHealthReceived = $state(false);
   // ROOT CAUSE FIX (2026-05-09): ``pendingGuide`` and ``pendingHealthDelta``
   // were plain ``let`` bindings — Svelte 5 only tracks ``$state`` reads as
   // reactive dependencies. The cold-boot $effect at line ~425 reads BOTH
@@ -286,25 +295,21 @@
         if (type === 'routing_state_changed') {
           const d = data as { trigger?: string; provider: string | null; sampling_capable: boolean | null; mcp_connected: boolean; available_tiers: string[] };
           const wasSamplingCapable = forgeStore.samplingCapable === true;
-          const prevTier = routing.tier;
           const delta = forgeStore.updateRoutingState({
             sampling_capable: d.sampling_capable,
             mcp_disconnected: !d.mcp_connected,
             provider: d.provider,
           });
 
-          // Auto-enable force_sampling when sampling becomes available
+          // Auto-enable force_sampling when sampling becomes available.
+          // Tier-guide trigger lives in the single ``$effect`` watching
+          // ``routing.tier`` below — no per-handler call here. Persisting
+          // the toggle (sync or async) re-derives ``routing.tier`` and
+          // the effect fires once, with the post-mutation tier.
           if (delta.samplingChanged) {
             onSamplingDetected();
             if (!preferencesStore.pipeline.force_sampling) {
-              // Await the toggle so routing.tier reflects sampling BEFORE
-              // triggering the guide. Without await, the guide reads the stale
-              // tier (internal) because the preference hasn't persisted yet.
-              preferencesStore.setPipelineToggle('force_sampling', true).then(() => {
-                triggerTierGuide(routing.tier);
-              });
-            } else {
-              triggerTierGuide(routing.tier);
+              void preferencesStore.setPipelineToggle('force_sampling', true);
             }
           }
 
@@ -312,19 +317,11 @@
           // Optimistic local update first to prevent UI flash.
           if (wasSamplingCapable && d.sampling_capable !== true && preferencesStore.pipeline.force_sampling) {
             preferencesStore.prefs.pipeline.force_sampling = false;
-            preferencesStore.setPipelineToggle('force_sampling', false);
+            void preferencesStore.setPipelineToggle('force_sampling', false);
           }
 
           if (delta.reconnected) addToast('created', 'MCP client reconnected');
           if (delta.disconnected && !forgeStore.provider) addToast('deleted', 'MCP client disconnected');
-
-          // Only trigger tier guide when the effective tier actually CHANGED.
-          // Without this guard, startup provider_changed events and benign
-          // routing broadcasts (e.g. during recluster) pop the internal
-          // pipeline modal even though the tier hasn't changed.
-          if (!delta.samplingChanged && routing.tier !== prevTier) {
-            triggerTierGuide(routing.tier);
-          }
         }
         if (type === 'preferences_changed') {
           preferencesStore.prefs = data as unknown as Preferences;
@@ -427,32 +424,58 @@
     return () => clearInterval(timer);
   });
 
-  // Gate: process toggle reconciliation AND trigger tier guide only after BOTH
-  // health AND preferences have loaded. This prevents:
-  // 1. Reading stale default preferences for toggle decisions
-  // 2. init() overwriting toggle patches when it resolves
-  // 3. Showing the wrong onboarding modal
+  // Cold-boot toggle reconciliation. Auto-enables ``force_sampling`` on
+  // first health response when sampling is detected, or auto-disables a
+  // stale ``force_sampling`` when sampling is gone. Decoupled from the
+  // tier-guide trigger as of 2026-05-09: that pathway is now driven by
+  // the single ``$effect`` below that watches ``routing.tier`` directly.
   $effect(() => {
     if (!pendingGuide || preferencesStore.loading) return;
-    // Capture and clear synchronously so a re-entrant SSE event after
-    // ``setPipelineToggle`` resolves doesn't race the trigger.
     const captured = pendingHealthDelta;
     pendingGuide = false;
     pendingHealthDelta = null;
-    void (async () => {
-      if (captured) {
-        // 2026-05-09: AWAIT the toggle persist before reading routing.tier.
-        // Pre-fix: setPipelineToggle was fire-and-forget, so on cold boot
-        // the trigger fired with stale preferences (force_sampling=false)
-        // and locked ``lastTriggeredTier='internal'`` even when sampling
-        // was about to take over. The post-toggle SamplingGuide trigger
-        // then never fired (no SSE re-broadcasts on preference flips),
-        // and InternalGuide silently never re-opened either. Awaiting
-        // resolves both directions.
-        await reconcileToggles(captured.health, captured.delta);
-      }
-      triggerTierGuide(routing.tier);
-    })();
+    if (captured) {
+      void reconcileToggles(captured.health, captured.delta);
+    }
+  });
+
+  // Single source of truth for tier-driven onboarding-guide triggers.
+  //
+  // Pre-2026-05-09 design: five separate call sites — cold-boot effect,
+  // SSE handler (samplingChanged branch), SSE handler (tier-changed
+  // branch), Settings toggle force_sampling, Settings toggle
+  // force_passthrough — each calling ``triggerTierGuide(routing.tier)``
+  // at slightly different moments. The fragmentation produced bug after
+  // bug: stale tier reads (await/no-await drift), missed transitions
+  // (preferences_changed never triggered), missed rate-limit flips,
+  // module-level ``lastTriggeredTier`` HMR corruption, etc.
+  //
+  // Post-fix design: ONE effect watches ``routing.tier``. Every pathway
+  // that flips the tier (SSE event, preference toggle, optimistic
+  // mutation, rate-limit transition, preferences_changed cross-client
+  // broadcast) flows through one of ``routing.tier``'s reactive
+  // dependencies, so the effect re-runs once with the genuine post-flip
+  // tier. The Settings-toggle ``show(false)`` calls remain in
+  // SettingsPanel for explicit user opt-in (force-open ignoring
+  // dismissal); they don't go through this effect.
+  //
+  // Bootstrap gate: wait until BOTH first health response AND
+  // preferences have settled — the very first run reports the
+  // genuine post-boot tier, not the initial 'passthrough' default.
+  let lastEffectiveTier = $state<EffectiveTier | null>(null);
+  $effect(() => {
+    // CRITICAL: read ``routing.tier`` BEFORE the early-return gate so
+    // Svelte 5's dep tracker subscribes the effect to tier changes on
+    // EVERY run. Pre-fix the gate fired on a still-loading boot, the
+    // function returned before line 4, and the effect was permanently
+    // unsubscribed from ``routing.tier``. Subsequent tier changes
+    // (provider detection, preference toggle, rate-limit flip) never
+    // re-fired the effect → cold-boot guides silently never opened.
+    const tier = routing.tier;
+    if (!firstHealthReceived || preferencesStore.loading) return;
+    if (tier === lastEffectiveTier) return;
+    lastEffectiveTier = tier;
+    triggerTierGuide(tier);
   });
 
   // Derived error states

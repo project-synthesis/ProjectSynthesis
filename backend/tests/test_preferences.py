@@ -358,15 +358,25 @@ class TestMutualExclusion:
 
 class TestPreferencesChangedEvent:
     async def test_patch_publishes_preferences_changed_event(self, svc: PreferencesService) -> None:
-        """PATCH /api/preferences publishes a preferences_changed event."""
+        """PATCH /api/preferences publishes a preferences_changed event.
+
+        2026-05-09: ``patch_preferences`` now accepts ``request: Request`` so
+        it can side-emit ``routing_state_changed`` when a routing-relevant
+        pipeline key flips. Models patches don't trigger that branch — the
+        request only needs ``app.state.routing`` to be ``None`` (or absent),
+        so we hand in a minimal stub.
+        """
         from app.services.event_bus import event_bus
+        from types import SimpleNamespace
+
+        request_stub = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(routing=None)))
 
         with mock_patch.object(event_bus, "publish") as mock_publish:
             # Swap in our tmp_path-based service
             with mock_patch("app.routers.preferences._svc", svc):
                 from app.routers.preferences import PreferencesUpdate, _ModelsUpdate, patch_preferences
                 body = PreferencesUpdate(models=_ModelsUpdate(analyzer="haiku"))
-                result = await patch_preferences(body)
+                result = await patch_preferences(body, request_stub)  # type: ignore[arg-type]
 
             mock_publish.assert_called_once_with("preferences_changed", result)
             assert result["models"]["analyzer"] == "haiku"

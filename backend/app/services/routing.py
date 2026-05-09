@@ -899,6 +899,25 @@ class RoutingManager:
             except Exception:
                 logger.warning("Failed to persist routing state to mcp_session.json", exc_info=True)
 
+    def broadcast_external(self, trigger: str) -> None:
+        """Re-publish the current state without mutating it.
+
+        Used when an external surface (e.g. the preferences PATCH router)
+        flips a routing-relevant input that the frontend should react to,
+        but no internal state change occurred. Pre-2026-05-09 a force-toggle
+        from another client / CLI would silently desync subscribers because
+        the patch only published ``preferences_changed`` (not
+        ``routing_state_changed``); ``available_tiers`` derives from the
+        toggle but the front-end's tier-display path subscribes to the
+        routing event. Calling this method emits the canonical payload via
+        the existing ``_broadcast_state_change`` plumbing so cross-process
+        + same-process consumers see the change uniformly.
+
+        ``trigger`` flows through to the payload's ``trigger`` field and
+        the structured log line for observability.
+        """
+        self._broadcast_state_change(trigger)
+
     def _broadcast_state_change(self, event: str) -> None:
         """Push routing_state_changed to local event bus and cross-process."""
         payload: RoutingStatePayload = {

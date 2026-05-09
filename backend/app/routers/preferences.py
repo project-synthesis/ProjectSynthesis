@@ -3,7 +3,7 @@
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, StrictBool
 
 from app.config import DATA_DIR
@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["preferences"])
 
 _svc = PreferencesService(DATA_DIR)
+
+# Pipeline keys whose mutation changes ``RoutingManager.available_tiers``
+# resolution. When a PATCH touches ANY of these, we additionally broadcast
+# ``routing_state_changed`` so frontend / cross-process subscribers see the
+# updated tier surface — pre-2026-05-09 only ``preferences_changed`` fired
+# and the routing-tier path silently desynced for non-toggling clients.
+_ROUTING_RELEVANT_PIPELINE_KEYS = frozenset({"force_sampling", "force_passthrough"})
 
 
 class _ModelsUpdate(BaseModel):
@@ -78,11 +85,32 @@ async def get_preferences() -> dict:
 
 
 @router.patch("/preferences")
-async def patch_preferences(body: PreferencesUpdate) -> dict:
-    """Deep-merge updates into preferences. Validates before saving."""
+async def patch_preferences(body: PreferencesUpdate, request: Request) -> dict:
+    """Deep-merge updates into preferences. Validates before saving.
+
+    Side-emits ``routing_state_changed`` when the patch touches a
+    routing-relevant pipeline key (``force_sampling`` / ``force_passthrough``)
+    so subscribers that drive tier-aware UI react to multi-client / CLI
+    patches the same way they react to backend-driven state changes.
+    """
+    patch_dict = body.model_dump(exclude_none=True)
     try:
-        result = _svc.patch(body.model_dump(exclude_none=True))
+        result = _svc.patch(patch_dict)
         event_bus.publish("preferences_changed", result)
+        # Routing-relevant key gate (2026-05-09): the backend's
+        # ``available_tiers`` resolution depends on these toggles, so a
+        # patch that flips them must propagate to the routing channel.
+        pipeline_patch = patch_dict.get("pipeline") or {}
+        if any(k in pipeline_patch for k in _ROUTING_RELEVANT_PIPELINE_KEYS):
+            routing = getattr(request.app.state, "routing", None)
+            if routing is not None:
+                try:
+                    routing.broadcast_external(trigger="preferences_changed")
+                except Exception:
+                    logger.debug(
+                        "broadcast_external failed (non-fatal)",
+                        exc_info=True,
+                    )
         return result
     except (ValueError, TypeError) as exc:
         logger.warning("Preferences patch rejected: %s", exc)

@@ -359,13 +359,17 @@
           <button
             class="toggle-track toggle-track--green"
             class:toggle-track--on={preferencesStore.pipeline.force_sampling}
-            onclick={() => {
+            onclick={async () => {
               const newVal = !preferencesStore.pipeline.force_sampling;
-              preferencesStore.setPipelineToggle('force_sampling', newVal);
-              // Explicit toggle is an explicit opt-in to see the guide —
-              // override prior dismissal. Pre-2026-05-09 used ``show(true)``
-              // (respectDismiss) which silently swallowed the request once
-              // the user had dismissed the guide once.
+              // Await the persist (2026-05-09): pre-fix the toggle was
+              // fire-and-forget, so the guide popped BEFORE the preference
+              // mutation completed and ``routing.tier`` was still the
+              // pre-toggle value when the guide read it. Awaiting the
+              // PATCH ensures any tier-derived guide content reads
+              // post-mutation state.
+              await preferencesStore.setPipelineToggle('force_sampling', newVal);
+              // Explicit toggle = explicit opt-in to see the guide —
+              // override prior dismissal via ``show(false)`` (force-open).
               if (newVal) samplingGuide.show(false);
             }}
             role="switch"
@@ -392,13 +396,11 @@
           <button
             class="toggle-track toggle-track--yellow"
             class:toggle-track--on={preferencesStore.pipeline.force_passthrough}
-            onclick={() => {
+            onclick={async () => {
               const newVal = !preferencesStore.pipeline.force_passthrough;
-              preferencesStore.setPipelineToggle('force_passthrough', newVal);
-              // Same fix as samplingGuide above (2026-05-09): explicit
-              // toggle = explicit opt-in. ``show(false)`` ignores prior
-              // dismissal so the guide actually pops on every fresh
-              // toggle rather than silently failing forever.
+              // Await the persist + ``show(false)`` (force-open) — see
+              // samplingGuide toggle above for rationale.
+              await preferencesStore.setPipelineToggle('force_passthrough', newVal);
               if (newVal) passthroughGuide.show(false);
             }}
             role="switch"
