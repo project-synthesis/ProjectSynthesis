@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { scoreColor, taxonomyColor, qHealthColor, stateColor, HIGHLIGHT_COLOR_HEX, SIMILARITY_EDGE_COLOR_HEX } from './colors';
+import { scoreColor, taxonomyColor, qHealthColor, stateColor, runStatusColor, HIGHLIGHT_COLOR_HEX, SIMILARITY_EDGE_COLOR_HEX } from './colors';
 import { domainStore } from '$lib/stores/domains.svelte';
 
 describe('scoreColor', () => {
@@ -158,5 +158,36 @@ describe('stateColor — template state removed', () => {
   it('no longer recognizes template state (falls back to default gray)', () => {
     // After the refactor, 'template' is unknown and gets the fallback.
     expect(stateColor('template')).toBe('#7a7a9e');
+  });
+});
+
+describe('runStatusColor (Foundation P3 — RunRow.status chromatic encoding)', () => {
+  // These tests pin the 4-state chromatic encoding the spec calls out:
+  //   running   → cyan   (in-flight, primary brand)
+  //   completed → green  (success, health)
+  //   partial   → yellow (mixed terminal — warning class)
+  //   failed    → red    (terminal failure)
+  // Plus a forward-compat fallback to text-dim for unknown statuses.
+
+  it('returns neon-cyan for running (in-flight)', () => {
+    expect(runStatusColor('running')).toBe('var(--color-neon-cyan)');
+  });
+
+  it('returns neon-green for completed (success)', () => {
+    expect(runStatusColor('completed')).toBe('var(--color-neon-green)');
+  });
+
+  it('returns neon-yellow for partial (mixed terminal)', () => {
+    expect(runStatusColor('partial')).toBe('var(--color-neon-yellow)');
+  });
+
+  it('returns neon-red for failed (terminal failure)', () => {
+    expect(runStatusColor('failed')).toBe('var(--color-neon-red)');
+  });
+
+  it('falls back to text-dim for unknown status (forward-compat)', () => {
+    expect(runStatusColor('unknown')).toBe('var(--color-text-dim)');
+    expect(runStatusColor('')).toBe('var(--color-text-dim)');
+    expect(runStatusColor('Cancelled')).toBe('var(--color-text-dim)');
   });
 });
