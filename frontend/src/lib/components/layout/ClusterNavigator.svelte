@@ -98,17 +98,35 @@
 
   let expandedId = $state<string | null>(null);
 
+  // Scroll-into-view race fix (2026-05-09): pre-fix the scroll fired
+  // inside ``tick()``, BEFORE the parent ``transition:slide={navSlide}``
+  // (180ms) finished expanding the family/sub-domain group containing
+  // the target. Result: scroll positioned the row at its pre-expansion
+  // location, then the slide animation pushed the row down — visually
+  // the selected row drifted out of view by the time the user looked.
+  // Now: wait one tick (Svelte DOM commit) PLUS the navSlide duration
+  // + 20ms safety margin so the layout is fully settled before scroll.
+  // ``block: 'center'`` instead of 'nearest' so partially-visible rows
+  // re-center; matches the user's intent on cross-tab cluster select.
   $effect(() => {
     const id = clustersStore.selectedClusterId;
     expandedId = id;
-    if (id) {
-      tick().then(() => {
+    if (!id) return;
+    const SCROLL_DELAY_MS = navSlide.duration + 20;
+    let cancelled = false;
+    void tick().then(() => {
+      if (cancelled) return;
+      window.setTimeout(() => {
+        if (cancelled) return;
         const el = document.querySelector(`[data-cluster-id="${id}"]`);
         if (el && typeof el.scrollIntoView === 'function') {
-          el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          el.scrollIntoView({ block: 'center', behavior: 'smooth' });
         }
-      });
-    }
+      }, SCROLL_DELAY_MS);
+    });
+    return () => {
+      cancelled = true;
+    };
   });
 
   const hasVisibleTemplates = $derived(

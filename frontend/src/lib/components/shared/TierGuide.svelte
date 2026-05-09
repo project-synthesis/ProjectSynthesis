@@ -9,6 +9,8 @@
    * Copyright 2025-2026 Project Synthesis contributors.
    */
   import type { GuideStep, ComparisonRow, HighlightColumn } from '$lib/types/tier-guide';
+  import { fade, fly } from 'svelte/transition';
+  import { dialogIn, dialogOut, easeSpring, easeExit } from '$lib/utils/transitions';
 
   interface Props {
     title: string;
@@ -111,7 +113,11 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if open}
-  <!-- Overlay backdrop -->
+  <!-- Overlay backdrop. Entrance/exit fade is driven by Svelte
+       ``in:fade={dialogIn}`` / ``out:fade={dialogOut}`` (2026-05-09) — pre-fix
+       the overlay snapped in/out instantly while the inner guide-container
+       used a CSS ``animation: guide-in`` for entrance, so dismissals showed
+       the dialog flying out over an instantly-cleared backdrop. -->
   <div
     class="overlay"
     role="dialog"
@@ -120,6 +126,8 @@
     tabindex="-1"
     onclick={(e) => { if (e.target === e.currentTarget) close(); }}
     onkeydown={handleKeydown}
+    in:fade={dialogIn}
+    out:fade={dialogOut}
   >
     <!-- Guide container — accent CSS custom property drives all color references -->
     <div
@@ -127,6 +135,8 @@
       bind:this={containerEl}
       tabindex="-1"
       style="--guide-accent: {accentColor};"
+      in:fly={{ y: 8, duration: dialogIn.duration, easing: easeSpring, opacity: 0 }}
+      out:fly={{ y: 4, duration: dialogOut.duration, easing: easeExit, opacity: 0 }}
     >
       <!-- Header -->
       <div class="guide-header">
@@ -306,7 +316,10 @@
     border: 1px solid var(--color-border-subtle);
     overflow: hidden;
     outline: none;
-    animation: guide-in var(--duration-structural) var(--ease-spring) forwards;
+    /* Entrance + exit handled by Svelte ``in:fly`` / ``out:fly`` directives
+       on the element (2026-05-09). Removed local ``animation: guide-in``
+       to coordinate with the overlay scrim through the shared ``dialogIn``
+       / ``dialogOut`` presets. */
   }
 
   @keyframes guide-in {

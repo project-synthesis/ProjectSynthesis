@@ -5,6 +5,8 @@
   import SuggestionChips from './SuggestionChips.svelte';
   import BranchSwitcher from './BranchSwitcher.svelte';
   import { tick } from 'svelte';
+  import { slide } from 'svelte/transition';
+  import { navSlide } from '$lib/utils/transitions';
 
   let scrollContainer: HTMLDivElement | undefined = $state();
   let turnsCollapsed = $state(false);
@@ -86,7 +88,7 @@
     </div>
 
     {#if !turnsCollapsed}
-      <div class="timeline-scroll" bind:this={scrollContainer}>
+      <div class="timeline-scroll" bind:this={scrollContainer} transition:slide={navSlide}>
         <div class="turns-list">
           {#each refinementStore.turns as turn (turn.id)}
             <RefinementTurnCard

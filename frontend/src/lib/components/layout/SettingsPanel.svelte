@@ -26,6 +26,8 @@
   import { STAT_TOOLTIPS } from '$lib/utils/metric-tooltips';
   import { ROUTING_TOOLTIPS, SCORING_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import { tooltip } from '$lib/actions/tooltip';
+  import { slide } from 'svelte/transition';
+  import { navSlide } from '$lib/utils/transitions';
 
   interface Props {
     active: boolean;
@@ -495,6 +497,7 @@
         </span>
       </button>
       {#if showProvider}
+        <div transition:slide={navSlide} class="accordion-body">
         {#if routing.isPassthrough}
           <div class="card-terminal">
             <div class="data-row">
@@ -623,6 +626,7 @@
             {/if}
           </div>
         {/if}
+        </div>
       {/if}
     </div>
 
@@ -661,6 +665,7 @@
         </span>
       </button>
       {#if showRateLimits}
+        <div transition:slide={navSlide} class="accordion-body">
         <div class="card-terminal">
           {#if rateLimitStore.isAnyActive}
             {#each rateLimitStore.activeList as entry (entry.provider)}
@@ -716,6 +721,7 @@
             </div>
           {/if}
         </div>
+        </div>
       {/if}
     </div>
 
@@ -731,6 +737,7 @@
         <span class="accordion-summary">v{forgeStore.version ?? '?'}</span>
       </button>
       {#if showSystem}
+        <div transition:slide={navSlide} class="accordion-body">
         {#if settings}
           {#if routing.isPassthrough}
             <div class="card-terminal">
@@ -890,6 +897,7 @@
         {:else}
           <p class="empty-note">Backend unavailable</p>
         {/if}
+        </div>
       {/if}
     </div>
   </div>

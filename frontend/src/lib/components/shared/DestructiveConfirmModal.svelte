@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { onDestroy, onMount } from 'svelte';
+  import { fade, fly } from 'svelte/transition';
+  import { dialogIn, dialogOut, easeSpring, easeExit } from '$lib/utils/transitions';
 
   type Props = {
     open: boolean;
@@ -87,7 +89,13 @@
 </script>
 
 {#if open}
-  <div class="scrim" onclick={onScrimClick} role="presentation"></div>
+  <div
+    class="scrim"
+    onclick={onScrimClick}
+    role="presentation"
+    in:fade={dialogIn}
+    out:fade={dialogOut}
+  ></div>
   <div
     class="modal"
     class:committing
@@ -95,6 +103,8 @@
     role="dialog"
     aria-modal="true"
     aria-labelledby="confirm-modal-title"
+    in:fly={{ y: 8, duration: dialogIn.duration, easing: easeSpring, opacity: 0 }}
+    out:fly={{ y: 4, duration: dialogOut.duration, easing: easeExit, opacity: 0 }}
   >
     <header class="modal-header">
       <h2 id="confirm-modal-title" class="modal-title">{title}</h2>
@@ -169,7 +179,12 @@
     /* Brand z-index tier 50 (Modal). Source order places scrim below
        the modal div that follows it in the DOM, so they share the tier. */
     z-index: 50;
-    animation: scrim-in 200ms var(--ease-spring);
+    /* Entrance + exit driven by Svelte ``in:fade`` / ``out:fade`` on the
+       element (2026-05-09) — the previous CSS-only ``animation: scrim-in``
+       fired on mount but had no exit, so the scrim snapped away on close
+       while the dialog tried to fly out underneath. The Svelte directives
+       coordinate both directions through the shared ``dialogIn`` /
+       ``dialogOut`` presets in utils/transitions.ts. */
   }
   .modal {
     position: fixed;
@@ -192,7 +207,8 @@
     border-radius: 0;
     /* Modal tier (50). Stacks above scrim via source order. */
     z-index: 50;
-    animation: modal-in 200ms var(--ease-spring);
+    /* Entrance + exit driven by Svelte ``in:fly`` / ``out:fly`` directives
+       on the element (2026-05-09) — see scrim comment above for context. */
     font-family: var(--font-sans);
     color: var(--color-text-primary);
   }
@@ -376,12 +392,8 @@
     outline-offset: 2px;
   }
 
-  @keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes modal-in {
-    from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
-    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  }
-
-  /* Reduced-motion is enforced globally in app.css with `!important` on
-     the universal selector — no component-local override needed. */
+  /* @keyframes scrim-in + modal-in hoisted to lib/styles/shared-keyframes.css
+     (2026-05-09). Pre-2026-05-09 each modal redefined them locally; now any
+     {scrim+dialog} pair (or the AnimatedDialog primitive in Phase 1.3) reads
+     the same definitions. Reduced-motion enforced globally in app.css. */
 </style>

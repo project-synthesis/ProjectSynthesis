@@ -1,0 +1,113 @@
+/* ===========================================================================
+   Shared keyframes — single source of truth for animation primitives that
+   recur across multiple components.
+
+   Why this file: pre-2026-05-09 the same keyframes were copy-pasted into
+   2+ components (skeleton-pulse), or each modal re-rolled its own scrim/
+   dialog entrance. Centralizing here:
+     1. enforces brand motion personality (every keyframe binds to either
+        --ease-spring or --ease-exit via the consuming `animation` shorthand);
+     2. removes ~150 LOC of duplicated CSS across the app;
+     3. makes future global motion tweaks a one-file change.
+
+   Imported once via app.css; consuming components reference the keyframe
+   names directly in their `animation:` shorthands.
+
+   Reduced-motion is enforced globally in app.css with `!important` on the
+   universal selector — no per-keyframe override needed.
+
+   Copyright 2026 Project Synthesis contributors.
+   =========================================================================== */
+
+/* --- Loading placeholders ------------------------------------------------ */
+
+/* skeleton-pulse — pulsing opacity for placeholder bars (history rows,
+   cluster detail loading). Replaces the duplicated definitions previously
+   in HistoryPanel.svelte:1231 and ClusterRow.svelte:310. */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* status-pulse — slow pulse for status indicators (UpdateBadge dot,
+   GitHubPanel indexing badge). Pulse keyframes are EXEMPTED from the
+   zero-effects directive ONLY for status indicators — never decorative.
+   The exemption is scoped: any new pulse animation must reuse this one
+   instead of inventing a fresh `@keyframes ... ease-in-out infinite`. */
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* --- Modal entrances ----------------------------------------------------- */
+
+/* scrim-in — overlay fade. Used by AnimatedDialog primitive + any direct
+   modal scrim that needs a CSS-driven entrance instead of a Svelte
+   transition. Pair with `--duration-structural` + `--ease-spring` in the
+   consumer's `animation:` shorthand. */
+@keyframes scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* modal-in — dialog content entrance with subtle scale. Used by
+   AnimatedDialog primitive + DestructiveConfirmModal (legacy direct
+   consumer pre-AnimatedDialog refactor). */
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* --- Bottom-anchored entrances ------------------------------------------ */
+
+/* fly-in-bottom — anything that slides up from below into final position.
+   Replaces Toast.svelte's local toast-in keyframe (renamed for reuse —
+   the same shape works for context-card entrance, suggestion-chip
+   reveal, etc.). 8px translate is the brand "rising upward" motion
+   pattern (see brand guidelines: Analyze stage → "Rising upward"). */
+@keyframes fly-in-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* --- Tab + phase reveals ------------------------------------------------- */
+
+/* tab-fade-in — pure opacity rise for tab-panel cross-fades (EditorGroups,
+   GitHubPanel sub-tabs). 4px lift is intentionally smaller than
+   fly-in-bottom — tab switches feel like content swap, not entrance. */
+@keyframes tab-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* phase-reveal-in — pipeline phase telemetry card entrance (analyze →
+   optimize → score). 4px translateY ladders cohesively with fly-in-bottom
+   without dominating the editor. */
+@keyframes phase-reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

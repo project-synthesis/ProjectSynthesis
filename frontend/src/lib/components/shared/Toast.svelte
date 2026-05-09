@@ -1,5 +1,7 @@
 <script lang="ts">
   import { toastStore, type ToastActionButton, type ToastItem } from '$lib/stores/toast.svelte';
+  import { fly } from 'svelte/transition';
+  import { listRemove } from '$lib/utils/transitions';
 
   async function runAction(toast: ToastItem, action: ToastActionButton): Promise<void> {
     try {
@@ -13,7 +15,11 @@
 {#if toastStore.toasts.length > 0}
   <div class="toast-container" aria-live="polite">
     {#each toastStore.toasts as toast (toast.id)}
-      <div class="toast-item" class:toast-with-actions={toast.actions && toast.actions.length > 0}>
+      <div
+        class="toast-item"
+        class:toast-with-actions={toast.actions && toast.actions.length > 0}
+        out:fly={{ y: 8, duration: listRemove.duration, easing: listRemove.easing, opacity: 0 }}
+      >
         <span class="toast-symbol" style="color: {toast.color};">{toast.symbol}</span>
         <span class="toast-message">{toast.message}</span>
         {#if toast.actions && toast.actions.length > 0}
@@ -66,7 +72,7 @@
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-text-dim);
-    animation: toast-in var(--duration-structural) var(--ease-spring) forwards;
+    animation: fly-in-bottom var(--duration-structural) var(--ease-spring) forwards;
     pointer-events: auto;
   }
 
@@ -134,20 +140,10 @@
     line-height: 1;
   }
 
-  @keyframes toast-in {
-    from {
-      opacity: 0;
-      transform: translateY(8px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .toast-item {
-      animation-duration: 0.01ms;
-    }
-  }
+  /* @keyframes toast-in renamed + hoisted to lib/styles/shared-keyframes.css
+     as `fly-in-bottom` (2026-05-09) — same shape, broader name so any
+     bottom-anchored entrance can reuse it. The `@media (prefers-reduced-motion)`
+     override below was redundant with the global `*` rule in app.css:79-85
+     (which already sets `animation-duration: 0.01ms !important`); removed
+     in the same sweep. */
 </style>

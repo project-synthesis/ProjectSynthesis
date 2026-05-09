@@ -236,6 +236,11 @@
     /* Tier 1 — never shrink below the rail, never overflow when collapsed */
     flex-shrink: 0;
     overflow: hidden;
+    /* Animate the rail collapse (240px ↔ 28px). Pre-2026-05-09 the
+       width snapped between the two values — visible jump on every
+       collapse toggle. Now slides at the structural tier with the
+       brand spring; reduced-motion is enforced globally. */
+    transition: width var(--duration-structural) var(--ease-spring);
   }
 
   .panel-header {

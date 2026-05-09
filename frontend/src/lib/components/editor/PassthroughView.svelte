@@ -6,10 +6,17 @@
   import { passthroughGuide } from '$lib/stores/passthrough-guide.svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { PASSTHROUGH_TOOLTIPS } from '$lib/utils/ui-tooltips';
+  import { useCopyFlash } from '$lib/utils/copy-feedback.svelte';
 
   let optimizedPrompt = $state('');
   let changesSummary = $state('');
-  let copying = $state(false);
+  // 2026-05-09: replaces hand-rolled `copying = $state(false); setTimeout
+  // (..., 1200)` — uses the shared ``useCopyFlash`` helper so this surface,
+  // CodeBlock, ForgeArtifact all reset on the same ``--duration-copy-flash``
+  // window (1500ms). Pre-fix the same logical "Copied" state lingered for
+  // 1200ms here vs 2000ms in ForgeArtifact vs 1500ms in CodeBlock —
+  // visible inconsistency users could perceive.
+  const copy = useCopyFlash();
   let saving = $state(false);
 
   const isLoading = $derived(!forgeStore.assembledPrompt);
@@ -27,9 +34,8 @@
     if (!forgeStore.assembledPrompt) return;
     const ok = await copyToClipboard(forgeStore.assembledPrompt);
     if (ok) {
-      copying = true;
+      copy.trigger();
       addToast('created', 'Copied to clipboard');
-      setTimeout(() => { copying = false; }, 1200);
     } else {
       addToast('deleted', 'Copy failed — select and copy manually');
     }
@@ -74,8 +80,8 @@
         <span class="section-label">ASSEMBLED PROMPT</span>
         <span class="section-hint">Copy this to your LLM of choice</span>
         <div class="spacer"></div>
-        <button class="copy-btn" class:copied={copying} disabled={isLoading} onclick={copyAssembled}>
-          {copying ? 'COPIED' : 'COPY'}
+        <button class="copy-btn" class:copied={copy.triggered} disabled={isLoading} onclick={copyAssembled}>
+          {copy.triggered ? 'COPIED' : 'COPY'}
         </button>
       </div>
       {#if isLoading}

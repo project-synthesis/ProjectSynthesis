@@ -3,6 +3,8 @@
   import { listRuns, type RunSummary } from '$lib/api/runs';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { runStatusColor } from '$lib/utils/colors';
+  import { fade } from 'svelte/transition';
+  import { navFade } from '$lib/utils/transitions';
 
   interface Props {
     open: boolean;
@@ -352,7 +354,7 @@
         <!-- Progress -->
         {#if seeding}
           {@const runningTint = runStatusColor('running')}
-          <div class="seed-progress" style="border-color: {runningTint}">
+          <div class="seed-progress" style="border-color: {runningTint}" transition:fade={navFade}>
             <div class="seed-progress-header">
               <span class="seed-progress-label" style="color: {runningTint}">RUNNING</span>
               <span class="seed-progress-pct">{progressPercent}%</span>
@@ -387,13 +389,13 @@
 
         <!-- Error -->
         {#if error}
-          <div class="seed-error">{error}</div>
+          <div class="seed-error" transition:fade={navFade}>{error}</div>
         {/if}
 
         <!-- Result card -->
         {#if result}
           {@const statusTint = runStatusColor(result.status)}
-          <div class="seed-result">
+          <div class="seed-result" transition:fade={navFade}>
             <div class="seed-result-header">
               <span
                 class="seed-result-status"

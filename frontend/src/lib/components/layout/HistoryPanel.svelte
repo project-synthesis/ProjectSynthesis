@@ -25,6 +25,8 @@
   import { formatScore, formatRelativeTime } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
   import { STRATEGY_TOOLTIPS } from '$lib/utils/ui-tooltips';
+  import { slide } from 'svelte/transition';
+  import { listInsert } from '$lib/utils/transitions';
 
   interface Props {
     active?: boolean;
@@ -784,8 +786,24 @@
       <p class="empty-note">No optimizations yet.</p>
     {:else}
       {#each filteredCompletedItems as item, idx (item.id)}
+        <!-- Row-level transition wrapper (2026-05-09): scoped to ``in:slide``
+             only — entrance animation for newly arrived rows (e.g.
+             optimizations completed via MCP arriving on the SSE stream).
+             Exit animation is intentionally OMITTED: the ``optimization-
+             deleted`` SSE contract is "row vanishes immediately" — both
+             the surgical-removal contract test and the user's expectation
+             when an external surface deletes a row. The grace-window
+             undo flow (× button → 5s toast → commit) gives users a
+             reversal channel that doesn't depend on a slide-out. -->
+        <div
+          class="history-row-wrapper"
+          in:slide={listInsert}
+        >
         {#if renamingOptId === item.id}
-          <div class="row-item history-row" style="--accent: {taxonomyColor(item.domain)};">
+          <div
+            class="row-item history-row"
+            style="--accent: {taxonomyColor(item.domain)};"
+          >
             <span class="row-prompt-line">
               {#if item.task_type && item.task_type !== 'general' && TASK_TYPE_ABBREV[item.task_type]}
                 <span class="row-type">{TASK_TYPE_ABBREV[item.task_type]}</span>
@@ -915,6 +933,7 @@
             </div>
           </button>
         {/if}
+        </div>
       {/each}
       {#if filteredCompletedItems.length === 0}
         <p class="empty-note">{projectStore.currentProjectId ? 'No optimizations for this project.' : 'No completed optimizations yet.'}</p>
@@ -1228,10 +1247,8 @@
   .skeleton-wide { width: 85%; }
   .skeleton-narrow { width: 55%; }
 
-  @keyframes skeleton-pulse {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 1; }
-  }
+  /* @keyframes skeleton-pulse hoisted to lib/styles/shared-keyframes.css
+     (2026-05-09) — was duplicated in this file and in ClusterRow.svelte. */
 
   /* ── Row delete affordance ─────────────────────────────────────── */
 

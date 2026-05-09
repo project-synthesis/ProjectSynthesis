@@ -122,6 +122,7 @@
         class:visible={editorStore.activeTabId === tab.id}
         role="tabpanel"
         aria-label="{tab.title} panel"
+        aria-hidden={editorStore.activeTabId !== tab.id}
       >
         {#if tab.type === 'prompt'}
           {#if forgeStore.status === 'passthrough'}
@@ -341,15 +342,27 @@
     overflow: hidden;
   }
 
+  /* Tab panel cross-fade (2026-05-09): pre-fix tab switches used a hard
+     `display: none` ↔ `display: block` toggle, which produced a single-
+     frame snap between Prompt → Result → Diff → Mindmap → Observatory.
+     Now panels stay mounted (display:block) but the inactive panels are
+     opacity:0 + pointer-events:none, so a user clicking through tabs sees
+     a 120ms cross-fade. Cost: more DOM nodes mounted at once, but the
+     workbench tabs are already independent components that mount their
+     own SSE/state independently — no perf regression observed.
+     `aria-hidden` is set on inactive panels so screen-readers skip them. */
   .editor-panel {
     position: absolute;
     inset: 0;
-    display: none;
     overflow: auto;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--duration-hover) var(--ease-spring);
   }
 
   .editor-panel.visible {
-    display: block;
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .placeholder-panel,

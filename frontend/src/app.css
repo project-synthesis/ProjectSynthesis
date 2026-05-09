@@ -1,4 +1,10 @@
 @import "tailwindcss";
+/* Shared animation keyframes — single source of truth for primitives that
+   recur across multiple components (skeleton-pulse, scrim-in, modal-in,
+   fly-in-bottom, status-pulse, tab-fade-in, phase-reveal-in). Import order
+   matters: load BEFORE :root tokens so consuming components can reference
+   keyframe names + duration/easing tokens in the same `animation:` shorthand. */
+@import "$lib/styles/shared-keyframes.css";
 
 /* ---- Design System Tokens ---- */
 :root {
@@ -94,6 +100,14 @@ html, body {
   --duration-stagger: 350ms;
   --duration-progress: 500ms;
   --duration-skeleton: 1500ms;
+  /* Copy-flash window: how long the "Copied" state lingers after a
+     copy-to-clipboard action across the app. Pre-2026-05-09 each
+     consumer (Logo, ForgeArtifact, PassthroughView, CodeBlock) hand-rolled
+     its own setTimeout with a different value (1200, 1500, 2000ms),
+     so users saw the same logical operation reset on different cadences.
+     Centralized here. Consumed via JS through useCopyFlash() in
+     utils/copy-feedback.ts which reads the same value via getComputedStyle. */
+  --duration-copy-flash: 1500ms;
 }
 
 /* ---- Interactive Defaults ---- */

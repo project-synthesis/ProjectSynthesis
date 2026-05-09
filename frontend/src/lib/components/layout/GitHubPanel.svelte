@@ -15,6 +15,8 @@
   import { formatRelativeTime } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
   import { GITHUB_TOOLTIPS } from '$lib/utils/ui-tooltips';
+  import { fade } from 'svelte/transition';
+  import { tabFade } from '$lib/utils/transitions';
 
   interface Props {
     active: boolean;
@@ -150,6 +152,7 @@
       </div>
 
       {#if githubStore.uiTab === 'info'}
+        <div in:fade={tabFade}>
         {#if githubStore.connectionState === 'expired'}
           <div class="auth-expired-banner">
             <span class="error-note" style="margin: 0;">GitHub session expired</span>
@@ -239,7 +242,9 @@
           <button class="action-btn" onclick={() => githubStore.reindex()}>REINDEX</button>
         </div>
 
+        </div>
       {:else}
+        <div in:fade={tabFade}>
         {#if githubStore.selectedFile}
           <div class="file-viewer">
             <div class="file-viewer-header">
@@ -267,6 +272,7 @@
             </div>
           {/if}
         {/if}
+        </div>
       {/if}
     {:else if githubStore.user}
       <div class="github-user-card">

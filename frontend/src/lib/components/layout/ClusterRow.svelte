@@ -307,8 +307,6 @@
   .skeleton-wide { width: 80%; }
   .skeleton-narrow { width: 50%; }
 
-  @keyframes skeleton-pulse {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 1; }
-  }
+  /* @keyframes skeleton-pulse hoisted to lib/styles/shared-keyframes.css
+     (2026-05-09) — was duplicated here and in HistoryPanel.svelte. */
 </style>

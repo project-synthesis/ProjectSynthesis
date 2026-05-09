@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { CodeBlockSection } from '$lib/content/types';
+  import { useCopyFlash } from '$lib/utils/copy-feedback.svelte';
 
   interface Props {
     language: CodeBlockSection['language'];
@@ -9,12 +10,17 @@
 
   let { language, code, filename }: Props = $props();
 
-  let copyLabel = $state('COPY');
+  // Replaces hand-rolled `let copyLabel = $state('COPY'); setTimeout(...,
+  // 1500)` (2026-05-09) — uses the shared ``useCopyFlash`` helper so this
+  // surface, Logo, ForgeArtifact, PassthroughView all reset on the same
+  // ``--duration-copy-flash`` window. Pre-fix each component used a
+  // different timeout (1200/1500/2000ms) so users saw the same logical
+  // copy operation reset on different cadences.
+  const copy = useCopyFlash();
 
   async function handleCopy() {
     await navigator.clipboard.writeText(code);
-    copyLabel = 'COPIED';
-    setTimeout(() => { copyLabel = 'COPY'; }, 1500);
+    copy.trigger();
   }
 </script>
 
@@ -28,7 +34,7 @@
   <div class="code-block__body">
     <pre class="code-block__pre"><code>{code}</code></pre>
     <button class="code-block__copy" onclick={handleCopy} aria-label="Copy code" aria-live="polite">
-      {copyLabel}
+      {copy.triggered ? 'COPIED' : 'COPY'}
     </button>
   </div>
 </div>
