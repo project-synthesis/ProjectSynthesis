@@ -20,10 +20,27 @@ The ``_orchestrator`` parameter is for test injection only (``_`` prefix
 flags it as private); production callers leave it ``None`` and the
 MCP-runtime singleton resolves via ``_shared.get_run_orchestrator``.
 
+Cycle 14 follow-up (v0.4.18-p3-PR2): the AC-C6-3 per-prompt progress
+contract retired in Cycle 13 is restored via a **bus → ctx bridge**.
+The shim mints ``run_id`` itself, registers an
+``event_bus.subscribe_for_run(run_id)`` subscription BEFORE dispatching
+the orchestrator (Cycle 11 race-free pattern), and runs a background
+task that forwards every ``probe_prompt_completed`` event into
+``ctx.report_progress(progress, total, message)``. Bridge guarantees:
+
+  - Race-free: subscription registered before dispatch
+  - Fail-soft: ``ctx is None`` / missing ``report_progress`` /
+    in-flight exceptions silently skipped
+  - No leaks: bridge task cancelled + subscription ``aclose``\\d in
+    ``finally``
+
 Copyright 2025-2026 Project Synthesis contributors.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
+import uuid
 from typing import Any, Literal
 
 from app.schemas.probes import (
@@ -35,6 +52,9 @@ from app.schemas.probes import (
     ProbeTaxonomyDelta,
 )
 from app.schemas.runs import RunRequest
+from app.services.event_bus import event_bus
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_orchestrator() -> Any:
@@ -99,13 +119,74 @@ def _row_to_probe_run_result(row: Any) -> ProbeRunResult:
     )
 
 
+def _ctx_supports_progress(ctx: Any) -> bool:
+    """Return True iff ``ctx`` exposes an ``async``-callable ``report_progress``.
+
+    The FastMCP runtime supplies a ``Context`` instance with
+    ``async def report_progress(progress, total=None, message=None)``;
+    test clients sometimes pass ``None`` or an opaque object. The bridge
+    must skip silently in those cases — progress reporting is best-effort.
+    """
+    if ctx is None:
+        return False
+    fn = getattr(ctx, "report_progress", None)
+    return callable(fn)
+
+
+async def _bridge_bus_to_ctx(subscription: Any, ctx: Any) -> None:
+    """Forward ``probe_prompt_completed`` events into ``ctx.report_progress``.
+
+    Iterates the per-run subscription until a terminal event
+    (``probe_completed`` / ``probe_failed``) arrives or the subscription
+    is closed. Each ``probe_prompt_completed`` event becomes one call to
+    ``ctx.report_progress(progress=current, total=total, message=…)``.
+
+    Fail-soft on every individual forward: any exception raised by
+    ``ctx.report_progress`` (transport error, serialization failure, …)
+    is swallowed with a debug log so a single bad forward cannot
+    interrupt the rest of the bridge or the probe run itself.
+    """
+    if not _ctx_supports_progress(ctx):
+        # Drain the subscription until terminal event so we don't leave
+        # events queued, but skip every forward. Cheaper than not
+        # subscribing at all because ``handle_probe`` already had to
+        # subscribe race-free before dispatch.
+        async for event in subscription:
+            if event.kind in ("probe_completed", "probe_failed"):
+                break
+        return
+
+    async for event in subscription:
+        if event.kind == "probe_prompt_completed":
+            payload = event.payload or {}
+            current = payload.get("current")
+            total = payload.get("total")
+            try:
+                await ctx.report_progress(
+                    progress=current,
+                    total=total,
+                    message=f"prompt {current}/{total}",
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                # Progress reporting is best-effort. Swallow the failure
+                # so the bridge keeps draining the queue and the run
+                # completes faithfully even when the IDE-side transport
+                # errors on a single forward.
+                logger.debug(
+                    "bus→ctx bridge: report_progress failed; continuing",
+                    exc_info=True,
+                )
+        if event.kind in ("probe_completed", "probe_failed"):
+            break
+
+
 async def handle_probe(
     topic: str,
     scope: str | None = None,
     intent_hint: Literal["audit", "refactor", "explore", "regression-test"] | None = None,
     n_prompts: int | None = None,
     repo_full_name: str | None = None,
-    ctx=None,  # FastMCP Context | None — reserved for future progress reports
+    ctx=None,  # FastMCP Context | None — bridge forwards progress when present
     _orchestrator: Any | None = None,
 ) -> ProbeRunResult:
     """MCP tool handler for ``synthesis_probe`` — dispatch via RunOrchestrator.
@@ -115,18 +196,25 @@ async def handle_probe(
          topic length 3-500, n_prompts range 5-25)
       2. Pre-flight gate: missing ``repo_full_name`` → ``ProbeError``
          (mirrors the REST router's ``link_repo_first`` short-circuit)
-      3. Build ``RunRequest`` and dispatch via
-         ``RunOrchestrator.run('topic_probe', ...)``
-      4. Read the resulting ``RunRow`` and shape into ``ProbeRunResult``
+      3. Mint ``run_id``; register ``event_bus.subscribe_for_run(run_id)``
+         BEFORE dispatch (Cycle 11 race-free pattern); kick off the
+         bridge task that forwards bus → ``ctx.report_progress``
+      4. Build ``RunRequest`` and dispatch via
+         ``RunOrchestrator.run('topic_probe', ...)`` with the
+         pre-allocated ``run_id``
+      5. ``finally``: cancel the bridge task + ``aclose`` the subscription
+         so ``event_bus._subscribers`` returns to its pre-call cardinality
+         (no leaks — verified by ``test_handle_probe_cleans_up_…``)
+      6. Read the resulting ``RunRow`` and shape into ``ProbeRunResult``
 
     The response shape is preserved byte-for-byte (spec § 7.1).
 
-    Notes:
-      - ``ctx.report_progress`` is NOT plumbed through Cycle 13 — the
-        TopicProbeGenerator publishes progress to ``event_bus``, not
-        through the MCP context. The ``ctx`` parameter is retained for
-        signature parity and future re-introduction (e.g., bridging
-        bus events to MCP progress in a follow-up cycle).
+    Bridge guarantees (Cycle 14, AC-C6-3 restored):
+      - Race-free: subscription registered before orchestrator starts
+      - Fail-soft: ``ctx is None``, missing ``report_progress`` attr,
+        and exceptions raised inside ``report_progress`` are all swallowed
+      - No task leak: bridge task cancelled in ``finally``
+      - No subscription leak: ``await subscription.aclose()`` in ``finally``
     """
     # Pydantic boundary validation — keeps the production contract enforced
     # even when callers bypass the ``@mcp.tool`` Field constraints.
@@ -153,7 +241,41 @@ async def handle_probe(
     if _orchestrator is None:
         _orchestrator = _resolve_orchestrator()
 
-    payload = request.model_dump()
-    run_request = RunRequest(mode="topic_probe", payload=payload)
-    run_row = await _orchestrator.run("topic_probe", run_request)
+    # Race-free pattern: pre-mint run_id, subscribe BEFORE dispatching the
+    # orchestrator. The 500ms ring-buffer replay inside _RunSubscription is
+    # defense-in-depth; subscribing here means the buffer cannot miss any
+    # event the generator publishes.
+    run_id = str(uuid.uuid4())
+    subscription = event_bus.subscribe_for_run(run_id)
+    bridge_task: asyncio.Task[None] = asyncio.create_task(
+        _bridge_bus_to_ctx(subscription, ctx),
+    )
+
+    try:
+        payload = request.model_dump()
+        run_request = RunRequest(mode="topic_probe", payload=payload)
+        run_row = await _orchestrator.run(
+            "topic_probe", run_request, run_id=run_id,
+        )
+    finally:
+        # Cancel + close in this order so the bridge stops iterating
+        # before the subscription's queue is sentinel-closed; this avoids
+        # the bridge picking up the sentinel mid-iteration as an event.
+        bridge_task.cancel()
+        try:
+            await bridge_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            # Cancellation is expected; any other exception is best-effort.
+            pass
+        try:
+            await subscription.aclose()
+        except Exception:  # noqa: BLE001
+            # Subscription cleanup is best-effort — the underlying
+            # discard from event_bus._subscribers happens unconditionally
+            # via _RunSubscription._cleanup.
+            logger.debug(
+                "bus→ctx bridge: subscription.aclose() failed; ignoring",
+                exc_info=True,
+            )
+
     return _row_to_probe_run_result(run_row)
