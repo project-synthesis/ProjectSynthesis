@@ -16,6 +16,7 @@
   import Logo from '$lib/components/shared/Logo.svelte';
   import ScoreSparkline from '$lib/components/shared/ScoreSparkline.svelte';
   import { sseHealthStore } from '$lib/stores/sse-health.svelte';
+  import { preferencesStore } from '$lib/stores/preferences.svelte';
   import type { ClusterStats } from '$lib/api/clusters';
 
   function qHealthTooltip(stats: ClusterStats | null): string {
@@ -155,7 +156,21 @@
     {:else if githubStore.connectionState === 'authenticated'}
       <span class="status-github status-github--token" style="color: var(--color-neon-yellow)">no repo</span>
     {/if}
-    {#if forgeStore.mcpDisconnected && !routing.isDegraded && !routing.isAutoFallback}
+    {#if forgeStore.mcpDisconnected
+      && !routing.isDegraded
+      && !routing.isAutoFallback
+      && (preferencesStore.pipeline.force_sampling || routing.tier === 'sampling')}
+      <!-- 2026-05-09: gate the "disconnected" label on whether MCP is
+           actually relevant to the user's current routing. Pre-fix the
+           label flashed during sampling→internal transitions: VS Code
+           closes → mcpDisconnected=true → force_sampling auto-disables
+           → tier flips to internal — but for one frame mcpDisconnected
+           was still true with no degraded/autofallback context, so the
+           label lit up red even though the user is now on a healthy
+           internal tier and never asked about MCP. The added
+           ``preferencesStore.pipeline.force_sampling || tier===sampling``
+           check makes the label visible only when MCP being down is a
+           real signal (the user wanted sampling and lost it). -->
       <span class="status-disconnected" use:tooltip={STATUS_TOOLTIPS.mcp_disconnected}>disconnected</span>
     {/if}
     {#if clustersStore.seedBatchActive}

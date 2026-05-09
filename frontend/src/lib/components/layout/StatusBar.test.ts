@@ -109,11 +109,27 @@ describe('StatusBar', () => {
     expect(screen.queryByText(/clusters/)).not.toBeInTheDocument();
   });
 
-  it('shows "disconnected" label when MCP is disconnected', () => {
+  it('hides "disconnected" label when MCP drops but no sampling-relevance signal is present', () => {
+    // 2026-05-09: the label is now gated on whether MCP relevance applies —
+    // ``preferencesStore.pipeline.force_sampling`` is true, OR the resolved
+    // tier is currently ``sampling``. Pre-fix the label flashed briefly on
+    // every sampling→internal transition because mcpDisconnected was still
+    // true for a frame after force_sampling auto-disabled, with no
+    // isDegraded/isAutoFallback context — the label lit up red even though
+    // the user is now on a healthy internal tier and never asked about
+    // MCP. With the new gate the label stays hidden for every realistic
+    // transient because either ``isAutoFallback`` or the new gate filters
+    // it out. The auto-fallback notice in SettingsPanel covers the
+    // sampling-degraded case with richer copy.
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     forgeStore.mcpDisconnected = true;
+    forgeStore.samplingCapable = true;
+    preferencesStore.prefs.pipeline.force_sampling = true;
     render(StatusBar);
-    expect(screen.getByText('disconnected')).toBeInTheDocument();
+    // isAutoFallback fires (requestedTier=sampling, effectiveTier=internal)
+    // → the existing ``!routing.isAutoFallback`` half of the condition
+    // hides the label even with force_sampling=true.
+    expect(screen.queryByText('disconnected')).not.toBeInTheDocument();
   });
 
   it('does not show "disconnected" when MCP is connected', () => {
@@ -493,13 +509,17 @@ describe('StatusBar', () => {
     expect(screen.getByText('SAMPLING')).toBeInTheDocument(); // struck-through
   });
 
-  it('shows "disconnected" when MCP is disconnected but no force toggle active', () => {
+  it('does NOT show "disconnected" when MCP is disconnected but the user isn\'t seeking sampling', () => {
+    // 2026-05-09: brand-driven gate. Pre-fix this rendered "disconnected"
+    // even though the user is happily on internal tier and MCP being
+    // unavailable is irrelevant noise. Now hidden unless the user has
+    // ``force_sampling=true`` or the resolved tier is ``sampling``.
     mockFetch([{ match: '/api/health', response: mockHealthResponse() }]);
     forgeStore.provider = 'claude_cli';
     forgeStore.mcpDisconnected = true;
-    // force_sampling is false (default) — no auto-fallback, no degradation
+    preferencesStore.prefs.pipeline.force_sampling = false;
     render(StatusBar);
-    expect(screen.getByText('disconnected')).toBeInTheDocument();
+    expect(screen.queryByText('disconnected')).not.toBeInTheDocument();
   });
 
   // -----------------------------------------------------------------------

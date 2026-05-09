@@ -362,7 +362,11 @@
             onclick={() => {
               const newVal = !preferencesStore.pipeline.force_sampling;
               preferencesStore.setPipelineToggle('force_sampling', newVal);
-              if (newVal) samplingGuide.show(true);
+              // Explicit toggle is an explicit opt-in to see the guide —
+              // override prior dismissal. Pre-2026-05-09 used ``show(true)``
+              // (respectDismiss) which silently swallowed the request once
+              // the user had dismissed the guide once.
+              if (newVal) samplingGuide.show(false);
             }}
             role="switch"
             aria-checked={preferencesStore.pipeline.force_sampling}
@@ -391,7 +395,11 @@
             onclick={() => {
               const newVal = !preferencesStore.pipeline.force_passthrough;
               preferencesStore.setPipelineToggle('force_passthrough', newVal);
-              if (newVal) passthroughGuide.show(true);
+              // Same fix as samplingGuide above (2026-05-09): explicit
+              // toggle = explicit opt-in. ``show(false)`` ignores prior
+              // dismissal so the guide actually pops on every fresh
+              // toggle rather than silently failing forever.
+              if (newVal) passthroughGuide.show(false);
             }}
             role="switch"
             aria-checked={preferencesStore.pipeline.force_passthrough}

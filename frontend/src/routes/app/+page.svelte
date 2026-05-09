@@ -31,13 +31,25 @@
   /**
    * Reconcile force toggles with actual system capabilities.
    * Called after BOTH health and preferences are loaded to avoid races.
+   *
+   * Async (2026-05-09): callers MUST await before reading ``routing.tier``
+   * to make a guide-trigger decision — pre-fix the function fired
+   * ``setPipelineToggle`` (which only mutates ``prefs`` after the network
+   * round-trip resolves) without awaiting, so the cold-boot ``pendingGuide``
+   * effect read a stale tier (``internal``) and triggered InternalGuide
+   * even when sampling was about to take over. Worse: when the sampling
+   * tier later resolved, NO further trigger fired (the routing_state_changed
+   * handler runs only on backend state changes, not preference flips), so
+   * SamplingGuide silently never opened. Conversely on VS-Code-closed boot,
+   * the same race could resolve to a flap that prevented InternalGuide
+   * from opening at all. Awaiting the toggle fixes both directions.
    */
-  function reconcileToggles(h: HealthResponse, delta: any): void {
+  async function reconcileToggles(h: HealthResponse, delta: any): Promise<void> {
     // Sampling just became available → auto-enable force_sampling, clear force_passthrough
     if (delta.samplingChanged) {
       onSamplingDetected();
       if (!preferencesStore.pipeline.force_sampling) {
-        preferencesStore.setPipelineToggle('force_sampling', true);
+        await preferencesStore.setPipelineToggle('force_sampling', true);
       }
     }
     // Sampling no longer available → clear stale force_sampling instantly
@@ -45,7 +57,7 @@
     if (preferencesStore.pipeline.force_sampling && h.sampling_capable !== true) {
       const prev = preferencesStore.prefs.pipeline.force_sampling;
       preferencesStore.prefs.pipeline.force_sampling = false;
-      preferencesStore.setPipelineToggle('force_sampling', false).catch(() => {
+      await preferencesStore.setPipelineToggle('force_sampling', false).catch(() => {
         // Rollback optimistic update on API failure
         preferencesStore.prefs.pipeline.force_sampling = prev;
         addToast('deleted', 'Failed to update sampling preference');
@@ -387,8 +399,11 @@
       pendingHealthDelta = { health: h, delta };
     } else if (!preferencesStore.loading) {
       // Subsequent health polls (every 60s) — preferences already loaded,
-      // safe to auto-sync toggles immediately.
-      reconcileToggles(h, delta);
+      // safe to auto-sync toggles immediately. Fire-and-forget here is
+      // OK because no guide-trigger reads ``routing.tier`` synchronously
+      // off the back of the periodic poll; the cold-boot path that does
+      // is in the $effect below.
+      void reconcileToggles(h, delta);
     }
   }
 
@@ -407,18 +422,26 @@
   // 2. init() overwriting toggle patches when it resolves
   // 3. Showing the wrong onboarding modal
   $effect(() => {
-    if (pendingGuide && !preferencesStore.loading) {
-      // First: reconcile toggles with actual capabilities
-      if (pendingHealthDelta) {
-        reconcileToggles(pendingHealthDelta.health, pendingHealthDelta.delta);
-        pendingHealthDelta = null;
+    if (!pendingGuide || preferencesStore.loading) return;
+    // Capture and clear synchronously so a re-entrant SSE event after
+    // ``setPipelineToggle`` resolves doesn't race the trigger.
+    const captured = pendingHealthDelta;
+    pendingGuide = false;
+    pendingHealthDelta = null;
+    void (async () => {
+      if (captured) {
+        // 2026-05-09: AWAIT the toggle persist before reading routing.tier.
+        // Pre-fix: setPipelineToggle was fire-and-forget, so on cold boot
+        // the trigger fired with stale preferences (force_sampling=false)
+        // and locked ``lastTriggeredTier='internal'`` even when sampling
+        // was about to take over. The post-toggle SamplingGuide trigger
+        // then never fired (no SSE re-broadcasts on preference flips),
+        // and InternalGuide silently never re-opened either. Awaiting
+        // resolves both directions.
+        await reconcileToggles(captured.health, captured.delta);
       }
-      // Then: trigger guide. triggerTierGuide handles startup settle
-      // internally (2s delay for MCP capability negotiation, cancelled
-      // if a routing_state_changed SSE arrives first).
-      pendingGuide = false;
       triggerTierGuide(routing.tier);
-    }
+    })();
   });
 
   // Derived error states
