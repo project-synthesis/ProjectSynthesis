@@ -322,13 +322,16 @@
        / ``dialogOut`` presets. */
   }
 
-  @keyframes guide-in {
-    from { opacity: 0; transform: scale(0.95) translateY(8px); }
-    to { opacity: 1; transform: scale(1) translateY(0); }
-  }
-
+  /* @keyframes guide-in removed (2026-05-09) — entrance/exit moved to
+     Svelte ``in:fly`` / ``out:fly`` directives on the .guide-container
+     element above. The local @media (prefers-reduced-motion) overrides
+     for ``.guide-container`` are also redundant — app.css:79-85 enforces
+     ``animation-duration: 0.01ms !important`` + ``transition-duration:
+     0.01ms !important`` on the universal selector globally. The
+     remaining .step-item / .step-content overrides are kept as
+     belt-and-braces against the brand "step-stagger" + "step-expand"
+     keyframes still in use below. */
   @media (prefers-reduced-motion: reduce) {
-    .guide-container { animation-duration: 0.01ms; }
     .step-item { animation-duration: 0.01ms !important; }
     .step-content { animation-duration: 0.01ms !important; }
   }
