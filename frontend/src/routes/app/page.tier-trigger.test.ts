@@ -38,12 +38,58 @@ vi.mock('$lib/stores/sse-health.svelte', async () => {
   };
 });
 
+// CI-portability note: pre-2026-05-09 the test passed locally only because
+// the dev backend was running on :8000 — ``patchPreferences`` happily hit
+// the real server and ``force_sampling`` actually flipped. On CI (no backend)
+// the network call rejects, ``update()`` swallows the error, and the prefs
+// snapshot never updates → ``routing.tier`` stays ``internal`` → the
+// SamplingGuide assertion times out. Mocking BOTH ``getPreferences`` and
+// ``patchPreferences`` to return deterministic merged snapshots makes the
+// trigger chain work the same way on every runner.
+const _patchedPrefsState = {
+  schema_version: 1,
+  models: { analyzer: 'sonnet', optimizer: 'opus', scorer: 'sonnet' },
+  pipeline: {
+    enable_explore: true,
+    enable_scoring: true,
+    enable_strategy_intelligence: true,
+    enable_llm_classification_fallback: true,
+    enable_cross_project_injection: false,
+    force_sampling: false,
+    force_passthrough: false,
+    optimizer_effort: 'max',
+    analyzer_effort: 'max',
+    scorer_effort: 'max',
+  },
+  defaults: { strategy: 'auto' },
+  domain_readiness_notifications: { enabled: false, muted_domain_ids: [] },
+};
+
 vi.mock('$lib/api/client', async () => {
   const actual = await vi.importActual<typeof import('$lib/api/client')>('$lib/api/client');
   return {
     ...actual,
     getHealth: vi.fn(),
     getOptimization: vi.fn(),
+    getPreferences: vi.fn(async () => structuredClone(_patchedPrefsState)),
+    patchPreferences: vi.fn(async (patch: Record<string, any>) => {
+      // Apply the same deep-merge contract the backend would: nested keys
+      // (`pipeline.*`, `models.*`) are merged into the existing snapshot;
+      // top-level scalar keys overwrite. Mutual exclusion of force toggles
+      // mirrors ``preferencesStore.setPipelineToggle`` so the test exercises
+      // the genuine post-mutation state.
+      for (const [key, value] of Object.entries(patch)) {
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          (_patchedPrefsState as any)[key] = {
+            ...(_patchedPrefsState as any)[key],
+            ...value,
+          };
+        } else {
+          (_patchedPrefsState as any)[key] = value;
+        }
+      }
+      return structuredClone(_patchedPrefsState);
+    }),
   };
 });
 
@@ -71,6 +117,11 @@ describe('app/+page.svelte — tier-guide trigger', () => {
     forgeStore._reset();
     preferencesStore._reset();
     resetGuides();
+    // Reset the in-mock prefs snapshot so each test starts from defaults.
+    // Without this, test N's ``setPipelineToggle('force_sampling', true)``
+    // would poison ``force_sampling`` for test N+1's cold-boot tier read.
+    _patchedPrefsState.pipeline.force_sampling = false;
+    _patchedPrefsState.pipeline.force_passthrough = false;
     vi.clearAllMocks();
   });
   afterEach(() => {
