@@ -16,12 +16,22 @@ All writes route through `app.state.write_queue.submit(work_fn, *, timeout, oper
 - Caller cancellation does NOT cancel in-flight work (shielded `__aexit__`); per-task timeout DOES (default 300s).
 - Audit hook fires on read-engine writes outside `migration_mode` (lifespan migrations) or `cold_path_mode` (taxonomy cold-path full-refit). RAISE in CI; WARN in dev/prod.
 - Reentrancy: hard-fail via `WriteQueueReentrancyError` if `submit()` called from within the worker task.
-- Migration completeness: 100% of hot+warm writers route through queue. Cold path is the sole exception (kept on `WriterLockedAsyncSession`; v0.4.15 chunks).
+- Migration completeness: 100% of hot+warm writers route through queue. Cold path + repo-index chunked through queue at v0.4.16 (see "Cold-path + repo-index chunking" below). Long-handler sites (refine/save_result/optimize internal pipeline) retain legacy session — deferred to a future release.
 - Telemetry writes (e.g., `task_type_telemetry`) use fire-and-forget `submit()` — failure does NOT block the caller.
 - `WriteQueue.submit_batch(work_fns, *, timeout, operation_label)` runs multiple writes in ONE queued task, ONE transaction, ONE writer session. Work_fns MUST NOT call db.commit(). Failure of any work_fn raises `SubmitBatchError(index, fn_name, original)` and rolls back ALL prior writes. Used by OAuth callback + token revoke. Inside submit_batch, call `audit_logger` directly via `AuditLog` insert (NOT `log_event`) because `log_event`'s legacy-mode commit violates the commit-forbidden contract.
-- v0.4.14: short-lived writers route through queue (REST routers + MCP optimize-passthrough + sampling-pipeline persist + audit logs + bg-task helper `_update_synthesis_status`). Long-handler sites (refine/save_result/optimize internal pipeline) + cold path + `_bg_index`/`build_index` retain legacy session pending v0.4.15.
+- v0.4.14: short-lived writers route through queue (REST routers + MCP optimize-passthrough + sampling-pipeline persist + audit logs + bg-task helper `_update_synthesis_status`).
 
-See `docs/specs/sqlite-writer-queue-2026-05-02.md` for full design rationale.
+See `docs/specs/sqlite-writer-queue-2026-05-02.md` (v0.4.13 design) + `docs/specs/v0.4.14-sqlite-finalization-2026-05-04.md` (v0.4.14 finalization).
+
+## Cold-path + repo-index chunking (v0.4.16)
+
+**Cold path P1a**: 4-phase SAVEPOINT-bounded execution replaces whole-refit atomicity. Outer `cp_pre_reembed` SAVEPOINT + 4 inner per-phase nested SAVEPOINTs. Q-checks fire after Phase 1 (re-embed) + Phase 2 (reassign); Q regression rolls back to `cp_pre_reembed` (preserves "Q never drops" invariant). `ColdPathPhaseFailure` + `ColdPathQCheckEvalFailure` typed exceptions. Module-level `_COLD_PATH_LOCK` serializes concurrent invocations; `_COLD_PATH_RUN_ID` ContextVar propagates correlation IDs. Peer-writer-aware quiescing via `cluster_metadata["refit_in_progress_until"]` flag lets hot/warm/seed/feedback paths cooperatively SKIP clusters mid-refit (4 peer paths integrated; defensive `_parse_quiesce_flag()` handles 4 corruption paths). 8 decision events (`lock_acquired`, `cold_path_started/phase_started/phase_committed/q_check/phase_rolled_back/completed`, `silhouette_restored_from_snapshot`). Health endpoint `cold_path` block. 7 new constants in `taxonomy/_constants.py` with `_validate_cold_path_constants()` import-time invariant.
+
+**Repo index P1b**: `_bg_index` + `RepoIndexService.build_index()`/`incremental_update()`/`invalidate_index()` migrated to `WriteQueue.submit()` with per-batch chunking at `REPO_INDEX_PERSIST_BATCH_SIZE=50` (DELETEs at `REPO_INDEX_DELETE_BATCH_SIZE=200`). Per-(repo, branch) `asyncio.Lock` registry serializes concurrent invocations; second call returns early via `repo_index_skipped(reason=lock_held)`. Lifespan startup sweep `_gc_orphan_repo_index_runs()` flips stuck `status='indexing'` rows older than `REPO_INDEX_LOCK_TTL_MIN=30 min` to `status='error'`. Refit-fatal model: any batch failure marks meta error and re-raises; previously-committed batches stay in DB; idempotent retry via Phase 1 DELETE on rebuild. `_REPO_INDEX_RUN_ID` ContextVar correlates phase calls. 8 decision events (`repo_index_lock_acquired/started/phase_started/batch_committed/batch_rolled_back/skipped/completed/recovered`); reason-code enums enforced at emission via `_assert_reason_in_set`; 8 `TypedDict` payload schemas exported from `repo_index_service.__all__`. Per-batch SSE `index_phase_changed` throttled at `REPO_INDEX_LOG_PROGRESS_BATCH_INTERVAL=5`. Health endpoint `repo_index` block.
+
+## Lifespan-DDL consolidation (v0.4.18 prework)
+
+All ~12 startup-time `ALTER TABLE` / `CREATE INDEX` / `CREATE TABLE IF NOT EXISTS` blocks migrated from `app/main.py` lifespan into Alembic migration `bdd8e96cf489`. `alembic upgrade head` is now the single source of truth — lifespan no longer mutates schema. `main.py` shrinks 2204 → 1957 lines. Regression file `tests/test_main_lifespan_no_ddl.py` (19 tests) pins both the static-text invariant (no DDL keywords inside lifespan) and per-(table,column) schema existence on a freshly migrated DB. Pre-existing Alembic schema drift cleanup: `alembic check` now exits cleanly; 9 hotpath indexes from `cc9c44e78f78` declared in models; `env.py` `compare_type` treats SQLite `JSON↔TEXT` + `Float↔REAL` as equivalent; migration `2d61e9b37427` repairs the only two real drift items (partial unique index `uq_prompt_cluster_domain_label` + `NOT NULL` on `global_patterns.id`).
 
 ## Key services (`app/services/`)
 
@@ -61,7 +71,7 @@ Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MOD
 | Router | Endpoints |
 |--------|-----------|
 | `optimize.py` | `POST /api/optimize` (SSE), `GET /api/optimize/{trace_id}` |
-| `history.py` | `GET /api/history` (sort/filter, pagination envelope), `DELETE /api/optimizations/{id}` (v0.4.2, always available), `POST /api/optimizations/delete` (v0.4.3, bulk 1–100 ids, rate-limited 10/min, emits one `optimization_deleted` per row + one aggregated `taxonomy_changed`) |
+| `history.py` | `GET /api/history` (sort/filter, pagination envelope; **server-pushdown of `project_id` + `status` Query params at v0.4.15** — eliminated the ~9-row-per-page regression that surfaced post-ADR-005 multi-project rollout), `DELETE /api/optimizations/{id}` (v0.4.2, always available), `POST /api/optimizations/delete` (v0.4.3, bulk 1–100 ids, rate-limited 10/min, emits one `optimization_deleted` per row + one aggregated `taxonomy_changed`) |
 | `feedback.py` | `POST /api/feedback`, `GET /api/feedback?optimization_id=X` |
 | `refinement.py` | `POST /api/refine` (SSE), `GET /api/refine/{id}/versions`, `POST /api/refine/{id}/rollback` |
 | `providers.py` | `GET /api/providers`, `GET/PATCH/DELETE /api/provider/api-key` |
@@ -70,7 +80,7 @@ Model IDs centralized in `config.py`: `MODEL_SONNET` (`claude-sonnet-4-6`), `MOD
 | `settings.py` | `GET /api/settings` (read-only) |
 | `github_auth.py` | Device Flow: request_device_code, poll_device_code. Callback: login, callback. Common: me, logout |
 | `github_repos.py` | `GET /api/repos`, link, linked, unlink, tree, files, branches, index-status, reindex |
-| `health.py` | `GET /api/health` (provider, tiers, scores, errors, domain_count, injection_stats, injection_effectiveness, recovery, global_patterns, project_count, classification_agreement) |
+| `health.py` | `GET /api/health` (provider, tiers, scores, errors, domain_count, injection_stats, injection_effectiveness, recovery, global_patterns, project_count, classification_agreement, **`cold_path` block** v0.4.16 P1a — `last_run_*` + `peer_skip_count_24h` + per-phase `p95_phase_duration_ms`, **`repo_index` block** v0.4.16 P1b — `last_run_*` + `batches_committed_total` + `p95_batch_duration_ms` + `active_locks`) |
 | `events.py` | `GET /api/events` (SSE), `POST /api/events/_publish` (cross-process) |
 | `domains.py` | `GET /api/domains`, `POST /api/domains/{id}/promote`, `GET /api/domains/readiness`, `GET /api/domains/{id}/readiness` (`?fresh=true` bypass), `GET /api/domains/{id}/readiness/history` (`?hours=`, hourly buckets), `POST /api/domains/{id}/rebuild-sub-domains` (10/min, R6 operator recovery) |
 | `seed.py` | `POST /api/seed` (batch seeding, sync — `SeedOutput` gains additive `run_id` since v0.4.18), `GET /api/seed/agents` (agent metadata for UI), `GET /api/seed`, `GET /api/seed/{run_id}` (paginated; `RunRow` rows filtered to `mode='seed_agent'`) |
