@@ -57,6 +57,26 @@ export function stateColor(state: string): string {
   return map[state] ?? '#7a7a9e';
 }
 
+/**
+ * RunRow.status color for the Foundation P3 unified run substrate.
+ *
+ * Chromatic encoding for the 4 terminal/in-flight states:
+ *   - running   → neon-cyan   (in-flight, primary brand)
+ *   - completed → neon-green  (success, health)
+ *   - partial   → neon-yellow (mixed terminal — some prompts succeeded, some failed)
+ *   - failed    → neon-red    (terminal failure)
+ *
+ * Unknown / unrecognized status falls back to text-dim — safe degrade for
+ * forward-compat with future status values.
+ */
+export function runStatusColor(status: string): string {
+  if (status === 'running') return 'var(--color-neon-cyan)';
+  if (status === 'completed') return 'var(--color-neon-green)';
+  if (status === 'partial') return 'var(--color-neon-yellow)';
+  if (status === 'failed') return 'var(--color-neon-red)';
+  return 'var(--color-text-dim)';
+}
+
 /** Per-dimension colors for multi-line sparkline overlay. */
 export const DIMENSION_COLORS: Record<string, string> = {
   clarity: 'var(--color-neon-cyan)',

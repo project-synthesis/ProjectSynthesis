@@ -24,12 +24,14 @@ __all__ = [
     "get_context_service",
     "get_domain_resolver",
     "get_routing",
+    "get_run_orchestrator",
     "get_signal_loader",
     "get_taxonomy_engine",
     "get_write_queue",
     "set_context_service",
     "set_domain_resolver",
     "set_routing",
+    "set_run_orchestrator",
     "set_signal_loader",
     "set_taxonomy_engine",
     "set_write_queue",
@@ -38,6 +40,7 @@ __all__ = [
 if TYPE_CHECKING:
     from app.services.context_enrichment import ContextEnrichmentService
     from app.services.routing import RoutingManager
+    from app.services.run_orchestrator import RunOrchestrator
     from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,7 @@ _routing: RoutingManager | None = None
 _taxonomy_engine = None  # TaxonomyEngine | None (avoid import for startup speed)
 _context_service: ContextEnrichmentService | None = None
 _write_queue: "WriteQueue | None" = None
+_run_orchestrator: "RunOrchestrator | None" = None
 
 
 def set_routing(routing: RoutingManager | None) -> None:
@@ -84,6 +88,30 @@ def set_taxonomy_engine(engine) -> None:
     """Set the module-level taxonomy engine (called by lifespan)."""
     global _taxonomy_engine
     _taxonomy_engine = engine
+
+
+def set_run_orchestrator(orchestrator: "RunOrchestrator | None") -> None:
+    """Set the module-level RunOrchestrator (called by lifespan).
+
+    Foundation P3 (Cycle 13, v0.4.18): MCP tool handlers (synthesis_probe,
+    synthesis_seed) dispatch through this orchestrator instead of the
+    legacy ProbeService / inline orchestration path. The MCP process
+    constructs its own orchestrator (separate from the FastAPI backend's
+    ``app.state.run_orchestrator``) bound to the MCP-process WriteQueue.
+    """
+    global _run_orchestrator
+    _run_orchestrator = orchestrator
+
+
+def get_run_orchestrator() -> "RunOrchestrator":
+    """Return the RunOrchestrator or raise if not initialized.
+
+    Used by MCP tool handlers in Cycle 13+ to dispatch ``synthesis_probe``
+    / ``synthesis_seed`` requests through the unified run substrate.
+    """
+    if _run_orchestrator is None:
+        raise ValueError("RunOrchestrator not initialized")
+    return _run_orchestrator
 
 
 def get_routing() -> RoutingManager:

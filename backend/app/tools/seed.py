@@ -1,25 +1,124 @@
 # backend/app/tools/seed.py
-"""MCP tool handler for batch seeding."""
+"""synthesis_seed MCP tool — Foundation P3 cycle 13 dispatch shim.
+
+Refactored under Foundation P3 (v0.4.18) to dispatch through
+``RunOrchestrator.run('seed_agent', ...)`` instead of the legacy inline
+``handle_seed`` orchestration body. The orchestration logic
+(``SeedOrchestrator.generate`` → ``run_batch`` → ``bulk_persist`` →
+``batch_taxonomy_assign``) now lives in ``SeedAgentGenerator``
+(v0.4.18 Cycle 7); this shim is now thin: validate inputs, build a
+``RunRequest``, dispatch, and convert the resulting ``RunRow`` back
+into a ``SeedOutput`` with the additive ``run_id`` field (spec § 7.2 +
+§ 6.3 + § 8.1).
+
+Routing + provider resolution preserved from the legacy handler so the
+generator's early-failure gate (no project_description + no prompts +
+no provider → ``status='failed'``) behaves identically to the previous
+flow. The shim wraps ``RunOrchestrator.run`` in try/except so any
+uncaught exception still returns ``SeedOutput(status='failed')`` — the
+contract is HTTP 200 (REST) / structured failure (MCP) for any seed
+shape, never a raised 5xx / tool-error.
+
+Copyright 2025-2026 Project Synthesis contributors.
+"""
 
 from __future__ import annotations
 
 import logging
-import time
-import uuid
 from typing import Any, Literal
 
-from app.config import PROMPTS_DIR
+from app.schemas.runs import RunRequest
 from app.schemas.seed import SeedOutput
-from app.services.agent_loader import AgentLoader
-from app.services.batch_pipeline import (
-    batch_taxonomy_assign,
-    bulk_persist,
-    estimate_batch_cost,
-    run_batch,
-)
-from app.services.seed_orchestrator import SeedOrchestrator
 
 logger = logging.getLogger(__name__)
+
+
+def _build_failed_output(
+    summary: str,
+    *,
+    tier: str | None = None,
+) -> SeedOutput:
+    """Construct a ``SeedOutput`` for the orchestrator-unavailable /
+    uncaught-exception path.
+
+    Mirrors ``routers/seed._build_failed_output`` so the MCP tool surface
+    matches the REST surface byte-for-byte. Preserves the pre-Foundation
+    contract that the seed surface never raises a 5xx / tool error — any
+    failure surfaces as a structured ``SeedOutput`` with ``status='failed'``.
+    """
+    return SeedOutput(
+        status="failed",
+        batch_id=None,
+        tier=tier,
+        prompts_generated=0,
+        prompts_optimized=0,
+        prompts_failed=0,
+        estimated_cost_usd=None,
+        domains_touched=[],
+        clusters_created=0,
+        summary=summary,
+        duration_ms=0,
+        run_id=None,
+    )
+
+
+def _row_to_seed_output(row: Any, *, fallback_tier: str | None) -> SeedOutput:
+    """Convert a ``RunRow`` (mode='seed_agent') into a ``SeedOutput``.
+
+    Mirrors ``routers/seed.seed_taxonomy``'s serialization tail (lines
+    127-148). Threads the additive ``run_id`` field from ``RunRow.id``,
+    None-guards every JSON-column accessor (failed runs may have NULL
+    ``aggregate`` / ``seed_agent_meta`` / ``taxonomy_delta``).
+    """
+    aggregate = row.aggregate or {}
+    seed_meta = row.seed_agent_meta or {}
+    taxonomy_delta = row.taxonomy_delta or {}
+
+    completed_at = row.completed_at or row.started_at
+    duration_ms = int((completed_at - row.started_at).total_seconds() * 1000)
+
+    return SeedOutput(
+        status=row.status,
+        batch_id=seed_meta.get("batch_id"),
+        tier=seed_meta.get("tier") or fallback_tier,
+        prompts_generated=row.prompts_generated or 0,
+        prompts_optimized=aggregate.get("prompts_optimized", 0),
+        prompts_failed=aggregate.get("prompts_failed", 0),
+        estimated_cost_usd=seed_meta.get("estimated_cost_usd"),
+        domains_touched=taxonomy_delta.get("domains_touched", []),
+        clusters_created=taxonomy_delta.get("clusters_created", 0),
+        summary=aggregate.get("summary", ""),
+        duration_ms=duration_ms,
+        run_id=row.id,
+    )
+
+
+def _resolve_routing_and_tier(
+    routing: Any | None,
+    ctx: Any | None,
+) -> tuple[str, Any | None]:
+    """Resolve tier + provider from the routing manager.
+
+    REST callers pass ``routing=request.app.state.routing`` directly; MCP
+    callers leave it ``None`` and we fall back to the MCP-process
+    ``_shared.get_routing()`` singleton. The caller class (rest vs mcp)
+    is inferred from whether ``ctx`` is non-None — mirrors the legacy
+    handler's heuristic.
+    """
+    if routing is None:
+        try:
+            from app.tools._shared import get_routing
+            routing = get_routing()
+        except Exception:
+            routing = None
+
+    if routing is None:
+        return "passthrough", None
+
+    from app.services.routing import RoutingContext
+    caller: Literal["mcp", "rest"] = "mcp" if ctx is not None else "rest"
+    decision = routing.resolve(RoutingContext(caller=caller))
+    return decision.tier, decision.provider
 
 
 async def handle_seed(
@@ -29,378 +128,75 @@ async def handle_seed(
     prompt_count: int = 30,
     agents: list[str] | None = None,
     prompts: list[str] | None = None,
-    ctx: Any | None = None,  # MCP Context — reserved for future sampling-tier support
+    ctx: Any | None = None,  # MCP Context — used to detect REST vs MCP caller
     routing: Any | None = None,  # Injected by REST endpoint from request.app.state.routing
     context_service: Any | None = None,  # Injected by REST/MCP: ContextEnrichmentService
-    write_queue: Any | None = None,  # v0.4.13 cycle 7.5: required by bulk_persist after collapse
+    write_queue: Any | None = None,  # v0.4.13 cycle 7.5: optional REST-side WriteQueue (no-op post-P3)
 ) -> SeedOutput:
-    """Full batch seeding flow: explore → generate → optimize → persist → taxonomy.
+    """Dispatch seed run through ``RunOrchestrator.run('seed_agent', ...)``.
 
-    Routing resolution:
-    - REST context: caller passes routing=request.app.state.routing directly.
-    - MCP context: falls back to get_routing() from tools/_shared.py.
-    This avoids the _shared.py singleton being uninitialized in the backend process.
+    Replaces the v0.4.13 inline orchestration (explore → generate →
+    run_batch → bulk_persist → batch_taxonomy_assign) — all of that now
+    lives in ``SeedAgentGenerator`` (Cycle 7). This shim is responsible
+    only for:
+      - Resolving routing tier + provider (so the generator's early-failure
+        gate behaves identically to the legacy code path)
+      - Building the ``RunRequest`` payload
+      - Dispatching via the MCP-process RunOrchestrator singleton
+      - Converting the resulting ``RunRow`` into a ``SeedOutput`` with
+        the additive ``run_id`` field
 
-    Enrichment:
-    - REST context: caller passes context_service=request.app.state.context_service.
-    - MCP context: caller passes explicitly (mcp_server.py reads from app.state).
-    When provided, batch prompts go through the same unified enrichment as the
-    regular pipeline (pattern injection, strategy intelligence, B0 repo
-    relevance gate, B1/B2 divergence detection).
+    Backward-compat:
+      - ``write_queue`` parameter retained for callers that still pass it;
+        Cycle 13 does not use it (the orchestrator's own queue handles
+        persistence). It is silently ignored for shape stability.
+      - Any uncaught exception during dispatch surfaces as
+        ``SeedOutput(status='failed', run_id=None)`` — the contract is
+        HTTP 200 / structured tool result, never a raised 5xx.
 
-    Write queue (v0.4.13 cycle 7.5):
-    - REST context: caller passes write_queue=request.app.state.write_queue.
-    - MCP context: caller passes explicitly (mcp_server.py reads from app.state).
-    Required after the polymorphic collapse of bulk_persist /
-    batch_taxonomy_assign signatures. When ``None`` we fall back to
-    constructing a transient in-process queue against
-    ``async_session_factory``'s engine -- adequate for tests + cold-start
-    boots; cycle 9 lifespan wiring removes the fallback path.
+    Spec: § 7.2 + § 6.3 backward-compat (additive ``run_id`` only).
     """
-    batch_id = str(uuid.uuid4())
-    t0 = time.monotonic()
-    explore_t0 = t0
+    del workspace_path, write_queue  # legacy params; orchestrator owns these
 
-    # Resolve routing tier
-    if routing is None:
-        try:
-            from app.tools._shared import get_routing
-            routing = get_routing()
-        except Exception:
-            routing = None
+    tier, provider = _resolve_routing_and_tier(routing, ctx)
 
-    if routing is not None:
-        from app.services.routing import RoutingContext
-        caller: Literal["mcp", "rest"] = "mcp" if ctx is not None else "rest"
-        decision = routing.resolve(RoutingContext(caller=caller))
-        tier = decision.tier
-        provider = decision.provider
-    else:
-        tier = "passthrough"
-        provider = None
-
-    # Resolve agent count for cost estimation
-    agent_count = len(AgentLoader(PROMPTS_DIR / "seed-agents").list_enabled())
-
-    # Cost estimation (done before pipeline so it can be included in seed_started)
-    estimated_cost = estimate_batch_cost(
-        prompt_count if not prompts else len(prompts),
-        agent_count,
-        tier,
-    )
-
-    # Log seed_started — single authoritative emit
-    # (Phase 1 SeedOrchestrator does NOT emit this)
+    # Resolve the orchestrator. If unavailable, surface a structured
+    # failure rather than raising — preserves the seed surface contract
+    # that no shape of seed input raises a 5xx / tool error.
     try:
-        from app.services.taxonomy.event_logger import get_event_logger
-        get_event_logger().log_decision(
-            path="hot", op="seed", decision="seed_started",
-            context={
-                "batch_id": batch_id,
-                "tier": tier,
-                "project_description": (project_description or "")[:200],
-                "prompt_count_target": prompt_count if not prompts else len(prompts),
-                "has_user_prompts": prompts is not None,
-                "agent_count": agent_count,
-                "estimated_cost_usd": estimated_cost,
-            },
-        )
-    except RuntimeError:
-        pass
-
-    # Track completed count for error events (populated as execution proceeds)
-    prompts_completed_before_failure = 0
-
-    # Determine prompt source
-    if prompts:
-        # User-provided prompts — skip generation
-        generated_prompts = prompts
-        prompts_generated = len(prompts)
-        workspace_profile = None
-        codebase_context = None
-
-    elif project_description and provider:
-        # Generated mode — explore + agents
-
-        # Explore workspace context — degrades gracefully on failure
-        workspace_profile = None
-        codebase_context = None  # Populated when repo_full_name explore is implemented
-        explore_t0 = time.monotonic()
-        if workspace_path:
-            try:
-                from pathlib import Path
-
-                from app.services.workspace_intelligence import WorkspaceIntelligence
-                wi = WorkspaceIntelligence()
-                workspace_profile = wi.analyze([Path(workspace_path)])
-            except Exception as exc:
-                logger.warning("Explore failed (continuing without context): %s", exc)
-                workspace_profile = None
-
-        # Log explore completion event
-        try:
-            get_event_logger().log_decision(
-                path="hot", op="seed", decision="seed_explore_complete",
-                context={
-                    "batch_id": batch_id,
-                    "workspace_profile_length": len(workspace_profile or ""),
-                    "codebase_context_length": len(codebase_context or ""),
-                    "duration_ms": int((time.monotonic() - explore_t0) * 1000),
-                },
-            )
-        except RuntimeError:
-            pass
-
-        try:
-            orchestrator = SeedOrchestrator(provider=provider)
-            gen_result = await orchestrator.generate(
-                project_description=project_description,
-                batch_id=batch_id,
-                workspace_profile=workspace_profile,
-                codebase_context=codebase_context,
-                agent_names=agents,
-                prompt_count=prompt_count,
-            )
-            generated_prompts = gen_result.prompts
-            prompts_generated = len(generated_prompts)
-        except Exception as exc:
-            logger.error("Seed generation failed: %s", exc, exc_info=True)
-            try:
-                get_event_logger().log_decision(
-                    path="hot", op="seed", decision="seed_failed",
-                    context={
-                        "batch_id": batch_id,
-                        "phase": "generate",
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc)[:200],
-                        "prompts_completed_before_failure": 0,
-                    },
-                )
-            except RuntimeError:
-                pass
-            return SeedOutput(
-                status="failed",
-                batch_id=batch_id,
-                tier=tier,
-                prompts_generated=0,
-                prompts_optimized=0,
-                prompts_failed=0,
-                estimated_cost_usd=estimated_cost,
-                summary=f"Generation failed: {exc}",
-                duration_ms=int((time.monotonic() - t0) * 1000),
-            )
-
-    else:
-        return SeedOutput(
-            status="failed",
-            batch_id=batch_id,
-            tier=tier,
-            prompts_generated=0,
-            prompts_optimized=0,
-            prompts_failed=0,
-            estimated_cost_usd=estimated_cost,
-            summary="Requires project_description with a provider, or user-provided prompts.",
-            duration_ms=int((time.monotonic() - t0) * 1000),
-        )
-
-    # Determine concurrency based on tier + provider type
-    # CLI handles 10 parallel subprocesses; API rate limits cap at 5
-    if tier == "internal" and provider is not None:
-        max_parallel = 10 if provider.name == "claude_cli" else 5
-    elif tier == "sampling":
-        max_parallel = 2
-    else:
-        max_parallel = 1
-
-    # Run batch pipeline — resolve service singletons for enrichment parity
-    # with the regular internal pipeline (pattern injection, few-shot, adaptation,
-    # domain resolution, z-score normalization).
-    from app.database import async_session_factory
-    from app.services.embedding_service import EmbeddingService
-    from app.services.prompt_loader import PromptLoader
-
-    # Taxonomy engine (singleton, may not be initialized on cold start)
-    _taxonomy_engine = None
-    try:
-        from app.services.taxonomy import get_engine
-        _taxonomy_engine = get_engine()
+        from app.tools._shared import get_run_orchestrator
+        orchestrator = get_run_orchestrator()
     except Exception:
-        logger.debug("Taxonomy engine unavailable for seed enrichment")
-
-    # Domain resolver (singleton, may not be initialized on cold start)
-    _domain_resolver = None
-    try:
-        from app.services.domain_resolver import get_domain_resolver
-        _domain_resolver = get_domain_resolver()
-    except Exception:
-        logger.debug("Domain resolver unavailable for seed enrichment")
-
-    try:
-        results = await run_batch(
-            prompts=generated_prompts,
-            provider=provider,  # type: ignore[arg-type]
-            prompt_loader=PromptLoader(PROMPTS_DIR),
-            embedding_service=EmbeddingService(),
-            max_parallel=max_parallel,
-            codebase_context=codebase_context if not prompts else None,
-            batch_id=batch_id,
-            session_factory=async_session_factory,
-            taxonomy_engine=_taxonomy_engine,
-            domain_resolver=_domain_resolver,
+        return _build_failed_output(
+            "RunOrchestrator unavailable; seed runs are degraded.",
             tier=tier,
-            context_service=context_service,
         )
-    except Exception as exc:
-        logger.error("Seed batch execution failed: %s", exc, exc_info=True)
-        try:
-            get_event_logger().log_decision(
-                path="hot", op="seed", decision="seed_failed",
-                context={
-                    "batch_id": batch_id,
-                    "phase": "optimize",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc)[:200],
-                    "prompts_completed_before_failure": prompts_completed_before_failure,
-                },
-            )
-        except RuntimeError:
-            pass
-        return SeedOutput(
-            status="failed",
-            batch_id=batch_id,
+
+    # Build the payload — generator picks up provider/tier/context_service
+    # from here. Mirrors routers/seed.seed_taxonomy:97-101.
+    payload: dict[str, Any] = {
+        "project_description": project_description,
+        "repo_full_name": repo_full_name,
+        "prompt_count": prompt_count,
+        "agents": agents,
+        "prompts": prompts,
+        "tier": tier,
+        "provider": provider,
+        "context_service": context_service,
+    }
+    run_request = RunRequest(mode="seed_agent", payload=payload)
+
+    try:
+        run_row = await orchestrator.run("seed_agent", run_request)
+    except Exception as exc:  # noqa: BLE001 — preserve HTTP 200 / tool-result contract
+        logger.error(
+            "synthesis_seed: RunOrchestrator dispatch failed: %s",
+            exc,
+            exc_info=True,
+        )
+        return _build_failed_output(
+            f"Seed run failed: {type(exc).__name__}: {exc}",
             tier=tier,
-            prompts_generated=prompts_generated,
-            prompts_optimized=0,
-            prompts_failed=len(generated_prompts),
-            estimated_cost_usd=estimated_cost,
-            summary=f"Batch execution failed: {exc}",
-            duration_ms=int((time.monotonic() - t0) * 1000),
         )
 
-    prompts_completed_before_failure = sum(
-        1 for r in results if r.status == "completed"
-    )
-
-    # v0.4.13 cycle 7.5: bulk_persist + batch_taxonomy_assign require a
-    # WriteQueue post-polymorphic-collapse. Resolve from app.state via
-    # the explicit ``write_queue`` parameter; fall back to a transient
-    # in-process queue when not supplied (tests + cold-start boot).
-    # Engine resolution prefers the session_factory's bind (so test
-    # in-memory engines pass through correctly) before falling back to
-    # the global engine.
-    _wq = write_queue
-    if _wq is None:
-        from app.services.write_queue import WriteQueue
-        _engine = None
-        try:
-            _engine = getattr(async_session_factory, "kw", {}).get("bind")
-        except Exception:
-            _engine = None
-        if _engine is None:
-            from app.database import engine as _global_engine
-            _engine = _global_engine
-        _wq = WriteQueue(_engine)
-        await _wq.start()
-        _transient_wq = True
-    else:
-        _transient_wq = False
-
-    # Bulk persist
-    try:
-        await bulk_persist(results, _wq, batch_id)
-    except Exception as exc:
-        logger.error("Seed persist failed: %s", exc, exc_info=True)
-        completed = sum(1 for r in results if r.status == "completed")
-        try:
-            get_event_logger().log_decision(
-                path="hot", op="seed", decision="seed_failed",
-                context={
-                    "batch_id": batch_id,
-                    "phase": "persist",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc)[:200],
-                    "prompts_completed_before_failure": completed,
-                },
-            )
-        except RuntimeError:
-            pass
-        return SeedOutput(
-            status="partial",
-            batch_id=batch_id,
-            tier=tier,
-            prompts_generated=prompts_generated,
-            prompts_optimized=completed,
-            prompts_failed=len(results) - completed,
-            estimated_cost_usd=estimated_cost,
-            summary=f"Optimized {completed} prompts but persist failed: {exc}",
-            duration_ms=int((time.monotonic() - t0) * 1000),
-        )
-
-    # Taxonomy integration
-    try:
-        taxonomy_result = await batch_taxonomy_assign(
-            results, _wq, batch_id,
-        )
-    except Exception as exc:
-        logger.warning("Taxonomy integration failed (non-fatal): %s", exc)
-        taxonomy_result = {
-            "clusters_assigned": 0,
-            "clusters_created": 0,
-            "domains_touched": [],
-        }
-    finally:
-        # Cleanup transient queue (only if we constructed one).
-        if _transient_wq:
-            try:
-                await _wq.stop(drain_timeout=2.0)
-            except Exception:
-                logger.debug("transient write_queue stop failed", exc_info=True)
-
-    # Final summary
-    completed = sum(1 for r in results if r.status == "completed")
-    failed = sum(1 for r in results if r.status == "failed")
-    duration_ms = int((time.monotonic() - t0) * 1000)
-
-    status = "completed" if failed == 0 else "partial"
-    summary = (
-        f"{completed} prompts optimized"
-        f"{f', {failed} failed' if failed else ''}"
-        f". {taxonomy_result.get('clusters_created', 0)} clusters created"
-        f", domains: {', '.join(taxonomy_result.get('domains_touched', []))}"
-    )
-
-    # Log completion event — includes monitoring data
-    try:
-        get_event_logger().log_decision(
-            path="hot", op="seed", decision="seed_completed",
-            context={
-                "batch_id": batch_id,
-                "total_duration_ms": duration_ms,
-                "prompts_generated": prompts_generated,
-                "prompts_optimized": completed,
-                "prompts_failed": failed,
-                "clusters_created": taxonomy_result.get("clusters_created", 0),
-                "domains_touched": taxonomy_result.get("domains_touched", []),
-                "cost_usd": estimated_cost,
-                "tier": tier,
-                # Sufficient for: prompts/min = prompts_optimized / (total_duration_ms/60000)
-                #                 cost/prompt = cost_usd / prompts_optimized
-                #                 failure_rate = prompts_failed / prompts_generated
-            },
-        )
-    except RuntimeError:
-        pass
-
-    return SeedOutput(
-        status=status,
-        batch_id=batch_id,
-        tier=tier,
-        prompts_generated=prompts_generated,
-        prompts_optimized=completed,
-        prompts_failed=failed,
-        estimated_cost_usd=estimated_cost,
-        domains_touched=taxonomy_result.get("domains_touched", []),
-        clusters_created=taxonomy_result.get("clusters_created", 0),
-        summary=summary,
-        duration_ms=duration_ms,
-    )
+    return _row_to_seed_output(run_row, fallback_tier=tier)

@@ -28,11 +28,16 @@ from app.schemas.pipeline_contracts import DimensionScores
 
 logger = logging.getLogger(__name__)
 
+# Foundation P3 (v0.4.18): canonical ContextVar renamed to current_run_id.
+# current_probe_id retained as alias of the SAME object -- preserves the
+# `legacy.current_probe_id is common.current_probe_id` identity test in
+# tests/test_probe_service_module_split_v0_4_17.py.
 # C4<->C7 dependency resolution -- declare ContextVar where it is SET (here).
 # C7's probe_event_correlation.py re-exports + adds inject_probe_id helper.
-current_probe_id: ContextVar[str | None] = ContextVar(
-    "current_probe_id", default=None,
+current_run_id: ContextVar[str | None] = ContextVar(
+    "current_run_id", default=None,
 )
+current_probe_id = current_run_id  # backward-compat alias
 
 
 def _apply_scope_filter(files: list[str], scope: str) -> list[str]:
@@ -121,6 +126,7 @@ def _stub_dimension_scores() -> DimensionScores:
 
 
 __all__ = [
+    "current_run_id",
     "current_probe_id",
     "_apply_scope_filter",
     "_truncate",

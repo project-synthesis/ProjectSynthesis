@@ -32,7 +32,8 @@ All backend calls go through this module. Key helpers:
 - `streamSSE()` — manages `AbortController` + line-buffering for SSE streams
 
 Key types: `HealthResponse`, `OptimizationResult`, `RefinementTurn`, `HistoryItem`, `DimensionScores`
-- `seed.ts` — `seedTaxonomy()`, `listSeedAgents()`. Types: `SeedRequest`, `SeedOutput`, `SeedAgent`
+- `seed.ts` — `seedTaxonomy()`, `listSeedAgents()`. Types: `SeedRequest`, `SeedOutput` (gains additive `run_id?: string` since v0.4.18 Foundation P3), `SeedAgent`
+- `runs.ts` (v0.4.18) — `listRuns(params?)` against `GET /api/runs`. Types: `RunSummary`, `RunListResponse`, `ListRunsParams`. Minimal surface — backs the inline "Recent Runs" hint in `SeedModal`; a dedicated Runs panel is T4 scope
 
 ## Stores (`src/lib/stores/`)
 
@@ -93,7 +94,11 @@ src/lib/components/
                 # rails + expandable context cards; recognizes readiness/* + vocab
                 # ops), DomainReadinessPanel + DomainStabilityMeter + SubDomainEmergenceList
                 # + DomainReadinessSparkline (hourly-bucket history; per-domain rings
-                # overlaid on topology; `role="meter"`, zero-glow), SeedModal,
+                # overlaid on topology; `role="meter"`, zero-glow), SeedModal
+                # (v0.4.18 P3 — `runId?: string | null` prop with truthy filter
+                # guard on `seed-batch-progress`; `currentRunId` display state;
+                # status badge via `runStatusColor()`; ambient "Recent runs / 24h"
+                # chip via `listRuns({ limit: 10 })`),
                 # TaxonomyObservatory (v0.4.4 — three-panel shell on the pinned
                 # Observatory tab; routes domain:select → clustersStore.selectCluster()):
                 # DomainLifecycleTimeline (render-time merge of clustersStore.activityEvents
@@ -137,7 +142,7 @@ src/routes/
 
 | File | Purpose |
 |------|---------|
-| `colors.ts` | `scoreColor()`, `taxonomyColor()` (delegates to `domainStore.colorFor()`), `qHealthColor()`, `stateColor()` (includes `domain`→amber). No hardcoded domain color maps |
+| `colors.ts` | `scoreColor()`, `taxonomyColor()` (delegates to `domainStore.colorFor()`), `qHealthColor()`, `stateColor()` (includes `domain`→amber), `runStatusColor()` (v0.4.18 — chromatic encoding for the 4 `RunRow.status` values: running cyan / completed green / partial yellow / failed red; unknown → text-dim safe degrade). No hardcoded domain color maps |
 | `dimensions.ts` | Score dimension label/description helpers |
 | `formatting.ts` | Display formatting (numbers, dates, text truncation) |
 | `strategies.ts` | Strategy display name/description helpers |

@@ -465,6 +465,65 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                 _wq_exc,
             )
 
+        # Foundation P3 cycle 13 — Process-local RunOrchestrator for the
+        # MCP-side dispatch of synthesis_probe / synthesis_seed. Mirrors
+        # main.py's lifespan registration but bound to the MCP-process
+        # WriteQueue. Generators are stateless singletons; the
+        # TopicProbeGenerator's RepoIndexQuery dependency is None at the
+        # singleton level (request-bound construction is a follow-up).
+        try:
+            from app.services.generators.seed_agent_generator import (
+                SeedAgentGenerator,
+            )
+            from app.services.generators.topic_probe_generator import (
+                TopicProbeGenerator,
+            )
+            from app.services.run_orchestrator import RunOrchestrator
+            from app.services.seed_orchestrator import SeedOrchestrator
+            from app.tools._shared import set_run_orchestrator as _set_ro
+
+            _mcp_wq = _shared._write_queue
+            _mcp_provider = (
+                routing.state.provider if routing is not None else None
+            )
+            _mcp_taxonomy = _shared.get_taxonomy_engine()
+
+            _topic_probe_gen = TopicProbeGenerator(
+                provider=_mcp_provider,
+                repo_index_query=None,
+                taxonomy_engine=_mcp_taxonomy,
+                write_queue=_mcp_wq,
+            )
+            _seed_orch_mcp = SeedOrchestrator(provider=_mcp_provider)
+            _seed_agent_gen = SeedAgentGenerator(
+                seed_orchestrator=_seed_orch_mcp,
+                write_queue=_mcp_wq,
+            )
+
+            if _mcp_wq is not None:
+                _mcp_run_orchestrator = RunOrchestrator(
+                    write_queue=_mcp_wq,
+                    generators={
+                        "topic_probe": _topic_probe_gen,
+                        "seed_agent": _seed_agent_gen,
+                    },
+                )
+                _set_ro(_mcp_run_orchestrator)
+                logger.info(
+                    "MCP lifespan: RunOrchestrator registered (modes=%s)",
+                    list(_mcp_run_orchestrator._generators.keys()),
+                )
+            else:
+                logger.warning(
+                    "MCP lifespan: RunOrchestrator not registered "
+                    "(WriteQueue unavailable)",
+                )
+        except Exception as _ro_exc:
+            logger.warning(
+                "MCP lifespan: RunOrchestrator init failed (non-fatal): %s",
+                _ro_exc,
+            )
+
         # Subscribe to domain events for cache invalidation
         async def _reload_domain_caches() -> None:
             try:
@@ -1400,6 +1459,14 @@ async def synthesis_probe(
         ge=5,
         le=25,
     )] = None,
+    repo_full_name: Annotated[str | None, Field(
+        default=None,
+        description=(
+            "Optional explicit GitHub repo (owner/repo). Defaults to the "
+            "active linked repo; if neither is supplied the tool surfaces "
+            "ProbeError('link_repo_first')."
+        ),
+    )] = None,
     ctx: Context | None = None,
 ) -> ProbeRunResult:
     """Topic Probe — agentic targeted exploration of a topic against the linked codebase.
@@ -1414,6 +1481,7 @@ async def synthesis_probe(
         scope=scope,
         intent_hint=intent_hint,
         n_prompts=n_prompts,
+        repo_full_name=repo_full_name,
         ctx=ctx,
     )
 

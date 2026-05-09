@@ -1,11 +1,12 @@
 """ContextVar-based probe_id correlation for taxonomy events (Tier 1, v0.4.12).
 
-`current_probe_id` is the canonical ContextVar, declared in
-`app/services/probe_service.py` (the module that SETS it). This file
-re-exports it for ergonomic imports and adds `inject_probe_id(context)`
-helper used by `event_logger.log_decision`.
+Foundation P3 (v0.4.18, Cycle 14) — re-import switched from the legacy
+``probe_service`` module to ``probe_common``, the canonical home of the
+ContextVar after the v0.4.17 P2 split. ``probe_service.py`` continues
+to re-export ``current_probe_id`` for backward-compat, but it is no
+longer where the ContextVar lives.
 """
-from app.services.probe_service import current_probe_id  # noqa: F401
+from app.services.probe_common import current_probe_id  # noqa: F401
 
 __all__ = ["current_probe_id", "inject_probe_id"]
 
