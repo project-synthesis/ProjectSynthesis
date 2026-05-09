@@ -158,12 +158,9 @@ describe('SeedModal', () => {
     (seedTaxonomy as ReturnType<typeof vi.fn>).mockImplementation(
       () => new Promise(() => {}) /* never resolves */,
     );
-    // RED: `runId` is the additive prop introduced in GREEN. Until then
-    // it's not part of `Props`, so we cast to `any` to keep svelte-check
-    // green while the *behavior* assertions still fail. Once GREEN lands,
-    // this cast simply becomes a no-op typed pass.
-    const props = { open: true, onClose: vi.fn(), runId } as any;
-    render(SeedModal, { props });
+    // GREEN landed (commit 13c3f41b): `runId` is now a typed prop on
+    // SeedModal. The earlier `as any` RED-bridge cast is retired.
+    render(SeedModal, { props: { open: true, onClose: vi.fn(), runId } });
     // Wait for the agent list (selectedAgents) to populate — without this
     // the isValid derivation gates the Start Seed button.
     await vi.waitFor(() => {

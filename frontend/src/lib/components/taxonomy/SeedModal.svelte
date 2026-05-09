@@ -8,8 +8,11 @@
     /**
      * Foundation P3 (Cycle 15): when bound to a specific run id, the modal
      * filters `seed-batch-progress` events so only matching `run_id` payloads
-     * update the progress display. `null`/`undefined` preserves pre-P3
-     * behavior (all events accepted — legacy global-progress contract).
+     * update the progress display. `null`/`undefined`/`""` (empty string)
+     * all preserve pre-P3 behavior (all events accepted — legacy global-
+     * progress contract). Empty-string is treated as "no filter" via the
+     * truthy check in the handler; defensive against accidental default-
+     * coincidence (e.g., uninitialized form fields).
      */
     runId?: string | null;
   }
