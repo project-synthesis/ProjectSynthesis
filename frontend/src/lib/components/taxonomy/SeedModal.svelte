@@ -1,6 +1,8 @@
 <script lang="ts">
   import { seedTaxonomy, listSeedAgents, type SeedOutput, type SeedAgent } from '$lib/api/seed';
+  import { listRuns, type RunSummary } from '$lib/api/runs';
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { runStatusColor } from '$lib/utils/colors';
 
   interface Props {
     open: boolean;
@@ -13,6 +15,17 @@
      * progress contract). Empty-string is treated as "no filter" via the
      * truthy check in the handler; defensive against accidental default-
      * coincidence (e.g., uninitialized form fields).
+     *
+     * v0.4.18-p3-PR2: the modal now wires `SeedOutput.run_id` end-to-end:
+     *  - When the synchronous `seedTaxonomy()` POST resolves the modal
+     *    captures `result.run_id` and stores it in `currentRunId` for
+     *    display in the result card (monospace chip, click-to-copy).
+     *  - Independent of that, the modal also tracks the latest observed
+     *    `run_id` on each `seed_batch_progress` SSE event for the in-
+     *    flight progress chip — surfaces immediately on the first event.
+     *  - `currentRunId` is purely a display value; the FILTER source
+     *    remains the explicit `runId` prop only, preserving the pre-P3
+     *    legacy global-progress contract when no parent binds the prop.
      */
     runId?: string | null;
   }
@@ -30,6 +43,14 @@
   let result = $state<SeedOutput | null>(null);
   let error = $state<string | null>(null);
   let progress = $state({ completed: 0, total: 0, current: '' });
+  // PR2: display-only run_id captured either (a) from the latest matching
+  // `seed_batch_progress` SSE event so the in-flight progress card can
+  // surface a chip immediately, or (b) from the synchronous POST response
+  // for the post-run result card. Always cleared on modal close + before
+  // a new run starts. Never feeds back into the filter gate.
+  let currentRunId = $state<string | null>(null);
+  // PR2: ambient "Recent Runs" hint — last-24h count, fetched once on open.
+  let recentRunsCount = $state<number | null>(null);
 
   // Reset transient state + load agents when modal opens
   // F8: Restore progress from persistent store if a batch was active while modal was closed
@@ -37,6 +58,7 @@
     if (open) {
       result = null;
       error = null;
+      currentRunId = null;
       if (clustersStore.seedBatchActive) {
         // Resume showing progress from store (seed was running while modal was closed)
         progress = { ...clustersStore.seedBatchProgress };
@@ -48,6 +70,9 @@
         agents = a;
         selectedAgents = new Set(a.map(ag => ag.name));
       }).catch(() => {});
+      // Fire-and-forget recent-runs counter — best-effort ambient hint;
+      // failure leaves recentRunsCount=null and the chip stays hidden.
+      loadRecentRuns();
     }
   });
 
@@ -56,9 +81,19 @@
     if (!seeding) return;
     const handler = (e: Event) => {
       const data = (e as CustomEvent).detail;
-      // Cycle 15: filter by run_id when modal is bound to a specific run.
-      // null/undefined runId preserves pre-P3 behavior (accept all events).
+      // Cycle 15 + PR2: filter source is the explicit `runId` prop ONLY.
+      // When `runId` is null/empty/unbound the legacy global-progress
+      // contract holds (all events accepted) — `currentRunId` is purely
+      // a display value populated post-run from the synchronous response,
+      // not a filter source. This preserves the pre-P3 contract.
       if (runId && data?.run_id !== runId) return;
+      // Best-effort: track the latest observed run_id for display in the
+      // running progress card so the chip surfaces immediately on the
+      // first matching event. This NEVER feeds back into the filter
+      // gate above.
+      if (typeof data?.run_id === 'string' && data.run_id) {
+        currentRunId = data.run_id;
+      }
       if (data?.phase === 'optimize') {
         progress = {
           completed: data.completed ?? progress.completed,
@@ -75,6 +110,7 @@
     seeding = true;
     error = null;
     result = null;
+    currentRunId = null;
     progress = { completed: 0, total: promptCount, current: '' };
 
     try {
@@ -90,6 +126,13 @@
           };
 
       result = await seedTaxonomy(req);
+      // PR2: capture the authoritative run_id from the synchronous
+      // response. Mid-run SSE may have already set `currentRunId`; this
+      // overwrites with the canonical id (they should agree). On a
+      // degraded path with no SSE, this is the only signal we have.
+      if (result?.run_id) {
+        currentRunId = result.run_id;
+      }
       clustersStore.invalidateClusters();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Seed failed';
@@ -131,11 +174,14 @@
     navigator.clipboard.writeText(id).catch(() => {});
   }
 
-  function statusColor(status: string): string {
-    if (status === 'completed') return 'var(--color-neon-green)';
-    if (status === 'partial') return 'var(--color-neon-yellow)';
-    return 'var(--color-neon-red)';
+  function copyRunId(id: string) {
+    navigator.clipboard.writeText(id).catch(() => {});
   }
+
+  // Note: the earlier local `statusColor()` was replaced by the shared
+  // `runStatusColor()` in `$lib/utils/colors.ts` so the 4 RunRow.status
+  // values (running/completed/partial/failed) map consistently across the
+  // app. See spec § 6.1 chromatic encoding.
 
   function formatDuration(ms: number): string {
     if (ms < 1000) return `${ms}ms`;
@@ -143,11 +189,41 @@
     return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
   }
 
+  /**
+   * PR2 ambient hint: fetch the count of runs in the last 24h via
+   * GET /api/runs?limit=10 and filter client-side by started_at.
+   * Best-effort — silent failure leaves the chip hidden.
+   */
+  async function loadRecentRuns() {
+    try {
+      const resp = await listRuns({ limit: 10 });
+      const cutoffMs = Date.now() - 24 * 60 * 60 * 1000;
+      const recent = resp.items.filter((r: RunSummary) => {
+        const ts = Date.parse(r.started_at);
+        return Number.isFinite(ts) && ts >= cutoffMs;
+      });
+      recentRunsCount = recent.length;
+    } catch {
+      recentRunsCount = null;
+    }
+  }
+
   // Estimated cost: mirrors backend estimate_batch_cost() logic
   // Agent generation: ~$0.003/agent (Haiku). Per optimization: ~$0.132 (Sonnet+Opus+Sonnet)
   const estimatedCost = $derived(
     (selectedAgents.size * 0.003 + promptCount * 0.132).toFixed(2)
   );
+
+  // PR2: status label is title-case for the result card so the voice is
+  // technical/precise rather than shouting all-caps. Falls back to the
+  // raw status string for forward-compat.
+  function statusLabel(status: string): string {
+    if (status === 'running') return 'Running';
+    if (status === 'completed') return 'Completed';
+    if (status === 'partial') return 'Partial';
+    if (status === 'failed') return 'Failed';
+    return status;
+  }
 </script>
 
 <svelte:window onkeydown={handleKeyDown} />
@@ -159,6 +235,15 @@
       <!-- Header -->
       <div class="seed-header">
         <span class="seed-title">SEED TAXONOMY</span>
+        {#if recentRunsCount !== null && recentRunsCount > 0}
+          <span
+            class="seed-recent-hint"
+            title="Total runs (seed + probe) recorded in the last 24 hours"
+            aria-label="{recentRunsCount} runs in the last 24 hours"
+          >
+            {recentRunsCount} run{recentRunsCount === 1 ? '' : 's'} / 24h
+          </span>
+        {/if}
         <button class="seed-close" onclick={onClose} aria-label="Close">×</button>
       </div>
 
@@ -266,13 +351,17 @@
 
         <!-- Progress -->
         {#if seeding}
-          <div class="seed-progress">
+          {@const runningTint = runStatusColor('running')}
+          <div class="seed-progress" style="border-color: {runningTint}">
             <div class="seed-progress-header">
-              <span class="seed-progress-label">SEEDING...</span>
+              <span class="seed-progress-label" style="color: {runningTint}">RUNNING</span>
               <span class="seed-progress-pct">{progressPercent}%</span>
             </div>
             <div class="seed-progress-track">
-              <div class="seed-progress-fill" style="width: {progressPercent}%"></div>
+              <div
+                class="seed-progress-fill"
+                style="width: {progressPercent}%; background: {runningTint}"
+              ></div>
             </div>
             {#if progress.current}
               <div class="seed-progress-current" title={progress.current}>
@@ -282,6 +371,17 @@
             <div class="seed-progress-stats">
               {progress.completed} / {progress.total} completed
             </div>
+            {#if currentRunId}
+              <button
+                type="button"
+                class="seed-run-id seed-run-id--inline"
+                onclick={() => copyRunId(currentRunId!)}
+                title="Click to copy run id ({currentRunId})"
+                aria-label="Run id {currentRunId} — click to copy"
+              >
+                run/{currentRunId.slice(0, 8)}
+              </button>
+            {/if}
           </div>
         {/if}
 
@@ -292,18 +392,37 @@
 
         <!-- Result card -->
         {#if result}
+          {@const statusTint = runStatusColor(result.status)}
           <div class="seed-result">
             <div class="seed-result-header">
-              <span class="seed-result-status" style="color: {statusColor(result.status)}; border-color: {statusColor(result.status)}">
-                {result.status.toUpperCase()}
-              </span>
-              <button
-                class="seed-batch-id"
-                onclick={() => copyBatchId(result!.batch_id)}
-                title="Click to copy batch ID"
+              <span
+                class="seed-result-status"
+                style="color: {statusTint}; border-color: {statusTint}; background: color-mix(in srgb, {statusTint} 8%, transparent)"
+                aria-label="Run status: {statusLabel(result.status)}"
               >
-                {result.batch_id}
-              </button>
+                {statusLabel(result.status)}
+              </span>
+              {#if result.run_id}
+                <button
+                  type="button"
+                  class="seed-run-id"
+                  onclick={() => copyRunId(result!.run_id!)}
+                  title="Click to copy run id ({result.run_id})"
+                  aria-label="Run id {result.run_id} — click to copy"
+                >
+                  run/{result.run_id.slice(0, 8)}
+                </button>
+              {/if}
+              {#if result.batch_id}
+                <button
+                  class="seed-batch-id"
+                  onclick={() => copyBatchId(result!.batch_id!)}
+                  title="Click to copy batch id"
+                  aria-label="Batch id {result.batch_id} — click to copy"
+                >
+                  batch/{result.batch_id.slice(0, 8)}
+                </button>
+              {/if}
             </div>
 
             <div class="seed-result-grid">
@@ -333,7 +452,9 @@
             {/if}
 
             <div class="seed-result-footer">
-              <span class="seed-tier-badge">{result.tier.toUpperCase()}</span>
+              {#if result.tier}
+                <span class="seed-tier-badge">{result.tier.toUpperCase()}</span>
+              {/if}
               <span class="seed-duration">{formatDuration(result.duration_ms)}</span>
             </div>
           </div>
@@ -724,6 +845,52 @@
 
   .seed-batch-id:hover {
     color: var(--color-text-secondary);
+  }
+
+  /* PR2: Run ID chip — monospace, compact, click-to-copy.
+     Dual mode:
+       - default (in result header): chip with subtle 1px contour
+       - --inline (inside the running progress card): right-aligned hint */
+  .seed-run-id {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--color-text-secondary);
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    cursor: pointer;
+    padding: 2px 6px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+
+  .seed-run-id:hover {
+    color: var(--color-text-primary);
+    border-color: var(--color-text-secondary);
+  }
+
+  .seed-run-id--inline {
+    align-self: flex-end;
+    margin-top: 2px;
+    font-size: 9px;
+    padding: 1px 5px;
+    color: var(--color-text-dim);
+  }
+
+  .seed-run-id--inline:hover {
+    color: var(--color-text-secondary);
+  }
+
+  /* PR2: Recent runs ambient hint — last-24h count next to header title. */
+  .seed-recent-hint {
+    margin-left: auto;
+    margin-right: 10px;
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    letter-spacing: 0.04em;
+    border: 1px solid var(--color-border-subtle);
+    padding: 1px 6px;
+    text-transform: lowercase;
   }
 
   .seed-result-grid {
