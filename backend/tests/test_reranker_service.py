@@ -1,5 +1,7 @@
 import pytest
+
 from app.services.reranker_service import RerankerService
+
 
 @pytest.fixture(scope="module")
 def reranker():
@@ -16,20 +18,20 @@ def test_reranker_negation(reranker):
 
 def test_reranker_binding(reranker):
         # Note: testing if the model correctly penalizes role swaps.
-        # STSB models might still struggle slightly with small roles, 
+        # STSB models might still struggle slightly with small roles,
         # so this test asserts the pipeline works rather than strict model correctness here.
         query = "Admin deletes user posts"
         docs = [
-            "An administrator removes posts made by a user", 
+            "An administrator removes posts made by a user",
         ]
         scores = reranker.score_batch(query, docs)
         assert len(scores) == 1
 def test_reranking_flow(reranker):
     query = "Optimize the database"
     docs = [
-        "Optimize the frontend caching layer", 
-        "Improve database query performance", 
-        "Remove the database entirely",        
+        "Optimize the frontend caching layer",
+        "Improve database query performance",
+        "Remove the database entirely",
     ]
     ranked = reranker.rerank(query, docs, top_k=1)
     assert len(ranked) == 1

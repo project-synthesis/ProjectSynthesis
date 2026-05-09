@@ -885,7 +885,7 @@ async def reset_taxonomy(
         )
     except RuntimeError:
         pass
-        
+
     try:
         await engine.run_warm_path(async_session_factory)
     except OperationalError as exc:

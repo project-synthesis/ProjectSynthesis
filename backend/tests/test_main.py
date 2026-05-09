@@ -23,7 +23,7 @@ async def test_lifespan_startup_and_shutdown():
     # throwaway aiosqlite connection at startup — so we no longer need to
     # patch aiosqlite.connect here.
     with patch("app.providers.detector.detect_provider") as mock_detect_provider, \
-         patch("app.services.embedding_service.EmbeddingService") as mock_embedding_service, \
+         patch("app.services.embedding_service.EmbeddingService"), \
          patch("app.services.write_queue.WriteQueue", autospec=True) as mock_write_queue_cls, \
          patch("app.services.prompt_loader.PromptLoader"), \
          patch("app.services.strategy_loader.StrategyLoader"), \
@@ -122,7 +122,7 @@ async def test_lifespan_startup_handler_errors_do_not_crash():
     # aiosqlite.connect no longer imported into app.main (see comment in
     # test_lifespan_startup_and_shutdown above).
     with patch("app.providers.detector.detect_provider", side_effect=ImportError("No provider")), \
-         patch("app.services.embedding_service.EmbeddingService") as mock_embedding_service, \
+         patch("app.services.embedding_service.EmbeddingService"), \
          patch("app.services.write_queue.WriteQueue", autospec=True) as mock_write_queue_cls, \
          patch("app.services.prompt_loader.PromptLoader") as mock_prompt_loader, \
          patch("app.services.strategy_loader.StrategyLoader"), \

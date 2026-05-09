@@ -14,6 +14,8 @@ import numpy as np
 import pytest
 
 from app.services.pattern_injection import auto_inject_patterns
+
+
 @pytest.fixture(autouse=True)
 def patch_reranker():
     with patch('app.services.reranker_service.RerankerService.score_batch', side_effect=Exception('Reranker offline')):

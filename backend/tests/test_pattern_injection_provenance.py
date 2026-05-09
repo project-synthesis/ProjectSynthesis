@@ -329,7 +329,10 @@ class TestRecordInjectionProvenancePostCommit:
 
     @pytest.fixture(autouse=True)
     def patch_reranker_for_provenance(self):
-        with patch('app.services.reranker_service.RerankerService.score_batch', side_effect=Exception('Test reranker offline')):
+        with patch(
+            'app.services.reranker_service.RerankerService.score_batch',
+            side_effect=Exception('Test reranker offline'),
+        ):
             yield
 
     """B5 (2026-04-25): the internal/sampling pipelines call

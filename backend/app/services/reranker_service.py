@@ -10,8 +10,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from app.config import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -51,7 +49,7 @@ class RerankerService:
 
             logger.info("Loading reranker model: %s", self._requested_model)
             model = CrossEncoder(self._requested_model)
-            
+
             RerankerService._model = model
             RerankerService._model_name = self._requested_model
 
@@ -72,16 +70,16 @@ class RerankerService:
         Args:
             query: The target text to match against.
             documents: A list of candidate strings.
-            
+
         Returns:
             A list of floats representing the logits/scores.
         """
         if not documents:
             return []
-            
+
         # pairs = [(query, doc1), (query, doc2), ...]
         pairs = [(query, doc) for doc in documents]
-        
+
         try:
             scores = self.model.predict(pairs)
             # if single doc, predict returns a float instead of list/array
@@ -93,28 +91,28 @@ class RerankerService:
 
     def rerank(self, query: str, documents: list[str], top_k: int | None = None) -> list[RankedDocument]:
         """Sort a list of documents by their cross-encoder score.
-        
+
         Args:
             query: The target text.
             documents: Candidate texts to rerank.
             top_k: Optional limit on the number of results to return.
-            
+
         Returns:
             A sorted list of RankedDocument objects (highest score first).
         """
         if not documents:
             return []
-            
+
         scores = self.score_batch(query, documents)
-        
+
         results = [
             RankedDocument(index=i, document=doc, score=score)
             for i, (doc, score) in enumerate(zip(documents, scores))
         ]
-        
+
         results.sort(key=lambda x: x.score, reverse=True)
-        
+
         if top_k is not None:
             results = results[:top_k]
-            
+
         return results

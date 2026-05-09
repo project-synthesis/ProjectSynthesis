@@ -353,15 +353,16 @@ class HeuristicScorer:
         """Faithfulness via asymmetrical projection metric.
 
         If the optimized prompt expands the original (increasing length), the similarity
-        organically drops due to added framing/reasoning tokens. This metric uses a 
-        High-Precision Cross-Encoder (Reranker) to evaluate exact textual entailment 
-        and applies an asymmetrical length projection to recover true faithfulness without 
+        organically drops due to added framing/reasoning tokens. This metric uses a
+        High-Precision Cross-Encoder (Reranker) to evaluate exact textual entailment
+        and applies an asymmetrical length projection to recover true faithfulness without
         penalizing length increases.
         """
         if not original or not optimized:
             return 5.0
         try:
             import math
+
             from app.services.reranker_service import RerankerService
 
             reranker = RerankerService()
@@ -386,7 +387,10 @@ class HeuristicScorer:
             return round(max(1.0, min(10.0, score)), 2)
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).debug("Embedding unavailable for faithfulness heuristic — returning neutral score: %s", exc)
+            logging.getLogger(__name__).debug(
+                "Embedding unavailable for faithfulness heuristic — returning neutral score: %s",
+                exc,
+            )
             return 5.0
 
     # ------------------------------------------------------------------
