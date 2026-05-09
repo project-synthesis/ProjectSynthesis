@@ -25,8 +25,19 @@
 
   let backendError = $state<string | null>(null);
   let firstHealthReceived = false;
-  let pendingGuide = false;
-  let pendingHealthDelta: { health: HealthResponse; delta: any } | null = null;
+  // ROOT CAUSE FIX (2026-05-09): ``pendingGuide`` and ``pendingHealthDelta``
+  // were plain ``let`` bindings — Svelte 5 only tracks ``$state`` reads as
+  // reactive dependencies. The cold-boot $effect at line ~425 reads BOTH
+  // ``pendingGuide`` AND ``preferencesStore.loading``, but only the latter
+  // re-fired the effect on change. If preferences finished loading BEFORE
+  // the first health poll resolved, the effect ran once with
+  // ``pendingGuide=false`` (returning early), and never re-ran when
+  // healthPoll later set ``pendingGuide=true`` (no reactive trigger). Cold
+  // boot silently lost the auto-trigger; sampling→internal mid-session
+  // worked because it goes through the SSE handler (event-driven, not
+  // effect-driven). Promoting both to ``$state`` fixes the race.
+  let pendingGuide = $state(false);
+  let pendingHealthDelta = $state<{ health: HealthResponse; delta: any } | null>(null);
 
   /**
    * Reconcile force toggles with actual system capabilities.
