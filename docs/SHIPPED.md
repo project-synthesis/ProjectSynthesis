@@ -6,6 +6,48 @@ For active work, see [`ROADMAP.md`](ROADMAP.md). For per-change detail with file
 
 ---
 
+### v0.4.18 — Foundation P3: substrate unification + DDL hygiene + drift cleanup (2026-05-09)
+
+The largest single architectural commitment of the foundation phase. Collapses the asymmetric probe/seed run surfaces into a unified substrate so Probe Tier 2/3/4 features can build natively on row-state rather than retrofitting persistence twice. Implementation followed plan APPROVED-ZERO-V5 with strict 7-dispatch TDD per cycle (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → V1 spec compliance → V2 code quality). Both spec and plan went through 5 independent subagent review rounds before APPROVED-ZERO; V1 of the spec surfaced 8 critical issues including the original incorrect "collapse SeedRun + ProbeRun" framing — verified that no `SeedRun` model has ever existed; only `ProbeRun` did, with 17 columns.
+
+**Pre-Cycle 1 prework (2 cycles, 2 commits each):**
+
+- **Alembic env hardening + drift cleanup** — `transaction_per_migration=True` enables per-migration transaction isolation. 8 pre-existing hotpath indexes that migration `cc9c44e78f78` created without round-tripping to the model declared in `models.py`. `compare_type` callback in `env.py` treats SQLite's `JSON↔TEXT` and `Float↔REAL` pairs as equivalent (same affinity, same on-disk bytes). `include_object` filter on `uq_prompt_cluster_domain_label` because SQLAlchemy's reflector silently skips expression-based partial indexes. Migration `2d61e9b37427` repairs the only two real drift items: re-creates the `uq_prompt_cluster_domain_label` partial unique index (multi-project domain-label uniqueness — ADR-005) + re-asserts `NOT NULL` on `global_patterns.id` for deployments where SQLite's VARCHAR PRIMARY KEY left it nullable. Both ops idempotent via inspector guards. After this cycle, `alembic check` exits cleanly with `No new upgrade operations detected.`
+- **Lifespan-DDL consolidation into Alembic** — migrated all ~12 startup-time `ALTER TABLE` / `CREATE INDEX` / `CREATE TABLE IF NOT EXISTS` blocks out of `app/main.py` lifespan into a single forward-only Alembic migration `bdd8e96cf489_consolidate_lifespan_ddl_into_alembic.py`. Closes the audit-trail gap where `alembic upgrade head` told only half the story. `main.py` shrinks from 2204 → 1957 lines (–264 lines net). New regression file `tests/test_main_lifespan_no_ddl.py` (19 tests) pins both the static-text invariant (no DDL keywords inside lifespan) and per-(table,column) schema existence on a freshly migrated DB.
+
+**16 implementation cycles + 1 follow-up cycle, all RED → GREEN → REFACTOR → INTEGRATE → OPERATE:**
+
+| # | Cycle | LOC delta / artifact |
+|---|---|---|
+| 1 | RunRow ORM model + Alembic migration `58510d3f6b81` | `models.py` +18 columns, 4 indexes; matched-state idempotency guard; reversible downgrade |
+| 2 | `current_run_id` ContextVar rebound at canonical `probe_common.py` | `current_probe_id` alias preserves object identity |
+| 3 + 3.5 | Pydantic schemas + `GeneratorResult` dataclass + `RunGenerator` Protocol | `schemas/runs.py`; 14 P3 test fixtures in conftest including `mcp_test_client` |
+| 4 | `RunOrchestrator` service | `services/run_orchestrator.py`; only legitimate `RunRow` writer; routes through `WriteQueue.submit()`; cancellation under `asyncio.shield()` |
+| 5 | `_gc_orphan_runs(db) -> int` | sweeps both modes; legacy `_gc_orphan_probe_runs` is no-op |
+| 6 | `TopicProbeGenerator` | `services/generators/topic_probe_generator.py` ~760 LOC; refactored from `ProbeService._run_impl`; preserves 5 phases + 8 SSE event types byte-for-byte |
+| 7 | `SeedAgentGenerator` | `services/generators/seed_agent_generator.py` ~330 LOC; refactored from `tools/seed.py:handle_seed`; `partial` classification + early-failure HTTP 200 contract preserved; `seed_batch_progress` payload gains `run_id` |
+| 8 | PR1 lifespan wiring | `app.state.run_orchestrator` registers both generators |
+| 9 | `event_bus.subscribe_for_run(run_id)` filtered async iterator | 500ms ring-buffer replay; coexists with existing `EventBus` (no `publish()` mod); non-dict-sentinel-safe |
+| 10 | NEW endpoints `GET /api/runs` + `GET /api/runs/{run_id}` | paginated, mode/status/project_id filters |
+| 11 | `routers/probes.py` shim refactor | race-free SSE via subscribe-before-dispatch (caller mints `run_id`); ValidationError → 400 `invalid_request` |
+| 12 | `routers/seed.py` shim refactor | sync POST + additive `run_id` on `SeedOutput`; new `GET /api/seed` + `GET /api/seed/{run_id}` |
+| 13 | MCP tool dispatch through `RunOrchestrator` | `tools/seed.py` 406→202 LOC; `synthesis_seed` gains additive `run_id`. Follow-up: bus→ctx progress bridge for `synthesis_probe` (AC-C6-3 restored) |
+| 14 | `ProbeService` class deleted; `ProbeRun` ORM class deleted | `probe_service.py` 2270→37 LOC re-export shim; 51 ProbeRun references in 8 test files rewritten; 2 obsolete test files (~2210 LOC) deleted |
+| 15 + integration | `SeedModal.svelte` `runId?: string \| null` prop + truthy filter guard + chromatic encoding | full-stack engineer subagent wired the substrate end-to-end (POST /api/seed → SeedModal `currentRunId` → status badge with chromatic encoding via `runStatusColor()` in `colors.ts`, ambient "N runs / 24h" hint via new `runs.ts` API client) |
+| 16 | CHANGELOG entry + final reviewers APPROVED FOR MERGE | PR #70 |
+
+**Backward compat preserved across all four surfaces:** `POST /api/probes` (race-free SSE via subscribe-before-dispatch), `POST /api/seed` (sync semantics + additive `run_id` field on `SeedOutput`), `synthesis_probe` MCP tool (response shape unchanged + bus→ctx progress bridge for AC-C6-3 via `event_bus.subscribe_for_run` filter forwarding `probe_prompt_completed` → `ctx.report_progress`), `synthesis_seed` MCP tool (additive `run_id` only). `current_run_id is current_probe_id` invariant pinned by `tests/test_probe_service_module_split_v0_4_17.py:27`.
+
+**Stats:** 95+ commits across `release/v0.4.18`. ~94 net new tests across 12 categories per spec § 9 (cat 1 RunRow + migration: 8 tests; cat 2 RunOrchestrator lifecycle: 14; cat 3 RunGenerator protocol: 7; cat 4 TopicProbeGenerator: 14; cat 5 SeedAgentGenerator: 10; cat 6 probes shim: 13; cat 7 seed shim: 8; cat 8 MCP tools: 7; cat 9 /api/runs: 7; cat 10 GC sweep: 4; cat 11 cross-process correlation: 4; cat 12 ProbeRun ORM removal: 6). Backend regression: 3648 passed / 4 skipped (2 pre-existing `test_main.py` lifespan hangs filtered, verified pre-existing on parent commit `2bb8de9a`). Frontend: 1566 passed / 0 failed (97 files). ruff + svelte-check + alembic check all clean.
+
+**Foundation phase status:** P1 + P2 Path A + P3 complete. P4 (long-handler restructures) next at v0.4.19. Probe T2-T4 follow at v0.4.20-v0.4.22 — all building natively on the unified `RunRow` substrate with zero retroactive migration.
+
+**Spec:** `docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md` (V5 APPROVED-ZERO via 5 independent review cycles). **Plan:** `docs/superpowers/plans/2026-05-06-foundation-p3-substrate-unification.md` (~5400 LOC, 16 cycles + Cycle 3.5 fixture cycle, V5 APPROVED-ZERO via 5 independent review cycles). **Migration:** `58510d3f6b81_add_run_row_table_foundation_p3.py` (atomic, with matched-state idempotency guard + reversible downgrade). **PR:** [#70](https://github.com/project-synthesis/ProjectSynthesis/pull/70).
+
+**Subsumes:** ROADMAP entry "Topic Probe Tier 4 (substrate unification)" — promoted out of T4 into Foundation P3 and shipped early.
+
+---
+
 ### v0.4.17 — Foundation P2 Path A: probe internals split (2026-05-06)
 
 Behavior-preserving refactor. `backend/app/services/probe_service.py` (2493 LOC) split into a thinner orchestrator (~2204 LOC) + 3 NEW modules holding extracted module-level helpers. ProbeService class methods + `_run_impl()` body byte-for-byte unchanged. Public API preserved via 2-symbol re-export shim. **Path B (Phase 3 body extraction) deferred indefinitely** — see ROADMAP "Probe Phase 3 body extraction — deferred" for the architectural questions to resolve before re-attempting.
