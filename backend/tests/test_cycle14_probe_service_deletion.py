@@ -46,7 +46,7 @@ def test_probe_service_class_deleted() -> None:
     )
 
     with pytest.raises(ImportError):
-        from app.services.probe_service import ProbeService  # noqa: F401
+        from app.services.probe_service import ProbeService  # type: ignore[attr-defined]  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ def test_probe_run_alias_deleted_from_models() -> None:
     )
 
     with pytest.raises(ImportError):
-        from app.models import ProbeRun  # noqa: F401
+        from app.models import ProbeRun  # type: ignore[attr-defined]  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
