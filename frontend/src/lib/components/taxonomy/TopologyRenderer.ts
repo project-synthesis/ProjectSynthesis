@@ -7,6 +7,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+import { computeFocusEndpoint } from './focus-math';
+
 export type LODTier = 'far' | 'mid' | 'near';
 
 export interface RendererOptions {
@@ -124,7 +126,13 @@ export class TopologyRenderer {
     this.renderer.setSize(width, height, false);
   }
 
-  /** Animate camera to look at a target position. */
+  /** Animate camera to look at a target position.
+   *
+   *  Endpoint math is delegated to `computeFocusEndpoint` (pure function,
+   *  unit-tested in `focus-math.test.ts`) for adaptive-distance clamping
+   *  to `[controls.minDistance, controls.maxDistance]` and zero-length
+   *  direction guard (camera-on-target case). The animation glue (RAF +
+   *  `lerpVectors`) lives here. */
   focusOn(target: THREE.Vector3, distance = 20, duration = 600): void {
     // Cancel any in-flight focus animation
     if (this._focusAnimId != null) {
@@ -135,12 +143,16 @@ export class TopologyRenderer {
 
     const startPos = this.camera.position.clone();
     const startTarget = this.controls.target.clone();
-    const endTarget = target.clone();
-    const dir = new THREE.Vector3()
-      .subVectors(startPos, startTarget)
-      .normalize()
-      .multiplyScalar(distance);
-    const endPos = endTarget.clone().add(dir);
+    const { endPos, endTarget } = computeFocusEndpoint(
+      startPos,
+      startTarget,
+      target,
+      distance,
+      {
+        minDistance: this.controls.minDistance,
+        maxDistance: this.controls.maxDistance,
+      },
+    );
 
     const startTime = performance.now();
     const animate = () => {
