@@ -82,6 +82,11 @@ vi.mock('three', () => {
   // value works for the equality assertion the constructor makes.
   const PCFShadowMap = 1;
 
+  // Vector2 — needed by UnrealBloomPass constructor (canon F13).
+  class Vector2 {
+    constructor(public x: number = 0, public y: number = 0) {}
+  }
+
   return {
     Scene,
     PerspectiveCamera,
@@ -89,6 +94,7 @@ vi.mock('three', () => {
     Color,
     Mesh,
     Vector3,
+    Vector2,
     AmbientLight,
     DirectionalLight,
     HemisphereLight,
@@ -133,6 +139,53 @@ vi.mock('three/addons/controls/OrbitControls.js', () => {
     target = makeTargetVec();
   }
   return { OrbitControls };
+});
+
+// Cinematic post-processing mocks (canon F13). The composer pipeline is
+// driven by EffectComposer + RenderPass + UnrealBloomPass + FilmPass.
+// In jsdom none of these can do real GL work — the mocks provide just
+// enough shape for the constructor to wire them, the render loop to
+// `composer.render()` and `composer.setSize()`, and dispose() to walk
+// the passes array.
+vi.mock('three/addons/postprocessing/EffectComposer.js', () => {
+  class EffectComposer {
+    passes: unknown[] = [];
+    constructor(_renderer: unknown) {}
+    addPass(pass: unknown) { this.passes.push(pass); }
+    render = vi.fn();
+    setSize = vi.fn();
+    dispose = vi.fn();
+  }
+  return { EffectComposer };
+});
+
+vi.mock('three/addons/postprocessing/RenderPass.js', () => {
+  class RenderPass {
+    constructor(_scene: unknown, _camera: unknown) {}
+    dispose = vi.fn();
+  }
+  return { RenderPass };
+});
+
+vi.mock('three/addons/postprocessing/UnrealBloomPass.js', () => {
+  class UnrealBloomPass {
+    constructor(
+      public resolution: unknown,
+      public strength: number,
+      public radius: number,
+      public threshold: number,
+    ) {}
+    dispose = vi.fn();
+  }
+  return { UnrealBloomPass };
+});
+
+vi.mock('three/addons/postprocessing/FilmPass.js', () => {
+  class FilmPass {
+    constructor(public intensity: number, public grayscale: boolean) {}
+    dispose = vi.fn();
+  }
+  return { FilmPass };
 });
 
 import { TopologyRenderer, type LODTier } from './TopologyRenderer';

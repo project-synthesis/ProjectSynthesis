@@ -369,6 +369,10 @@ vi.mock('three', () => {
     }
   }
   class Points {
+    // Neural Dust (canon F10) rotates this every frame via _removeDustAnim;
+    // headless tests need the rotation field to exist so the callback
+    // doesn't throw `Cannot read properties of undefined (reading 'y')`.
+    rotation = { x: 0, y: 0, z: 0 };
     scale = { setScalar: () => {} };
     userData: Record<string, unknown> = {};
     material: unknown = null;
@@ -378,6 +382,12 @@ vi.mock('three', () => {
     v0 = new Vector3(); v1 = new Vector3(); v2 = new Vector3();
     getPoint(_t: number, target?: Vector3) { return target ?? new Vector3(); }
   }
+  // CanvasTexture used by canon F2 — radial-gradient glow texture cached
+  // on globalThis.__semTopGlowTexture. Disposable.
+  class CanvasTexture {
+    constructor(public source: HTMLCanvasElement) {}
+    dispose = () => {};
+  }
   const AdditiveBlending = 1;
   const DoubleSide = 2;
   return {
@@ -385,7 +395,7 @@ vi.mock('three', () => {
     EdgesGeometry, RingGeometry, MeshBasicMaterial, MeshStandardMaterial, ShaderMaterial,
     Mesh, BufferAttribute, BufferGeometry, Float32BufferAttribute, LineBasicMaterial,
     LineDashedMaterial, PointsMaterial, LineSegments, Points, Sprite, QuadraticBezierCurve3,
-    AdditiveBlending, DoubleSide,
+    CanvasTexture, AdditiveBlending, DoubleSide,
   };
 });
 
