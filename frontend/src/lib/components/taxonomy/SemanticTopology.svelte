@@ -20,6 +20,7 @@
   import type { ClusterNode } from '$lib/api/clusters';
   import { BeamPool } from './BeamPool';
   import { ClusterPhysics } from './ClusterPhysics';
+  import { EnvelopePool } from './EnvelopePool';
   import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
   import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
   import { readinessTierColor } from './readiness-tier';
@@ -516,6 +517,26 @@
   // Beam pool + cluster physics state
   let beamPool: BeamPool | null = null;
   let clusterPhysics: ClusterPhysics | null = null;
+  // Envelope pool — plasma engulfment burst at beam impact (canon F19).
+  // Acquired from the click `$effect` via the `onImpact` callback passed
+  // to `beamPool.acquire`, so the envelope ignites at the moment the
+  // beam visually arrives at the target rather than synchronously with
+  // the click. Disposed in the cleanup return below.
+  let envelopePool: EnvelopePool | null = null;
+  let _removeEnvelopeUpdate: (() => void) | null = null;
+
+  // Emissive flash state — per-node MeshStandardMaterial.emissiveIntensity
+  // burst at impact. Layered with the additive plasma envelope: envelope
+  // wraps the node from outside (additive blending), emissive flash lights
+  // it from within. Together they read as a complete impact beat — the
+  // node is briefly energized AND engulfed.
+  const FLASH_PEAK_MULTIPLIER = 4;
+  const FLASH_ATTACK_MS = 60;
+  const FLASH_DECAY_MS = 250;
+  const FLASH_TOTAL_MS = FLASH_ATTACK_MS + FLASH_DECAY_MS;
+  const _flashStates = new Map<string, { startTime: number; baselineEmissive: number; }>();
+  let _removeFlashUpdate: (() => void) | null = null;
+
   let _hasPlayedEntrance = false;
   // One-shot auto-focus guard (canon F17). The bird's-eye-view "frame the
   // largest domain" zoom must run EXACTLY ONCE for the component lifecycle.
@@ -579,6 +600,68 @@
     }
     _highlightedId = null;
     _highlightedColor = null;
+  }
+
+  /**
+   * Flash a node's MeshStandardMaterial emissive intensity at beam impact.
+   *
+   * Lifecycle (driven by `_tickFlashStates` per-frame):
+   *   - 0 → FLASH_ATTACK_MS (60ms): hold at peak (set immediately below)
+   *   - FLASH_ATTACK_MS → FLASH_TOTAL_MS (250ms decay): cubic ease-out
+   *     back to baseline
+   *   - At FLASH_TOTAL_MS: emissiveIntensity restored, map entry deleted
+   *
+   * Baseline-capture: rapid re-fires during an active flash reuse the
+   * prior baseline so emissiveIntensity doesn't lock at peak * peak (which
+   * a naive read of the live value would do — peak overrides baseline,
+   * second flash reads the inflated value as "baseline" and goes to 16×).
+   */
+  function flashEmissive(nodeId: string): void {
+    const mesh = nodeMeshes.get(nodeId);
+    if (!mesh) return;
+    const mat = mesh.material as THREE.MeshStandardMaterial;
+    const existing = _flashStates.get(nodeId);
+    const baseline = existing ? existing.baselineEmissive : mat.emissiveIntensity;
+    mat.emissiveIntensity = baseline * FLASH_PEAK_MULTIPLIER;
+    _flashStates.set(nodeId, {
+      startTime: performance.now(),
+      baselineEmissive: baseline,
+    });
+  }
+
+  /**
+   * Per-frame advance for every active emissive flash. Registered once via
+   * `addAnimationCallback` in `onMount`; canceller stored in
+   * `_removeFlashUpdate`. Iterates the small `_flashStates` map (≤ a few
+   * entries in steady state — only nodes recently impacted), restores
+   * baselines and deletes entries on expiry.
+   */
+  function _tickFlashStates(now: number): void {
+    if (_flashStates.size === 0) return;
+    for (const [nodeId, state] of _flashStates) {
+      const mesh = nodeMeshes.get(nodeId);
+      if (!mesh) {
+        // Mesh was rebuilt out from under this flash — drop the stale
+        // entry so the map doesn't grow unboundedly across rebuilds.
+        _flashStates.delete(nodeId);
+        continue;
+      }
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      const elapsed = now - state.startTime;
+      if (elapsed >= FLASH_TOTAL_MS) {
+        mat.emissiveIntensity = state.baselineEmissive;
+        _flashStates.delete(nodeId);
+        continue;
+      }
+      if (elapsed >= FLASH_ATTACK_MS) {
+        const t = (elapsed - FLASH_ATTACK_MS) / FLASH_DECAY_MS;
+        const ease = 1 - Math.pow(1 - t, 3);
+        const peak = state.baselineEmissive * FLASH_PEAK_MULTIPLIER;
+        mat.emissiveIntensity = peak + (state.baselineEmissive - peak) * ease;
+      }
+      // During attack (elapsed < FLASH_ATTACK_MS): emissiveIntensity stays
+      // at peak — set by `flashEmissive` at fire time, no per-frame work.
+    }
   }
 
   /** Set opacity on an edge material — handles both LineBasicMaterial and ShaderMaterial. */
@@ -1873,11 +1956,14 @@
       _scratchVec3a.set(node.position[0], node.position[1], node.position[2]),
     );
 
-    // Tactile feedback: ClusterPhysics overshoot accretion + plasma beam
-    // injection from the FPS-weapon NDC origin (canon F7 + F18).
-    if (clusterPhysics) {
-      clusterPhysics.onBeamImpact(node.id, node.size);
-    }
+    // Tactile feedback (canon F7 + F18 + F19). All impact reactions —
+    // ClusterPhysics overshoot accretion, plasma envelopement burst,
+    // emissive flash on the fill material — fire from the beam's
+    // `onImpact` callback so they synchronize to the moment the beam
+    // visually arrives at the target. Calling these synchronously with
+    // `acquire()` was a pre-existing anti-causal-ordering bug: the beam
+    // takes ~300ms to travel from FPS-weapon NDC origin to the cluster,
+    // so the cluster used to ripple BEFORE being hit.
     if (beamPool) {
       const group = _beamNodeGroups.get(node.id);
       if (group) {
@@ -1885,12 +1971,22 @@
         // sustain elapses), so a fresh Color is required here — cannot
         // borrow `_scratchColor` because it would be re-mutated before the
         // beam release. Per-selection event (not per-frame); negligible.
+        const envelopeColor = new THREE.Color(node.color);
+        const envelopeShape = node.state === 'domain' ? 'domain' : 'cluster';
         beamPool.acquire(
           group,
           {
-            color: new THREE.Color(node.color),
+            color: envelopeColor,
             radius: Math.max(node.size * 0.04, 0.1),
             sustainMs: 800, // short, sharp injection burst
+            onImpact: () => {
+              // Single anchor point — fires at the beam's
+              // firing→sustain transition (~300ms post-acquire). All
+              // three reactions read as one coherent beat:
+              clusterPhysics?.onBeamImpact(node.id, node.size);
+              envelopePool?.acquire(group, node.size, envelopeShape, envelopeColor);
+              flashEmissive(node.id);
+            },
           },
           renderer.camera,
         );
@@ -1913,6 +2009,28 @@
     beamPool = new BeamPool();
     clusterPhysics = new ClusterPhysics();
     renderer.scene.add(beamPool.group);
+
+    // Initialize plasma envelope pool (canon F19). Mounted as a sibling
+    // of beamPool's group — both are owned by the renderer's scene and
+    // disposed in the cleanup return. Per-frame update tracks node world
+    // positions and advances the per-instance attack→hold→decay state
+    // machine; missing-target detection ends an envelope gracefully if
+    // its target node is removed mid-effect.
+    envelopePool = new EnvelopePool();
+    renderer.scene.add(envelopePool.group);
+    let envelopeLastTime = performance.now();
+    _removeEnvelopeUpdate = renderer.addAnimationCallback(() => {
+      const now = performance.now();
+      const delta = (now - envelopeLastTime) / 1000;
+      envelopeLastTime = now;
+      envelopePool?.update(delta);
+    });
+
+    // Emissive flash tick — drives per-node MeshStandardMaterial intensity
+    // ramps for any active flash. Cheap no-op when `_flashStates` is empty.
+    _removeFlashUpdate = renderer.addAnimationCallback(() => {
+      _tickFlashStates(performance.now());
+    });
 
     let lastTime = performance.now();
     const removeBeamUpdate = renderer.addAnimationCallback(() => {
@@ -1981,6 +2099,28 @@
       beamPool = null;
       clusterPhysics?.clear();
       clusterPhysics = null;
+      // Envelope pool — canon F19. Cancel its per-frame update first so a
+      // late-firing animation tick can't read disposed materials, then
+      // dispose the pool itself.
+      _removeEnvelopeUpdate?.();
+      _removeEnvelopeUpdate = null;
+      envelopePool?.dispose();
+      envelopePool = null;
+      // Emissive flash — cancel the tick BEFORE clearing the map so a
+      // half-cleared map can't be read by a late-firing animation tick.
+      // Restore each active flash's baseline emissive so a remount
+      // doesn't inherit inflated values that would only normalize on
+      // first paint (visible as a brief over-glow).
+      _removeFlashUpdate?.();
+      _removeFlashUpdate = null;
+      for (const [nodeId, state] of _flashStates) {
+        const mesh = nodeMeshes.get(nodeId);
+        if (mesh) {
+          const mat = mesh.material as THREE.MeshStandardMaterial;
+          mat.emissiveIntensity = state.baselineEmissive;
+        }
+      }
+      _flashStates.clear();
       removeBeamUpdate();
       _removeRingLodUpdate();
       _removeFormationAnim?.();
