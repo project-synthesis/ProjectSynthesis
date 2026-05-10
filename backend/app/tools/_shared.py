@@ -24,7 +24,9 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.config import DATA_DIR, PROMPTS_DIR
 from app.database import async_session_factory
@@ -32,6 +34,7 @@ from app.database import async_session_factory
 __all__ = [
     "DATA_DIR",
     "PROMPTS_DIR",
+    "_fetch_historical_stats",
     "async_session_factory",
     "auto_resolve_repo",
     "build_scores_dict",
@@ -52,6 +55,8 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from app.services.context_enrichment import ContextEnrichmentService
     from app.services.routing import RoutingManager
     from app.services.run_orchestrator import RunOrchestrator
@@ -229,5 +234,47 @@ def build_scores_dict(obj: object) -> dict[str, float] | None:
         "faithfulness": getattr(obj, "score_faithfulness", None) or 0.0,
         "conciseness": getattr(obj, "score_conciseness", None) or 0.0,
     }
+
+
+async def _fetch_historical_stats(
+    db: "AsyncSession",
+    *,
+    exclude_scoring_modes: list[str],
+) -> dict[str, Any] | None:
+    """Fetch score-distribution stats via OptimizationService for blended scoring.
+
+    Foundation P4 — used by:
+    - Cycle 1 (save_result, exclude=['heuristic', 'hybrid_passthrough'])
+    - Cycle 2 (refine, exclude=['heuristic'])
+    - Cycle 3 (orchestrator pre-fetch for run_hybrid_scoring, exclude=['heuristic'])
+
+    Returns ``None`` if the stats query fails for a legitimate "data not
+    available yet" reason (empty DB, locked DB during contention, missing
+    table during a migration). Callers degrade to non-blended scoring.
+
+    Return-shape contract: `OptimizationService.get_score_distribution`
+    returns `dict[str, dict[str, float | int]]` (per-dimension count/mean/
+    stddev). This is `dict[str, Any]`-compatible — `score_passthrough` and
+    `blend_scores` already accept it under that wider annotation.
+
+    Exception scope is intentionally narrow — `OperationalError` and
+    `ProgrammingError` cover the legitimate cases. Other exceptions
+    (greenlet errors, `AttributeError`, etc.) indicate real bugs and
+    must propagate so tests catch them. If your test path needs this
+    helper to fail loudly on a different exception class, monkeypatch
+    it to raise — do NOT widen the catch.
+    """
+    try:
+        from app.services.optimization_service import OptimizationService
+        opt_svc = OptimizationService(db)
+        return await opt_svc.get_score_distribution(
+            exclude_scoring_modes=exclude_scoring_modes,
+        )
+    except (OperationalError, ProgrammingError):
+        logger.debug(
+            "_fetch_historical_stats unavailable (non-fatal, returning None)",
+            exc_info=True,
+        )
+        return None
 
 
