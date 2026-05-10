@@ -644,6 +644,38 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 
 ---
 
+### Pattern Graph visual feel calibration — spec-vs-feel drift sweep across canon F1–F19
+**Status:** Exploring
+**Context:** Reactive item surfaced during the Pattern Graph plasma envelopement work on `feature/restore-pattern-graph-canon` (commits `94aa799b → 64924994`, 2026-05-10). Cycle 1 of the F19 work shipped beam timing constants strictly aligned to the Data-as-Matter spec (`FIRING_MS = 300`, `TERMINATE_MS = 800`). All 327 taxonomy tests passed; svelte-check was clean. User then reported the impact "triggers way too soon and isn't smooth enough." Re-tune to `FIRING_MS = 700` + a new `uHead` progressive-extension uniform (catenary visibly unfolds from origin toward target instead of fading in along its full length) + 220ms envelope attack + 80ms cubic-eased emissive flash ramp landed correctly. The spec value was visually wrong despite being the canonical written reference.
+
+The takeaway is a working principle now captured in `.claude/skills/brand-guidelines/references/3d-visualization.md` F7 + F19 documentation: **the user's eye is ground truth for visual feel; spec values encode intent at one point in time and can drift from what reads correctly.** Tests passing ≠ feel correct; the test harness cannot validate UX feel, so future changes to any 3D timing/onset constant should be ready to iterate based on user reports.
+
+**Default fixes when visual timing or smoothness feedback comes in:**
+1. **Extend durations** when something lands "too soon" — earlier the Data-as-Matter 300ms beam read as no-transmission.
+2. **Replace instant onsets with eased ramps** — pre-fix `mat.emissiveIntensity = baseline * 4` was a synchronous step on the first frame; moving the interpolation into the per-frame tick (cubic ease-out from baseline → peak over 80ms) eliminated the "thud" reading.
+3. **Add progressive shader uniforms** when geometry has extent the visual should travel along — the `uHead` 0..1 + `smoothstep(uHead + 0.04, uHead - 0.02, vUv.x)` mask pattern is reusable for any directional/extending energy effect (linear beam, radial pulse, surface-traversing wave).
+4. **Update the canon doc to match what shipped**, never argue from "the spec says X."
+
+**F1–F18 timing constants potentially due for the same review** (none confirmed wrong — listed as audit candidates if/when polish cycles touch the Pattern Graph):
+- **F5** hierarchical edge `uTime` pulse — pulse frequency + amplitude have not been re-evaluated since initial implementation
+- **F8** organic breathing oscillation — `_breathingTime += 0.016` per frame produces a fixed ~0.95Hz cycle; ±2% amplitude (±12% on hover) has never been user-tuned
+- **F10** Neural Dust slow XY rotation — rotation speed is a magic number that may read either too static or too restless
+- **F14** `focusOn` 600ms default duration + adaptive distance clamps — user reports of "click-zoom feels jerky" would route here
+- **F17** one-shot auto-focus 1500ms pan — bound to formation animation 90-frame duration; if formation timing changes, this needs to follow
+- **F9** ClusterPhysics ripple-decay constant `0.92` per frame — the ~500-600ms visible glow envelope is implicit in the decay rate; re-clicks during an active ripple compound (additive accretion via `targetScale += 0.02`)
+
+**Triggers (revisit when):**
+1. User reports any 3D effect lands "too soon," "too late," "too fast," "too slow," or "not smooth" — apply the default fixes above and update the canon doc.
+2. A code-quality pass touches one of the F-feature implementations — opportunistically re-evaluate its timing constants against the latest user feedback signal.
+3. A new 3D effect is added — borrow the `uHead`-style progressive-uniform pattern from F19 if the new effect has any directional or extending visual character (don't default to "fade in along full length" again).
+4. A formal polish cycle is scheduled — sweep all F1–F18 timing constants with a structured review, ideally side-by-side comparing baseline-vs-tuned recordings.
+
+**No spec, no plan, no version target.** Reactive discipline note. The principle lives in `feedback_visual_feel_over_spec.md` (memory) + canon F7/F19 (this repo); this entry exists to surface it on the roadmap so future polish cycles have a discoverable touchpoint instead of re-learning the lesson per feature.
+
+**Files (when triggered):** depends on which F-feature is being revisited. Canon doc `.claude/skills/brand-guidelines/references/3d-visualization.md` for documentation updates; `frontend/src/lib/components/taxonomy/` for code changes (specifically `BeamShader.ts`, `PlasmaBeam.ts`, `EnvelopePool.ts`, `EnvelopeShader.ts`, `ClusterPhysics.ts`, `TopologyRenderer.ts`, `SemanticTopology.svelte` per-frame callbacks).
+
+---
+
 ### Probe Phase 3 body extraction — deferred from Foundation P2 (2026-05-06)
 **Status:** Exploring (was Foundation P2 Path B; deferred 2026-05-06 after spec validation surfaced unresolved architectural questions).
 **Context:** The original Foundation P2 design proposed extracting Phase 3's ~600-LOC body from `ProbeService._run_impl()` into a free function `running(...)` in a new `probe_phase_3.py` module. After 5 spec validation rounds + 1 plan validation round, the plan reviewer caught structural defects:
