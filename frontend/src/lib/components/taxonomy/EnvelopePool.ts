@@ -8,8 +8,8 @@
 // detection terminates gracefully when the target is removed from the
 // scene graph.
 //
-// State machine: idle → attack (120ms) → hold (180ms) → decay (500ms) → idle
-// Total: 800 ms. Cubic-ease-out for both attack and decay phases.
+// State machine: idle → attack (220ms) → hold (180ms) → decay (580ms) → idle
+// Total: 980 ms. Cubic-ease-out for both attack and decay phases.
 //
 // Brand: `.claude/skills/brand-guidelines/references/3d-visualization.md`
 //        canon F19 "Envelopement Burst" (added in this cycle)

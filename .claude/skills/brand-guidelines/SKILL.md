@@ -167,7 +167,7 @@ Semi-transparent surfaces (`color-mix` at 50–98% opacity), backdrop blur for p
 
 It inherits the **5 brand axioms verbatim** — Signal Over Noise, Neon Tube Model translated to 3D as lit emission, Darkness as Active Design, Chromatic Encoding, Mechanical Responsiveness. The axioms are non-negotiable; how they translate into the 3D medium is fundamentally different from how they translate into 2D HTML/CSS.
 
-**Canonical reference:** [`references/3d-visualization.md`](references/3d-visualization.md) — the full document of canonical visual features (F1–F18), per-frame allocation budget, disposal contract, and the **audit checklist** that determines whether an implementation passes brand review.
+**Canonical reference:** [`references/3d-visualization.md`](references/3d-visualization.md) — the full document of canonical visual features (F1–F19), per-frame allocation budget, disposal contract, and the **audit checklist** that determines whether an implementation passes brand review.
 
 ### What is permitted in 3D (and may be banned in 2D)
 
@@ -202,7 +202,7 @@ These constraints are NOT brand rules — they are correctness rules. They apply
 
 Before adding/removing/modifying anything in `frontend/src/lib/components/taxonomy/`:
 
-1. **Find the relevant canon feature** in `references/3d-visualization.md` (F1–F18).
+1. **Find the relevant canon feature** in `references/3d-visualization.md` (F1–F19).
 2. If the change implements an existing canon feature more correctly: proceed.
 3. If the change adds a new visual feature: **first** update `references/3d-visualization.md` with a new canon entry (parameters, source location, rationale, audit-checklist line) — then implement.
 4. If the change removes or fundamentally alters a canon feature: requires an explicit user-driven redirection of the canon. The 3D Pattern Graph does not bend to 2D-UI rules absent that redirection.

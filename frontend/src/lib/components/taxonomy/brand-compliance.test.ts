@@ -34,6 +34,8 @@ const SCOPE_FILES = [
   'BeamShader.ts',
   'ClusterPhysics.ts',
   'EdgeShader.ts',
+  'EnvelopePool.ts',     // canon F19 — plasma envelopement pool
+  'EnvelopeShader.ts',   // canon F19 — envelope shader (BeamShader-adapted)
   'focus-math.ts',
   'PlasmaBeam.ts',
   'SemanticTopology.svelte',
@@ -60,6 +62,8 @@ const fileContents = import.meta.glob<string>(
     './BeamShader.ts',
     './ClusterPhysics.ts',
     './EdgeShader.ts',
+    './EnvelopePool.ts',
+    './EnvelopeShader.ts',
     './focus-math.ts',
     './PlasmaBeam.ts',
     './SemanticTopology.svelte',

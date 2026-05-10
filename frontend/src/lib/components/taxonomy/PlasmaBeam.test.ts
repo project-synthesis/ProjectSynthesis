@@ -13,13 +13,17 @@
  * pre-existing anti-causal-ordering bug where ripple fired immediately on
  * click while the beam still travelled.
  *
- * Cycle 1 also realigns timing constants to the Data-as-Matter spec:
- *   - FIRING_MS:    600 → 300  (spec compliance)
+ * Final visual timing (after the smoothness re-tune):
+ *   - FIRING_MS:    600 → 700  (perceptible energy transmission — the
+ *                                strict-spec 300ms read as instant-impact;
+ *                                700ms gives the user time to see the
+ *                                catenary head propagate before the
+ *                                cluster reacts)
  *   - TERMINATE_MS: 800 → 250  (snappier dissipation; rapid-click responsiveness)
  *
  * The tests below pin both invariants. They should FAIL on main's pre-fix code
  * (no `onImpact` field; FIRING_MS=600; TERMINATE_MS=800) and PASS once the
- * Cycle 1 implementation lands.
+ * Cycle 1 implementation + smoothness re-tune lands.
  */
 import { describe, expect, test, vi } from 'vitest';
 import * as THREE from 'three';
