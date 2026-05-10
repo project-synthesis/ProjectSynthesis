@@ -62,7 +62,7 @@ function stateOpacity(state: string, stateFilter: string | null, hasMatches: boo
     // "all" tab or empty filter — candidates translucent, everything else full.
     return state === 'candidate' ? 0.4 : 1.0;
   }
-  // Filtered tab with matches — matching nodes glow, structural nodes semi-visible, rest ghosted.
+  // Filtered tab with matches — matching nodes emit at full intensity, structural nodes semi-visible, rest ghosted.
   if (state === stateFilter) return 1.0;
   if (state === 'domain' || state === 'project') return 0.5;
   return 0.25;
@@ -91,7 +91,7 @@ const MAX_NODE_SIZE = 3.0;
 
 /** Color by lifecycle state.
  * All nodes (including templates) inherit their domain color via `taxonomyColor()`.
- * Template identification is carried by the halo ring decoration in SemanticTopology,
+ * Template identification is carried by the template ring decoration in SemanticTopology,
  * the cyan TEMPLATE badge in the inspector, and the `template_count` field on SceneNode.
  */
 function stateNodeColor(_state: string, oklabColor: string | null): string {
