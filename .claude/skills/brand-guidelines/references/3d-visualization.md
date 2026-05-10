@@ -48,7 +48,7 @@ Real 3D lighting is permitted (and required for `emissive` to read correctly). E
 
 **ShadowMap defaults** (when `castShadow: true`):
 - `renderer.shadowMap.enabled = true`
-- `renderer.shadowMap.type = THREE.PCFSoftShadowMap`
+- `renderer.shadowMap.type = THREE.PCFShadowMap` (PCFSoftShadowMap was deprecated in three@0.170+; PCFShadowMap is the canonical replacement)
 - Light `shadow.mapSize.set(1024, 1024)` (2048 for hero scenes if perf budget allows)
 - Mesh `castShadow = true` for clusters, `receiveShadow = true` for the floor plane (if any)
 
