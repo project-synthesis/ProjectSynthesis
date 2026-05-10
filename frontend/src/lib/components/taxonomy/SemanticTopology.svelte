@@ -1427,104 +1427,138 @@
           topologyCache.set(fingerprint, settledPositions);
         }
 
-        // Start all nodes collapsed at origin for galaxy formation
-        sceneData.nodes.forEach((n, i) => {
-          const radius = Math.random() * 2.0;
-          const theta = Math.random() * Math.PI * 2;
-          const phi = Math.acos((Math.random() * 2) - 1);
-          n.position = [
-            radius * Math.sin(phi) * Math.cos(theta),
-            radius * Math.sin(phi) * Math.sin(theta),
-            radius * Math.cos(phi)
-          ];
-        });
+        // Galaxy formation gate: cache-miss = first time seeing this node-set
+        // (initial mount, or structural change via taxonomy_changed SSE that
+        // added/removed clusters). Cache-hit = same node-set, only a scalar
+        // property changed (stateFilter, readinessStore.reports). Subsequent
+        // rebuilds MUST NOT re-run the formation animation — it disrupts the
+        // user's view, and most concretely it produces the "click a node →
+        // zoom in → LOD reset → zoom in second time" artifact when the
+        // animation fires mid-focus (cross-filter clicks mutate stateFilter
+        // in `_loadClusterDetail`, re-firing this $effect within the ~600ms
+        // focus window).
+        if (!cached) {
+          // Start all nodes collapsed at origin for galaxy formation
+          sceneData.nodes.forEach((n, i) => {
+            const radius = Math.random() * 2.0;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
+            n.position = [
+              radius * Math.sin(phi) * Math.cos(theta),
+              radius * Math.sin(phi) * Math.sin(theta),
+              radius * Math.cos(phi)
+            ];
+          });
 
-        rebuildScene(sceneData);
+          rebuildScene(sceneData);
 
-        // Hide edges during formation to prevent visual clutter
-        renderer?.scene.traverse((obj) => {
-          if (obj.userData?.isInterClusterEdgeGroup) obj.visible = false;
-        });
-        if (similarityEdgeGroup) similarityEdgeGroup.visible = false;
-        if (injectionEdgeGroup) injectionEdgeGroup.visible = false;
+          // Hide edges during formation to prevent visual clutter
+          renderer?.scene.traverse((obj) => {
+            if (obj.userData?.isInterClusterEdgeGroup) obj.visible = false;
+          });
+          if (similarityEdgeGroup) similarityEdgeGroup.visible = false;
+          if (injectionEdgeGroup) injectionEdgeGroup.visible = false;
 
-        // Galaxy Formation Animation Loop (Lerp to Settled Positions)
-        // Capture in const for TypeScript narrowing inside the closure
-        const formSceneData = sceneData;
-        let formProgress = 0.0;
-        const formDuration = 90.0; // frames
-        const initialPositions = new Float32Array(nodeCount * 3);
-        sceneData.nodes.forEach((n, i) => {
-           initialPositions[i*3] = n.position[0];
-           initialPositions[i*3+1] = n.position[1];
-           initialPositions[i*3+2] = n.position[2];
-        });
+          // Galaxy Formation Animation Loop (Lerp to Settled Positions)
+          // Capture in const for TypeScript narrowing inside the closure
+          const formSceneData = sceneData;
+          let formProgress = 0.0;
+          const formDuration = 90.0; // frames
+          const initialPositions = new Float32Array(nodeCount * 3);
+          sceneData.nodes.forEach((n, i) => {
+             initialPositions[i*3] = n.position[0];
+             initialPositions[i*3+1] = n.position[1];
+             initialPositions[i*3+2] = n.position[2];
+          });
 
-        _removeFormationAnim?.();
-        _removeFormationAnim = renderer?.addAnimationCallback(() => {
-           formProgress += 1.0;
-           // cubic ease-out
-           const t = Math.min(formProgress / formDuration, 1.0);
-           const easeT = 1 - Math.pow(1 - t, 3);
+          _removeFormationAnim?.();
+          _removeFormationAnim = renderer?.addAnimationCallback(() => {
+             formProgress += 1.0;
+             // cubic ease-out
+             const t = Math.min(formProgress / formDuration, 1.0);
+             const easeT = 1 - Math.pow(1 - t, 3);
 
-           formSceneData.nodes.forEach((n, i) => {
-              n.position[0] = initialPositions[i*3] + (settledPositions[i*3] - initialPositions[i*3]) * easeT;
-              n.position[1] = initialPositions[i*3+1] + (settledPositions[i*3+1] - initialPositions[i*3+1]) * easeT;
-              n.position[2] = initialPositions[i*3+2] + (settledPositions[i*3+2] - initialPositions[i*3+2]) * easeT;
+             formSceneData.nodes.forEach((n, i) => {
+                n.position[0] = initialPositions[i*3] + (settledPositions[i*3] - initialPositions[i*3]) * easeT;
+                n.position[1] = initialPositions[i*3+1] + (settledPositions[i*3+1] - initialPositions[i*3+1]) * easeT;
+                n.position[2] = initialPositions[i*3+2] + (settledPositions[i*3+2] - initialPositions[i*3+2]) * easeT;
 
-              const group = _beamNodeGroups.get(n.id);
-              if (group) group.position.set(...n.position);
+                const group = _beamNodeGroups.get(n.id);
+                if (group) group.position.set(...n.position);
 
-              if (labels) {
-                 const sprite = labels.getOrCreate(n.id, n.label, n.color);
-                 sprite.position.set(n.position[0], n.position[1] + n.size + 0.5, n.position[2]);
-              }
-
-              // Pre-fix bug: template ring + readiness ring meshes were positioned ONCE
-              // by ``rebuildScene`` which ran BEFORE this formation animation.
-              // At that moment all nodes were origin-collapsed, so the rings
-              // were placed at origin.  This callback then animated each
-              // ``n.position`` toward its settled target without syncing the
-              // decorations, leaving rings pinned at origin while clusters
-              // flew outward.  Visible until LOD-change → ``rebuildScene``
-              // re-sync (e.g. user zoom — which is exactly the symptom
-              // observed: "I have to zoom in or out for the rings to
-              // position themselves in the correct order and clusters").
-              const templateRing = _templateRingById.get(n.id);
-              if (templateRing) templateRing.position.set(n.position[0], n.position[1], n.position[2]);
-              const ringEntry = _readinessRings.get(n.id);
-              if (ringEntry) {
-                ringEntry.mesh.position.set(n.position[0], n.position[1], n.position[2]);
-              }
-           });
-
-           if (t >= 1.0) {
-              _removeFormationAnim?.();
-              _removeFormationAnim = null;
-
-              // Re-enable hierarchical edges — rebuild curves from settled positions.
-              // Uses _edgesByParent (persisted from rebuildScene) to avoid re-scanning
-              // all edges. Node positions were lerped to settled values above, so
-              // _sceneNodeMap positions are already at their final locations.
-              renderer?.scene.traverse((obj) => {
-                if (obj.userData?.isInterClusterEdgeGroup) {
-                  for (const child of (obj as THREE.Group).children) {
-                    const ls = child as THREE.LineSegments;
-                    const parentId = ls.userData?.parentId as string | undefined;
-                    if (!parentId) continue;
-                    const edges = _edgesByParent.get(parentId);
-                    if (!edges || edges.length === 0) continue;
-                    const { positions, indices } = buildMergedCurveGeometry(edges);
-                    ls.geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-                    ls.geometry.setIndex(indices);
-                  }
-                  obj.visible = true;
+                if (labels) {
+                   const sprite = labels.getOrCreate(n.id, n.label, n.color);
+                   sprite.position.set(n.position[0], n.position[1] + n.size + 0.5, n.position[2]);
                 }
-              });
-              if (similarityEdgeGroup) similarityEdgeGroup.visible = clustersStore.showSimilarityEdges;
-              if (injectionEdgeGroup) injectionEdgeGroup.visible = clustersStore.showInjectionEdges;
-           }
-        }) ?? null;
+
+                // Pre-fix bug: template ring + readiness ring meshes were positioned ONCE
+                // by ``rebuildScene`` which ran BEFORE this formation animation.
+                // At that moment all nodes were origin-collapsed, so the rings
+                // were placed at origin.  This callback then animated each
+                // ``n.position`` toward its settled target without syncing the
+                // decorations, leaving rings pinned at origin while clusters
+                // flew outward.  Visible until LOD-change → ``rebuildScene``
+                // re-sync (e.g. user zoom — which is exactly the symptom
+                // observed: "I have to zoom in or out for the rings to
+                // position themselves in the correct order and clusters").
+                const templateRing = _templateRingById.get(n.id);
+                if (templateRing) templateRing.position.set(n.position[0], n.position[1], n.position[2]);
+                const ringEntry = _readinessRings.get(n.id);
+                if (ringEntry) {
+                  ringEntry.mesh.position.set(n.position[0], n.position[1], n.position[2]);
+                }
+             });
+
+             if (t >= 1.0) {
+                _removeFormationAnim?.();
+                _removeFormationAnim = null;
+
+                // Re-enable hierarchical edges — rebuild curves from settled positions.
+                // Uses _edgesByParent (persisted from rebuildScene) to avoid re-scanning
+                // all edges. Node positions were lerped to settled values above, so
+                // _sceneNodeMap positions are already at their final locations.
+                renderer?.scene.traverse((obj) => {
+                  if (obj.userData?.isInterClusterEdgeGroup) {
+                    for (const child of (obj as THREE.Group).children) {
+                      const ls = child as THREE.LineSegments;
+                      const parentId = ls.userData?.parentId as string | undefined;
+                      if (!parentId) continue;
+                      const edges = _edgesByParent.get(parentId);
+                      if (!edges || edges.length === 0) continue;
+                      const { positions, indices } = buildMergedCurveGeometry(edges);
+                      ls.geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                      ls.geometry.setIndex(indices);
+                    }
+                    obj.visible = true;
+                  }
+                });
+                if (similarityEdgeGroup) similarityEdgeGroup.visible = clustersStore.showSimilarityEdges;
+                if (injectionEdgeGroup) injectionEdgeGroup.visible = clustersStore.showInjectionEdges;
+             }
+          }) ?? null;
+        } else {
+          // Cache hit — same node-set as a prior build. Place each node
+          // directly at its settled position and rebuild the scene without
+          // animation. rebuildScene paints rings, labels, and beam groups
+          // off `n.position`, so static placement here gives them correct
+          // settled coordinates with no formation-animation post-processing.
+          //
+          // If a prior formation animation is still running (e.g., a fast
+          // SSE re-fire during initial mount), cancel it — its closure-captured
+          // `initialPositions` no longer matches the current node positions.
+          _removeFormationAnim?.();
+          _removeFormationAnim = null;
+
+          sceneData.nodes.forEach((n, i) => {
+            n.position = [
+              settledPositions[i * 3],
+              settledPositions[i * 3 + 1],
+              settledPositions[i * 3 + 2],
+            ];
+          });
+
+          rebuildScene(sceneData);
+        }
 
         // Auto-focus on the largest domain cluster on initial load (canon F17).
         // _hasAutoFocused is a one-shot guard — every subsequent rebuildScene

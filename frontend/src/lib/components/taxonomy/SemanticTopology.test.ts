@@ -2439,4 +2439,44 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // Must gate the rebuildScene call on the flag (prevents unconditional rebuild).
     expect(body).toMatch(/if\s*\(\s*needsFullRebuild\s*\)\s*\{\s*\n\s*rebuildScene\(sceneData\)/);
   });
+
+  it('source: galaxy formation animation is gated on cache miss — preserves view across stateFilter mutations', () => {
+    const src = _semTopSrc();
+    // Click-zoom bug (intermittent variant): the $effect watching
+    // taxonomyTree + stateFilter + readinessStore.reports re-fires when
+    // ANY of those mutate. The previous implementation unconditionally
+    // re-collapsed every node to random near-origin then ran a 90-frame
+    // galaxy formation animation. When this fires mid-click-focus
+    // (because _loadClusterDetail mutates stateFilter on cross-filter
+    // clicks, or because a taxonomy_changed/domain_readiness_changed
+    // SSE arrives within the ~600ms focus animation window), the user
+    // sees: zoom in → all clusters reset to origin (visible as "LOD
+    // reset") → 90-frame formation animation while camera completes
+    // its zoom → "zoom in again". The fingerprint cache is the natural
+    // discriminator: cache hit = same node-set = subsequent rebuild =
+    // skip formation; cache miss = first time seeing this node-set =
+    // formation makes sense.
+    //
+    // Cache check happens at `const cached = topologyCache.get(...)`
+    // and the formation block must be inside `if (!cached)`.
+    expect(src).toMatch(
+      /const\s+cached\s*=\s*topologyCache\.get\(fingerprint\)/,
+    );
+    // The collapse-to-origin block must be inside an `if (!cached)`
+    // branch — not unconditional.
+    expect(src).toMatch(
+      /if\s*\(\s*!\s*cached\s*\)\s*\{[\s\S]{0,4000}Start all nodes collapsed at origin/,
+    );
+    // The formation animation registration (`_removeFormationAnim =
+    // renderer?.addAnimationCallback`) must be inside the same
+    // `!cached` branch.
+    expect(src).toMatch(
+      /if\s*\(\s*!\s*cached\s*\)\s*\{[\s\S]{0,8000}_removeFormationAnim\s*=\s*renderer\?\.addAnimationCallback/,
+    );
+    // The else branch must set positions directly to settled values
+    // (no animation, no collapse).
+    expect(src).toMatch(
+      /\}\s*else\s*\{[\s\S]{0,2000}n\.position\s*=\s*\[\s*\n?\s*settledPositions\[i\s*\*\s*3\]/,
+    );
+  });
 });
