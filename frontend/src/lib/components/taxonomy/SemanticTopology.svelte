@@ -113,35 +113,35 @@
   const DOMAIN_DIM_FACTOR = 0.15;
 
   // ---------------------------------------------------------------------------
-  // Halo pool — growable mesh pool for templated clusters (Task 19)
+  // Template ring pool — growable mesh pool for templated clusters (Task 19)
   //
   // Halos are cyan RingGeometry meshes rendered around cluster nodes whose
-  // `template_count > 0`.  The pool starts at HALO_POOL_INITIAL capacity and
-  // grows in HALO_POOL_GROW_CHUNK increments up to HALO_POOL_MAX.  After the
-  // pool reaches HALO_POOL_MAX, excess requests fall through to one-frame
+  // `template_count > 0`.  The pool starts at TEMPLATE_RING_POOL_INITIAL capacity and
+  // grows in TEMPLATE_RING_POOL_GROW_CHUNK increments up to TEMPLATE_RING_POOL_MAX.  After the
+  // pool reaches TEMPLATE_RING_POOL_MAX, excess requests fall through to one-frame
   // allocation (spill) and a console.warn is emitted once per rebuild.
   //
   // Design notes:
-  //  • `_haloPool`  — all ever-allocated Mesh objects (high-water mark).
-  //  • `_freeHalos` — currently unused halos available for reuse.
-  //  • `_haloById`  — active halo per cluster id.
-  //  • `_haloGroup` — THREE.Group re-attached to the scene after the
+  //  • `_templateRingPool`  — all ever-allocated Mesh objects (high-water mark).
+  //  • `_freeTemplateRings` — currently unused halos available for reuse.
+  //  • `_templateRingById`  — active template ring per cluster id.
+  //  • `_templateRingGroup` — THREE.Group re-attached to the scene after the
   //                   scene-clear traverse (mirrors readiness ring group).
   // ---------------------------------------------------------------------------
-  const HALO_POOL_INITIAL = 50;
-  const HALO_POOL_GROW_CHUNK = 50;
-  const HALO_POOL_MAX = 500;
+  const TEMPLATE_RING_POOL_INITIAL = 50;
+  const TEMPLATE_RING_POOL_GROW_CHUNK = 50;
+  const TEMPLATE_RING_POOL_MAX = 500;
 
-  const _haloPool: THREE.Mesh[] = [];
-  const _haloPoolSet: Set<THREE.Mesh> = new Set(); // O(1) membership check
-  const _freeHalos: THREE.Mesh[] = [];
-  const _haloById: Map<string, THREE.Mesh> = new Map();
-  let _haloGroup: THREE.Group | null = null;
+  const _templateRingPool: THREE.Mesh[] = [];
+  const _templateRingPoolSet: Set<THREE.Mesh> = new Set(); // O(1) membership check
+  const _freeTemplateRings: THREE.Mesh[] = [];
+  const _templateRingById: Map<string, THREE.Mesh> = new Map();
+  let _templateRingGroup: THREE.Group | null = null;
   // Per-rebuild warn-once flag: prevent spamming console.warn every frame
-  // when the cluster count stays above HALO_POOL_MAX.
-  let _haloWarnedThisRebuild = false;
+  // when the cluster count stays above TEMPLATE_RING_POOL_MAX.
+  let _templateRingWarnedThisRebuild = false;
 
-  function _createHaloMesh(): THREE.Mesh {
+  function _createTemplateRingMesh(): THREE.Mesh {
     const geom = new THREE.RingGeometry(1.25, 1.35, 32);
     const mat = new THREE.MeshBasicMaterial({
       color: 0x00e5ff,
@@ -151,78 +151,78 @@
     });
     const mesh = new THREE.Mesh(geom, mat);
     mesh.visible = false;
-    mesh.userData = { kind: 'halo' };
+    mesh.userData = { kind: 'template_ring' };
     return mesh;
   }
 
-  /** Ensure `_freeHalos` has enough entries for `extraNeeded` new attachments.
-   *  On the very first call the pool is empty — seed it with HALO_POOL_INITIAL
+  /** Ensure `_freeTemplateRings` has enough entries for `extraNeeded` new attachments.
+   *  On the very first call the pool is empty — seed it with TEMPLATE_RING_POOL_INITIAL
    *  meshes so early small renders don't re-enter the grow loop each time.
-   *  Subsequent shortfalls grow in HALO_POOL_GROW_CHUNK increments.  Emits a
+   *  Subsequent shortfalls grow in TEMPLATE_RING_POOL_GROW_CHUNK increments.  Emits a
    *  once-per-rebuild warning when the cap is hit and excess halos spill to
    *  one-frame allocation (not pooled). */
   function _ensureHaloPool(extraNeeded: number): void {
-    while (_freeHalos.length < extraNeeded && _haloPool.length < HALO_POOL_MAX) {
-      // First-time seeding uses HALO_POOL_INITIAL; subsequent growth uses the
-      // standard chunk size.  Both are capped so we never exceed HALO_POOL_MAX.
-      const seed = _haloPool.length === 0 ? HALO_POOL_INITIAL : HALO_POOL_GROW_CHUNK;
-      const grow = Math.min(seed, HALO_POOL_MAX - _haloPool.length);
+    while (_freeTemplateRings.length < extraNeeded && _templateRingPool.length < TEMPLATE_RING_POOL_MAX) {
+      // First-time seeding uses TEMPLATE_RING_POOL_INITIAL; subsequent growth uses the
+      // standard chunk size.  Both are capped so we never exceed TEMPLATE_RING_POOL_MAX.
+      const seed = _templateRingPool.length === 0 ? TEMPLATE_RING_POOL_INITIAL : TEMPLATE_RING_POOL_GROW_CHUNK;
+      const grow = Math.min(seed, TEMPLATE_RING_POOL_MAX - _templateRingPool.length);
       for (let i = 0; i < grow; i++) {
-        const m = _createHaloMesh();
-        _haloPool.push(m);
-        _haloPoolSet.add(m);
-        _freeHalos.push(m);
+        const m = _createTemplateRingMesh();
+        _templateRingPool.push(m);
+        _templateRingPoolSet.add(m);
+        _freeTemplateRings.push(m);
       }
     }
-    if (!_haloWarnedThisRebuild && extraNeeded > _freeHalos.length && _haloPool.length >= HALO_POOL_MAX) {
+    if (!_templateRingWarnedThisRebuild && extraNeeded > _freeTemplateRings.length && _templateRingPool.length >= TEMPLATE_RING_POOL_MAX) {
       console.warn(
-        `[SemanticTopology] halo pool at cap ${HALO_POOL_MAX}; ${extraNeeded - _freeHalos.length} clusters spill to one-frame allocation`,
+        `[SemanticTopology] template ring pool at cap ${TEMPLATE_RING_POOL_MAX}; ${extraNeeded - _freeTemplateRings.length} clusters spill to one-frame allocation`,
       );
-      _haloWarnedThisRebuild = true;
+      _templateRingWarnedThisRebuild = true;
     }
   }
 
-  function _acquireHalo(): THREE.Mesh {
-    return _freeHalos.pop() ?? _createHaloMesh();
+  function _acquireTemplateRing(): THREE.Mesh {
+    return _freeTemplateRings.pop() ?? _createTemplateRingMesh();
   }
 
-  function _releaseHalo(cid: string, mesh: THREE.Mesh): void {
+  function _releaseTemplateRing(cid: string, mesh: THREE.Mesh): void {
     mesh.visible = false;
     if (mesh.parent) mesh.parent.remove(mesh);
-    _haloById.delete(cid);
+    _templateRingById.delete(cid);
     // Only recycle meshes that belong to the pool (not spill-allocated ones).
-    if (_haloPoolSet.has(mesh)) _freeHalos.push(mesh);
+    if (_templateRingPoolSet.has(mesh)) _freeTemplateRings.push(mesh);
   }
 
-  /** Sync halo meshes to the current cluster set.  Called from within
-   *  `rebuildScene` immediately after the node-mesh loop so that halo
+  /** Sync template ring meshes to the current cluster set.  Called from within
+   *  `rebuildScene` immediately after the node-mesh loop so that the template ring
    *  and node color are written in the same render pass. */
   function _syncHalos(nodes: SceneNode[]): void {
-    if (!_haloGroup) {
-      _haloGroup = new THREE.Group();
-      _haloGroup.userData = { isHaloGroup: true };
+    if (!_templateRingGroup) {
+      _templateRingGroup = new THREE.Group();
+      _templateRingGroup.userData = { isTemplateRingGroup: true };
     }
-    _haloWarnedThisRebuild = false;
+    _templateRingWarnedThisRebuild = false;
 
     const templated = nodes.filter((n) => (n.template_count ?? 0) > 0 && n.visible);
 
     // Release halos for clusters that are no longer templated or no longer visible
-    for (const [cid, mesh] of [..._haloById]) {
-      if (!templated.find((c) => c.id === cid)) _releaseHalo(cid, mesh);
+    for (const [cid, mesh] of [..._templateRingById]) {
+      if (!templated.find((c) => c.id === cid)) _releaseTemplateRing(cid, mesh);
     }
 
-    const newAttachments = templated.filter((c) => !_haloById.has(c.id)).length;
+    const newAttachments = templated.filter((c) => !_templateRingById.has(c.id)).length;
     _ensureHaloPool(newAttachments);
 
     for (const c of templated) {
-      let mesh = _haloById.get(c.id);
+      let mesh = _templateRingById.get(c.id);
       if (!mesh) {
-        mesh = _acquireHalo();
-        _haloById.set(c.id, mesh);
-        mesh.userData = { kind: 'halo', clusterId: c.id };
-        _haloGroup.add(mesh);
+        mesh = _acquireTemplateRing();
+        _templateRingById.set(c.id, mesh);
+        mesh.userData = { kind: 'template_ring', clusterId: c.id };
+        _templateRingGroup.add(mesh);
       } else {
-        // Update clusterId tag in case the halo was reused
+        // Update clusterId tag in case the template ring was reused
         mesh.userData.clusterId = c.id;
       }
       mesh.visible = true;
@@ -233,12 +233,12 @@
     }
   }
 
-  // Test-only: expose halo pool length via a global so tests can observe
+  // Test-only: expose template ring pool length via a global so tests can observe
   // the high-water mark and growth behaviour without coupling to internals.
   if (import.meta.env.MODE === 'test') {
-    // `_haloPool` is the array; expose the reference so the length reflects
+    // `_templateRingPool` is the array; expose the reference so the length reflects
     // every allocation.  Tests read `.length` on the array directly.
-    (globalThis as any).__semTopHaloPool = _haloPool;
+    (globalThis as any).__semTopTemplateRingPool = _templateRingPool;
   }
 
   /** Predicate — shared between scene-build loop and DOM marker `{#each}`.
@@ -623,10 +623,10 @@
       renderer.scene.remove(_readinessRingGroup);
     }
 
-    // Detach the halo group from the scene BEFORE the scene-clear traverse
+    // Detach the template ring group from the scene BEFORE the scene-clear traverse
     // so pooled meshes survive across rebuilds without re-allocation.
-    if (_haloGroup) {
-      renderer.scene.remove(_haloGroup);
+    if (_templateRingGroup) {
+      renderer.scene.remove(_templateRingGroup);
     }
     // Ring survives only if the domain is still visible AND still carries a
     // readiness tier — matches the ring-build pass gate below, so LOD hides
@@ -769,16 +769,16 @@
       interaction?.registerNode(node.id, fill, node);
     }
 
-    // Halo rings — sync after node-mesh loop so halo and node color are
+    // Template rings — sync after node-mesh loop so template ring and node color are
     // written in the same rebuildScene pass (satisfies same-frame sync).
     _syncHalos(data.nodes);
-    if (_haloGroup && _haloById.size > 0) {
-      renderer.scene.add(_haloGroup);
+    if (_templateRingGroup && _templateRingById.size > 0) {
+      renderer.scene.add(_templateRingGroup);
     }
 
     // Readiness rings — per-domain contour ring colored by composite tier.
     // Only for visible domain nodes with a resolved readinessTier (see
-    // `hasReadinessRing`). Brand spec: 1px contour, no glow, no emissive —
+    // `hasReadinessRing`). Brand spec: 1px contour, sharp emission, no falloff —
     // MeshBasicMaterial with depthWrite:false is sufficient to sit over the
     // dodecahedron silhouette without z-fighting.
     const camera = renderer.camera;
@@ -1204,7 +1204,7 @@
                  sprite.position.set(n.position[0], n.position[1] + n.size + 0.5, n.position[2]);
               }
 
-              // Pre-fix bug: halo + readiness ring meshes were positioned ONCE
+              // Pre-fix bug: template ring + readiness ring meshes were positioned ONCE
               // by ``rebuildScene`` which ran BEFORE this formation animation.
               // At that moment all nodes were origin-collapsed, so the halos
               // were placed at origin.  This callback then animated each
@@ -1214,8 +1214,8 @@
               // re-sync (e.g. user zoom — which is exactly the symptom
               // observed: "I have to zoom in or out for the rings to
               // position themselves in the correct order and clusters").
-              const halo = _haloById.get(n.id);
-              if (halo) halo.position.set(n.position[0], n.position[1], n.position[2]);
+              const templateRing = _templateRingById.get(n.id);
+              if (templateRing) templateRing.position.set(n.position[0], n.position[1], n.position[2]);
               const ringEntry = _readinessRings.get(n.id);
               if (ringEntry) {
                 ringEntry.mesh.position.set(n.position[0], n.position[1], n.position[2]);
@@ -1648,18 +1648,18 @@
         renderer?.scene.remove(_readinessRingGroup);
         _readinessRingGroup = null;
       }
-      // Clear active-halo state on unmount. The pool arrays themselves are
+      // Clear active-template-ring state on unmount. The pool arrays themselves are
       // retained (high-water mark) so a quick remount doesn't re-allocate.
-      _haloById.clear();
-      _freeHalos.length = 0;
+      _templateRingById.clear();
+      _freeTemplateRings.length = 0;
       // Return all pool meshes to the free list for potential reuse on remount.
-      for (const m of _haloPool) {
+      for (const m of _templateRingPool) {
         m.visible = false;
-        _freeHalos.push(m);
+        _freeTemplateRings.push(m);
       }
-      if (_haloGroup) {
-        renderer?.scene.remove(_haloGroup);
-        _haloGroup = null;
+      if (_templateRingGroup) {
+        renderer?.scene.remove(_templateRingGroup);
+        _templateRingGroup = null;
       }
       ro.disconnect();
       interaction?.dispose();

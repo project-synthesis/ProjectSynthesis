@@ -1918,7 +1918,7 @@ describe('SemanticTopology — readiness ring overlay', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Halo pool — growable mesh pool for templated clusters (Task 19)
+// Template ring pool — growable mesh pool for templated clusters (Task 19)
 // ---------------------------------------------------------------------------
 // Helper: build a minimal SceneNode-shaped cluster with `template_count` set.
 // Fields must satisfy the SceneNode shape enough for rebuildScene not to crash.
@@ -1941,7 +1941,7 @@ const _makeClusterNode = (id: string, templateCount: number, color = '#36b5ff'):
   template_count: templateCount,
 });
 
-// Helper: mount the component and wait for halos to appear.
+// Helper: mount the component and wait for templateRings to appear.
 // Returns the scene reference captured by the TopologyRenderer mock.
 async function _mountWithClusters(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1950,7 +1950,7 @@ async function _mountWithClusters(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   lastScene: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  haloPool: any;
+  templateRingPool: any;
 }> {
   _sceneOverride.value = { nodes, edges: [] };
   const { clustersStore } = await import('$lib/stores/clusters.svelte');
@@ -1976,19 +1976,19 @@ async function _mountWithClusters(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lastScene = (globalThis as any).__semTopLastScene;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const haloPool = (globalThis as any).__semTopHaloPool;
-  return { lastScene, haloPool };
+  const templateRingPool = (globalThis as any).__semTopTemplateRingPool;
+  return { lastScene, templateRingPool };
 }
 
-// Collect all halo meshes from the scene (tagged with userData.kind === 'halo').
+// Collect all template ring meshes from the scene (tagged with userData.kind === 'template_ring').
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function _collectHalos(lastScene: any): any[] {
+function _collectTemplateRings(lastScene: any): any[] {
   if (!lastScene) return [];
-  const halos: unknown[] = [];
+  const templateRings: unknown[] = [];
   // Walk depth-1 children plus any group children.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const walk = (node: any) => {
-    if (node?.userData?.kind === 'halo') halos.push(node);
+    if (node?.userData?.kind === 'template_ring') templateRings.push(node);
     if (Array.isArray(node?.children)) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const child of node.children) walk(child);
@@ -1996,10 +1996,10 @@ function _collectHalos(lastScene: any): any[] {
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const child of lastScene.children as any[]) walk(child);
-  return halos as any[];
+  return templateRings as any[];
 }
 
-describe('SemanticTopology — halo pool (Task 19)', () => {
+describe('SemanticTopology — template ring pool (Task 19)', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     const { clustersStore } = await import('$lib/stores/clusters.svelte');
@@ -2012,7 +2012,7 @@ describe('SemanticTopology — halo pool (Task 19)', () => {
     _animationCallbacks.length = 0;
     _lodTierOverride.value = 'near';
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (globalThis as any).__semTopHaloPool = undefined;
+    (globalThis as any).__semTopTemplateRingPool = undefined;
   });
 
   afterEach(() => {
@@ -2022,22 +2022,22 @@ describe('SemanticTopology — halo pool (Task 19)', () => {
     _lodTierOverride.value = 'near';
   });
 
-  it('renders a halo for clusters with template_count > 0 and not for template_count === 0', async () => {
+  it('renders a template ring for clusters with template_count > 0 and not for template_count === 0', async () => {
     const nodes = [
-      _makeClusterNode('c1', 2, '#b44aff'), // has templates → gets halo
-      _makeClusterNode('c2', 0, '#ff4895'), // no templates → no halo
+      _makeClusterNode('c1', 2, '#b44aff'), // has templates → gets template ring
+      _makeClusterNode('c2', 0, '#ff4895'), // no templates → no template ring
     ];
     const { lastScene } = await _mountWithClusters(nodes);
 
-    // Halo pool global must be exposed in test mode
+    // Template ring pool global must be exposed in test mode
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((globalThis as any).__semTopHaloPool).toBeDefined();
+    expect((globalThis as any).__semTopTemplateRingPool).toBeDefined();
 
-    const halos = _collectHalos(lastScene);
-    // Only c1 gets a halo
-    expect(halos.length).toBe(1);
+    const templateRings = _collectTemplateRings(lastScene);
+    // Only c1 gets a template ring
+    expect(templateRings.length).toBe(1);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const h = halos[0] as any;
+    const h = templateRings[0] as any;
     expect(h.userData.clusterId).toBe('c1');
     expect(h.visible).toBe(true);
   });
@@ -2047,14 +2047,14 @@ describe('SemanticTopology — halo pool (Task 19)', () => {
     const nodes = Array.from({ length: 75 }, (_, i) =>
       _makeClusterNode(`c${i}`, 1),
     );
-    const { haloPool } = await _mountWithClusters(nodes);
-    expect(haloPool).toBeDefined();
+    const { templateRingPool } = await _mountWithClusters(nodes);
+    expect(templateRingPool).toBeDefined();
     // Pool retains high-water mark — must be ≥75, should be exactly 100 (50 + one 50-chunk)
-    expect(haloPool.length).toBeGreaterThanOrEqual(75);
-    expect(haloPool.length).toBeLessThanOrEqual(100);
+    expect(templateRingPool.length).toBeGreaterThanOrEqual(75);
+    expect(templateRingPool.length).toBeLessThanOrEqual(100);
   });
 
-  it('warns when halo pool exceeds 500-mesh cap', async () => {
+  it('warns when template ring pool exceeds 500-mesh cap', async () => {
     const warnSpy = vi.spyOn(console, 'warn');
     try {
       const nodes = Array.from({ length: 510 }, (_, i) =>
@@ -2064,7 +2064,7 @@ describe('SemanticTopology — halo pool (Task 19)', () => {
       expect(warnSpy).toHaveBeenCalled();
       // Warning message should mention the pool cap
       const warned = warnSpy.mock.calls.some((args) =>
-        String(args[0]).includes('halo pool'),
+        String(args[0]).includes('template ring pool'),
       );
       expect(warned).toBe(true);
     } finally {
@@ -2077,7 +2077,7 @@ describe('SemanticTopology — halo pool (Task 19)', () => {
     const bigNodes = Array.from({ length: 100 }, (_, i) =>
       _makeClusterNode(`c${i}`, 1),
     );
-    const { haloPool: poolAfterBig } = await _mountWithClusters(bigNodes);
+    const { templateRingPool: poolAfterBig } = await _mountWithClusters(bigNodes);
     const highWater = poolAfterBig.length;
     expect(highWater).toBeGreaterThanOrEqual(100);
 
@@ -2093,52 +2093,52 @@ describe('SemanticTopology — halo pool (Task 19)', () => {
 
     // Pool must not shrink — high-water mark is retained.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const poolAfterShrink = (globalThis as any).__semTopHaloPool;
+    const poolAfterShrink = (globalThis as any).__semTopTemplateRingPool;
     expect(poolAfterShrink).toBeDefined();
     expect(poolAfterShrink.length).toBeGreaterThanOrEqual(highWater);
   });
 
-  it('halo color matches the cluster node color (same live color)', async () => {
+  it('template ring color matches the cluster node color (same live color)', async () => {
     const clusterColor = '#b44aff';
     const nodes = [_makeClusterNode('c1', 1, clusterColor)];
     const { lastScene } = await _mountWithClusters(nodes);
 
-    const halos = _collectHalos(lastScene);
-    expect(halos.length).toBe(1);
+    const templateRings = _collectTemplateRings(lastScene);
+    expect(templateRings.length).toBe(1);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const halo = halos[0] as any;
+    const templateRing = templateRings[0] as any;
     const THREE = await import('three');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const MeshBasicMaterialClass = (THREE as any).MeshBasicMaterial;
-    expect(halo.material).toBeInstanceOf(MeshBasicMaterialClass);
+    expect(templateRing.material).toBeInstanceOf(MeshBasicMaterialClass);
 
-    // The color on the halo material must match `parseInt(clusterColor.replace('#',''),16)`.
+    // The color on the template ring material must match `parseInt(clusterColor.replace('#',''),16)`.
     const expectedHex = parseInt(clusterColor.replace('#', ''), 16);
     const expectedR = ((expectedHex >> 16) & 0xff) / 255;
     const expectedG = ((expectedHex >> 8) & 0xff) / 255;
     const expectedB = (expectedHex & 0xff) / 255;
 
-    expect(halo.material.color.r).toBeCloseTo(expectedR, 4);
-    expect(halo.material.color.g).toBeCloseTo(expectedG, 4);
-    expect(halo.material.color.b).toBeCloseTo(expectedB, 4);
+    expect(templateRing.material.color.r).toBeCloseTo(expectedR, 4);
+    expect(templateRing.material.color.g).toBeCloseTo(expectedG, 4);
+    expect(templateRing.material.color.b).toBeCloseTo(expectedB, 4);
   });
 
-  it('halo and node color are set in the same rebuildScene pass', async () => {
-    // Contract: _syncHalos runs inside rebuildScene (not in a separate $effect
-    // tick), so after a rebuild both the cluster mesh and the halo mesh must
+  it('template ring and node color are set in the same rebuildScene pass', async () => {
+    // Contract: _syncTemplateRings runs inside rebuildScene (not in a separate $effect
+    // tick), so after a rebuild both the cluster mesh and the template ring mesh must
     // already reflect the node's color — no extra tick required.
     const clusterColor = '#ff4895';
     const nodes = [_makeClusterNode('c1', 1, clusterColor)];
     const { lastScene } = await _mountWithClusters(nodes);
 
-    const halos = _collectHalos(lastScene);
-    expect(halos.length).toBe(1);
+    const templateRings = _collectTemplateRings(lastScene);
+    expect(templateRings.length).toBe(1);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const halo = halos[0] as any;
+    const templateRing = templateRings[0] as any;
 
     // Node mesh is stored in nodeMeshes.  The Three.js mock Mesh captures
     // the fill material as the first child of the group.  Walk the scene
-    // to find a Group whose fill.userData does NOT have 'kind: halo',
+    // to find a Group whose fill.userData does NOT have 'kind: template ring',
     // confirming both are present after a single build (no extra tick).
     const THREE = await import('three');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2147,14 +2147,14 @@ describe('SemanticTopology — halo pool (Task 19)', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (c: any) => c instanceof GroupClass,
     );
-    // At least one non-halo group should exist (the cluster node group)
+    // At least one non-template-ring group should exist (the cluster node group)
     expect(groups.length).toBeGreaterThan(0);
 
-    // Both the group (node) and the halo are in scene after one build pass.
-    expect(halo.visible).toBe(true);
-    // Halo color matches what was provided — same source as node color
+    // Both the group (node) and the template ring are in scene after one build pass.
+    expect(templateRing.visible).toBe(true);
+    // Template ring color matches what was provided — same source as node color
     const expectedHex = parseInt(clusterColor.replace('#', ''), 16);
     const expectedR = ((expectedHex >> 16) & 0xff) / 255;
-    expect(halo.material.color.r).toBeCloseTo(expectedR, 4);
+    expect(templateRing.material.color.r).toBeCloseTo(expectedR, 4);
   });
 });
