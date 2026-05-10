@@ -52,6 +52,7 @@ from app.services.task_type_classifier import (
     classify_with_llm,
     extract_first_sentence,
     get_task_type_signals,
+    rescue_task_type_via_structural_evidence,
     score_category,
     set_task_type_signals,
     task_type_has_dynamic_signals,
@@ -241,6 +242,190 @@ class HeuristicAnalyzer:
                 intent_label="general optimization",
                 confidence=0.0,
             )
+
+    async def analyze_no_session(
+        self,
+        raw_prompt: str,
+        *,
+        provider: Any | None = None,
+        enable_llm_fallback: bool = True,
+    ) -> HeuristicAnalysis:
+        """Heuristic + A4-fallback classification without holding a DB session.
+
+        Foundation P4 Cycle 1 — used by tools/save_result.py post-restructure
+        to avoid holding a read-engine session across the A4 Haiku fallback.
+
+        Differences from analyze():
+        - No `db: AsyncSession` parameter.
+        - `recommended_strategy` always returns 'auto' (default). Strategy
+          recommendation requires DB queries; save_result's caller provides
+          `strategy_used` from the external LLM, so this is unneeded.
+        - A4 telemetry uses `operation_label='task_type_telemetry_no_session'`
+          (parameterized via classify_with_llm) so the call site is
+          distinguishable in audit logs.
+
+        Args:
+            raw_prompt: Prompt to classify.
+            provider: LLM provider for A4 fallback. None disables A4.
+            enable_llm_fallback: When False, skip A4 entirely. Default True.
+
+        Returns:
+            HeuristicAnalysis with recommended_strategy='auto'.
+        """
+        try:
+            return await self._analyze_no_session_inner(
+                raw_prompt,
+                provider=provider,
+                enable_llm_fallback=enable_llm_fallback,
+            )
+        except Exception:
+            logger.exception(
+                "analyze_no_session failed — returning general fallback",
+            )
+            return HeuristicAnalysis(
+                task_type="general",
+                domain="general",
+                intent_label="general optimization",
+                confidence=0.0,
+            )
+
+    async def _analyze_no_session_inner(
+        self,
+        raw_prompt: str,
+        *,
+        provider: Any | None = None,
+        enable_llm_fallback: bool = True,
+    ) -> HeuristicAnalysis:
+        """Inner body of analyze_no_session — mirrors _analyze_inner's call shape
+        but passes db=None to A4 and skips strategy recommendation."""
+        prompt_lower = raw_prompt.lower()
+        words = prompt_lower.split()
+        first_sentence = extract_first_sentence(prompt_lower)
+
+        signals = get_task_type_signals()
+
+        # Layer 1: heuristic task-type classification
+        task_type, task_confidence, all_scores = classify_task_type(
+            prompt_lower, first_sentence, signals,
+        )
+
+        # Layer 1b: Technical verb disambiguation (A2)
+        disambiguation_applied = False
+        disambiguation_from: str | None = None
+        if task_type in ("creative", "general"):
+            tech_disambig = check_technical_disambiguation(first_sentence)
+            if tech_disambig:
+                coding_score = score_category(
+                    prompt_lower, first_sentence, signals["coding"],
+                )
+                if coding_score > 0:
+                    disambiguation_from = task_type
+                    task_type = "coding"
+                    task_confidence = max(task_confidence, coding_score, 0.6)
+                    disambiguation_applied = True
+
+        # Layer 1c: A4 confidence-gated LLM fallback.
+        # NOTE: `_a4_domain` initialized OUTSIDE the A4 block to support the
+        # post-domain-classification rescue below. The legacy `_analyze_inner`
+        # binds `_a4_domain` only inside the A4 branch, which would
+        # `UnboundLocalError` on the non-A4 path if the rescue logic were ever
+        # reached by mistake. This `analyze_no_session` variant fixes that
+        # latent ordering bug by initializing `_a4_domain = None` unconditionally.
+        llm_fallback_applied = False
+        _a4_domain: str | None = None
+        if (
+            enable_llm_fallback
+            and provider is not None
+            and not disambiguation_applied
+            and task_confidence < _LLM_CLASSIFICATION_CONFIDENCE_GATE
+        ):
+            sorted_vals = sorted(all_scores.values(), reverse=True)
+            margin = (
+                (sorted_vals[0] - sorted_vals[1])
+                if len(sorted_vals) >= 2
+                else 999
+            )
+            if margin < _LLM_CLASSIFICATION_MARGIN_GATE:
+                # KEY DIFFERENCE: db=None + custom operation_label
+                llm_result = await classify_with_llm(
+                    raw_prompt,
+                    db=None,
+                    provider=provider,
+                    operation_label="task_type_telemetry_no_session",
+                )
+                if llm_result:
+                    disambiguation_from = task_type
+                    task_type = llm_result[0]
+                    _a4_domain = llm_result[1]
+                    task_confidence = 0.8
+                    llm_fallback_applied = True
+
+        # Domain classification (no DB — uses module-level singleton)
+        word_set = set(words)
+        loader = get_signal_loader()
+        domain_scores = loader.score(word_set) if loader is not None else {}
+        domain = _classify_domain(domain_scores)
+        domain = _enrich_domain_qualifier(domain, prompt_lower)
+
+        # A4 domain-rescue (mirrors _analyze_inner): if heuristic produced
+        # "general" but A4 derived a meaningful domain, prefer A4.
+        if (
+            llm_fallback_applied
+            and _a4_domain
+            and domain == "general"
+            and _a4_domain != "general"
+        ):
+            domain = _a4_domain
+
+        # Apply structural-evidence rescue (B5+ task-type lock equivalent)
+        rescued_task_type, rescue_reason = (
+            rescue_task_type_via_structural_evidence(task_type, raw_prompt)
+        )
+        if rescue_reason:
+            task_type = rescued_task_type
+
+        # Weakness detection (no DB)
+        has_constraints = "constraint" in prompt_lower or "must" in prompt_lower
+        has_outcome = (
+            "outcome" in prompt_lower
+            or "result" in prompt_lower
+            or "should" in prompt_lower
+        )
+        has_audience = (
+            "audience" in prompt_lower
+            or "user" in prompt_lower
+            or "reader" in prompt_lower
+        )
+        weaknesses = detect_weaknesses(
+            raw_prompt,
+            prompt_lower,
+            words,
+            task_type,
+            has_constraints=has_constraints,
+            has_outcome=has_outcome,
+            has_audience=has_audience,
+        )
+
+        # Intent label via existing helper (no DB)
+        intent_label = self._generate_intent_label(raw_prompt, task_type, domain)
+
+        # Build the result — NB: recommended_strategy='auto' (no DB lookup)
+        return HeuristicAnalysis(
+            task_type=task_type,
+            domain=domain,
+            intent_label=intent_label,
+            weaknesses=weaknesses,
+            recommended_strategy="auto",
+            confidence=task_confidence,
+            disambiguation_applied=disambiguation_applied,
+            disambiguation_from=disambiguation_from,
+            domain_scores=domain_scores if domain_scores else None,
+            llm_fallback_applied=llm_fallback_applied,
+            task_type_signal_source=(
+                "dynamic" if task_type_has_dynamic_signals(task_type) else "bootstrap"
+            ),
+            task_type_scores=all_scores,
+        )
 
     async def _analyze_inner(
         self, raw_prompt: str, db: AsyncSession,
