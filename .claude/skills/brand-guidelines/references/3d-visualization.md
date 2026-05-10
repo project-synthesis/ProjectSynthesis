@@ -130,9 +130,11 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Trigger:** cluster selection (external selection from sidebar OR `handleNodeClick`)
 - **Geometry:** quadratic Bezier curve from origin to target with catenary control point, sampled into a `BufferGeometry` strip
 - **Material:** `ShaderMaterial` with custom vertex+fragment from `BeamShader.ts`
+- **Lifecycle constants** (`PlasmaBeam.ts`, exported): `FIRING_MS = 300` (Data-as-Matter spec compliance), `TERMINATE_MS = 250` (snappier dissipation than the prior 800ms — keeps the click beat tight on rapid re-clicks)
 - **Lifetime:** 800ms sustain, then released back to pool
 - **Color:** target cluster's `domain hex`
 - **Radius:** `Math.max(node.size * 0.04, 0.1)`
+- **`onImpact` callback** (canonical anchor point, `BeamConfig.onImpact?: () => void`): fires EXACTLY ONCE at the firing→sustain edge — i.e., when the catenary curve has fully extended and the beam visually impacts the target. All click-impact reactions (cluster physics ripple, plasma envelopement, emissive flash) wire through this callback so they synchronize to actual beam arrival rather than firing synchronously with `acquire()`. **Causal-ordering invariant: every impact reaction MUST fire from `onImpact`, never synchronously with `acquire()`** — otherwise the cluster reacts before the beam arrives.
 - *Source: `BeamPool.ts`, `PlasmaBeam.ts`, `BeamShader.ts`*
 
 ### F8 — Organic Breathing Oscillation
@@ -247,9 +249,45 @@ A module-level `_hasAutoFocused: boolean` guard ensures the bird's-eye-view "fra
 
 ### F18 — Tactile Feedback on External Selection
 
-When `clustersStore.selectedClusterId` changes via the sidebar (NOT a click on the canvas), the `$effect` watching it fires the same tactile feedback pipeline as a direct click:
-- `clusterPhysics.onBeamImpact(node.id, node.size)` — accretion + spring overshoot
-- `beamPool.acquire(group, { color, radius, sustainMs: 800 }, camera)` — plasma beam injection from the FPS-weapon origin
+When `clustersStore.selectedClusterId` changes via the sidebar (NOT a click on the canvas), the `$effect` watching it fires the same tactile feedback pipeline as a direct click. **All impact reactions wire through the beam's `onImpact` callback** (canon F7) so they synchronize to actual beam arrival — never synchronously with `beamPool.acquire(...)`:
+
+```ts
+beamPool.acquire(group, {
+  color: envelopeColor,
+  radius: Math.max(node.size * 0.04, 0.1),
+  sustainMs: 800,
+  onImpact: () => {
+    clusterPhysics?.onBeamImpact(node.id, node.size);              // F9 ripple + accretion
+    envelopePool?.acquire(group, node.size, envelopeShape, color); // F19 plasma engulfment
+    flashEmissive(node.id);                                        // F19 emissive flash
+  },
+}, camera);
+```
+
+### F19 — Envelopement Burst at Beam Impact
+
+Layered impact effect — at the moment the F7 beam visually arrives at the cluster, the node briefly engulfs in a plasma "skin" that smoothly dissipates to reveal the base node. Combined with the per-node `MeshStandardMaterial` emissive flash, the node reads as both internally energized AND externally engulfed.
+
+**EnvelopePool (`EnvelopePool.ts`):**
+- 10 pre-allocated `Envelope` instances with per-instance `ShaderMaterial` (own uniforms per envelope, mirrors `BeamPool` capacity)
+- Pool's own `THREE.Group` added to the renderer scene — envelopes are **NOT** parented to target node groups, so a `rebuildScene` cleanup of node groups mid-effect cannot crash an active envelope. World position is copied from the target each frame.
+- **Geometry:** pool-instance-owned `IcosahedronGeometry(1, 2)` and `DodecahedronGeometry(1, 2)` shared singletons; `acquire()` swaps the mesh's geometry to match the target's node shape (cluster vs. domain). Same parameters as the node fill geometries in `SemanticTopology.svelte:749-768` so the envelope shape exactly matches.
+- **Material:** `ShaderMaterial` with vertex/fragment from `EnvelopeShader.ts` — adapts the F7 multi-wave fluid + fresnel rim glow pattern for closed surfaces (no muzzle flash, no length-wise smoothFade). `AdditiveBlending`, `depthWrite: false`, `transparent: true`, `side: FrontSide`.
+- **State machine:** `idle → attack (120ms) → hold (180ms) → decay (500ms) → idle`. Total active duration **800ms**, synchronizes with beam sustain. Cubic ease-out for both attack and decay phases.
+- **Peak swell:** `PEAK_SWELL = 1.18` × `node.size` — visible plasma skin sits just outside the cluster silhouette without overlapping neighbors.
+- **Color:** target cluster's `domain hex` (same as the beam — preserves the canon's "data has the node's identity" reading).
+- **Re-acquire semantics:** re-acquiring an envelope on a node already enveloped reuses that instance and resets its state to `attack` — prevents double-stacked envelopes on rapid re-clicks.
+- **Missing-target detection:** if `targetGroup` was attached at acquire time and has since lost its parent (e.g., `rebuildScene` disposed the cluster group), the envelope terminates gracefully on the next `update()` tick.
+- *Source: `EnvelopePool.ts`, `EnvelopeShader.ts`*
+
+**Emissive Flash (`SemanticTopology.svelte` `flashEmissive` + `_tickFlashStates`):**
+- **Per-node `MeshStandardMaterial.emissiveIntensity` burst** at impact — internal glow that complements the additive plasma envelope.
+- **Lifecycle constants:** `FLASH_PEAK_MULTIPLIER = 4` (4× baseline), `FLASH_ATTACK_MS = 60` (hold at peak), `FLASH_DECAY_MS = 250` (cubic ease-out back to baseline). Total: 310ms.
+- **Baseline-capture pattern:** rapid re-fires during an active flash REUSE the prior `baselineEmissive` — preventing emissiveIntensity from locking at peak² (4×4 = 16×) when a re-click reads the inflated live value as the "baseline".
+- **State map:** `_flashStates: Map<string, { startTime: number; baselineEmissive: number }>` — tiny in steady state (only nodes recently impacted).
+- **Cleanup:** `_removeFlashUpdate?.()` invoked BEFORE `_flashStates.clear()` (so a late-firing tick can't read a half-cleared map); each active flash's baseline is restored to the underlying material before the map is cleared (so a remount doesn't inherit inflated emissive).
+
+**Causal-ordering invariant (with F7):** every F19 reaction fires from the beam's `onImpact` callback. Synchronous calls inside the click `$effect` are forbidden — the beam takes 300ms to travel, so a synchronous ripple/envelope/flash would precede beam arrival.
 
 ## Per-Frame Allocation Budget
 
@@ -307,6 +345,8 @@ Every GPU resource reaches a `dispose()` call from cleanup.
 | `_removeEdgeAnim?.()` | Edge shader `uTime` pulse |
 | `_removeDustAnim?.()` | Neural Dust slow rotation |
 | `_breathingAnim?.()` | Per-frame organic breathing oscillation |
+| `_removeEnvelopeUpdate?.()` | F19 plasma envelope state-machine tick |
+| `_removeFlashUpdate?.()` | F19 emissive flash per-frame restore |
 
 **Required pool drains in cleanup:**
 
@@ -358,12 +398,17 @@ Run through each numbered feature. **The implementation passes if every line bel
 - [ ] **F16**: `applyHighlight(focusedNodeId)` at end of `rebuildScene`
 - [ ] **F16**: `applyHighlight` flips both `color` AND `emissive`
 - [ ] **F17**: `_hasAutoFocused` guard — bird's-eye-view zoom runs exactly once per lifecycle
-- [ ] **F18**: external selection triggers `clusterPhysics.onBeamImpact` + `beamPool.acquire`
+- [ ] **F18**: external selection triggers `clusterPhysics.onBeamImpact` + `beamPool.acquire` — both via `onImpact` callback (NEVER synchronous)
+- [ ] **F19**: `EnvelopePool` constructed in `onMount`; envelope geometry shape literals match `node.state === 'domain' ? 'domain' : 'cluster'`
+- [ ] **F19**: `flashEmissive` uses baseline-capture pattern — rapid re-fires reuse prior `baselineEmissive`
+- [ ] **F19**: causal-ordering invariant — `clusterPhysics.onBeamImpact` is NEVER called synchronously inside the click `$effect`; lives only inside the `onImpact: () =>` callback body
 
 ### Performance + lifecycle
 - [ ] Module-level scratch table declared (`_scratchVec3a`, `_scratchQuat`, `_scratchColor`, `Z_AXIS`)
 - [ ] `_breathingAnim` borrows `_scratchVec3a` for `mesh.scale.lerp` (not `new THREE.Vector3()`)
-- [ ] All 8 cancellers wired in cleanup return (F8 list above)
+- [ ] All 10 cancellers wired in cleanup return (Disposal Contract list above — includes F19 `_removeEnvelopeUpdate?.()` + `_removeFlashUpdate?.()`)
+- [ ] `envelopePool?.dispose()` invoked + reference nulled in cleanup return
+- [ ] `_flashStates.clear()` happens AFTER `_removeFlashUpdate?.()` (so a half-cleared map can't be read by a late-firing tick); each active flash's baseline restored before the map is cleared
 - [ ] All disposables drained (geometries, materials, textures, lights' shadow maps)
 - [ ] `composer.dispose()` + each pass disposed
 - [ ] `renderer.dispose()` + `renderer.forceContextLoss()`

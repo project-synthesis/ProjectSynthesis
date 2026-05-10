@@ -64,9 +64,9 @@ function extractCleanupBody(src: string): string {
 }
 
 describe('Cleanup contract — canon animation cancellers', () => {
-  test('all 8 canonical cancellers wired in cleanup body', () => {
+  test('all 10 canonical cancellers wired in cleanup body', () => {
     const cleanup = extractCleanupBody(readSemTopSource());
-    // Per canon F5/F8/F10 + existing pre-canon cancellers. Every
+    // Per canon F5/F8/F10/F19 + existing pre-canon cancellers. Every
     // `addAnimationCallback` registration must have a matching invocation
     // in the cleanup return.
     const required = [
@@ -80,6 +80,9 @@ describe('Cleanup contract — canon animation cancellers', () => {
       '_removeEdgeAnim?.()',
       '_removeDustAnim?.()',
       '_breathingAnim?.()',
+      // canon F19 (envelopement burst + emissive flash)
+      '_removeEnvelopeUpdate?.()',
+      '_removeFlashUpdate?.()',
     ];
     const missing = required.filter((sig) => !cleanup.includes(sig));
     expect(missing).toEqual([]);
@@ -92,6 +95,8 @@ describe('Cleanup contract — canon disposables', () => {
     const required = [
       'beamPool?.dispose()',
       'clusterPhysics?.clear()',
+      'envelopePool?.dispose()', // canon F19 — plasma envelope pool
+      '_flashStates.clear()',    // canon F19 — emissive flash state map
       'disposeRingEntry(entry)',
       '_readinessRings.clear()',
       'ro.disconnect()',

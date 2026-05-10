@@ -399,12 +399,13 @@ vi.mock('three', () => {
   }
   const AdditiveBlending = 1;
   const DoubleSide = 2;
+  const FrontSide = 0;
   return {
     Vector3, Color, Quaternion, Group, IcosahedronGeometry, DodecahedronGeometry,
     EdgesGeometry, RingGeometry, MeshBasicMaterial, MeshStandardMaterial, ShaderMaterial,
     Mesh, BufferAttribute, BufferGeometry, Float32BufferAttribute, LineBasicMaterial,
     LineDashedMaterial, PointsMaterial, LineSegments, Points, Sprite, QuadraticBezierCurve3,
-    CanvasTexture, AdditiveBlending, DoubleSide,
+    CanvasTexture, AdditiveBlending, DoubleSide, FrontSide,
   };
 });
 
@@ -2438,6 +2439,239 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(body).toMatch(/\.parent\s*as\s*THREE\.Group\)\.visible\s*=\s*node\.visible/);
     // Must gate the rebuildScene call on the flag (prevents unconditional rebuild).
     expect(body).toMatch(/if\s*\(\s*needsFullRebuild\s*\)\s*\{\s*\n\s*rebuildScene\(sceneData\)/);
+  });
+
+  // Cycle 3: SemanticTopology wiring + causal-ordering bug fix.
+  //
+  // The existing click chain at SemanticTopology.svelte:1876-1898 fires
+  // `clusterPhysics?.onBeamImpact(node.id, ...)` synchronously with the
+  // beam acquire. The beam takes ~300ms to travel, so the cluster ripples
+  // BEFORE the beam visually arrives. Cycle 3 migrates all impact reactions
+  // (ripple, plasma envelope, emissive flash) into a single `onImpact`
+  // callback passed to `beamPool.acquire` — it fires at the firing→sustain
+  // edge, synchronizing every reaction to actual beam arrival.
+  //
+  // Source-grep regression tests pin the wiring shape so future refactors
+  // can't accidentally re-introduce the synchronous (anti-causal) call.
+
+  it('source: envelopePool is declared at module scope and imported from EnvelopePool', () => {
+    const src = _semTopSrc();
+    expect(src).toMatch(/import\s*\{[^}]*EnvelopePool[^}]*\}\s*from\s*['"]\.\/EnvelopePool['"]/);
+    expect(src).toMatch(/let\s+envelopePool\s*:\s*EnvelopePool\s*\|\s*null\s*=\s*null/);
+  });
+
+  it('source: _removeEnvelopeUpdate canceller declared at module scope', () => {
+    const src = _semTopSrc();
+    expect(src).toMatch(/let\s+_removeEnvelopeUpdate\s*:\s*\(\(\)\s*=>\s*void\)\s*\|\s*null\s*=\s*null/);
+  });
+
+  it('source: envelopePool constructed in onMount + group added to scene', () => {
+    const src = _semTopSrc();
+    expect(src).toMatch(/envelopePool\s*=\s*new\s+EnvelopePool\(\)/);
+    expect(src).toMatch(/renderer[!?]?\.scene\.add\(envelopePool[!?]?\.group\)/);
+  });
+
+  it('source: envelopePool.update wired into a per-frame addAnimationCallback', () => {
+    const src = _semTopSrc();
+    // Some addAnimationCallback registration mentions envelopePool.update,
+    // and the result is captured into _removeEnvelopeUpdate.
+    expect(src).toMatch(
+      /_removeEnvelopeUpdate\s*=\s*renderer[!?]?\.addAnimationCallback\([\s\S]{0,300}envelopePool\?\.update/,
+    );
+  });
+
+  it('source: click $effect fires beamPool.acquire with onImpact callback (causal-ordering fix)', () => {
+    const src = _semTopSrc();
+    // beamPool.acquire BeamConfig must include `onImpact:` field — the
+    // single anchor for synchronizing every impact reaction to beam
+    // arrival. Match across the click selectedClusterId effect site.
+    expect(src).toMatch(
+      /beamPool\.acquire\(\s*group\s*,\s*\{[\s\S]{0,400}onImpact\s*:\s*\(\)\s*=>/,
+    );
+  });
+
+  it('source: clusterPhysics.onBeamImpact is NOT called synchronously inside the click $effect', () => {
+    const src = _semTopSrc();
+    // Locate the click selection $effect — anchored on the comment
+    // "Sync external family selection".
+    const effectStart = src.indexOf('Sync external family selection');
+    expect(effectStart).toBeGreaterThan(0);
+    const effectBody = src.slice(effectStart, effectStart + 4000);
+
+    // Within the body up to the beamPool.acquire call, there must be NO
+    // standalone `clusterPhysics?.onBeamImpact(...)` invocation. After the
+    // fix, that call lives only inside the `onImpact:` arrow body.
+    const acquireIdx = effectBody.indexOf('beamPool.acquire');
+    expect(acquireIdx).toBeGreaterThan(0);
+    const preAcquire = effectBody.slice(0, acquireIdx);
+    expect(preAcquire).not.toMatch(/clusterPhysics\?\.onBeamImpact/);
+  });
+
+  it('source: onImpact callback body fires clusterPhysics.onBeamImpact + envelopePool.acquire + flashEmissive for the same node', () => {
+    const src = _semTopSrc();
+    // Capture the onImpact arrow body — `() => {` ... matching brace.
+    const onImpactStart = src.search(/onImpact\s*:\s*\(\)\s*=>\s*\{/);
+    expect(onImpactStart).toBeGreaterThan(0);
+    // Walk forward, brace-balancing.
+    let depth = 0;
+    let i = src.indexOf('{', onImpactStart);
+    const bodyStart = i + 1;
+    do {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') depth--;
+      i++;
+    } while (depth > 0 && i < src.length);
+    const onImpactBody = src.slice(bodyStart, i - 1);
+
+    expect(onImpactBody).toMatch(/clusterPhysics\?\.onBeamImpact\(\s*node\.id/);
+    expect(onImpactBody).toMatch(/envelopePool\?\.acquire\(\s*group\s*,\s*node\.size/);
+    expect(onImpactBody).toMatch(/flashEmissive\(\s*node\.id/);
+  });
+
+  it('source: envelope shape literal — "domain" for state==="domain", else "cluster"', () => {
+    const src = _semTopSrc();
+    // The shape selection appears as a ternary or guard near the beam
+    // acquire site. Pinning the literal string ensures the dispatch
+    // matches EnvelopePool.NodeShape.
+    expect(src).toMatch(
+      /node\.state\s*===\s*['"]domain['"]\s*\?\s*['"]domain['"]\s*:\s*['"]cluster['"]/,
+    );
+  });
+
+  // Cycle 4: flashEmissive lifecycle — attack/decay state machine on the
+  // per-node MeshStandardMaterial. Pinned via source-grep so future
+  // refactors can't strip the baseline-capture or restore-on-expiry
+  // semantics. Combined with the envelope (external plasma skin) the
+  // node now reads as both internally energized AND externally engulfed
+  // at impact.
+  it('source: _flashStates Map + _removeFlashUpdate canceller declared at module scope', () => {
+    const src = _semTopSrc();
+    expect(src).toMatch(
+      /(?:const|let)\s+_flashStates\s*=\s*new\s+Map<\s*string\s*,\s*\{\s*startTime\s*:\s*number\s*;\s*baselineEmissive\s*:\s*number\s*;?\s*\}\s*>\(\)/,
+    );
+    expect(src).toMatch(/let\s+_removeFlashUpdate\s*:\s*\(\(\)\s*=>\s*void\)\s*\|\s*null\s*=\s*null/);
+  });
+
+  it('source: flashEmissive uses baseline-capture pattern (rapid re-fires reuse prior baseline)', () => {
+    const src = _semTopSrc();
+    // The pattern: capture an existing entry first; if present, reuse its
+    // `baselineEmissive`. Otherwise read the material's current value.
+    // This stops a re-click during an active flash from locking in a
+    // peak-multiplied baseline.
+    expect(src).toMatch(
+      /existing\s*\?\s*existing\.baselineEmissive\s*:\s*mat\.emissiveIntensity/,
+    );
+    // Initial emissive bump to baseline * peak multiplier (4× per plan).
+    expect(src).toMatch(
+      /mat\.emissiveIntensity\s*=\s*baseline\s*\*\s*FLASH_PEAK_MULTIPLIER/,
+    );
+  });
+
+  it('source: per-frame tick handles attack (hold at peak) + decay (cubic ease-out) + restore on expiry', () => {
+    const src = _semTopSrc();
+    // Attack window check — elapsed compared to FLASH_ATTACK_MS.
+    expect(src).toMatch(/elapsed\s*>=\s*FLASH_ATTACK_MS/);
+    // Decay easing — same cubic ease-out as TopologyRenderer.focusOn /
+    // EnvelopePool. `1 - Math.pow(1 - t, 3)`.
+    expect(src).toMatch(/1\s*-\s*Math\.pow\(\s*1\s*-\s*t\s*,\s*3\s*\)/);
+    // Total expiry — `elapsed >= FLASH_TOTAL_MS` deletes entry +
+    // restores baseline.
+    expect(src).toMatch(/elapsed\s*>=\s*FLASH_TOTAL_MS/);
+    expect(src).toMatch(
+      /mat\.emissiveIntensity\s*=\s*state\.baselineEmissive[\s\S]{0,80}_flashStates\.delete\(\s*nodeId\s*\)/,
+    );
+  });
+
+  it('source: _removeFlashUpdate registered via addAnimationCallback in onMount', () => {
+    const src = _semTopSrc();
+    expect(src).toMatch(
+      /_removeFlashUpdate\s*=\s*renderer[!?]?\.addAnimationCallback\([\s\S]{0,300}_tickFlashStates/,
+    );
+  });
+
+  it('source: cleanup return invokes _removeFlashUpdate?.() before clearing _flashStates', () => {
+    const src = _semTopSrc();
+    const closeIdx = src.indexOf('</script>');
+    const returnPattern = /return\s*\(\s*\)\s*=>\s*\{/g;
+    let lastReturnIdx = -1;
+    let m: RegExpExecArray | null;
+    while ((m = returnPattern.exec(src)) !== null) {
+      if (m.index < closeIdx) lastReturnIdx = m.index + m[0].length;
+    }
+    expect(lastReturnIdx).toBeGreaterThan(0);
+    let depth = 1;
+    let i = lastReturnIdx;
+    while (i < src.length && depth > 0) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') depth--;
+      i++;
+    }
+    const cleanupBody = src.slice(lastReturnIdx, i - 1);
+
+    expect(cleanupBody).toMatch(/_removeFlashUpdate\?\.\(\)/);
+    expect(cleanupBody).toMatch(/_flashStates\.clear\(\)/);
+    // _removeFlashUpdate must be invoked BEFORE _flashStates.clear() so
+    // the per-frame tick can't read into a half-cleared map.
+    const cancelIdx = cleanupBody.indexOf('_removeFlashUpdate?.()');
+    const clearIdx = cleanupBody.indexOf('_flashStates.clear()');
+    expect(cancelIdx).toBeGreaterThan(-1);
+    expect(clearIdx).toBeGreaterThan(-1);
+    expect(cancelIdx).toBeLessThan(clearIdx);
+  });
+
+  it('source: cleanup return restores baselines on every active flash before clearing the map', () => {
+    const src = _semTopSrc();
+    const closeIdx = src.indexOf('</script>');
+    const returnPattern = /return\s*\(\s*\)\s*=>\s*\{/g;
+    let lastReturnIdx = -1;
+    let m: RegExpExecArray | null;
+    while ((m = returnPattern.exec(src)) !== null) {
+      if (m.index < closeIdx) lastReturnIdx = m.index + m[0].length;
+    }
+    let depth = 1;
+    let i = lastReturnIdx;
+    while (i < src.length && depth > 0) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') depth--;
+      i++;
+    }
+    const cleanupBody = src.slice(lastReturnIdx, i - 1);
+    // The restore loop iterates entries and writes baselineEmissive back
+    // onto the per-node MeshStandardMaterial. Without this, a remount
+    // could inherit inflated emissiveIntensity that would only normalize
+    // on first paint — visible as a brief over-glow.
+    expect(cleanupBody).toMatch(
+      /for\s*\(\s*const\s*\[[^\]]+\]\s*of\s*_flashStates\s*\)/,
+    );
+    expect(cleanupBody).toMatch(
+      /mat\.emissiveIntensity\s*=\s*state\.baselineEmissive/,
+    );
+  });
+
+  it('source: cleanup return invokes _removeEnvelopeUpdate?.() and envelopePool?.dispose()', () => {
+    const src = _semTopSrc();
+    // Locate the onMount cleanup return body.
+    const closeIdx = src.indexOf('</script>');
+    const returnPattern = /return\s*\(\s*\)\s*=>\s*\{/g;
+    let lastReturnIdx = -1;
+    let m: RegExpExecArray | null;
+    while ((m = returnPattern.exec(src)) !== null) {
+      if (m.index < closeIdx) lastReturnIdx = m.index + m[0].length;
+    }
+    expect(lastReturnIdx).toBeGreaterThan(0);
+    let depth = 1;
+    let i = lastReturnIdx;
+    while (i < src.length && depth > 0) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') depth--;
+      i++;
+    }
+    const cleanupBody = src.slice(lastReturnIdx, i - 1);
+
+    expect(cleanupBody).toMatch(/_removeEnvelopeUpdate\?\.\(\)/);
+    expect(cleanupBody).toMatch(/envelopePool\?\.dispose\(\)/);
+    // Pool reference nulled after dispose so subsequent disposals are no-ops.
+    expect(cleanupBody).toMatch(/envelopePool\s*=\s*null/);
   });
 
   it('source: galaxy formation animation is gated on cache miss — preserves view across stateFilter mutations', () => {
