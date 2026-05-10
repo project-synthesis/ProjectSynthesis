@@ -15,8 +15,14 @@ import pytest
 # --- Fixtures ------------------------------------------------------------
 
 def _read_source(rel_path: str) -> str:
-    """Read a source file relative to the repo root."""
-    return Path(rel_path).read_text(encoding="utf-8")
+    """Read a source file relative to the repo root.
+
+    Tests run from various CWDs (`backend/`, repo root, etc.). Anchor to
+    this test file's location so the path resolves deterministically.
+    `parents[2]` = repo root (test file is at `backend/tests/X.py`).
+    """
+    repo_root = Path(__file__).parents[2]
+    return (repo_root / rel_path).read_text(encoding="utf-8")
 
 
 # --- Test 1: AST regression — no LLM/scoring await in long-lived session ---
