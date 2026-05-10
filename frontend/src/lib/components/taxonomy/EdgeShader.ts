@@ -21,17 +21,34 @@ export const EDGE_DEPTH_FRAGMENT = /* glsl */ `
   uniform float uNearDist;
   uniform float uFarDist;
   uniform float uMaxReduction;
+  uniform float uTime;
 
   varying float vDepth;
 
   void main() {
-    // Proportional attenuation — depth reduces base opacity by up to
-    // uMaxReduction (e.g. 0.6 = at most 60% dimmer at far distance).
-    // This preserves density-opacity as the dominant control and prevents
-    // the double-reduction problem (density * depth → near-zero).
+    // Synaptic data tendons (canon F5). Edges aren't static lines — they
+    // are flowing energy paths between domains. The shader composes two
+    // sine interferences (slow flow + faster pulse) into an "organic
+    // energy" amplitude that modulates opacity AND boosts color
+    // intensity above 1.0 so the UnrealBloomPass picks it up dynamically
+    // as the data flows.
     float t = clamp((vDepth - uNearDist) / (uFarDist - uNearDist), 0.0, 1.0);
-    float opacity = uBaseOpacity * (1.0 - t * uMaxReduction);
-    gl_FragColor = vec4(uColor, opacity);
+
+    // Two-sine interference for organic flow (not a sterile cycle).
+    float flow = sin(vDepth * 0.4 - uTime * 3.0) * 0.5 + 0.5;
+    float pulse = sin(uTime * 2.0 + vDepth * 0.1) * 0.5 + 0.5;
+    float organicEnergy = flow * 0.7 + pulse * 0.3;
+
+    // Depth attenuation × organic envelope. The 0.3 baseline prevents
+    // edges from disappearing entirely between pulses.
+    float opacity = uBaseOpacity * (1.0 - t * uMaxReduction) * (0.3 + organicEnergy * 0.7);
+
+    // HDR color boost — multiplies above 1.0 into the EffectComposer
+    // bloom pass, producing dynamic glow as energy peaks cross the
+    // bloom threshold (canon F13).
+    vec3 glowingColor = uColor * (1.0 + organicEnergy * 0.8);
+
+    gl_FragColor = vec4(glowingColor, opacity);
   }
 `;
 
@@ -47,5 +64,6 @@ export function createEdgeDepthUniforms(color: number, baseOpacity: number) {
     uNearDist: { value: 30.0 },
     uFarDist: { value: 120.0 },
     uMaxReduction: { value: 0.25 },
+    uTime: { value: 0.0 },
   };
 }
