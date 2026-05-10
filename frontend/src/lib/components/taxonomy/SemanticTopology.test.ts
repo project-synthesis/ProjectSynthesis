@@ -2445,7 +2445,7 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   //
   // The existing click chain at SemanticTopology.svelte:1876-1898 fires
   // `clusterPhysics?.onBeamImpact(node.id, ...)` synchronously with the
-  // beam acquire. The beam takes ~300ms to travel, so the cluster ripples
+  // beam acquire. The beam takes `FIRING_MS` (~700ms) to travel, so the cluster ripples
   // BEFORE the beam visually arrives. Cycle 3 migrates all impact reactions
   // (ripple, plasma envelope, emissive flash) into a single `onImpact`
   // callback passed to `beamPool.acquire` — it fires at the firing→sustain
@@ -2665,6 +2665,28 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(cleanupBody).toMatch(
       /mat\.emissiveIntensity\s*=\s*state\.baselineEmissive/,
     );
+  });
+
+  it('source: every beamPool.acquire site wires onImpact (canon F7 universal causal-ordering invariant)', () => {
+    const src = _semTopSrc();
+    // Canon F7 invariant — every impact reaction fires from `onImpact`,
+    // never synchronously with `acquire()`. Three call sites today:
+    //   1. Click `$effect` — selection beam (the canonical click path)
+    //   2. Entrance materialization burst — staggered domain beams on mount
+    //   3. Post-growth burst — beams when domains grow (post-optimize/seed)
+    //
+    // Locate every `beamPool.acquire(` call site and confirm each one's
+    // BeamConfig object literal contains an `onImpact:` field. Without
+    // this, a future refactor could regress one site silently and the
+    // anti-causal ordering bug returns at that site only — invisible to
+    // the click-effect-specific regression tests above.
+    const acquirePattern = /beamPool\.acquire\(\s*[^,]+,\s*\{([\s\S]*?)\}\s*,/g;
+    const matches = Array.from(src.matchAll(acquirePattern));
+    expect(matches.length).toBeGreaterThanOrEqual(3);
+    for (const match of matches) {
+      const configBody = match[1];
+      expect(configBody, `beamPool.acquire site missing onImpact field — anti-causal ordering risk\n${match[0]}`).toMatch(/onImpact\s*:/);
+    }
   });
 
   it('source: cleanup return invokes _removeEnvelopeUpdate?.() and envelopePool?.dispose()', () => {

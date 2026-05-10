@@ -1986,7 +1986,7 @@
     // `onImpact` callback so they synchronize to the moment the beam
     // visually arrives at the target. Calling these synchronously with
     // `acquire()` was a pre-existing anti-causal-ordering bug: the beam
-    // takes ~300ms to travel from FPS-weapon NDC origin to the cluster,
+    // takes `FIRING_MS` (~700ms) to travel from FPS-weapon NDC origin to the cluster,
     // so the cluster used to ripple BEFORE being hit.
     if (beamPool) {
       const group = _beamNodeGroups.get(node.id);
@@ -2005,7 +2005,7 @@
             sustainMs: 800, // short, sharp injection burst
             onImpact: () => {
               // Single anchor point — fires at the beam's
-              // firing→sustain transition (~300ms post-acquire). All
+              // firing→sustain transition (`FIRING_MS`, ~700ms post-acquire). All
               // three reactions read as one coherent beat:
               clusterPhysics?.onBeamImpact(node.id, node.size);
               envelopePool?.acquire(group, node.size, envelopeShape, envelopeColor);

@@ -20,7 +20,8 @@ export interface BeamConfig {
    * All click-impact reactions (cluster-physics ripple, plasma envelopement,
    * emissive flash) wire through this callback so they synchronize to actual
    * beam arrival rather than firing synchronously with `acquire()` (which is
-   * anti-causal — the beam still has to travel ~300ms before it lands).
+   * anti-causal — the beam still has to travel `FIRING_MS` (~700ms)
+   * before it lands).
    *
    * Not invoked if the beam is force-terminated mid-firing via
    * `terminate()` (e.g., pool teardown). The callback reference is cleared
