@@ -7,12 +7,21 @@ vi.mock('three', () => {
     constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
     clone() { return new Vector3(this.x, this.y, this.z); }
     add(v: Vector3) { this.x += v.x; this.y += v.y; this.z += v.z; return this; }
-    subVectors(_a: Vector3, _b: Vector3) { return this; }
+    subVectors(a: Vector3, b: Vector3) {
+      this.x = a.x - b.x; this.y = a.y - b.y; this.z = a.z - b.z; return this;
+    }
     normalize() { return this; }
     multiplyScalar() { return this; }
     lerpVectors() { return this; }
     set(x: number, y: number, z: number) { this.x = x; this.y = y; this.z = z; }
     distanceTo() { return 80; }
+    // computeFocusEndpoint inputs use length() + divideScalar() for the
+    // zero-direction guard. Implement minimally — Euclidean magnitude
+    // and in-place scale.
+    length() { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); }
+    divideScalar(s: number) {
+      if (s !== 0) { this.x /= s; this.y /= s; this.z /= s; } return this;
+    }
   }
 
   class Scene {
