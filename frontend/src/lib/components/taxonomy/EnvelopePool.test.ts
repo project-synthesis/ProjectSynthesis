@@ -2,8 +2,7 @@
  * EnvelopePool — Cycle 2: plasma envelopement pool primitives.
  *
  * Brand: `.claude/skills/brand-guidelines/references/3d-visualization.md`
- *        canon F19 (envelopement burst, new in this cycle)
- * Plan:  `~/.claude/plans/imperative-hatching-penguin.md` § Architecture
+ *        canon F19 (envelopement burst)
  *
  * The pool mirrors `BeamPool.ts` exactly — pre-allocated 10 instances, each
  * with its own `ShaderMaterial` (per-instance uniforms), mesh.geometry
@@ -13,8 +12,10 @@
  * `rebuildScene` cleanup of node groups mid-effect doesn't crash; missing
  * target is handled by per-frame existence-check in `update()`.
  *
- * State machine: idle → attack (120ms) → hold (180ms) → decay (500ms) → idle
- * Total active duration: 800ms. Cubic-ease-out for attack + decay.
+ * State machine: idle → attack (220ms) → hold (180ms) → decay (580ms) → idle
+ * Total active duration: 980ms. Cubic-ease-out for attack + decay. Earlier
+ * 120/180/500 (total 800ms) read as a punchy "thud" alongside the emissive
+ * flash; the smoothness re-tune extended attack + decay for a gradient swell.
  */
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three';

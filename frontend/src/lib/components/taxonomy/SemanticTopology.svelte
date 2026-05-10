@@ -1708,10 +1708,15 @@
                 color: new THREE.Color(node.color), // Exact color of target node
                 radius: node.size * 0.04 * sizeFactor,           // Scales dynamically with node size
                 sustainMs: 1500 + (sizeFactor * 500), // Linger longer for bigger domains
+                // Canon F7 causal-ordering invariant — every impact reaction
+                // fires from `onImpact`, never synchronously with `acquire`.
+                // The cluster shouldn't ripple before the materialization beam
+                // visually arrives, regardless of trigger (click, sidebar
+                // selection, or this entrance burst).
+                onImpact: () => {
+                  clusterPhysics?.onBeamImpact(node.id, node.size);
+                },
               }, renderer.camera);
-              
-              // Ensure the cluster visually reacts/ripples to the materialization burst
-              clusterPhysics?.onBeamImpact(node.id, node.size);
             }, i * 150);
           });
         }
@@ -1737,8 +1742,14 @@
                     color: new THREE.Color(node.color),
                     radius: isSeedBatch ? nodeRadius * 2.0 : nodeRadius,
                     sustainMs: (isSeedBatch ? 3500 : 2500) + (sizeFactor * 500),
+                    // Canon F7 causal-ordering invariant — see entrance
+                    // burst above. Post-growth bursts (post-optimization
+                    // or post-seed) follow the same rule: ripple syncs
+                    // to beam arrival, not to acquire time.
+                    onImpact: () => {
+                      clusterPhysics?.onBeamImpact(node.id, node.size);
+                    },
                   }, renderer.camera);
-                  clusterPhysics?.onBeamImpact(node.id, node.size);
                 }, isSeedBatch ? firedCount * 120 : 0);
                 firedCount++;
               }

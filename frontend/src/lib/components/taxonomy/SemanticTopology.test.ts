@@ -2509,10 +2509,20 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
 
   it('source: onImpact callback body fires clusterPhysics.onBeamImpact + envelopePool.acquire + flashEmissive for the same node', () => {
     const src = _semTopSrc();
-    // Capture the onImpact arrow body — `() => {` ... matching brace.
-    const onImpactStart = src.search(/onImpact\s*:\s*\(\)\s*=>\s*\{/);
-    expect(onImpactStart).toBeGreaterThan(0);
-    // Walk forward, brace-balancing.
+    // Scope the search to the click selection $effect (anchored on the
+    // "Sync external family selection" comment). Multiple `onImpact`
+    // callbacks exist in the source — entrance materialization burst,
+    // post-growth burst, and this click effect. We want THIS one, which
+    // is the comprehensive impact pipeline (ripple + envelope + flash).
+    const effectStart = src.indexOf('Sync external family selection');
+    expect(effectStart).toBeGreaterThan(0);
+    const effectSlice = src.slice(effectStart, effectStart + 4000);
+    // Find the onImpact arrow within the click effect's slice.
+    const onImpactRel = effectSlice.search(/onImpact\s*:\s*\(\)\s*=>\s*\{/);
+    expect(onImpactRel).toBeGreaterThan(0);
+    const onImpactStart = effectStart + onImpactRel;
+    // Walk forward, brace-balancing, in the FULL source (not the slice)
+    // so the matching close brace is found regardless of slice end.
     let depth = 0;
     let i = src.indexOf('{', onImpactStart);
     const bodyStart = i + 1;
