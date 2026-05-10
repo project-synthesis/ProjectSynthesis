@@ -34,24 +34,27 @@ function makeTarget(x = 5, y = 0, z = 0): THREE.Object3D {
 }
 
 describe('EnvelopePool — phase duration constants (canon F19)', () => {
-  test('ATTACK_MS is 120 (rapid swell at impact)', () => {
-    expect(ATTACK_MS).toBe(120);
+  test('ATTACK_MS is 220 (smoother swell — eases pressure off the impact onset)', () => {
+    // Earlier 120ms read as a punchy "thud" landing alongside the
+    // emissive flash. 220ms lets the plasma skin grow more
+    // organically across ~13 frames at 60fps.
+    expect(ATTACK_MS).toBe(220);
   });
 
   test('HOLD_MS is 180 (sustained plasma skin during beam sustain)', () => {
     expect(HOLD_MS).toBe(180);
   });
 
-  test('DECAY_MS is 500 (smooth dissipation — ≥30 frames at 60fps)', () => {
-    expect(DECAY_MS).toBe(500);
+  test('DECAY_MS is 580 (smoother slow dissipation across ~35 frames at 60fps)', () => {
+    expect(DECAY_MS).toBe(580);
   });
 
   test('PEAK_SWELL is 1.18 (visible plasma skin, no neighbor overlap)', () => {
     expect(PEAK_SWELL).toBeCloseTo(1.18);
   });
 
-  test('total envelope lifecycle is 800 ms (synchronizes with beam sustain)', () => {
-    expect(ATTACK_MS + HOLD_MS + DECAY_MS).toBe(800);
+  test('total envelope lifecycle is 980 ms (~beam sustain window)', () => {
+    expect(ATTACK_MS + HOLD_MS + DECAY_MS).toBe(980);
   });
 });
 

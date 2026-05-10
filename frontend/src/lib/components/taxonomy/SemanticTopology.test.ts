@@ -2561,19 +2561,28 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(src).toMatch(
       /existing\s*\?\s*existing\.baselineEmissive\s*:\s*mat\.emissiveIntensity/,
     );
-    // Initial emissive bump to baseline * peak multiplier (4× per plan).
+    // After the smoothness fix: flashEmissive only stamps startTime +
+    // baselineEmissive. The per-frame tick handles ALL interpolation
+    // (ease-in attack + ease-out decay). Earlier `flashEmissive` did
+    // an instant jump to `baseline * FLASH_PEAK_MULTIPLIER`, which
+    // combined with the envelope swell read as a hard "thud."
     expect(src).toMatch(
-      /mat\.emissiveIntensity\s*=\s*baseline\s*\*\s*FLASH_PEAK_MULTIPLIER/,
+      /_flashStates\.set\(\s*nodeId\s*,\s*\{\s*\n?\s*startTime\s*:\s*performance\.now\(\)/,
     );
   });
 
-  it('source: per-frame tick handles attack (hold at peak) + decay (cubic ease-out) + restore on expiry', () => {
+  it('source: per-frame tick handles attack (cubic ease-out ramp UP) + decay (ease-out down) + restore on expiry', () => {
     const src = _semTopSrc();
-    // Attack window check — elapsed compared to FLASH_ATTACK_MS.
-    expect(src).toMatch(/elapsed\s*>=\s*FLASH_ATTACK_MS/);
-    // Decay easing — same cubic ease-out as TopologyRenderer.focusOn /
-    // EnvelopePool. `1 - Math.pow(1 - t, 3)`.
-    expect(src).toMatch(/1\s*-\s*Math\.pow\(\s*1\s*-\s*t\s*,\s*3\s*\)/);
+    // Attack window — `elapsed < FLASH_ATTACK_MS` is the eased ramp UP
+    // from baseline to peak. Decay branch (`else`) is the eased ramp
+    // DOWN from peak to baseline.
+    expect(src).toMatch(/elapsed\s*<\s*FLASH_ATTACK_MS/);
+    // Cubic ease-out used for both ramps — same shape as
+    // TopologyRenderer.focusOn and EnvelopePool. `1 - Math.pow(1 - t, 3)`.
+    const easeMatches = src.match(/1\s*-\s*Math\.pow\(\s*1\s*-\s*t\s*,\s*3\s*\)/g);
+    expect(easeMatches).not.toBeNull();
+    // Two occurrences inside _tickFlashStates: one for attack, one for decay.
+    expect(easeMatches!.length).toBeGreaterThanOrEqual(2);
     // Total expiry — `elapsed >= FLASH_TOTAL_MS` deletes entry +
     // restores baseline.
     expect(src).toMatch(/elapsed\s*>=\s*FLASH_TOTAL_MS/);

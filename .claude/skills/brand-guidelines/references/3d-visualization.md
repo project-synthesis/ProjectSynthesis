@@ -130,7 +130,8 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Trigger:** cluster selection (external selection from sidebar OR `handleNodeClick`)
 - **Geometry:** quadratic Bezier curve from origin to target with catenary control point, sampled into a `BufferGeometry` strip
 - **Material:** `ShaderMaterial` with custom vertex+fragment from `BeamShader.ts`
-- **Lifecycle constants** (`PlasmaBeam.ts`, exported): `FIRING_MS = 300` (Data-as-Matter spec compliance), `TERMINATE_MS = 250` (snappier dissipation than the prior 800ms — keeps the click beat tight on rapid re-clicks)
+- **Lifecycle constants** (`PlasmaBeam.ts`, exported): `FIRING_MS = 700` (perceptible energy transmission — gives the user time to see the catenary head propagate before the cluster reacts; earlier 300ms read as "beam appears, then impact" with no transmission perception), `TERMINATE_MS = 250` (snappier dissipation than the prior 800ms — keeps the click beat tight on rapid re-clicks)
+- **Progressive head extension** (`uHead` uniform 0..1): during firing, advances in lockstep with state-time. The fragment shader uses `smoothstep(uHead + 0.04, uHead - 0.02, vUv.x)` to soft-mask alpha past the head — the visible portion of the catenary genuinely extends from origin toward target rather than fading in along its full length. Held at 1.0 throughout sustain + terminate. The cluster sees no light until the head reaches `vUv.x = 1.0`, exactly when `onImpact` fires.
 - **Lifetime:** 800ms sustain, then released back to pool
 - **Color:** target cluster's `domain hex`
 - **Radius:** `Math.max(node.size * 0.04, 0.1)`
@@ -273,7 +274,7 @@ Layered impact effect — at the moment the F7 beam visually arrives at the clus
 - Pool's own `THREE.Group` added to the renderer scene — envelopes are **NOT** parented to target node groups, so a `rebuildScene` cleanup of node groups mid-effect cannot crash an active envelope. World position is copied from the target each frame.
 - **Geometry:** pool-instance-owned `IcosahedronGeometry(1, 2)` and `DodecahedronGeometry(1, 2)` shared singletons; `acquire()` swaps the mesh's geometry to match the target's node shape (cluster vs. domain). Same parameters as the node fill geometries in `SemanticTopology.svelte:749-768` so the envelope shape exactly matches.
 - **Material:** `ShaderMaterial` with vertex/fragment from `EnvelopeShader.ts` — adapts the F7 multi-wave fluid + fresnel rim glow pattern for closed surfaces (no muzzle flash, no length-wise smoothFade). `AdditiveBlending`, `depthWrite: false`, `transparent: true`, `side: FrontSide`.
-- **State machine:** `idle → attack (120ms) → hold (180ms) → decay (500ms) → idle`. Total active duration **800ms**, synchronizes with beam sustain. Cubic ease-out for both attack and decay phases.
+- **State machine:** `idle → attack (220ms) → hold (180ms) → decay (580ms) → idle`. Total active duration **980ms**, synchronizes with the beam sustain window. Cubic ease-out for both attack and decay phases. The 220ms attack (was 120ms) + 580ms decay (was 500ms) replace earlier values that combined with an instant-jump emissive flash to produce a hard "thud" reading at impact.
 - **Peak swell:** `PEAK_SWELL = 1.18` × `node.size` — visible plasma skin sits just outside the cluster silhouette without overlapping neighbors.
 - **Color:** target cluster's `domain hex` (same as the beam — preserves the canon's "data has the node's identity" reading).
 - **Re-acquire semantics:** re-acquiring an envelope on a node already enveloped reuses that instance and resets its state to `attack` — prevents double-stacked envelopes on rapid re-clicks.
@@ -282,7 +283,7 @@ Layered impact effect — at the moment the F7 beam visually arrives at the clus
 
 **Emissive Flash (`SemanticTopology.svelte` `flashEmissive` + `_tickFlashStates`):**
 - **Per-node `MeshStandardMaterial.emissiveIntensity` burst** at impact — internal glow that complements the additive plasma envelope.
-- **Lifecycle constants:** `FLASH_PEAK_MULTIPLIER = 4` (4× baseline), `FLASH_ATTACK_MS = 60` (hold at peak), `FLASH_DECAY_MS = 250` (cubic ease-out back to baseline). Total: 310ms.
+- **Lifecycle constants:** `FLASH_PEAK_MULTIPLIER = 4` (4× baseline), `FLASH_ATTACK_MS = 80` (cubic ease-out RAMP from baseline up to peak — replaces an earlier instant jump that read as a hard "thud" alongside the envelope swell), `FLASH_DECAY_MS = 280` (cubic ease-out back to baseline). Total: 360ms. `flashEmissive()` only stamps the start time + captures baseline; the per-frame tick handles every interpolation.
 - **Baseline-capture pattern:** rapid re-fires during an active flash REUSE the prior `baselineEmissive` — preventing emissiveIntensity from locking at peak² (4×4 = 16×) when a re-click reads the inflated live value as the "baseline".
 - **State map:** `_flashStates: Map<string, { startTime: number; baselineEmissive: number }>` — tiny in steady state (only nodes recently impacted).
 - **Cleanup:** `_removeFlashUpdate?.()` invoked BEFORE `_flashStates.clear()` (so a late-firing tick can't read a half-cleared map); each active flash's baseline is restored to the underlying material before the map is cleared (so a remount doesn't inherit inflated emissive).
