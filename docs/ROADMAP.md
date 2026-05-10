@@ -225,7 +225,7 @@ MCP tools/
 ---
 
 ### Foundation P4 — Long-handler restructures (target v0.4.21)
-**Status:** Planned. Detailed brainstorm pending.
+**Status:** Brainstorming (started 2026-05-10).
 
 **Scope:** Split read/process/write phases in 3 long-running MCP tool handlers so each LLM call lives outside any DB session lifetime, and persistence boundaries route through the WriteQueue. Closes the final v0.4.13 SQLite migration tail (the 3 sites explicitly deferred at v0.4.14).
 
@@ -239,9 +239,19 @@ MCP tools/
 
 **Why this matters:**
 
-1. **Audit-hook RAISE-in-prod flip** is currently gated on these 3 sites being clean. Today they emit WARN. Post-P4, audit hook can flip to RAISE for the entire stack — drift writes become hard failures at source instead of forensic-reconstruction-after-symptom.
+1. **Audit-hook RAISE-in-prod flip** is currently gated on these 3 sites being clean. Today they emit WARN. Post-P4, audit hook can flip to RAISE for the entire stack — drift writes become hard failures at source instead of forensic-reconstruction-after-symptom. **The flip is staged separately from P4 — see "Release strategy" below.**
 2. **Foundation invariant.** v0.4.13 architectural fix promised "100% of writers route through queue, except cold path (closed in P1)". P4 is the last remaining exception.
 3. **Long-LLM-call SQLite contention.** Today, an LLM call inside a session holds the writer slot for the multi-second LLM round-trip. Concurrent writers either contend or fail. Post-P4, the writer slot is held only during the persistence flush (~10-50ms).
+
+**Release strategy (decided 2026-05-10):**
+
+P4's v0.4.21 scope is **restricted to the 3 handler restructures**. The audit-hook WARN→RAISE flip is **deferred to v0.4.22** (rides with Probe Tier 2's release window) per the 7-day soak gate. Rationale:
+
+1. **WARN's purpose is the soak.** Skipping the observation window collapses "monitor → enforce" into a single step, defeating the WARN level's design intent. The 7-day window in production catches drift writes that pytest cannot.
+2. **Bisect cleanliness.** Bundling restructures + flip into v0.4.21 makes any post-release regression ambiguous (restructure-induced vs flip-induced). Staged release isolates flip regressions to a one-line change.
+3. **Independent revertibility.** Bundled = revert restructures + flip together if the flip surfaces an unforeseen drift writer. Staged = revert just the flip, keep handler benefits.
+
+**Soak monitoring during the 7-day window:** `grep -E "audit_drift|audit_hook_warn" data/backend.log | tail -50` — check daily for unexpected WARN occurrences. Zero new WARN sources for 7 days = green light to flip in v0.4.22. Any unexpected source documented + restructured before flipping.
 
 **Restructure pattern (canonical):**
 
@@ -289,7 +299,7 @@ After Foundation P3 + P4 + Probe T2-T4 ship (target window: v0.4.18-v0.4.24), th
 | **Hierarchical topology navigation** | 4-level drill-down topology (project → domain → cluster → prompt) | Planned (was target v0.4.0 — re-targeting to v0.5.x given foundation phase pre-empted; see "Hierarchical topology navigation" entry) |
 | **Unified scoring service** | Eliminate scoring-orchestration duplication across 4 call sites | Planned (no version — see "Unified scoring service" entry) |
 | **Pipeline progress visualization** | Streaming token previews + per-phase timing for optimize/refine | Planned (no version — see "Pipeline progress visualization" entry) |
-| **Time-gated cleanup follow-ups** | Audit-hook RAISE-in-prod flip + `WriterLockedAsyncSession` removal | Time-gated (7-day post-P4 trigger — see entries under Planned) |
+| **Time-gated cleanup follow-ups** | Audit-hook RAISE-in-prod flip + `WriterLockedAsyncSession` removal | Audit flip → v0.4.22 (rides with Probe T2 after 7-day post-P4 soak) — `WriterLockedAsyncSession` removal still time-gated |
 
 The v0.5.0 major would either (a) ship one or two of these as the headline feature, or (b) be a clean architecture milestone marker if the foundation + probe lifecycle leaves the codebase in a release-worthy state worth bumping the minor for.
 
