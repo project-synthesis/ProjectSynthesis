@@ -416,6 +416,12 @@
   let _breathingAnim: (() => void) | null = null;
   let _breathingTime = 0;
 
+  // Canon F2 — radial-gradient glow texture build sentinel. Records that
+  // we've already attempted to construct the texture (success OR JSDOM
+  // no-context fallback) so the lazy-init guard doesn't re-enter every
+  // rebuildScene.
+  let _glowTextureBuilt = false;
+
   /** Single source of truth for readiness ring geometry. Used by both the
    *  initial-build path and the size-drift rebuild path in `rebuildScene`
    *  so radius/thickness/segments never diverge between the two.
@@ -820,11 +826,12 @@
         group.add(edges); // child 1: edges
 
         // Domain: vertex anchor points — glowing energy cores (canon F2).
-        // Lazily build the radial-gradient CanvasTexture once per session.
-        // JSDOM stability: if the 2D canvas context isn't available (headless
-        // tests), set the global to undefined and let the points fall back to
-        // sprite-less rendering (size + color still convey the data).
-        if (!(globalThis as any).__semTopGlowTexture) {
+        // Lazily build the radial-gradient CanvasTexture once per component
+        // lifecycle. Sentinel `_glowTextureBuilt` records the no-canvas
+        // (JSDOM) branch so the truthy `if (!__semTopGlowTexture)` check
+        // doesn't re-enter every rebuildScene when ctx is null.
+        if (!_glowTextureBuilt) {
+          _glowTextureBuilt = true;
           const canvas = document.createElement('canvas');
           canvas.width = 64; canvas.height = 64;
           const ctx = canvas.getContext('2d');
@@ -837,9 +844,10 @@
             ctx.fillStyle = gradient;
             ctx.fillRect(0, 0, 64, 64);
             (globalThis as any).__semTopGlowTexture = new THREE.CanvasTexture(canvas);
-          } else {
-            (globalThis as any).__semTopGlowTexture = undefined; // JSDOM fallback
           }
+          // JSDOM (no canvas context): leave __semTopGlowTexture undefined;
+          // PointsMaterial.map = undefined falls back to sprite-less
+          // rendering (size + color still convey the data signal).
         }
 
         const pointsMat = new THREE.PointsMaterial({
@@ -945,8 +953,11 @@
     // Neural Dust — galaxy-style ambient backdrop (canon F10).
     // 3000-particle Points cloud uniformly distributed in 300^3 space,
     // additively-blended cool-blue, slow XY drift via _removeDustAnim.
-    // Single-instance: created once, persists across rebuildScene calls
-    // (re-added to scene after the scene-clear traverse).
+    // Within a single component instance: built once on first rebuildScene
+    // (the `if (!_dustPoints)` guard) and re-attached to the scene after
+    // each scene-clear traverse below. The geometry is rebuilt on remount
+    // (component-scoped `let _dustPoints`) — the BufferGeometry alloc
+    // takes ~milliseconds, well below the rebuild budget.
     if (!_dustPoints) {
       const DUST_COUNT = 3000;
       const dustGeo = new THREE.BufferGeometry();
@@ -1042,13 +1053,15 @@
         mesh.scale.lerp(_scratchVec3a.set(targetScale, targetScale, targetScale), 0.1);
 
         // Sibling group children (edges, glowing cores) follow the fill.
+        // Using `for...of` instead of `.forEach` avoids per-frame closure
+        // allocation across ~50 cluster meshes × 60fps = ~3000 closures/sec.
         const parentGroup = mesh.parent;
         if (parentGroup) {
-          parentGroup.children.forEach(child => {
+          for (const child of parentGroup.children) {
             if (child !== mesh && child.type !== 'Group') {
               child.scale.copy(mesh.scale);
             }
-          });
+          }
         }
 
         // Readiness ring scales with the cluster + spins on hover.
@@ -1773,11 +1786,14 @@
     const externalId = clustersStore.selectedClusterId;
 
     // Deselected — restore previous highlight + return to overview camera.
+    // Borrow `_scratchVec3a` for the focusOn target — `focusOn` clones the
+    // target internally (TopologyRenderer.ts focusOn → endTarget.clone()),
+    // so the scratch can be re-mutated immediately.
     if (!externalId) {
       clearHighlight();
       if (focusedNodeId) {
         focusedNodeId = null;
-        renderer?.focusOn(new THREE.Vector3(0, 0, 0), 80);
+        renderer?.focusOn(_scratchVec3a.set(0, 0, 0), 80);
       }
       return;
     }
@@ -1790,7 +1806,9 @@
 
     applyHighlight(externalId);
     focusedNodeId = externalId;
-    renderer.focusOn(new THREE.Vector3(...node.position));
+    renderer.focusOn(
+      _scratchVec3a.set(node.position[0], node.position[1], node.position[2]),
+    );
 
     // Tactile feedback: ClusterPhysics overshoot accretion + plasma beam
     // injection from the FPS-weapon NDC origin (canon F7 + F18).
@@ -1800,6 +1818,10 @@
     if (beamPool) {
       const group = _beamNodeGroups.get(node.id);
       if (group) {
+        // BeamConfig.color is stored on the acquired beam (held until
+        // sustain elapses), so a fresh Color is required here — cannot
+        // borrow `_scratchColor` because it would be re-mutated before the
+        // beam release. Per-selection event (not per-frame); negligible.
         beamPool.acquire(
           group,
           {
@@ -1911,10 +1933,23 @@
       _removeDustAnim = null;
       _breathingAnim?.();
       _breathingAnim = null;
-      // Neural Dust survives across remounts intentionally — disposing it
-      // would force a 3000-particle re-allocation on every taxonomy_changed
-      // event. The dust geometry + material are released alongside the
-      // renderer in the scene.traverse below.
+      // Neural Dust geometry + material are released alongside the renderer
+      // in the scene.traverse below. Note: `_dustPoints` is component-scoped
+      // (Svelte 5 `let` inside the script) so a remount starts with a fresh
+      // null reference — the 3000-particle BufferGeometry is rebuilt on
+      // first rebuildScene of the new instance. This is fast (~milliseconds)
+      // and avoids cross-instance ownership confusion.
+
+      // Canon F2 — dispose the radial-gradient CanvasTexture cache so a
+      // future remount rebuilds it cleanly. Also reset the build sentinel.
+      const glowTex = (globalThis as any).__semTopGlowTexture as
+        | THREE.CanvasTexture
+        | undefined;
+      if (glowTex && typeof glowTex.dispose === 'function') {
+        glowTex.dispose();
+      }
+      (globalThis as any).__semTopGlowTexture = undefined;
+      _glowTextureBuilt = false;
       // Cancel in-flight tier tweens before disposing materials (use-after-free guard).
       for (const entry of _readinessRings.values()) {
         disposeRingEntry(entry);

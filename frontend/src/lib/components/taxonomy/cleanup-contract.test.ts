@@ -112,21 +112,13 @@ describe('Cleanup contract — canon disposables', () => {
   });
 });
 
-describe('Cleanup contract — canon F2 globalThis state', () => {
-  test('__semTopGlowTexture is the only production globalThis assignment, and it has documented disposal handling', () => {
+describe('Cleanup contract — canon F2 globalThis state + disposal', () => {
+  test('__semTopGlowTexture is the only production globalThis assignment', () => {
     // Per canon F2: __semTopGlowTexture is the canonical CanvasTexture
     // cache for the radial-gradient glow used by domain anchor energy
-    // cores. Its single shared instance is intentional — re-creating
-    // 64x64 CanvasTextures on every rebuildScene would be wasteful.
-    //
-    // The texture's lifecycle is shared across the application — it is
-    // NOT disposed on component unmount because a remount on the same
-    // session can reuse it. The sole disposal happens on full page
-    // navigation (the GL context tear-down) or via the renderer's
-    // scene.traverse Texture branch.
-    //
-    // This test pins the documented exemption — the rest of the test
-    // mode `__semTop*` globals MUST stay gated by import.meta.env.MODE.
+    // cores. The component lazy-builds it once via the `_glowTextureBuilt`
+    // sentinel and disposes + nulls it in the cleanup return (assertion
+    // below). Other production globalThis assignments are regressions.
     const src = readSemTopSource();
     const lines = src.split('\n');
     const productionGlobals: string[] = [];
@@ -145,10 +137,23 @@ describe('Cleanup contract — canon F2 globalThis state', () => {
       }
     }
     // Production globalThis assignments allowed: only the canon F2
-    // glow texture cache. Anything else here is a regression.
+    // glow texture cache (set + cleared = 2 assignments). Anything else
+    // here is a regression.
     const unauthorized = productionGlobals.filter(
       (entry) => !entry.includes('__semTopGlowTexture'),
     );
     expect(unauthorized).toEqual([]);
+  });
+
+  test('__semTopGlowTexture is disposed and nulled in cleanup body (canon F2)', () => {
+    // Per canon F2 "Disposal: texture disposed on unmount". The cleanup
+    // return must explicitly call `.dispose()` on the cached texture and
+    // reset the global + the `_glowTextureBuilt` sentinel so a remount
+    // rebuilds the texture cleanly.
+    const cleanup = extractCleanupBody(readSemTopSource());
+    expect(cleanup).toMatch(/__semTopGlowTexture/);
+    expect(cleanup).toMatch(/glowTex.*\.dispose\(\)/s);
+    expect(cleanup).toMatch(/__semTopGlowTexture\s*\)?\s*=\s*undefined/);
+    expect(cleanup).toMatch(/_glowTextureBuilt\s*=\s*false/);
   });
 });

@@ -47,6 +47,7 @@ vi.mock('three', () => {
     setSize = vi.fn();
     render = vi.fn();
     dispose = vi.fn();
+    forceContextLoss = vi.fn();
     domElement = document.createElement('canvas');
     // ShadowMap state — TopologyRenderer constructor configures these.
     shadowMap = { enabled: false, type: 0 };
