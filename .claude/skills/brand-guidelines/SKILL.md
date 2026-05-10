@@ -74,7 +74,9 @@ Interactions feel like precision hardware — immediate, tactile, and determinis
 | `radial-gradient` | Fading to transparent around elements | Data visualizations only |
 | `@keyframes` | Pulse, breathe, radiate outward | Scale, translate, opacity-in/out, rotation |
 
-The word **"glow"** is banned from code comments, class names, and specs. Replacements: **contour** (sharp 1px border), **tint** (color fill), **flash** (brief feedback), **emission** (visual presence of lit element).
+**Vocabulary (2D UI only):** the words **"glow"**, **"halo"**, **"bloom"**, **"radiance"** are banned from 2D-UI code (CSS, Svelte components in `frontend/src/lib/components/{layout,editor,refinement,shared,landing}/`, etc.). Replacements: **contour** (sharp 1px border), **tint** (color fill), **flash** (brief feedback), **emission** (visual presence of lit element).
+
+**The 3D Pattern Graph (`frontend/src/lib/components/taxonomy/`) uses a different vocabulary** — `glow`, `halo`, `bloom`, `radiance`, `breathing`, `dust`, `pulse`, `flash` are all canonical names for specific data-bearing features. See [references/3d-visualization.md](references/3d-visualization.md) "Canon Vocabulary" for the per-feature mapping. The 2D-UI banlist does not apply to that directory.
 
 ### Dark-First Flat-Neon Contours
 
@@ -159,37 +161,49 @@ Semi-transparent surfaces (`color-mix` at 50–98% opacity), backdrop blur for p
 
 ## 3D Visualization Scope
 
-The 3D Pattern Graph / Taxonomy visualization is the only WebGL surface in Project Synthesis. It inherits the **5 axioms verbatim** — Signal Over Noise, Neon Tube Model translated to 3D as sharp emission, Darkness as Active Design, Chromatic Encoding, Mechanical Responsiveness. These are non-negotiable across mediums.
+**The 3D Pattern Graph / Taxonomy visualization is exempt from the 2D-UI brand rules.** It is its own medium with its own grammar — cinematic, organic, atmospheric, tactile, high-fidelity. This exemption is consistent with the `AGENTS.md` "Design constraints" amendment ("Applies to Web UI only. The 3D Taxonomy/Pattern Graph visualization is exempt and should prioritize fluid, organic, and highly-polished 3D physics and smooth geometries").
 
-### What changes in 3D
+It inherits the **5 brand axioms verbatim** — Signal Over Noise, Neon Tube Model translated to 3D as lit emission, Darkness as Active Design, Chromatic Encoding, Mechanical Responsiveness. The axioms are non-negotiable; how they translate into the 3D medium is fundamentally different from how they translate into 2D HTML/CSS.
 
-| Concern | 2D rule | 3D translation |
-|---------|---------|----------------|
-| Emission | 1px solid neon contour, no falloff | `MeshStandardMaterial.emissiveIntensity` cranked on the mesh itself + scene lighting. Falloff is real 3D physics, not blur. |
-| Spatial depth | Background opacity tiers + overlapping borders | Real 3D depth via camera + perspective. ShadowMaps from directional lights are permitted (they encode depth, not mimic 2D drop-shadows). |
-| Chromatic encoding | Strategy / domain / tier colors on borders | Same palette mapped to material `emissive` + `color`. Domain dot color in the 2D UI ↔ cluster mesh emission color in 3D. |
-| Motion | Spring entrance, accelerating exit | Same easing curves in JS animation, plus continuous spring physics for layout (cluster forces, edge catenary). This is where Mechanical Responsiveness flexes most. |
+**Canonical reference:** [`references/3d-visualization.md`](references/3d-visualization.md) — the full document of canonical visual features (F1–F18), per-frame allocation budget, disposal contract, and the **audit checklist** that determines whether an implementation passes brand review.
 
-### Hard bans in 3D
+### What is permitted in 3D (and may be banned in 2D)
 
-These are non-negotiable. They are 2D anti-patterns rendered onto a 3D scene:
+The 3D Pattern Graph permits — and in many cases **canonically uses** — visual techniques that are explicitly forbidden in the 2D UI. Each of the following is a **canon feature** documented in `references/3d-visualization.md`:
 
-- **No `UnrealBloomPass` / `BloomPass` / any bloom post-processing** — bloom is 2D-glow rendered onto a 3D scene; same anti-pattern as `text-shadow: 0 0 8px`, different layer. Use `emissiveIntensity` on materials instead.
-- **No `FilmPass` / film grain / noise post-processing** — pure noise contradicts Signal Over Noise (axiom 1).
-- **No `radial-gradient`-based fade textures imitating glow halos** — same intent as the 2D ban, same response.
-- **No per-frame allocations in the render loop** — every `new THREE.Vector3()`, `new THREE.Color()`, `new THREE.Quaternion()` inside an animation callback is a GC pressure leak. Use module-level scratch instances. Laggy 3D contradicts "precision instrument."
-- **No undisposed `geometry` / `material` / `texture` / `composer` / `renderer`** — every object created must have a `dispose()` site reachable from cleanup. GPU memory leaks contradict "precision instrument."
-- **No `globalThis.__*` globals for 3D state** — module-level `let` only; cleanup-disposable.
+| Technique | Canon feature reference |
+|---|---|
+| `UnrealBloomPass` (strength 1.5, radius 0.4, threshold 0.85) — amplifies emission post-render | F13 |
+| `FilmPass` (intensity 0.35, color) — cinematic grain | F13 |
+| `MeshStandardMaterial.emissive` + `emissiveIntensity` driven by data | F1 |
+| `radial-gradient` `CanvasTexture` (`__semTopGlowTexture`) on `PointsMaterial` with `AdditiveBlending` for glowing energy cores | F2 |
+| 3000-particle `Points` ambient cloud (`Neural Dust`) with slow drift rotation — galaxy-style backdrop | F10 |
+| Per-frame `±2%` sin-wave scale oscillation on every cluster mesh (`organic breathing`) | F8 |
+| Hover pulse on template indicator rings (opacity oscillation + rotation spin) | F3 |
+| Spring physics (semi-implicit Euler, k=120, d=12, dt-clamp 0.1, velocity-floor snap) | F9 |
+| Plasma beam tactile feedback on selection (BeamPool, FPS-weapon NDC origin, catenary curve, 800ms sustain) | F7 |
+| `ShadowMap` (`PCFShadowMap`, 1024×1024, self-shadowing meshes) | F12 |
+| `DirectionalLight` + `AmbientLight` + `HemisphereLight` 3-light setup | F11 |
+| Edge shader `uTime` uniform pulse driving per-frame data-flow signal | F5 |
+| Smooth Bezier / catenary edge geometries with `0.15 * distance` sag | F5 |
+| Adaptive `focusOn` (keeps current zoom by default, zero-length direction guard) | F14 |
 
-### Permitted in 3D, banned in 2D
+### Universal invariants (apply everywhere, including 3D)
 
-These are the explicit carve-outs the 2D directive does not govern:
+These constraints are NOT brand rules — they are correctness rules. They apply equally to 3D as to 2D code:
 
-- **`MeshStandardMaterial.emissiveIntensity`** with values driven by data (cluster score, domain confidence, hover state). Canonical 3D emission technique.
-- **`DirectionalLight` + `AmbientLight`** for scene-wide illumination. Real 3D lighting, not effects.
-- **Fluid spring physics** (semi-implicit Euler with damping) for cluster scaling, edge catenary droop, layout forces. Continuous motion is a brand feature in 3D.
-- **Smooth Bezier / Catenary edge geometries** between clusters. Polished organic form is encouraged.
-- **`ShadowMap` from a directional light** for depth cueing in the 3D scene. Encodes depth, not 2D shadow effects.
+- **No per-frame allocations in the render loop.** With 50+ clusters at 60fps, allocating one `Vector3` per cluster per frame produces ~3000 allocs/sec — visible jank. Use the module-level scratch table in `references/3d-visualization.md` "Per-Frame Allocation Budget".
+- **No undisposed GPU resources.** Every `BufferGeometry`, `Material`, `Texture`, `WebGLRenderTarget`, `EffectComposer` pass, light shadow map, animation canceller must reach a `dispose()` / cancel call from cleanup. See `references/3d-visualization.md` "Disposal Contract".
+- **No `globalThis.__*` globals for production state.** Test fixtures (`__semTopLastScene`, `__semTopTemplateRingPool`) are gated by `import.meta.env.MODE === 'test'`. The one production `globalThis` reference, `__semTopGlowTexture` (F2), is a single shared `CanvasTexture` cached across rebuilds and explicitly disposed on unmount — its global storage is documented in canon and intentional.
+
+### Decision protocol
+
+Before adding/removing/modifying anything in `frontend/src/lib/components/taxonomy/`:
+
+1. **Find the relevant canon feature** in `references/3d-visualization.md` (F1–F18).
+2. If the change implements an existing canon feature more correctly: proceed.
+3. If the change adds a new visual feature: **first** update `references/3d-visualization.md` with a new canon entry (parameters, source location, rationale, audit-checklist line) — then implement.
+4. If the change removes or fundamentally alters a canon feature: requires an explicit user-driven redirection of the canon. The 3D Pattern Graph does not bend to 2D-UI rules absent that redirection.
 
 ### Word usage in 3D code
 

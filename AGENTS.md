@@ -135,7 +135,7 @@ docker compose up --build -d
 
 ## Design constraints
 
-- **Theme**: industrial cyberpunk — dark backgrounds, 1px neon contours, no rounded corners, no shadows on the 2D UI. The 3D Pattern Graph / Taxonomy visualization follows its own medium-specific grammar (real lighting + spring physics + organic geometries + emission via material `emissiveIntensity`) — see `.claude/skills/brand-guidelines/SKILL.md` "3D Visualization Scope" + `references/3d-visualization.md`.
+- **Theme**: industrial cyberpunk — dark backgrounds, 1px neon contours, no rounded corners, no shadows. **Applies to 2D Web UI only.** The 3D Pattern Graph / Taxonomy visualization (`frontend/src/lib/components/taxonomy/`) is **exempt** from these rules and prioritizes fluid, organic, atmospheric, tactile, and cinematic 3D physics. Canonical visual features — bloom + film grain post-processing, `MeshStandardMaterial` emission, glow textures, `AdditiveBlending` energy cores, Neural Dust galaxy backdrop, organic breathing oscillation, plasma beam tactile feedback, spring physics, smooth catenary edges, etc. — are documented as canon F1–F18 in `.claude/skills/brand-guidelines/references/3d-visualization.md` (the audit checklist there is the source-of-truth for what passes 3D brand review).
 - **Pagination**: all list endpoints return `{total, count, offset, items, has_more, next_offset}`
 - **Strategies**: file-driven from `prompts/strategies/*.md` — no hardcoded lists
 - **Models**: configurable per phase via `GET/PATCH /api/preferences`
