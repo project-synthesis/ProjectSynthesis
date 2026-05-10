@@ -12,12 +12,40 @@ export interface BeamConfig {
   color: THREE.Color;
   radius: number;
   sustainMs: number;
+  /**
+   * Optional callback fired EXACTLY ONCE when the beam transitions from
+   * `firing` to `sustain` — i.e., the moment the catenary curve has fully
+   * extended and the beam visually impacts the target.
+   *
+   * All click-impact reactions (cluster-physics ripple, plasma envelopement,
+   * emissive flash) wire through this callback so they synchronize to actual
+   * beam arrival rather than firing synchronously with `acquire()` (which is
+   * anti-causal — the beam still has to travel ~300ms before it lands).
+   *
+   * Not invoked if the beam is force-terminated mid-firing via
+   * `terminate()` (e.g., pool teardown). The callback reference is cleared
+   * after firing so a re-acquire of the same beam picks up its new
+   * `BeamConfig.onImpact` cleanly.
+   */
+  onImpact?: () => void;
 }
 
 const RADIAL_SEGMENTS = 12; // Smooth cylinder
 const TUBULAR_SEGMENTS = 24; // Smooth catenary curve
-const FIRING_MS = 600;
-const TERMINATE_MS = 800;
+
+/**
+ * Beam firing-phase duration in ms. Aligned to the Data-as-Matter spec
+ * (`docs/specs/2026-04-05-data-as-matter-design.md` § Trigger Mapping).
+ */
+export const FIRING_MS = 300;
+
+/**
+ * Beam terminate-phase duration in ms. Snappier than the prior 800ms — at
+ * 800 the residual beam material lingered visibly long after a rapid click
+ * had moved focus to the next node. 250ms still reads as a smooth
+ * dissipation while keeping the click beat tight.
+ */
+export const TERMINATE_MS = 250;
 
 export class PlasmaBeam {
   readonly mesh: THREE.Mesh;
@@ -27,6 +55,11 @@ export class PlasmaBeam {
   private _stateTime = 0;
   private _config: BeamConfig | null = null;
   private _targetObject: THREE.Object3D | null = null;
+  // Captured separately from `_config` so a stale callback reference isn't
+  // retained when the config object is nulled out on `_reset`. Cleared once
+  // the beam reaches `sustain` so re-acquires of the same pooled beam pick
+  // up their fresh `BeamConfig.onImpact`.
+  private _onImpact: (() => void) | null = null;
 
   private _origin = new THREE.Vector3();
   private _target = new THREE.Vector3();
@@ -110,6 +143,7 @@ export class PlasmaBeam {
   ): void {
     this._targetObject = target;
     this._config = config;
+    this._onImpact = config.onImpact ?? null;
     this._state = 'firing';
     this._stateTime = 0;
     this._frameCounter = 0;
@@ -132,6 +166,10 @@ export class PlasmaBeam {
     if (this._state === 'idle' || this._state === 'terminate') return;
     this._state = 'terminate';
     this._stateTime = 0;
+    // Force-termination during firing must NOT invoke `onImpact` — the beam
+    // never visually arrived. Drop the callback reference so a residual
+    // sustain-edge transition (impossible from `terminate`) cannot fire it.
+    this._onImpact = null;
   }
 
   update(
@@ -152,10 +190,7 @@ export class PlasmaBeam {
         const t = Math.min(this._stateTime / FIRING_MS, 1);
         this._material.uniforms.uOpacity.value = t;
         this._updateCurve(origin, camera);
-        if (t >= 1) {
-          this._state = 'sustain';
-          this._stateTime = 0;
-        }
+        if (t >= 1) this._enterSustainAtImpact();
         break;
       }
       case 'sustain': {
@@ -181,6 +216,24 @@ export class PlasmaBeam {
     }
 
     return true;
+  }
+
+  /**
+   * Firing → sustain edge handler. The beam has visually impacted the
+   * target; opacity is at full and the catenary curve is fully extended.
+   *
+   * Fires the `onImpact` callback exactly once, then clears the reference
+   * so a re-acquire of this pooled beam picks up its new callback cleanly.
+   * This is the single anchor point used by `SemanticTopology` to
+   * synchronize cluster-physics ripple, plasma-envelopement burst, and
+   * emissive flash to actual beam arrival.
+   */
+  private _enterSustainAtImpact(): void {
+    this._state = 'sustain';
+    this._stateTime = 0;
+    const onImpact = this._onImpact;
+    this._onImpact = null;
+    onImpact?.();
   }
 
   private _reset(): void {
