@@ -51,7 +51,7 @@ const NON_CANON_POSTPROCESSING_IMPORTS = [
   'GlitchPass',
   'DotScreenPass',
   'RGBShiftPass',
-  'GodRaysPass', // permitted in canon F13 with strict justification, banned by default
+  'GodRaysPass', // banned per canon F13 — aesthetic-only, no data signal
 ];
 
 const fileContents = import.meta.glob<string>(

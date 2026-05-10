@@ -236,6 +236,10 @@ export class TopologyRenderer {
     }
     this.composer.dispose();
     this.renderer.dispose();
+    // Force GL context release per canon "Disposal Contract" — prevents
+    // GL context accumulation on rapid mount/unmount cycles (e.g. HMR
+    // during dev, or SvelteKit navigation in/out of /app).
+    this.renderer.forceContextLoss();
     this._animateCallbacks.length = 0;
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments || obj instanceof THREE.Points) {

@@ -208,8 +208,7 @@ The 3D Pattern Graph **uses post-processing**. Render via `composer.render()` no
 | `FilmPass` | **Yes** | `(intensity: 0.35, grayscale: false)` | Cinematic grain — texture without noise. `intensity ≤ 0.4` keeps it subtle |
 | `SMAAPass` / `FXAAPass` | **Yes** | default | Anti-aliasing — supports edge sharpness |
 | `ToneMappingPass` | **Yes (rare)** | when doing PBR with HDR colors | Default `THREE.NoToneMapping` is fine for non-HDR |
-| `GodRaysPass` | **Avoid** | — | Volumetric — only if the data signal is "this cluster is the source of light" (e.g., active focus) |
-| `GlitchPass` / `DotScreenPass` / `RGBShiftPass` | **No** | — | Decorative, no data signal |
+| `GodRaysPass` / `GlitchPass` / `DotScreenPass` / `RGBShiftPass` | **No** | — | Aesthetic-only or decorative; no data signal. The brand-compliance test bans imports of all four. |
 
 **Composer setup pattern:**
 ```ts
