@@ -272,7 +272,7 @@ Layered impact effect — at the moment the F7 beam visually arrives at the clus
 **EnvelopePool (`EnvelopePool.ts`):**
 - 10 pre-allocated `Envelope` instances with per-instance `ShaderMaterial` (own uniforms per envelope, mirrors `BeamPool` capacity)
 - Pool's own `THREE.Group` added to the renderer scene — envelopes are **NOT** parented to target node groups, so a `rebuildScene` cleanup of node groups mid-effect cannot crash an active envelope. World position is copied from the target each frame.
-- **Geometry:** pool-instance-owned `IcosahedronGeometry(1, 2)` and `DodecahedronGeometry(1, 2)` shared singletons; `acquire()` swaps the mesh's geometry to match the target's node shape (cluster vs. domain). Same parameters as the node fill geometries in `SemanticTopology.svelte:749-768` so the envelope shape exactly matches.
+- **Geometry:** pool-instance-owned `IcosahedronGeometry(1, 2)` and `DodecahedronGeometry(1, 2)` shared singletons; `acquire()` swaps the mesh's geometry to match the target's node shape (cluster vs. domain). Same parameters as the cluster + domain fill geometries declared in `SemanticTopology.svelte` `rebuildScene()` (`clusterFillGeo = new THREE.IcosahedronGeometry(1, 2)` + `domainFillGeo = new THREE.DodecahedronGeometry(1, 2)`) so the envelope shape exactly matches the node fill it wraps.
 - **Material:** `ShaderMaterial` with vertex/fragment from `EnvelopeShader.ts` — adapts the F7 multi-wave fluid + fresnel rim glow pattern for closed surfaces (no muzzle flash, no length-wise smoothFade). `AdditiveBlending`, `depthWrite: false`, `transparent: true`, `side: FrontSide`.
 - **State machine:** `idle → attack (220ms) → hold (180ms) → decay (580ms) → idle`. Total active duration **980ms**, synchronizes with the beam sustain window. Cubic ease-out for both attack and decay phases. The 220ms attack (was 120ms) + 580ms decay (was 500ms) replace earlier values that combined with an instant-jump emissive flash to produce a hard "thud" reading at impact.
 - **Peak swell:** `PEAK_SWELL = 1.18` × `node.size` — visible plasma skin sits just outside the cluster silhouette without overlapping neighbors.
@@ -380,6 +380,7 @@ Run through each numbered feature. **The implementation passes if every line bel
 - [ ] **F4**: LOD-attenuated opacity (far/mid/near = 0.4/0.7/1.0)
 - [ ] **F5**: hierarchical edges use `ShaderMaterial` with `uTime` uniform driven by `_removeEdgeAnim`
 - [ ] **F5**: catenary sag = `0.15 * distance`
+- [ ] **F6**: similarity edges use `LineDashedMaterial`; injection edges use `LineBasicMaterial`; both visibility-toggled via `clustersStore.showSimilarityEdges` / `showInjectionEdges`
 - [ ] **F7**: BeamPool of 10 reusable `PlasmaBeam` instances; FPS-weapon NDC origin
 - [ ] **F8**: `_breathingAnim` per-frame callback updates every cluster mesh + ring
 - [ ] **F8**: hover amplifies breathing to `±12%`
