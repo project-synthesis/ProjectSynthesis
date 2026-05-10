@@ -135,7 +135,7 @@ docker compose up --build -d
 
 ## Design constraints
 
-- **Theme**: industrial cyberpunk — dark backgrounds, 1px neon contours, no rounded corners, no shadows
+- **Theme**: industrial cyberpunk — dark backgrounds, 1px neon contours, no rounded corners, no shadows on the 2D UI. The 3D Pattern Graph / Taxonomy visualization follows its own medium-specific grammar (real lighting + spring physics + organic geometries + emission via material `emissiveIntensity`) — see `.claude/skills/brand-guidelines/SKILL.md` "3D Visualization Scope" + `references/3d-visualization.md`.
 - **Pagination**: all list endpoints return `{total, count, offset, items, has_more, next_offset}`
 - **Strategies**: file-driven from `prompts/strategies/*.md` — no hardcoded lists
 - **Models**: configurable per phase via `GET/PATCH /api/preferences`

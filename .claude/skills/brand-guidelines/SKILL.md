@@ -64,7 +64,7 @@ Interactions feel like precision hardware — immediate, tactile, and determinis
 
 ### Zero-Effects Directive
 
-**STRICT DIRECTIVE: There are ZERO glow effects, drop shadows, text-shadow blooms, diffuse box-shadows, or soft radiance of any kind anywhere in the UI. Absolute and non-negotiable.**
+**STRICT DIRECTIVE: There are ZERO glow effects, drop shadows, text-shadow blooms, diffuse box-shadows, or soft radiance of any kind anywhere in the 2D HTML/CSS UI. Absolute and non-negotiable. The 3D Pattern Graph / Taxonomy visualization (Three.js / WebGL) is a different medium with its own grammar — see [3D Visualization Scope](#3d-visualization-scope) below and [`references/3d-visualization.md`](references/3d-visualization.md) for detail.**
 
 | Property | Banned Usage | Permitted Usage |
 |----------|-------------|-----------------|
@@ -154,6 +154,48 @@ Semi-transparent surfaces (`color-mix` at 50–98% opacity), backdrop blur for p
 .glass { background: color-mix(in srgb, var(--color-bg-secondary) 92%, transparent); }
 /* Collapsible: 50%, Accent-tinted: 98%, Blur: 4px light / 8px medium */
 ```
+
+---
+
+## 3D Visualization Scope
+
+The 3D Pattern Graph / Taxonomy visualization is the only WebGL surface in Project Synthesis. It inherits the **5 axioms verbatim** — Signal Over Noise, Neon Tube Model translated to 3D as sharp emission, Darkness as Active Design, Chromatic Encoding, Mechanical Responsiveness. These are non-negotiable across mediums.
+
+### What changes in 3D
+
+| Concern | 2D rule | 3D translation |
+|---------|---------|----------------|
+| Emission | 1px solid neon contour, no falloff | `MeshStandardMaterial.emissiveIntensity` cranked on the mesh itself + scene lighting. Falloff is real 3D physics, not blur. |
+| Spatial depth | Background opacity tiers + overlapping borders | Real 3D depth via camera + perspective. ShadowMaps from directional lights are permitted (they encode depth, not mimic 2D drop-shadows). |
+| Chromatic encoding | Strategy / domain / tier colors on borders | Same palette mapped to material `emissive` + `color`. Domain dot color in the 2D UI ↔ cluster mesh emission color in 3D. |
+| Motion | Spring entrance, accelerating exit | Same easing curves in JS animation, plus continuous spring physics for layout (cluster forces, edge catenary). This is where Mechanical Responsiveness flexes most. |
+
+### Hard bans in 3D
+
+These are non-negotiable. They are 2D anti-patterns rendered onto a 3D scene:
+
+- **No `UnrealBloomPass` / `BloomPass` / any bloom post-processing** — bloom is 2D-glow rendered onto a 3D scene; same anti-pattern as `text-shadow: 0 0 8px`, different layer. Use `emissiveIntensity` on materials instead.
+- **No `FilmPass` / film grain / noise post-processing** — pure noise contradicts Signal Over Noise (axiom 1).
+- **No `radial-gradient`-based fade textures imitating glow halos** — same intent as the 2D ban, same response.
+- **No per-frame allocations in the render loop** — every `new THREE.Vector3()`, `new THREE.Color()`, `new THREE.Quaternion()` inside an animation callback is a GC pressure leak. Use module-level scratch instances. Laggy 3D contradicts "precision instrument."
+- **No undisposed `geometry` / `material` / `texture` / `composer` / `renderer`** — every object created must have a `dispose()` site reachable from cleanup. GPU memory leaks contradict "precision instrument."
+- **No `globalThis.__*` globals for 3D state** — module-level `let` only; cleanup-disposable.
+
+### Permitted in 3D, banned in 2D
+
+These are the explicit carve-outs the 2D directive does not govern:
+
+- **`MeshStandardMaterial.emissiveIntensity`** with values driven by data (cluster score, domain confidence, hover state). Canonical 3D emission technique.
+- **`DirectionalLight` + `AmbientLight`** for scene-wide illumination. Real 3D lighting, not effects.
+- **Fluid spring physics** (semi-implicit Euler with damping) for cluster scaling, edge catenary droop, layout forces. Continuous motion is a brand feature in 3D.
+- **Smooth Bezier / Catenary edge geometries** between clusters. Polished organic form is encouraged.
+- **`ShadowMap` from a directional light** for depth cueing in the 3D scene. Encodes depth, not 2D shadow effects.
+
+### Word usage in 3D code
+
+The Canon Terminology table (Use: contour / flash / tint / emission. Avoid: glow / radiance / bloom / halo) **applies to 3D code comments, shader uniforms, and class names** even though the rendering technique differs. Write `emissiveColor` not `glowingColor`. Write `pulseEmission` not `pulseGlow`. Write `cluster.emissive` not `cluster.glow`.
+
+For detailed material recipes, lighting setups, post-processing decision trees, perf invariants, disposal contracts, and shader patterns, see [`references/3d-visualization.md`](references/3d-visualization.md).
 
 ---
 
@@ -358,6 +400,7 @@ Detailed lookup tables are split into reference files to keep this core document
 | `references/color-mappings.md` | Strategy colors (10), task type colors (14), complexity colors (3), score-to-color mapping, data visualization conventions | Implementing strategy badges, task type chips, score displays, comparative views |
 | `references/component-patterns.md` | Button styles, card patterns, chips/badges, inputs, score circles, strategy bar, pipeline timeline, sidebar tabs, hover state recipes (5 recipes), keyframe animations (17), transition timing | Building or modifying any UI component, adding hover states, choosing animation |
 | `references/layout-and-accessibility.md` | Border radius (6 tiers), opacity tiers (bg/border/text), spacing system (padding/gap/rhythm), icon sizing, z-index layers, color-mix patterns, scrollbar, selection, accessibility (focus rings, reduced motion, sr-only, skip link, WCAG contrast) | Setting spacing, radius, opacity, z-index, or implementing accessibility features |
+| `references/3d-visualization.md` | Material recipes (`MeshStandardMaterial.emissiveIntensity`), lighting setups (Ambient + Directional defaults, ShadowMap), post-processing decision tree (3 permitted passes, 4+ banned), spring physics constants (`k=120, d=12`), edge geometry recipes (catenary droop, segment counts), per-frame allocation budget (zero-allocs invariant + scratch table), disposal contract (mandatory disposal targets + canonical `disposables` pattern), shader uniform patterns | Working on the 3D Pattern Graph / Taxonomy visualization (`frontend/src/lib/components/taxonomy/*`) — Three.js / WebGL only |
 
 ---
 
