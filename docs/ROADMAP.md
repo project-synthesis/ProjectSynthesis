@@ -658,7 +658,7 @@ The takeaway is a working principle now captured in `.claude/skills/brand-guidel
 
 **F1–F19 timing constants potentially due for the same review** (none confirmed wrong — listed as audit candidates if/when polish cycles touch the Pattern Graph; F19's own constants were just re-tuned in this branch and remain candidates for further iteration):
 - **F5** hierarchical edge `uTime` pulse — pulse frequency + amplitude have not been re-evaluated since initial implementation
-- **F8** organic breathing oscillation — `_breathingTime += 0.016` per frame produces a fixed ~0.95Hz cycle; ±2% amplitude (±12% on hover) has never been user-tuned
+- **F8** organic breathing oscillation — `_breathingTime += 0.016` per frame produces a fixed ~0.95Hz cycle; ±2% amplitude (±12% on hover) has never been calibrated against live observation
 - **F10** Neural Dust slow XY rotation — rotation speed is a magic number that may read either too static or too restless
 - **F14** `focusOn` 600ms default duration + adaptive distance clamps — observations of "click-zoom feels jerky" would route here
 - **F17** one-shot auto-focus 1500ms pan — bound to formation animation 90-frame duration; if formation timing changes, this needs to follow
