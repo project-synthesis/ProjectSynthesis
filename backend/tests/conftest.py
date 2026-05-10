@@ -562,3 +562,72 @@ async def mcp_test_client():
     from app.mcp_server import mcp
     async with Client(mcp) as client:
         yield client
+
+
+@pytest.fixture
+async def async_session_factory_override(tmp_path, monkeypatch):
+    """In-memory SQLite session factory for Foundation P4 integration tests.
+
+    Wires both the read engine and the writer engine to the same temp-file
+    SQLite DB so persists made through the WriteQueue are visible on
+    subsequent SELECTs through the read engine.
+
+    Patches every import-time rebound name of `async_session_factory`
+    (top-level `from app.database import async_session_factory` in each
+    consumer module binds a SEPARATE module-level reference, so patching
+    only `app.database.async_session_factory` does NOT redirect those
+    consumers). Foundation P4 consumers: `app.tools.save_result`,
+    `app.tools._shared`. Cycles 2/3 add more — extend this fixture's
+    monkeypatch list when those land.
+    """
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+
+    from app.models import Base
+    from app.services.write_queue import WriteQueue
+
+    shared_url = f"sqlite+aiosqlite:///{tmp_path}/shared.db"
+    test_engine = create_async_engine(shared_url, future=True)
+
+    # Create schema
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = async_sessionmaker(
+        test_engine, class_=AsyncSession, expire_on_commit=False,
+    )
+
+    # Patch every consumer's locally rebound `async_session_factory`.
+    monkeypatch.setattr("app.database.async_session_factory", factory)
+    monkeypatch.setattr("app.tools.save_result.async_session_factory", factory)
+    monkeypatch.setattr("app.tools._shared.async_session_factory", factory)
+
+    # DEFENSIVE: patch `writer_engine` + `writer_session_factory` even though
+    # the fixture's own `WriteQueue(test_engine)` builds its internal
+    # sessionmaker against `test_engine` directly (not via these names).
+    # Reason for defense: lifecycle tasks (`gc.py`, `_recurring_gc_task`,
+    # ad-hoc writer-engine access patterns) may read these names directly
+    # during test runs; if they do, they must hit `test_engine`, not the
+    # production writer. Cycles 2/3 may also add direct readers — keep
+    # these patches here, not removed.
+    monkeypatch.setattr("app.database.writer_engine", test_engine)
+    monkeypatch.setattr(
+        "app.database.writer_session_factory",
+        async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False),
+    )
+
+    # Start a WriteQueue against the shared engine
+    test_wq = WriteQueue(test_engine)
+    await test_wq.start()
+    monkeypatch.setattr(
+        "app.tools._shared.get_write_queue",
+        lambda: test_wq,
+    )
+
+    yield factory
+
+    await test_wq.stop()
+    await test_engine.dispose()
