@@ -529,7 +529,19 @@ export interface DeviceCodeResponse {
   interval: number;
 }
 export interface DevicePollResponse {
-  status: 'authorization_pending' | 'slow_down' | 'expired_token' | 'success' | 'error';
+  // GitHub-defined statuses: authorization_pending | slow_down | expired_token | success
+  // Backend-added structured statuses (replace prior 502s for the polling loop):
+  //   server_error  — GitHub returned 5xx HTML (transient outage / stale device code)
+  //   network_error — backend → GitHub network failure (DNS / timeout / connection)
+  //   error         — generic upstream error (e.g., success response missing access_token)
+  status:
+    | 'authorization_pending'
+    | 'slow_down'
+    | 'expired_token'
+    | 'success'
+    | 'error'
+    | 'server_error'
+    | 'network_error';
   user?: GitHubUser;
 }
 export const githubDeviceRequest = () =>

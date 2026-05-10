@@ -20,6 +20,48 @@ from app.services.github_client import GitHubClient
 from app.services.github_service import GitHubService
 
 
+def _classify_poll_error(resp: httpx.Response) -> str | None:
+    """Classify a GitHub OAuth response in the device-poll context.
+
+    Live reference (2026-05-10): GitHub's `/login/oauth/access_token`
+    occasionally returns 5xx with a ~160KB HTML error page (server-side
+    abuse-detection / rate-limiting on stale device codes / transient
+    outage). The strict `_safe_github_json` helper turns those into
+    `HTTPException(502)`, which is correct for the OAuth callback flow
+    (single user-facing call, fail-fast). But the device-poll flow is a
+    tight 5s loop, and a 502 propagates as an `apiFetch` rejection that
+    the frontend's `catch {}` silently swallows — the user sees
+    "Waiting for authorization..." stuck for the full 15-minute device
+    expiry window with no signal that anything is wrong.
+
+    This helper detects the specific failure mode and returns a status
+    string that the poll handler can fold into a structured
+    `DevicePollResponse(status=...)` — the frontend's bounded
+    consecutive-error counter then decides whether to retry or surface
+    an actionable error. Returns `None` when the response should flow
+    through to the strict JSON parser unchanged.
+
+    Classification:
+      * 5xx + non-JSON content-type → `"server_error"` (the actual prod
+        failure mode — GitHub's HTML 500 page).
+      * 5xx + missing content-type header → `"server_error"` (defensive;
+        if GitHub didn't bother declaring the response shape, treat as
+        malformed).
+      * 5xx + JSON content-type → `None` (rare but conceivable; let
+        `_safe_github_json` extract whatever structured error GitHub
+        provided).
+      * Anything < 500 → `None` (`authorization_pending`, `slow_down`,
+        `expired_token`, success, 4xx with JSON — all flow through the
+        parser as before).
+    """
+    if resp.status_code < 500:
+        return None
+    content_type = resp.headers.get("content-type", "")
+    if "json" in content_type.lower():
+        return None
+    return "server_error"
+
+
 def _safe_github_json(resp: httpx.Response, *, what: str) -> dict[str, Any]:
     """Defensively parse a GitHub OAuth JSON response.
 
@@ -522,7 +564,12 @@ class DevicePollRequest(BaseModel):
 
 
 class DevicePollResponse(BaseModel):
-    status: str = Field(description="authorization_pending | slow_down | expired_token | success")
+    status: str = Field(
+        description=(
+            "authorization_pending | slow_down | expired_token | success | "
+            "server_error | network_error | error"
+        ),
+    )
     user: GitHubUserResponse | None = None
 
 
@@ -568,17 +615,40 @@ async def poll_device_code(
     if not client_id:
         raise HTTPException(500, "GITHUB_OAUTH_CLIENT_ID not configured.")
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "https://github.com/login/oauth/access_token",
-            data={
-                "client_id": client_id,
-                "device_code": body.device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            },
-            headers={"Accept": "application/json"},
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://github.com/login/oauth/access_token",
+                data={
+                    "client_id": client_id,
+                    "device_code": body.device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                },
+                headers={"Accept": "application/json"},
+            )
+    except httpx.HTTPError as exc:
+        # Network failure (DNS, connection, timeout) — surface as a structured
+        # poll-shape response so the frontend's bounded retry counter handles
+        # it, rather than a 502 the catch-block silently swallows.
+        logger.warning("GitHub device poll network error: %s", exc)
+        return DevicePollResponse(status="network_error")
+
+    # Poll-flow upstream-error classification: GitHub occasionally returns
+    # 5xx HTML (~160KB error pages) for stale device codes or transient
+    # outages. Map to a structured `server_error` status so the frontend's
+    # consecutive-error counter can bound retries — without this, the
+    # frontend silently retries on 502 forever and the user sees the
+    # "Waiting for authorization..." modal stuck for the full 15-minute
+    # device expiry window with no signal.
+    poll_error = _classify_poll_error(resp)
+    if poll_error:
+        logger.info(
+            "GitHub poll upstream returned non-JSON %s, surfacing as %s",
+            resp.status_code, poll_error,
         )
-        data = _safe_github_json(resp, what="device code poll")
+        return DevicePollResponse(status=poll_error)
+
+    data = _safe_github_json(resp, what="device code poll")
 
     # Still waiting or error
     if "error" in data:

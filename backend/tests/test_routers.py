@@ -690,6 +690,99 @@ class TestGitHubOAuthDefensive:
         assert out == {"device_code": "abc", "user_code": "XYZ-123"}
 
 
+class TestGitHubDevicePollUpstreamErrorClassification:
+    """Regression tests for `_classify_poll_error` — the poll-flow-specific
+    upstream-error classifier.
+
+    Live reference (2026-05-10): the device/poll endpoint translated GitHub's
+    160KB HTML 5xx error pages into `HTTPException(502)` via the strict
+    `_safe_github_json` helper. The frontend polling loop has an empty
+    `catch {}` that silently swallowed the resulting 502s, leaving the
+    "Waiting for authorization..." modal stuck for the full 15-minute
+    device-code expiry window with no signal to the user.
+
+    The fix: in the poll-only flow, classify upstream HTML 5xx into a
+    structured `DevicePollResponse(status="server_error")` so the frontend's
+    consecutive-error counter can bound retries and surface an actionable
+    error after a threshold. The OAuth callback flow keeps the strict
+    `_safe_github_json` 502 semantics (single user-facing call, fail-fast
+    is correct there).
+    """
+
+    def test_classify_poll_error_html_500_returns_server_error(self):
+        """The actual production failure mode: GitHub returns 500 with a
+        ~160KB HTML error page. Must map to ``server_error`` so the
+        frontend can bound its retries.
+        """
+        from app.routers.github_auth import _classify_poll_error
+
+        class _R:
+            status_code = 500
+            headers = {"content-type": "text/html; charset=utf-8"}
+
+        assert _classify_poll_error(_R()) == "server_error"
+
+    def test_classify_poll_error_html_502_returns_server_error(self):
+        """Other 5xx variants (502, 503, 504) — same handling."""
+        from app.routers.github_auth import _classify_poll_error
+
+        for status in (502, 503, 504):
+            class _R:
+                status_code = status
+                headers = {"content-type": "text/html"}
+
+            assert _classify_poll_error(_R()) == "server_error", f"status={status}"
+
+    def test_classify_poll_error_json_200_returns_none(self):
+        """Happy path — 200 with JSON should pass through to normal parser."""
+        from app.routers.github_auth import _classify_poll_error
+
+        class _R:
+            status_code = 200
+            headers = {"content-type": "application/json; charset=utf-8"}
+
+        assert _classify_poll_error(_R()) is None
+
+    def test_classify_poll_error_json_4xx_returns_none(self):
+        """4xx with JSON body (e.g., authorization_pending shaped as 200,
+        but bad_verification_code as 200 too) — pass through to parser
+        which extracts the structured ``error`` field.
+
+        4xx with JSON is unusual but conceivable; let parser handle it.
+        """
+        from app.routers.github_auth import _classify_poll_error
+
+        class _R:
+            status_code = 400
+            headers = {"content-type": "application/json"}
+
+        assert _classify_poll_error(_R()) is None
+
+    def test_classify_poll_error_json_5xx_returns_none(self):
+        """5xx WITH JSON body — rare but technically possible; pass through
+        so parser extracts whatever structured error GitHub provides.
+        Only 5xx with non-JSON content type triggers the safe-default.
+        """
+        from app.routers.github_auth import _classify_poll_error
+
+        class _R:
+            status_code = 500
+            headers = {"content-type": "application/json"}
+
+        assert _classify_poll_error(_R()) is None
+
+    def test_classify_poll_error_missing_content_type_returns_server_error(self):
+        """No content-type header on 5xx — treat as malformed/non-JSON and
+        return ``server_error`` defensively."""
+        from app.routers.github_auth import _classify_poll_error
+
+        class _R:
+            status_code = 500
+            headers = {}
+
+        assert _classify_poll_error(_R()) == "server_error"
+
+
 class TestGitHubRepos:
     async def test_list_repos_unauthenticated(self, app_client):
         """repos listing returns 401 without session cookie."""

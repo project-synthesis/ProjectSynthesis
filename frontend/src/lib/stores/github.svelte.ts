@@ -58,6 +58,13 @@ class GitHubStore {
   private deviceCode: string | null = null;
   private pollInterval = 5;
   private deviceExpiry = 0;
+  // Bounded retry — surfaces a real error after N consecutive
+  // server_error / network_error responses (or thrown apiFetch
+  // rejections). Without this, an empty `catch {}` silently retries
+  // forever and the user sees "Waiting for authorization..." stuck
+  // for the full 15-minute device-expiry window.
+  private consecutiveErrors = 0;
+  private readonly MAX_CONSECUTIVE_ERRORS = 5;
 
   // Repo browsing state
   branches = $state<string[]>([]);
@@ -223,6 +230,7 @@ class GitHubStore {
 
   private async startPolling() {
     this.polling = true;
+    this.consecutiveErrors = 0;
     while (this.polling && Date.now() < this.deviceExpiry) {
       await new Promise(r => setTimeout(r, this.pollInterval * 1000));
       if (!this.polling) break; // cancelled during wait
@@ -233,11 +241,14 @@ class GitHubStore {
           this.userCode = null;
           this.verificationUri = null;
           this.deviceCode = null;
+          this.consecutiveErrors = 0;
           await this.checkAuth();
           return;
         }
         if (result.status === 'slow_down') {
           this.pollInterval += 5;
+          this.consecutiveErrors = 0;
+          continue;
         }
         if (result.status === 'expired_token') {
           this.polling = false;
@@ -247,9 +258,44 @@ class GitHubStore {
           this.error = 'Authorization expired. Please try again.';
           return;
         }
-        // authorization_pending — keep polling
-      } catch {
-        // Network error, keep polling
+        if (result.status === 'server_error' || result.status === 'network_error') {
+          // Backend signaled an upstream GitHub issue (5xx HTML, network
+          // failure, etc.). Count toward the bounded retry threshold;
+          // exit if exceeded so the user sees an actionable error
+          // rather than an infinite "Waiting for authorization..." stall.
+          this.consecutiveErrors++;
+          if (this.consecutiveErrors >= this.MAX_CONSECUTIVE_ERRORS) {
+            this.polling = false;
+            this.userCode = null;
+            this.verificationUri = null;
+            this.deviceCode = null;
+            this.error =
+              result.status === 'network_error'
+                ? 'Network error contacting GitHub. Check your connection and try again.'
+                : 'GitHub OAuth is unavailable right now. Please try again in a few minutes.';
+            return;
+          }
+          continue;
+        }
+        // authorization_pending (or any other in-progress status) —
+        // reset the error counter and keep polling.
+        this.consecutiveErrors = 0;
+      } catch (err) {
+        // apiFetch threw (non-2xx that wasn't translated to a poll-shape
+        // status; e.g., backend returned 500 for a different reason, or
+        // CORS/network failure that bypassed the backend entirely).
+        // Count toward the same bounded retry; exit on threshold so the
+        // user gets a real signal instead of a silent hang.
+        this.consecutiveErrors++;
+        if (this.consecutiveErrors >= this.MAX_CONSECUTIVE_ERRORS) {
+          this.polling = false;
+          this.userCode = null;
+          this.verificationUri = null;
+          this.deviceCode = null;
+          const detail = err instanceof Error ? err.message : 'Network error';
+          this.error = `Polling failed (${detail}). Please try again.`;
+          return;
+        }
       }
     }
     // Timed out
