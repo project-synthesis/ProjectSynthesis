@@ -6,6 +6,10 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { FilmPass } from 'three/addons/postprocessing/FilmPass.js';
 
 import { computeFocusEndpoint } from './focus-math';
 
@@ -25,6 +29,7 @@ export class TopologyRenderer {
   readonly camera: THREE.PerspectiveCamera;
   readonly renderer: THREE.WebGLRenderer;
   readonly controls: OrbitControls;
+  readonly composer: EffectComposer;
 
   private _animationId: number | null = null;
   private _focusAnimId: number | null = null;
@@ -77,6 +82,23 @@ export class TopologyRenderer {
     const hemisphere = new THREE.HemisphereLight(0x1a1a2e, 0x06060c, 0.2);
     this.scene.add(hemisphere);
 
+    // Cinematic post-processing pipeline (canon F13). The 3D Pattern
+    // Graph is its own medium — UnrealBloomPass amplifies emissive
+    // surfaces (the "alive" feeling), FilmPass adds subtle cinematic
+    // grain (texture without noise). Render via composer.render() in
+    // the start() loop instead of renderer.render().
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(
+      new UnrealBloomPass(
+        new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
+        1.5, // strength
+        0.4, // radius
+        0.85, // threshold
+      ),
+    );
+    this.composer.addPass(new FilmPass(0.35, false));
+
     // Controls
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
@@ -113,7 +135,7 @@ export class TopologyRenderer {
       this._animationId = requestAnimationFrame(loop);
       this.controls.update();
       for (const cb of this._animateCallbacks) cb();
-      this.renderer.render(this.scene, this.camera);
+      this.composer.render(); // canon F13 — bloom + film grain pipeline
     };
     loop();
   }
@@ -124,6 +146,7 @@ export class TopologyRenderer {
     this.camera.aspect = width / height || 1;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    this.composer.setSize(width, height); // canon F13 — keep composer in sync
   }
 
   /** Animate camera to look at a target position (canon F14).
@@ -204,6 +227,14 @@ export class TopologyRenderer {
       cancelAnimationFrame(this._focusAnimId);
     }
     this.controls.dispose();
+    // Composer disposal (canon F13) — disposes each pass's render target +
+    // any internal materials. Must run before renderer.dispose().
+    for (const pass of this.composer.passes) {
+      if (typeof (pass as { dispose?: () => void }).dispose === 'function') {
+        (pass as { dispose: () => void }).dispose();
+      }
+    }
+    this.composer.dispose();
     this.renderer.dispose();
     this._animateCallbacks.length = 0;
     this.scene.traverse((obj) => {
