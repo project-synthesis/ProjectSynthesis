@@ -7,10 +7,9 @@ from __future__ import annotations
 import ast
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
-
 
 # --- Fixtures ------------------------------------------------------------
 
@@ -324,9 +323,11 @@ async def test_save_result_creates_new_optimization_when_no_pending(
     Invoke handle_save_result for an unknown trace_id; assert a new
     Optimization row is persisted with status='completed'."""
     import uuid
+
+    from sqlalchemy import select
+
     from app.models import Optimization
     from app.tools import save_result as save_result_module
-    from sqlalchemy import select
 
     # The fixture `async_session_factory_override` (defined in conftest.py)
     # provides a temp-file SQLite session factory wired to both the read
@@ -384,9 +385,11 @@ async def test_save_result_mutates_pending_optimization_when_present(
     invoke handle_save_result for that trace_id; assert the row is updated in
     place (same id, status flips to 'completed')."""
     import uuid
+
+    from sqlalchemy import select
+
     from app.models import Optimization
     from app.tools import save_result as save_result_module
-    from sqlalchemy import select
 
     monkeypatch.setattr(
         save_result_module, "notify_event_bus", AsyncMock(),
@@ -455,6 +458,7 @@ async def test_save_result_emits_optimization_created_event_with_full_payload(
     event with all expected payload keys, sourced from the persist callback's
     return dict (NOT from a post-callback ORM access)."""
     import uuid
+
     from app.tools import save_result as save_result_module
 
     event_calls: list[dict] = []
