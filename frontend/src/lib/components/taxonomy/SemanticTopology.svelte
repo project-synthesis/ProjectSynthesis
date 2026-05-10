@@ -511,6 +511,12 @@
   let beamPool: BeamPool | null = null;
   let clusterPhysics: ClusterPhysics | null = null;
   let _hasPlayedEntrance = false;
+  // One-shot auto-focus guard (canon F17). The bird's-eye-view "frame the
+  // largest domain" zoom must run EXACTLY ONCE for the component lifecycle.
+  // Without this guard, every async stateFilter mutation triggers
+  // rebuildScene which would re-trigger the auto-focus block, snapping the
+  // camera back to distance 60 and overriding the user's current view.
+  let _hasAutoFocused = false;
   let _beamNodeGroups: Map<string, THREE.Group> = new Map();
   let _sceneNodeMap: Map<string, import('./TopologyData').SceneNode> = new Map();
   let _prevNodeSizes: Map<string, number> = new Map();
@@ -1232,6 +1238,16 @@
     if (beamPool) {
       renderer.scene.add(beamPool.group);
     }
+
+    // Highlight survival on rebuild (canon F16). If a focusedNodeId exists,
+    // re-apply the cyan highlight so it survives any async rebuildScene
+    // mutation (clicking a node fires getClusterDetail, which can mutate
+    // stateFilter, which rebuilds every node mesh — without this re-apply,
+    // the freshly-recreated mesh has the original domain color, not the
+    // selection cyan).
+    if (focusedNodeId) {
+      applyHighlight(focusedNodeId);
+    }
   }
 
   function handleLodChange(tier: LODTier): void {
@@ -1243,12 +1259,11 @@
   }
 
   function handleNodeClick(nodeId: string): void {
-    focusedNodeId = nodeId;
-    const node = sceneData?.nodes.find(n => n.id === nodeId);
-    if (node) {
-      renderer?.focusOn(new THREE.Vector3(...node.position));
-    }
-    // Select family in store for Inspector
+    // Canon F15: only call selectCluster — the $effect watching
+    // clustersStore.selectedClusterId drives every visual update
+    // (focusOn, applyHighlight, tactile feedback). Doing the work here
+    // too duplicates effort and creates race conditions with the
+    // async getClusterDetail fetch.
     clustersStore.selectCluster(nodeId);
     // F10: Switch navigator to clusters tab so user sees the selection context
     window.dispatchEvent(new CustomEvent('switch-activity', { detail: 'clusters' }));
@@ -1258,11 +1273,11 @@
     if (focusedNodeId && sceneData) {
       const current = sceneData.nodes.find(n => n.id === focusedNodeId);
       if (current?.parentId) {
-        handleNodeClick(current.parentId);
+        // Canon F15: route through selectCluster, let the $effect drive.
+        clustersStore.selectCluster(current.parentId);
       } else {
         // Back to overview
-        focusedNodeId = null;
-        renderer?.focusOn(new THREE.Vector3(0, 0, 0), 80);
+        clustersStore.selectCluster(null);
       }
     }
   }
@@ -1275,8 +1290,8 @@
     );
     if (match) {
       interaction?.highlightNode(match.id);
-      applyHighlight(match.id);
-      focusedNodeId = match.id;
+      // Canon F15: selectCluster drives applyHighlight + focusOn + tactile
+      // feedback via the $effect.
       clustersStore.selectCluster(match.id);
     }
   }
@@ -1469,8 +1484,12 @@
            }
         }) ?? null;
 
-        // Auto-focus on the largest domain cluster on initial load.
-        if (!focusedNodeId && sceneData.nodes.length > 0) {
+        // Auto-focus on the largest domain cluster on initial load (canon F17).
+        // _hasAutoFocused is a one-shot guard — every subsequent rebuildScene
+        // (triggered by stateFilter mutation, taxonomy_changed, etc.) skips
+        // this block and preserves the user's current camera position.
+        if (!_hasAutoFocused && !focusedNodeId && sceneData.nodes.length > 0) {
+          _hasAutoFocused = true;
           const domainSizes = new Map<string, { count: number; cx: number; cy: number; cz: number }>();
           for (const n of sceneData.nodes) {
             if (n.state === 'domain' || !n.visible) continue;
@@ -1749,13 +1768,17 @@
     });
   });
 
-  // Sync external family selection → highlight node
+  // Sync external family selection → highlight node + tactile feedback (canon F18)
   $effect(() => {
     const externalId = clustersStore.selectedClusterId;
 
-    // Deselected — restore previous highlight
+    // Deselected — restore previous highlight + return to overview camera.
     if (!externalId) {
       clearHighlight();
+      if (focusedNodeId) {
+        focusedNodeId = null;
+        renderer?.focusOn(new THREE.Vector3(0, 0, 0), 80);
+      }
       return;
     }
 
@@ -1768,6 +1791,26 @@
     applyHighlight(externalId);
     focusedNodeId = externalId;
     renderer.focusOn(new THREE.Vector3(...node.position));
+
+    // Tactile feedback: ClusterPhysics overshoot accretion + plasma beam
+    // injection from the FPS-weapon NDC origin (canon F7 + F18).
+    if (clusterPhysics) {
+      clusterPhysics.onBeamImpact(node.id, node.size);
+    }
+    if (beamPool) {
+      const group = _beamNodeGroups.get(node.id);
+      if (group) {
+        beamPool.acquire(
+          group,
+          {
+            color: new THREE.Color(node.color),
+            radius: Math.max(node.size * 0.04, 0.1),
+            sustainMs: 800, // short, sharp injection burst
+          },
+          renderer.camera,
+        );
+      }
+    }
   });
 
   onMount(() => {
