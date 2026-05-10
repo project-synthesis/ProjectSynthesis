@@ -177,6 +177,34 @@ describe('TopologyRenderer', () => {
     const THREE = await import('three');
     expect(() => r.focusOn(new THREE.Vector3(1, 2, 3))).not.toThrow();
   });
+
+  it('focusOn called consecutively cancels in-flight animation', async () => {
+    // Spec § 4.6 third bullet: "focusOn consecutively cancels any
+    // in-flight focus animation". The implementation cancels via
+    // `cancelAnimationFrame(this._focusAnimId)` at the top of focusOn.
+    // Verified here by stubbing RAF + cancelRAF and asserting the second
+    // call invokes cancelAnimationFrame with the id the first call
+    // registered. (Endpoint correctness is covered by focus-math.test.ts;
+    // this gate covers the cancellation wiring.)
+    const r = new TopologyRenderer(canvas);
+    const THREE = await import('three');
+    const RAF_ID = 12345;
+    const rafSpy = vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(RAF_ID);
+    const cancelSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+
+    r.focusOn(new THREE.Vector3(1, 2, 3), 50);
+    // First call's synchronous animate() runs once with t=0 (no advance)
+    // and queues the next RAF tick — at that point _focusAnimId === RAF_ID.
+    expect(rafSpy).toHaveBeenCalled();
+
+    r.focusOn(new THREE.Vector3(4, 5, 6), 80);
+    // Second call must observe _focusAnimId !== null and cancel it before
+    // starting fresh.
+    expect(cancelSpy).toHaveBeenCalledWith(RAF_ID);
+
+    rafSpy.mockRestore();
+    cancelSpy.mockRestore();
+  });
 });
 
 describe('LODTier type', () => {

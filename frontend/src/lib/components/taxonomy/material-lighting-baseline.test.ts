@@ -11,6 +11,26 @@
  * presence of those changes via source-grep over the live source — same
  * mechanism as `brand-compliance.test.ts` and `cleanup-contract.test.ts`.
  *
+ * **Methodology deviation from spec § 4.5** (acknowledged): the spec
+ * prescribed rendering a fixed seed scene (3 clusters + 2 edges + 1 anchor +
+ * 1 template ring) and asserting `scene.children` properties via Three.js
+ * introspection. jsdom has no GL context, so a real `WebGLRenderer` cannot
+ * be constructed in the test environment without invasive mocking that
+ * would force the test to drift from production semantics on every renderer
+ * change. The source-grep approach trades render-time scene-graph
+ * introspection for compile-time source-shape pinning: every brand-canonical
+ * setting (material class, roughness/metalness/emissive/emissiveIntensity,
+ * castShadow, light constructors with exact intensities and colors,
+ * PCFShadowMap, mapSize 1024×1024) is verified against the source. The
+ * trade-off is that this test cannot catch a runtime conditional that
+ * BYPASSES the brand-canonical material on certain code paths — but every
+ * cluster fill path runs through the single `fillMat = ...` construction
+ * site, so a bypass would require an entirely new material constructor
+ * appearing elsewhere in the file, which the cluster-fill grep would
+ * NOT match. Pixel-level regression is captured manually in OPERATE
+ * (spec § 6.4) and would be added to a Playwright snapshot suite if
+ * one is ever introduced (deferred per spec § 8).
+ *
  * Five property classes asserted:
  *
  *   1. Cluster fill material is `MeshStandardMaterial` with brand-canonical
@@ -97,16 +117,41 @@ describe('Material baseline — cluster fill uses MeshStandardMaterial', () => {
   });
 });
 
-describe('Material baseline — readiness ring stays MeshBasicMaterial', () => {
-  test('readiness ring builder still uses MeshBasicMaterial (spec § 3.7 carve-out)', () => {
+describe('Material baseline — banner-overlay rings stay MeshBasicMaterial', () => {
+  test('readiness ring uses MeshBasicMaterial with depthWrite:false (spec § 3.7 carve-out)', () => {
     const src = readSource('SemanticTopology.svelte');
-    // The cyan ring around mature templated clusters is a banner overlay —
-    // it sits over geometry with `depthWrite: false` and isn't a 3D shaded
-    // sphere. Per spec § 3.7, it stays `MeshBasicMaterial`. The exact
-    // identifier is `mat` (not `fillMat`) inside the readiness ring builder.
-    // Match `new THREE.MeshBasicMaterial` — at least one occurrence in the
-    // file (post-cluster-swap, this is the readiness ring + tween cast only).
-    expect(src).toMatch(/new\s+THREE\.MeshBasicMaterial\s*\(/);
+    // The readiness ring is a banner overlay sitting OVER the cluster
+    // dodecahedron silhouette with `depthWrite: false` to avoid z-fighting.
+    // It is NOT a 3D shaded sphere, so MeshStandardMaterial would be wrong.
+    // Anchor on the unique property `depthWrite: false` near the
+    // `MeshBasicMaterial` construction — matches the readiness-ring block
+    // at line ~855 and would NOT match if a future change converted the
+    // readiness ring to MeshStandardMaterial (which would drop the
+    // MeshBasicMaterial line, no longer adjacent to depthWrite).
+    expect(src).toMatch(
+      /new\s+THREE\.MeshBasicMaterial\s*\([\s\S]*?depthWrite\s*:\s*false[\s\S]*?\}\s*\)/,
+    );
+  });
+
+  test('template ring uses MeshBasicMaterial with cyan literal 0x00e5ff (spec § 3.7 carve-out)', () => {
+    const src = readSource('SemanticTopology.svelte');
+    // The cyan template indicator ring sits around mature templated
+    // clusters. Like the readiness ring, it is a banner overlay rather
+    // than a 3D shaded sphere. Anchor on the cyan color literal `0x00e5ff`
+    // adjacent to the `MeshBasicMaterial` construction.
+    expect(src).toMatch(
+      /new\s+THREE\.MeshBasicMaterial\s*\([\s\S]*?color\s*:\s*0x00e5ff[\s\S]*?\}\s*\)/,
+    );
+  });
+
+  test('exactly two MeshBasicMaterial constructions remain in source', () => {
+    const src = readSource('SemanticTopology.svelte');
+    // Spec § 3.7 + § 4.5 + § 4.8: cluster fills + domain anchors swap to
+    // MeshStandardMaterial. The only surviving Basic constructions are the
+    // two banner-overlay rings (template + readiness). If a third Basic
+    // appears, something else dropped out of the standard-material swap.
+    const matches = src.match(/new\s+THREE\.MeshBasicMaterial\s*\(/g) ?? [];
+    expect(matches.length).toBe(2);
   });
 });
 

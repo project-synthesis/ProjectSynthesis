@@ -33,6 +33,17 @@
   // reference at `.claude/skills/brand-guidelines/references/3d-visualization.md`
   // documents this pattern under "Per-Frame Allocation Budget".
   //
+  // **Forward-defense status (cycle 3 follow-up)**: at present every
+  // animation callback in this file (readiness billboard `lookAt`,
+  // domain rotation `rotation.y +=`, formation lerp on
+  // `n.position[0..2]`, `BeamPool.update` reusing `_origin` /
+  // `_ndcOrigin`, ring LOD opacity sweep) operates entirely on existing
+  // members or scalar math — no `new THREE.X()` per frame. The runtime
+  // gate in `perf-budget.test.ts` proves this for `BeamPool.update` and
+  // `ClusterPhysics.update`. The scratch table is therefore canonical
+  // brand infrastructure that future per-frame code MUST borrow from
+  // (rather than each file inventing its own scratch primitives).
+  //
   // Borrow rules:
   //   - `_scratchVec3a` / `_scratchQuat` / `_scratchColor` may be
   //     mutated by any callback as a transient. Treat the value as
@@ -134,15 +145,16 @@
   // ---------------------------------------------------------------------------
   // Template ring pool — growable mesh pool for templated clusters (Task 19)
   //
-  // Halos are cyan RingGeometry meshes rendered around cluster nodes whose
-  // `template_count > 0`.  The pool starts at TEMPLATE_RING_POOL_INITIAL capacity and
-  // grows in TEMPLATE_RING_POOL_GROW_CHUNK increments up to TEMPLATE_RING_POOL_MAX.  After the
-  // pool reaches TEMPLATE_RING_POOL_MAX, excess requests fall through to one-frame
-  // allocation (spill) and a console.warn is emitted once per rebuild.
+  // Template rings are cyan RingGeometry meshes rendered around cluster nodes
+  // whose `template_count > 0`. The pool starts at TEMPLATE_RING_POOL_INITIAL
+  // capacity and grows in TEMPLATE_RING_POOL_GROW_CHUNK increments up to
+  // TEMPLATE_RING_POOL_MAX. After the pool reaches TEMPLATE_RING_POOL_MAX,
+  // excess requests fall through to one-frame allocation (spill) and a
+  // console.warn is emitted once per rebuild.
   //
   // Design notes:
   //  • `_templateRingPool`  — all ever-allocated Mesh objects (high-water mark).
-  //  • `_freeTemplateRings` — currently unused halos available for reuse.
+  //  • `_freeTemplateRings` — currently unused template rings available for reuse.
   //  • `_templateRingById`  — active template ring per cluster id.
   //  • `_templateRingGroup` — THREE.Group re-attached to the scene after the
   //                   scene-clear traverse (mirrors readiness ring group).
@@ -178,9 +190,9 @@
    *  On the very first call the pool is empty — seed it with TEMPLATE_RING_POOL_INITIAL
    *  meshes so early small renders don't re-enter the grow loop each time.
    *  Subsequent shortfalls grow in TEMPLATE_RING_POOL_GROW_CHUNK increments.  Emits a
-   *  once-per-rebuild warning when the cap is hit and excess halos spill to
-   *  one-frame allocation (not pooled). */
-  function _ensureHaloPool(extraNeeded: number): void {
+   *  once-per-rebuild warning when the cap is hit and excess template rings spill
+   *  to one-frame allocation (not pooled). */
+  function _ensureTemplateRingPool(extraNeeded: number): void {
     while (_freeTemplateRings.length < extraNeeded && _templateRingPool.length < TEMPLATE_RING_POOL_MAX) {
       // First-time seeding uses TEMPLATE_RING_POOL_INITIAL; subsequent growth uses the
       // standard chunk size.  Both are capped so we never exceed TEMPLATE_RING_POOL_MAX.
@@ -216,7 +228,7 @@
   /** Sync template ring meshes to the current cluster set.  Called from within
    *  `rebuildScene` immediately after the node-mesh loop so that the template ring
    *  and node color are written in the same render pass. */
-  function _syncHalos(nodes: SceneNode[]): void {
+  function _syncTemplateRings(nodes: SceneNode[]): void {
     if (!_templateRingGroup) {
       _templateRingGroup = new THREE.Group();
       _templateRingGroup.userData = { isTemplateRingGroup: true };
@@ -225,13 +237,13 @@
 
     const templated = nodes.filter((n) => (n.template_count ?? 0) > 0 && n.visible);
 
-    // Release halos for clusters that are no longer templated or no longer visible
+    // Release template rings for clusters that are no longer templated or no longer visible
     for (const [cid, mesh] of [..._templateRingById]) {
       if (!templated.find((c) => c.id === cid)) _releaseTemplateRing(cid, mesh);
     }
 
     const newAttachments = templated.filter((c) => !_templateRingById.has(c.id)).length;
-    _ensureHaloPool(newAttachments);
+    _ensureTemplateRingPool(newAttachments);
 
     for (const c of templated) {
       let mesh = _templateRingById.get(c.id);
@@ -498,14 +510,19 @@
 
   /** Restore previous highlight color and apply neon cyan to a new node.
    *  Cluster fill meshes use `MeshStandardMaterial` (per brand reference
-   *  "Material Recipes"). The highlight only swaps `material.color` — the
-   *  emission and shading properties are unaffected. */
+   *  "Material Recipes"). The highlight swaps both `material.color` AND
+   *  `material.emissive` — without the emissive flip, the matte surface
+   *  would read cyan but the lit emission would still emit the original
+   *  domain hex, producing a desaturated mismatch under the directional
+   *  light. Spec § 3.2 (emissive setHex on highlight). */
   function applyHighlight(nodeId: string): void {
     // Restore previous
     if (_highlightedId && _highlightedId !== nodeId) {
       const prev = nodeMeshes.get(_highlightedId);
       if (prev && _highlightedColor !== null) {
-        (prev.material as THREE.MeshStandardMaterial).color.setHex(_highlightedColor);
+        const m = prev.material as THREE.MeshStandardMaterial;
+        m.color.setHex(_highlightedColor);
+        m.emissive.setHex(_highlightedColor);
       }
     }
     const mesh = nodeMeshes.get(nodeId);
@@ -514,17 +531,21 @@
       _highlightedColor = null;
       return;
     }
-    _highlightedColor = (mesh.material as THREE.MeshStandardMaterial).color.getHex();
+    const m = mesh.material as THREE.MeshStandardMaterial;
+    _highlightedColor = m.color.getHex();
     _highlightedId = nodeId;
-    (mesh.material as THREE.MeshStandardMaterial).color.setHex(HIGHLIGHT_COLOR);
+    m.color.setHex(HIGHLIGHT_COLOR);
+    m.emissive.setHex(HIGHLIGHT_COLOR);
   }
 
-  /** Clear any active highlight, restoring the original color. */
+  /** Clear any active highlight, restoring the original color + emission. */
   function clearHighlight(): void {
     if (_highlightedId) {
       const prev = nodeMeshes.get(_highlightedId);
       if (prev && _highlightedColor !== null) {
-        (prev.material as THREE.MeshStandardMaterial).color.setHex(_highlightedColor);
+        const m = prev.material as THREE.MeshStandardMaterial;
+        m.color.setHex(_highlightedColor);
+        m.emissive.setHex(_highlightedColor);
       }
     }
     _highlightedId = null;
@@ -754,7 +775,13 @@
       });
       const fillGeo = isStructural ? domainFillGeo : clusterFillGeo;
       const fill = new THREE.Mesh(fillGeo, fillMat);
+      // Self-shadowing: clusters cast shadows AND receive shadows from
+      // neighbouring clusters under the directional key light. Without a
+      // floor plane, this is the only way the shadow render pass produces
+      // visible output (per code-quality review M4: shadows enabled with
+      // no receivers is wasted compute).
       fill.castShadow = true;
+      fill.receiveShadow = true;
       fill.scale.setScalar(node.size);
       group.add(fill); // child 0: fill
 
@@ -808,7 +835,7 @@
 
     // Template rings — sync after node-mesh loop so template ring and node color are
     // written in the same rebuildScene pass (satisfies same-frame sync).
-    _syncHalos(data.nodes);
+    _syncTemplateRings(data.nodes);
     if (_templateRingGroup && _templateRingById.size > 0) {
       renderer.scene.add(_templateRingGroup);
     }
@@ -1243,10 +1270,10 @@
 
               // Pre-fix bug: template ring + readiness ring meshes were positioned ONCE
               // by ``rebuildScene`` which ran BEFORE this formation animation.
-              // At that moment all nodes were origin-collapsed, so the halos
+              // At that moment all nodes were origin-collapsed, so the rings
               // were placed at origin.  This callback then animated each
               // ``n.position`` toward its settled target without syncing the
-              // decorations, leaving halos pinned at origin while clusters
+              // decorations, leaving rings pinned at origin while clusters
               // flew outward.  Visible until LOD-change → ``rebuildScene``
               // re-sync (e.g. user zoom — which is exactly the symptom
               // observed: "I have to zoom in or out for the rings to

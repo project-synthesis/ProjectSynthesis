@@ -28,6 +28,7 @@ const SCOPE_FILES = [
   'BeamShader.ts',
   'ClusterPhysics.ts',
   'EdgeShader.ts',
+  'focus-math.ts',
   'PlasmaBeam.ts',
   'SemanticTopology.svelte',
   'TopologyData.ts',
@@ -50,6 +51,17 @@ const BANNED_IMPORT_PATTERNS = [
 // Word-boundary regex per Canon Terminology. Case-insensitive.
 const BANNED_WORD_REGEX = /\b(glow|radiance|bloom|halo)\b/gi;
 
+// Identifier-level denylist per spec § 4.4 ("Identifier-level usage
+// (variable names, function names, property accesses) MUST be renamed
+// alongside source"). Catches camelCase and PascalCase variants the
+// word-boundary regex misses (e.g., `_ensureHaloPool`, `Halo`, `_haloById`).
+// Each entry is a substring match — case-insensitive.
+const BANNED_IDENTIFIER_SUBSTRINGS = [
+  'halo',
+  'glowing',  // includes Glow* / GlowingX / etc.
+  'bloomPass',
+];
+
 // Vite resolves `import.meta.glob` at build/test time. The `?raw` query loads
 // each file as a string. Eager mode flattens the lazy module map into direct
 // string values keyed by relative path.
@@ -59,6 +71,7 @@ const fileContents = import.meta.glob<string>(
     './BeamShader.ts',
     './ClusterPhysics.ts',
     './EdgeShader.ts',
+    './focus-math.ts',
     './PlasmaBeam.ts',
     './SemanticTopology.svelte',
     './TopologyData.ts',
@@ -113,6 +126,39 @@ describe('Brand compliance — 3D Pattern Graph scope', () => {
         .join('\n');
       throw new Error(
         `Banned-word matches found (Canon Terminology — use contour/flash/tint/emission):\n${details}`,
+      );
+    }
+    expect(violations).toEqual([]);
+  });
+
+  test('no banned identifier substrings (catches camelCase/PascalCase variants)', () => {
+    // Spec § 4.4: identifier-level usage MUST be renamed alongside source.
+    // The word-boundary regex above misses identifiers where the banned
+    // term is glued to other word characters (e.g., `_ensureHaloPool`,
+    // `glowingColor`, `BloomPassClone`). This test catches those.
+    const violations: Array<{ file: string; line: number; text: string; pattern: string }> = [];
+    for (const file of SCOPE_FILES) {
+      const content = readScopeFile(file);
+      const lower = content.toLowerCase();
+      const lines = content.split('\n');
+      for (const pattern of BANNED_IDENTIFIER_SUBSTRINGS) {
+        const lowerPattern = pattern.toLowerCase();
+        if (!lower.includes(lowerPattern)) continue;
+        // Find each occurrence. We walk lines for the report context.
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].toLowerCase().includes(lowerPattern)) {
+            violations.push({ file, line: i + 1, text: lines[i].trim(), pattern });
+          }
+        }
+      }
+    }
+
+    if (violations.length > 0) {
+      const details = violations
+        .map((v) => `  ${v.file}:${v.line} (matched "${v.pattern}") → ${v.text}`)
+        .join('\n');
+      throw new Error(
+        `Banned identifier substring matches found (rename to template/emission/contour):\n${details}`,
       );
     }
     expect(violations).toEqual([]);
