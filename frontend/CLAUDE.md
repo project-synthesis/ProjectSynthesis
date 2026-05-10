@@ -9,7 +9,7 @@ Everything frontend developers need. For project overview, see root `CLAUDE.md`.
 - **Build**: Vite 7 with `@sveltejs/adapter-static` (pre-renders to `/build`)
 - **Key deps**: Three.js (topology 3D viz), D3 (data viz), diff (text diffing), marked (markdown)
 - **Base path**: `/ProjectSynthesis` on GitHub Pages (`GITHUB_PAGES` env), empty otherwise
-- **Brand**: industrial cyberpunk — see `brand-guidelines` skill for full reference
+- **Brand**: industrial cyberpunk for the 2D workbench UI (`components/{layout,editor,refinement,shared,landing}/`) — see `.claude/skills/brand-guidelines/SKILL.md`. The 3D Pattern Graph (`components/taxonomy/`) is its own medium with canon F1–F18 in `.claude/skills/brand-guidelines/references/3d-visualization.md` (cinematic, organic, atmospheric — bloom + film + glow textures + breathing + Neural Dust are all canonical there)
 
 ## Development
 
