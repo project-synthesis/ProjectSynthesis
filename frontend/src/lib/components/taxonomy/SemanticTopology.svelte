@@ -1485,10 +1485,13 @@
         const child = group.children[i];
         // Fill meshes are `MeshStandardMaterial` (cluster + domain anchor) per
         // brand reference; edges + points are LineBasicMaterial / PointsMaterial.
-        // The wire ShaderMaterial uses uniforms (handled in `setEdgeOpacity`,
-        // not here) — wires are children at index 1 on cluster groups, but the
-        // dim-sweep below short-circuits on `!mat` for `ShaderMaterial`s whose
-        // `.opacity` field reads as undefined, so the cast widening is safe.
+        // The wire ShaderMaterial uses uniforms — handled by the explicit
+        // `isShaderMaterial && uniforms?.uOpacity` guard a few lines below
+        // (line ~1504), which `continue`s before the `mat.opacity =`
+        // assignment. The cast widening here is safe because that downstream
+        // guard catches the ShaderMaterial branch; the cast just keeps the
+        // `.opacity` access type-checked for the LineBasic/Points/Standard
+        // cases.
         const mat = (child as THREE.Mesh | THREE.LineSegments | THREE.Points).material as
           THREE.MeshStandardMaterial | THREE.LineBasicMaterial | THREE.PointsMaterial;
         if (!mat) continue;

@@ -97,6 +97,31 @@ vi.mock('three', () => {
 });
 
 vi.mock('three/addons/controls/OrbitControls.js', () => {
+  // `controls.target.clone()` MUST return an object that supports the
+  // same Vector3 surface used by `computeFocusEndpoint` — `.subVectors`,
+  // `.length`, `.divideScalar`, etc. Inline a minimal Vector3-shape so
+  // method calls on `cloneTarget` succeed; pre-fix, `clone()` returned a
+  // plain object literal with `{x, y, z, lerpVectors}` and would throw
+  // `TypeError: subVectors is not a function` if the focus-on call
+  // pattern changes. (Code-quality reviewer M7.)
+  function makeTargetVec() {
+    return {
+      x: 0, y: 0, z: 0,
+      clone() { return makeTargetVec(); },
+      subVectors(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) {
+        this.x = a.x - b.x; this.y = a.y - b.y; this.z = a.z - b.z; return this;
+      },
+      normalize() { return this; },
+      multiplyScalar() { return this; },
+      add() { return this; },
+      set(x: number, y: number, z: number) { this.x = x; this.y = y; this.z = z; return this; },
+      length() { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); },
+      divideScalar(s: number) {
+        if (s !== 0) { this.x /= s; this.y /= s; this.z /= s; } return this;
+      },
+      lerpVectors: vi.fn(),
+    };
+  }
   class OrbitControls {
     enableDamping = false;
     dampingFactor = 0;
@@ -105,10 +130,7 @@ vi.mock('three/addons/controls/OrbitControls.js', () => {
     addEventListener = vi.fn();
     update = vi.fn();
     dispose = vi.fn();
-    target = {
-      clone: () => ({ x: 0, y: 0, z: 0, lerpVectors: vi.fn() }),
-      lerpVectors: vi.fn(),
-    };
+    target = makeTargetVec();
   }
   return { OrbitControls };
 });

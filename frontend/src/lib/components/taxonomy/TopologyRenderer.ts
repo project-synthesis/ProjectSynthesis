@@ -197,6 +197,19 @@ export class TopologyRenderer {
       } else if (obj instanceof THREE.Sprite) {
         obj.material.map?.dispose();
         obj.material.dispose();
+      } else if (
+        obj instanceof THREE.DirectionalLight ||
+        obj instanceof THREE.SpotLight ||
+        obj instanceof THREE.PointLight
+      ) {
+        // Shadow-casting lights lazily allocate a `WebGLRenderTarget` for
+        // the shadow map on first render. `renderer.dispose()` releases
+        // context-level resources but does not release per-light shadow
+        // maps — explicit dispose avoids a small GPU resource leak on
+        // remount. AmbientLight + HemisphereLight have no shadow map.
+        // (Brand reference: "Disposal Contract" — every GPU resource has
+        // an explicit owner.)
+        obj.shadow?.map?.dispose();
       }
     });
   }
