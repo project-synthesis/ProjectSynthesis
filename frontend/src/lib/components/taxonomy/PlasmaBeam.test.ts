@@ -37,9 +37,13 @@ function makeFixture() {
   return { beam, target, camera, origin };
 }
 
-describe('PlasmaBeam — Data-as-Matter spec timing constants', () => {
-  test('FIRING_MS is 300 (matches Data-as-Matter trigger-mapping spec)', () => {
-    expect(FIRING_MS).toBe(300);
+describe('PlasmaBeam — visual timing constants', () => {
+  test('FIRING_MS is 700 (perceptible energy transmission — beam genuinely travels)', () => {
+    // Earlier 300ms (a strict Data-as-Matter spec value) read as
+    // "beam appears, then impact" with no transmission perception.
+    // 700ms gives the user time to see the leading edge propagate
+    // along the catenary before the cluster reacts.
+    expect(FIRING_MS).toBe(700);
   });
 
   test('TERMINATE_MS is 250 (snappy dissipation; reduces residual on rapid clicks)', () => {
@@ -142,6 +146,56 @@ describe('PlasmaBeam — onImpact callback', () => {
       beam.update((TERMINATE_MS + 10) / 1000, origin, camera);
       expect(beam.state).toBe('idle');
     }).not.toThrow();
+  });
+
+  test('uHead uniform progresses 0 → 1 during firing (visible leading-edge extension)', () => {
+    const { beam, target, camera, origin } = makeFixture();
+    beam.fire(
+      target,
+      { color: new THREE.Color(0x00e5ff), radius: 0.1, sustainMs: 100 },
+      origin,
+      camera,
+    );
+    // Internal uniform on the material — exposed via `mesh.material`.
+    const mat = beam.mesh.material as THREE.ShaderMaterial;
+    expect(mat.uniforms.uHead.value).toBe(0);
+
+    // Drive 25% through firing
+    beam.update(FIRING_MS * 0.25 / 1000, origin, camera);
+    expect(mat.uniforms.uHead.value).toBeGreaterThan(0);
+    expect(mat.uniforms.uHead.value).toBeLessThan(0.5);
+
+    // Mid-firing
+    beam.update(FIRING_MS * 0.25 / 1000, origin, camera);
+    expect(mat.uniforms.uHead.value).toBeCloseTo(0.5, 1);
+
+    // Complete firing — head clamps at 1
+    beam.update((FIRING_MS * 0.55) / 1000, origin, camera);
+    expect(beam.state).toBe('sustain');
+    expect(mat.uniforms.uHead.value).toBeCloseTo(1, 2);
+  });
+
+  test('uHead stays at 1 during sustain and terminate phases', () => {
+    const { beam, target, camera, origin } = makeFixture();
+    beam.fire(
+      target,
+      { color: new THREE.Color(0xff0000), radius: 0.1, sustainMs: 80 },
+      origin,
+      camera,
+    );
+    // Drive into sustain
+    beam.update((FIRING_MS + 10) / 1000, origin, camera);
+    const mat = beam.mesh.material as THREE.ShaderMaterial;
+    expect(mat.uniforms.uHead.value).toBeCloseTo(1, 2);
+
+    // Mid-sustain — head still 1
+    beam.update(0.04, origin, camera);
+    expect(mat.uniforms.uHead.value).toBeCloseTo(1, 2);
+
+    // Terminate phase
+    beam.update(0.1, origin, camera);
+    expect(beam.state).toBe('terminate');
+    expect(mat.uniforms.uHead.value).toBeCloseTo(1, 2);
   });
 
   test('re-firing the same beam wires up the new callback (and old one does not re-fire)', () => {

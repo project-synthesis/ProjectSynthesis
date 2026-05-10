@@ -530,9 +530,13 @@
   // wraps the node from outside (additive blending), emissive flash lights
   // it from within. Together they read as a complete impact beat — the
   // node is briefly energized AND engulfed.
+  //
+  // Both phases use cubic ease-out for a smooth, non-jarring onset.
+  // Attack RAMPS UP from baseline to peak (was an instant jump to peak,
+  // which combined with the envelope swell read as a hard "thud").
   const FLASH_PEAK_MULTIPLIER = 4;
-  const FLASH_ATTACK_MS = 60;
-  const FLASH_DECAY_MS = 250;
+  const FLASH_ATTACK_MS = 80;
+  const FLASH_DECAY_MS = 280;
   const FLASH_TOTAL_MS = FLASH_ATTACK_MS + FLASH_DECAY_MS;
   const _flashStates = new Map<string, { startTime: number; baselineEmissive: number; }>();
   let _removeFlashUpdate: (() => void) | null = null;
@@ -606,10 +610,16 @@
    * Flash a node's MeshStandardMaterial emissive intensity at beam impact.
    *
    * Lifecycle (driven by `_tickFlashStates` per-frame):
-   *   - 0 → FLASH_ATTACK_MS (60ms): hold at peak (set immediately below)
-   *   - FLASH_ATTACK_MS → FLASH_TOTAL_MS (250ms decay): cubic ease-out
+   *   - 0 → FLASH_ATTACK_MS (80ms): cubic ease-out RAMP from baseline up
+   *     to baseline × FLASH_PEAK_MULTIPLIER — no instant jump
+   *   - FLASH_ATTACK_MS → FLASH_TOTAL_MS (280ms decay): cubic ease-out
    *     back to baseline
    *   - At FLASH_TOTAL_MS: emissiveIntensity restored, map entry deleted
+   *
+   * `flashEmissive` only stamps the start time and captures the baseline.
+   * The per-frame tick handles every interpolation. This eliminates the
+   * pre-fix instant jump-to-peak which read as a hard "thud" alongside
+   * the envelope swell.
    *
    * Baseline-capture: rapid re-fires during an active flash reuse the
    * prior baseline so emissiveIntensity doesn't lock at peak * peak (which
@@ -622,7 +632,6 @@
     const mat = mesh.material as THREE.MeshStandardMaterial;
     const existing = _flashStates.get(nodeId);
     const baseline = existing ? existing.baselineEmissive : mat.emissiveIntensity;
-    mat.emissiveIntensity = baseline * FLASH_PEAK_MULTIPLIER;
     _flashStates.set(nodeId, {
       startTime: performance.now(),
       baselineEmissive: baseline,
@@ -648,19 +657,23 @@
       }
       const mat = mesh.material as THREE.MeshStandardMaterial;
       const elapsed = now - state.startTime;
+      const peak = state.baselineEmissive * FLASH_PEAK_MULTIPLIER;
       if (elapsed >= FLASH_TOTAL_MS) {
         mat.emissiveIntensity = state.baselineEmissive;
         _flashStates.delete(nodeId);
         continue;
       }
-      if (elapsed >= FLASH_ATTACK_MS) {
+      if (elapsed < FLASH_ATTACK_MS) {
+        // Attack: cubic ease-out ramp baseline → peak.
+        const t = elapsed / FLASH_ATTACK_MS;
+        const ease = 1 - Math.pow(1 - t, 3);
+        mat.emissiveIntensity = state.baselineEmissive + (peak - state.baselineEmissive) * ease;
+      } else {
+        // Decay: cubic ease-out from peak → baseline.
         const t = (elapsed - FLASH_ATTACK_MS) / FLASH_DECAY_MS;
         const ease = 1 - Math.pow(1 - t, 3);
-        const peak = state.baselineEmissive * FLASH_PEAK_MULTIPLIER;
         mat.emissiveIntensity = peak + (state.baselineEmissive - peak) * ease;
       }
-      // During attack (elapsed < FLASH_ATTACK_MS): emissiveIntensity stays
-      // at peak — set by `flashEmissive` at fire time, no per-frame work.
     }
   }
 

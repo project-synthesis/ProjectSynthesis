@@ -23,13 +23,19 @@ import {
 const POOL_SIZE = 10;
 
 /**
- * Phase durations in milliseconds. Total lifecycle = 800ms.
- * Synchronizes with the beam sustain phase so the envelope finishes
- * dissipating right before the beam's terminate phase begins.
+ * Phase durations in milliseconds. Total lifecycle = 980ms.
+ * Synchronizes with the beam sustain window so the envelope finishes
+ * dissipating around the time the beam's terminate phase begins.
+ *
+ * The 220ms attack (was 120ms) softens the impact onset — earlier the
+ * envelope swelled in 7 frames while the emissive flash jumped instantly
+ * to peak, which combined into a punchy "thud." 220ms (~13 frames at
+ * 60fps) reads as the plasma skin growing organically. Decay extends
+ * 500→580ms for a longer, smoother dissipation reveal.
  */
-export const ATTACK_MS = 120;
+export const ATTACK_MS = 220;
 export const HOLD_MS = 180;
-export const DECAY_MS = 500;
+export const DECAY_MS = 580;
 
 /**
  * Peak envelope swell, multiplied with `baseScale` (the node fill size) to

@@ -34,10 +34,14 @@ const RADIAL_SEGMENTS = 12; // Smooth cylinder
 const TUBULAR_SEGMENTS = 24; // Smooth catenary curve
 
 /**
- * Beam firing-phase duration in ms. Aligned to the Data-as-Matter spec
- * (`docs/specs/2026-04-05-data-as-matter-design.md` § Trigger Mapping).
+ * Beam firing-phase duration in ms. The earlier 300ms (a strict reading of
+ * the Data-as-Matter spec) read as "beam appears, then impact" — there
+ * was no perceptible transmission, just a uniform fade-in. 700ms gives
+ * the user time to see the leading edge propagate along the catenary
+ * (drive by `uHead` uniform, masked in the fragment shader) before the
+ * cluster reacts.
  */
-export const FIRING_MS = 300;
+export const FIRING_MS = 700;
 
 /**
  * Beam terminate-phase duration in ms. Snappier than the prior 800ms — at
@@ -153,6 +157,7 @@ export class PlasmaBeam {
     this._material.uniforms.uOpacity.value = 0;
     this._material.uniforms.uFlowSpeed.value = 2.0;
     this._material.uniforms.uThickness.value = 1.0;
+    this._material.uniforms.uHead.value = 0;
     this._sustainMs = config.sustainMs;
 
     this._updateCurve(origin, camera);
@@ -189,12 +194,19 @@ export class PlasmaBeam {
       case 'firing': {
         const t = Math.min(this._stateTime / FIRING_MS, 1);
         this._material.uniforms.uOpacity.value = t;
+        // Progressive leading-edge extension. Drives the soft-mask in the
+        // fragment shader so the beam visually unfolds from origin toward
+        // target rather than fading in along its full length. The cluster
+        // doesn't see anything until the head reaches `vUv.x = 1.0` at
+        // firing→sustain — i.e., the moment `onImpact` fires.
+        this._material.uniforms.uHead.value = t;
         this._updateCurve(origin, camera);
         if (t >= 1) this._enterSustainAtImpact();
         break;
       }
       case 'sustain': {
         this._material.uniforms.uOpacity.value = 1.0;
+        this._material.uniforms.uHead.value = 1.0;
         // Always update curve during sustain to ensure it stays attached to moving camera/nodes
         this._updateCurve(origin, camera);
         if (this._sustainMs !== Infinity && this._stateTime >= this._sustainMs) {
@@ -206,6 +218,7 @@ export class PlasmaBeam {
       case 'terminate': {
         const t = Math.min(this._stateTime / TERMINATE_MS, 1);
         this._material.uniforms.uOpacity.value = 1.0 - t;
+        this._material.uniforms.uHead.value = 1.0;
         this._updateCurve(origin, camera);
         if (t >= 1) {
           this._reset();
@@ -245,6 +258,7 @@ export class PlasmaBeam {
     this._material.uniforms.uOpacity.value = 0;
     this._material.uniforms.uTime.value = 0;
     this._material.uniforms.uThickness.value = 1.0;
+    this._material.uniforms.uHead.value = 0;
   }
 
   private _updateCurve(
