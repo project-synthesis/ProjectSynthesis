@@ -288,7 +288,7 @@ Layered impact effect — at the moment the F7 beam visually arrives at the clus
 - **State map:** `_flashStates: Map<string, { startTime: number; baselineEmissive: number }>` — tiny in steady state (only nodes recently impacted).
 - **Cleanup:** `_removeFlashUpdate?.()` invoked BEFORE `_flashStates.clear()` (so a late-firing tick can't read a half-cleared map); each active flash's baseline is restored to the underlying material before the map is cleared (so a remount doesn't inherit inflated emissive).
 
-**Causal-ordering invariant (with F7):** every F19 reaction fires from the beam's `onImpact` callback. Synchronous calls inside the click `$effect` are forbidden — the beam takes 300ms to travel, so a synchronous ripple/envelope/flash would precede beam arrival.
+**Causal-ordering invariant (with F7):** every F19 reaction fires from the beam's `onImpact` callback. Synchronous calls inside the click `$effect` (and the entrance + post-growth burst sites) are forbidden — the beam takes ~700ms (`FIRING_MS`) to travel, so a synchronous ripple/envelope/flash would precede beam arrival.
 
 ## Per-Frame Allocation Budget
 
