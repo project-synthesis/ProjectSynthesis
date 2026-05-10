@@ -496,13 +496,16 @@
   let _highlightedId: string | null = null;
   let _highlightedColor: number | null = null;
 
-  /** Restore previous highlight color and apply neon cyan to a new node. */
+  /** Restore previous highlight color and apply neon cyan to a new node.
+   *  Cluster fill meshes use `MeshStandardMaterial` (per brand reference
+   *  "Material Recipes"). The highlight only swaps `material.color` — the
+   *  emission and shading properties are unaffected. */
   function applyHighlight(nodeId: string): void {
     // Restore previous
     if (_highlightedId && _highlightedId !== nodeId) {
       const prev = nodeMeshes.get(_highlightedId);
       if (prev && _highlightedColor !== null) {
-        (prev.material as THREE.MeshBasicMaterial).color.setHex(_highlightedColor);
+        (prev.material as THREE.MeshStandardMaterial).color.setHex(_highlightedColor);
       }
     }
     const mesh = nodeMeshes.get(nodeId);
@@ -511,9 +514,9 @@
       _highlightedColor = null;
       return;
     }
-    _highlightedColor = (mesh.material as THREE.MeshBasicMaterial).color.getHex();
+    _highlightedColor = (mesh.material as THREE.MeshStandardMaterial).color.getHex();
     _highlightedId = nodeId;
-    (mesh.material as THREE.MeshBasicMaterial).color.setHex(HIGHLIGHT_COLOR);
+    (mesh.material as THREE.MeshStandardMaterial).color.setHex(HIGHLIGHT_COLOR);
   }
 
   /** Clear any active highlight, restoring the original color. */
@@ -521,7 +524,7 @@
     if (_highlightedId) {
       const prev = nodeMeshes.get(_highlightedId);
       if (prev && _highlightedColor !== null) {
-        (prev.material as THREE.MeshBasicMaterial).color.setHex(_highlightedColor);
+        (prev.material as THREE.MeshStandardMaterial).color.setHex(_highlightedColor);
       }
     }
     _highlightedId = null;
@@ -730,13 +733,28 @@
       if (!isStructural && node.avgScore != null) {
         fillScalar *= 0.7 + 0.3 * Math.min(1, Math.max(0, node.avgScore / 10));
       }
-      const fillMat = new THREE.MeshBasicMaterial({
+      // emissiveIntensity is **data-driven**, never aesthetic. Brand reference:
+      // .claude/skills/brand-guidelines/references/3d-visualization.md
+      // "Material Recipes". Mapping: member count 1 → 0.6 base, 50+ → 1.4 hero,
+      // clamped. Domain anchors recess to 0.4 since they're context, not the
+      // foreground signal. Source: brand reference, "Cluster sphere" + "Domain
+      // anchor" rows.
+      const HERO_MEMBER_COUNT = 50;
+      const emissiveIntensity = isStructural
+        ? 0.4
+        : 0.6 + 0.8 * Math.min(1, Math.max(0, (node.memberCount - 1) / (HERO_MEMBER_COUNT - 1)));
+      const fillMat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(node.color).multiplyScalar(fillScalar),
+        emissive: new THREE.Color(node.color),
+        emissiveIntensity,
+        roughness: 0.6,
+        metalness: 0.0,
         transparent: true,
         opacity: node.opacity * 0.9,
       });
       const fillGeo = isStructural ? domainFillGeo : clusterFillGeo;
       const fill = new THREE.Mesh(fillGeo, fillMat);
+      fill.castShadow = true;
       fill.scale.setScalar(node.size);
       group.add(fill); // child 0: fill
 
@@ -1438,8 +1456,14 @@
       const isStructural = group.userData?.isStructural === true;
       for (let i = 0; i < group.children.length; i++) {
         const child = group.children[i];
+        // Fill meshes are `MeshStandardMaterial` (cluster + domain anchor) per
+        // brand reference; edges + points are LineBasicMaterial / PointsMaterial.
+        // The wire ShaderMaterial uses uniforms (handled in `setEdgeOpacity`,
+        // not here) — wires are children at index 1 on cluster groups, but the
+        // dim-sweep below short-circuits on `!mat` for `ShaderMaterial`s whose
+        // `.opacity` field reads as undefined, so the cast widening is safe.
         const mat = (child as THREE.Mesh | THREE.LineSegments | THREE.Points).material as
-          THREE.MeshBasicMaterial | THREE.LineBasicMaterial | THREE.PointsMaterial;
+          THREE.MeshStandardMaterial | THREE.LineBasicMaterial | THREE.PointsMaterial;
         if (!mat) continue;
         let baseOpacity: number;
         if (i === 0) {

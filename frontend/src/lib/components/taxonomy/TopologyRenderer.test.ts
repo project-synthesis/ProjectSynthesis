@@ -39,6 +39,8 @@ vi.mock('three', () => {
     render = vi.fn();
     dispose = vi.fn();
     domElement = document.createElement('canvas');
+    // ShadowMap state — TopologyRenderer constructor configures these.
+    shadowMap = { enabled: false, type: 0 };
   }
 
   class Color {
@@ -47,7 +49,42 @@ vi.mock('three', () => {
 
   class Mesh {}
 
-  return { Scene, PerspectiveCamera, WebGLRenderer, Color, Mesh, Vector3 };
+  // Light classes — minimal shape supporting the constructor + the
+  // properties TopologyRenderer assigns (`position.set`, `castShadow`,
+  // `shadow.mapSize.set`).
+  class AmbientLight {
+    constructor(public color: number, public intensity: number) {}
+  }
+  class DirectionalLight {
+    position = { set: vi.fn() };
+    castShadow = false;
+    shadow = { mapSize: { set: vi.fn() } };
+    constructor(public color: number, public intensity: number) {}
+  }
+  class HemisphereLight {
+    constructor(
+      public skyColor: number,
+      public groundColor: number,
+      public intensity: number,
+    ) {}
+  }
+
+  // PCFShadowMap is a numeric constant in real Three.js; any non-zero
+  // value works for the equality assertion the constructor makes.
+  const PCFShadowMap = 1;
+
+  return {
+    Scene,
+    PerspectiveCamera,
+    WebGLRenderer,
+    Color,
+    Mesh,
+    Vector3,
+    AmbientLight,
+    DirectionalLight,
+    HemisphereLight,
+    PCFShadowMap,
+  };
 });
 
 vi.mock('three/addons/controls/OrbitControls.js', () => {

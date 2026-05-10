@@ -283,6 +283,40 @@ vi.mock('three', () => {
       }
     }
   }
+  // MeshStandardMaterial is the canonical lit material per brand reference
+  // (Pattern Graph 3D scope) — accepts `emissive` + `emissiveIntensity` +
+  // `roughness` + `metalness`. Cluster fills + domain anchors use it.
+  class MeshStandardMaterial {
+    color = new Color();
+    emissive = new Color();
+    emissiveIntensity = 1;
+    roughness = 0.5;
+    metalness = 0.5;
+    opacity = 1;
+    transparent = false;
+    dispose() {}
+    constructor(params?: {
+      color?: unknown;
+      emissive?: unknown;
+      emissiveIntensity?: number;
+      roughness?: number;
+      metalness?: number;
+      opacity?: number;
+      transparent?: boolean;
+    }) {
+      if (params?.opacity != null) this.opacity = params.opacity;
+      if (params?.transparent != null) this.transparent = params.transparent;
+      if (params?.emissiveIntensity != null) this.emissiveIntensity = params.emissiveIntensity;
+      if (params?.roughness != null) this.roughness = params.roughness;
+      if (params?.metalness != null) this.metalness = params.metalness;
+      if (params?.color instanceof Color) {
+        this.color.copy(params.color as Color);
+      }
+      if (params?.emissive instanceof Color) {
+        this.emissive.copy(params.emissive as Color);
+      }
+    }
+  }
   class ShaderMaterial {
     uniforms: Record<string, { value: unknown }> = {};
     isShaderMaterial = true;
@@ -297,6 +331,8 @@ vi.mock('three', () => {
     visible = true;
     frustumCulled = true;
     geometry: unknown = null;
+    castShadow = false;
+    receiveShadow = false;
     lookAt() {}
     constructor(geometry?: unknown, material?: unknown) {
       if (geometry !== undefined) this.geometry = geometry;
@@ -346,9 +382,9 @@ vi.mock('three', () => {
   const DoubleSide = 2;
   return {
     Vector3, Color, Quaternion, Group, IcosahedronGeometry, DodecahedronGeometry,
-    EdgesGeometry, RingGeometry, MeshBasicMaterial, ShaderMaterial, Mesh, BufferAttribute,
-    BufferGeometry, Float32BufferAttribute, LineBasicMaterial, LineDashedMaterial,
-    PointsMaterial, LineSegments, Points, Sprite, QuadraticBezierCurve3,
+    EdgesGeometry, RingGeometry, MeshBasicMaterial, MeshStandardMaterial, ShaderMaterial,
+    Mesh, BufferAttribute, BufferGeometry, Float32BufferAttribute, LineBasicMaterial,
+    LineDashedMaterial, PointsMaterial, LineSegments, Points, Sprite, QuadraticBezierCurve3,
     AdditiveBlending, DoubleSide,
   };
 });
