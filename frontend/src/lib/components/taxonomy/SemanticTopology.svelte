@@ -25,6 +25,25 @@
   import { readinessTierColor } from './readiness-tier';
   import type { ReadinessTier } from './readiness-tier';
 
+  // ── Per-frame scratch table ──────────────────────────────────────
+  // Per spec § 3.5: animation callbacks borrow these instances via
+  // `.set()` / `.copy()` mutation instead of allocating fresh THREE
+  // primitives every frame. The runtime invariant ("zero THREE allocs
+  // per frame") is enforced by `perf-budget.test.ts`. The brand
+  // reference at `.claude/skills/brand-guidelines/references/3d-visualization.md`
+  // documents this pattern under "Per-Frame Allocation Budget".
+  //
+  // Borrow rules:
+  //   - `_scratchVec3a` / `_scratchQuat` / `_scratchColor` may be
+  //     mutated by any callback as a transient. Treat the value as
+  //     **invalid after the same callback returns** — no caching.
+  //   - `Z_AXIS` is read-only. Never `.set()` or `.copy()` it. Used
+  //     by `rotateOnAxis` callers that need a constant +Z axis.
+  const _scratchVec3a = new THREE.Vector3();
+  const _scratchQuat = new THREE.Quaternion();
+  const _scratchColor = new THREE.Color();
+  const Z_AXIS = new THREE.Vector3(0, 0, 1);
+
   /** ease-out cubic: 1 - (1-t)^3 — matches brand motion system. */
   const _CUBIC = (t: number): number => 1 - Math.pow(1 - t, 3);
 
