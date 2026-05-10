@@ -1,5 +1,7 @@
 # Component Patterns Reference
 
+> **Scope:** 2D HTML/CSS components in `frontend/src/lib/components/{layout,editor,refinement,shared,landing}/` only. The 3D Pattern Graph (`frontend/src/lib/components/taxonomy/`) is its own medium — Three.js geometries, materials, shaders — governed by [`3d-visualization.md`](3d-visualization.md). Do not apply CSS recipes (button styles, card patterns, hover-lift `translateY(-1px)`, etc.) to 3D scene components.
+
 ## Table of Contents
 - [Button Styles](#button-styles)
 - [Card Patterns](#card-patterns)

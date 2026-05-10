@@ -1,5 +1,7 @@
 # Layout & Accessibility Reference
 
+> **Scope:** 2D HTML/CSS layout, spacing, opacity, typography, and a11y for the workbench UI in `frontend/src/lib/components/{layout,editor,refinement,shared,landing}/` only. The 3D Pattern Graph (`frontend/src/lib/components/taxonomy/`) is its own medium with its own geometric grammar — `RingGeometry`, `IcosahedronGeometry`, etc. — governed by [`3d-visualization.md`](3d-visualization.md). The "Border Radius System" / "Opacity Tiers" / etc. below do not apply to 3D meshes.
+
 ## Table of Contents
 - [Border Radius System](#border-radius-system)
 - [Opacity Tiers](#opacity-tiers)
@@ -17,18 +19,18 @@
 
 Flat edges are the default. Rounding is the exception, reserved for specific pill/chip shapes.
 
-| Tier | Radius | Token | Use Cases |
-|------|--------|-------|-----------|
-| None | `0px` | `rounded-none` | **Default for everything** — buttons, inputs, cards, panels, headers, rows, sidebar elements |
+| Tier | Radius | Tailwind alias | Use Cases |
+|------|--------|----------------|-----------|
+| None | `0px` | `rounded-none` | **Default for everything in 2D UI** — buttons, inputs, cards, panels, headers, rows, sidebar elements |
 | Micro | `2px` | `rounded-sm` | Provider badges, tiny status chips only |
 | Full | `9999px` | `rounded-full` | Pill chips, tag badges (rare) |
 
-**Convention:** The industrial cyberpunk aesthetic demands sharp geometry. Flat edges signal precision tooling. The only rounded elements are tiny badges and pill-shaped chips where rounding encodes "this is a discrete data token."
+**Convention:** The industrial cyberpunk aesthetic demands sharp geometry in the 2D UI. Flat edges signal precision tooling. The only rounded elements are tiny badges and pill-shaped chips where rounding encodes "this is a discrete data token."
 
-**Banned in all contexts:**
+**Banned in 2D-UI HTML/CSS** (the file's scope; 3D mesh geometry is unrelated):
 - `rounded-md` (6px), `rounded-lg` (8px), `rounded-xl` (12px) — these produce soft, consumer-app aesthetics
 - `rounded` (4px) on buttons, inputs, or cards — use 0px
-- Any border-radius on sidebar elements, data rows, or toolbar controls
+- Any `border-radius` on sidebar elements, data rows, or toolbar controls
 
 ---
 
