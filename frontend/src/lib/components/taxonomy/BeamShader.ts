@@ -79,7 +79,7 @@ export const BEAM_FRAGMENT_SHADER = /* glsl */ `
     float muzzle = pow(1.0 - vUv.x, 20.0) * 1.5;
 
     // Combine structural components
-    // Emphasize the geometric wiring and neon structure over soft gradient glows
+    // Emphasize the geometric wiring and neon structure over soft gradient emission
     float basePresence = 0.05; 
     float structure = (edgeLine * 0.5) + (dataStream * 1.2) + (helix * 0.8) + (rimLine * 0.8) + muzzle;
     
