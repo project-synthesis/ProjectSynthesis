@@ -14,8 +14,8 @@ export interface BeamConfig {
   sustainMs: number;
 }
 
-const RADIAL_SEGMENTS = 5; // Pentagonal cross-section as per design
-const TUBULAR_SEGMENTS = 16; // Smoother arc
+const RADIAL_SEGMENTS = 12; // Smooth cylinder
+const TUBULAR_SEGMENTS = 24; // Smooth catenary curve
 const FIRING_MS = 600;
 const TERMINATE_MS = 800;
 
@@ -200,17 +200,16 @@ export class PlasmaBeam {
   ): void {
     if (!this._targetObject) return;
 
-    // Use the exact unprojected origin which is anchored to the bottom
-    // center of the camera near-plane (HUD-style)
     this._origin.copy(origin);
 
     this._targetObject.getWorldPosition(this._target);
 
+    // Catenary droop
+    const distance = this._origin.distanceTo(this._target);
+    const sag = distance * 0.15;
+    
     this._control.addVectors(this._origin, this._target).multiplyScalar(0.5);
-    const dist = this._origin.distanceTo(this._target);
-    const sag = dist * 0.15;
-    this._tempVec.copy(camera.up).negate().multiplyScalar(sag);
-    this._control.add(this._tempVec);
+    this._control.y -= sag;
 
     this._curve.v0.copy(this._origin);
     this._curve.v1.copy(this._control);

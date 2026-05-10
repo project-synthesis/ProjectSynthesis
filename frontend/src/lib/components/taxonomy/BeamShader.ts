@@ -49,50 +49,43 @@ export const BEAM_FRAGMENT_SHADER = /* glsl */ `
   varying vec3 vViewPosition;
 
   void main() {
-    vec3 color = uColorStart; // Exact color of the node
+    vec3 color = mix(uColorStart, uColorEnd, vUv.x); 
     
     // Speed modifiers
     float streamSpeed = uTime * uFlowSpeed * 1.5; 
     
-    // 1. Structural Geometric Edges (Wireframe aesthetic merging with domain aesthetic)
-    // Create sharp straight lines instead of smooth curves by stepping over the radial UV map.
-    // vUv.y maps around the beam outline (8 sides).
-    float edgeLine = step(0.90, fract(vUv.y * 8.0)); // Thinner, sharper lines
+    // Smooth fluid overlapping sine waves
+    float wave1 = sin(vUv.x * 15.0 - streamSpeed) * 0.5 + 0.5;
+    float wave2 = sin(vUv.x * 25.0 - streamSpeed * 1.8 + vUv.y * 12.0) * 0.5 + 0.5;
+    float wave3 = sin(vUv.x * 5.0 - streamSpeed * 0.5 - vUv.y * 6.0) * 0.5 + 0.5;
     
-    // 2. High-speed Hexagonal Data Packets travelling strictly along the geometric structure
-    float packetLong = step(0.85, fract(vUv.x * 10.0 - streamSpeed));
-    float packetShort = step(0.97, fract(vUv.x * 25.0 - streamSpeed * 1.8));
-    float dataStream = max(packetLong * 0.7, packetShort);
+    float fluid = (wave1 * 0.5 + wave2 * 0.3 + wave3 * 0.2);
     
-    // 3. Angular helix (step function forces it into rings/hexagons)
-    // Using floor to lock it to discrete geometric steps
-    float geoSteps = floor(vUv.y * 8.0) / 8.0;
-    float helix = step(0.90, fract(vUv.x * 8.0 + geoSteps * 4.0 - streamSpeed * 0.7));
-    
-    // 4. Sharp Fresnel Contour (simulates 1px neon glass rim)
+    // Soft radial core (glow) - assuming y maps around the circumference or across the width
+    // With TUBULAR_SEGMENTS=24 and RADIAL_SEGMENTS=12, vUv.y goes 0 to 1 around the tube
+    // We want a glowing core that looks volumetric.
     vec3 normal = normalize(vNormal);
     vec3 viewDir = normalize(vViewPosition);
-    float fresnel = 1.0 - abs(dot(normal, viewDir));
-    float rimLine = step(0.85, fresnel); // very sharp step to match precise wireframes
+    float fresnel = dot(normal, viewDir);
+    float core = smoothstep(0.0, 0.8, fresnel); // Brighter in the center facing the camera
+    float rim = smoothstep(0.6, 1.0, 1.0 - fresnel) * 0.5; // Soft rim light
     
     // Muzzle / Injection Flash
-    float muzzle = pow(1.0 - vUv.x, 20.0) * 1.5;
+    float muzzle = pow(1.0 - vUv.x, 8.0) * 1.2;
 
-    // Combine structural components
-    // Emphasize the geometric wiring and neon structure over soft gradient emission
-    float basePresence = 0.05; 
-    float structure = (edgeLine * 0.5) + (dataStream * 1.2) + (helix * 0.8) + (rimLine * 0.8) + muzzle;
+    // Combine organic fluid components
+    float energy = clamp((core * 1.2 + fluid * 0.8 + rim + muzzle), 0.0, 1.5);
     
-    // Keep raw color to match strictly to domain
-    float energy = clamp(basePresence + structure, 0.0, 1.0);
+    // Length-wise fade in/out - smooth bounds
+    float smoothFade = smoothstep(0.0, 0.1, vUv.x) * smoothstep(1.0, 0.8, vUv.x);
     
-    // Length-wise fade in/out - extremely sharp bounds
-    float sharpFade = step(0.01, vUv.x) * step(vUv.x, 0.99);
+    // Additive alpha based on energy and fade
+    float alpha = energy * uOpacity * smoothFade * uThickness;
     
-    // Clamp alpha output
-    float alpha = energy * uOpacity * sharpFade * step(0.5, uThickness);
+    // Boost color intensity to feed the UnrealBloomPass for a radiant core
+    vec3 glowingColor = color * (1.0 + energy * 0.8);
     
-    gl_FragColor = vec4(color, alpha);
+    gl_FragColor = vec4(glowingColor, alpha);
   }
 `;
 
@@ -117,11 +110,19 @@ export const RIPPLE_VERTEX_SHADER = /* glsl */ `
 
   void main() {
     vUv = uv;
-    // Digital jitter scale on impact instead of smooth ballooning
-    float noise = fract(sin(dot(position.xyz, vec3(12.9898, 78.233, 45.164))) * 43758.5453);
-    float jitter = 0.3 + 0.7 * noise; // erratic offset based on vertex position
     
-    vec3 displaced = position + normal * uRipple * (0.15 * jitter);
+    // Smooth spherical shockwave expanding outward
+    float dist = length(position.xyz);
+    // Expand the wave radius based on uRipple (uRipple decays from 1 to 0, so wave travels outward)
+    float waveRadius = (1.0 - uRipple) * 3.0; 
+    float wave = smoothstep(0.5, 0.0, abs(dist - waveRadius));
+    
+    // Organic fluid displacement
+    float organic = sin(position.x * 12.0) * cos(position.y * 12.0 + uRipple * 10.0);
+    float displacement = wave * (0.3 + organic * 0.2) * uRipple;
+    
+    vec3 displaced = position + normal * displacement;
+    
     gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
   }
 `;
@@ -134,6 +135,10 @@ export const RIPPLE_FRAGMENT_SHADER = /* glsl */ `
   void main() {
     // Keep absolute brand color, just flash the opacity on ripple impact
     float flashOpacity = min(1.0, uOpacity + uRipple * 0.6);
-    gl_FragColor = vec4(uColor, flashOpacity);
+    
+    // Boost color intensity to feed the UnrealBloomPass on impact
+    vec3 flashColor = uColor * (1.0 + uRipple * 1.2);
+    
+    gl_FragColor = vec4(flashColor, flashOpacity);
   }
 `;
