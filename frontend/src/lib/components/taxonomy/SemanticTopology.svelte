@@ -1265,8 +1265,37 @@
 
   function handleLodChange(tier: LODTier): void {
     lodTier = tier;
-    if (sceneData) {
-      assignLodVisibility(sceneData.nodes, tier);
+    if (!sceneData) return;
+    assignLodVisibility(sceneData.nodes, tier);
+
+    // Click-zoom bug fix: when the focus animation crosses an LOD tier
+    // boundary (FAR→MID at distance 50, MID→NEAR at distance 15), this
+    // callback fires mid-animation. The previous implementation called
+    // `rebuildScene(sceneData)` here, which disposed every cluster mesh
+    // and rebuilt them while the camera was lerping — visible to the
+    // user as a "reset and zoom again" artifact.
+    //
+    // The lightweight path: just toggle each existing mesh group's
+    // .visible flag. The per-frame readiness-ring LOD opacity callback
+    // (_removeRingLodUpdate, line ~1884) already reads renderer.lodTier
+    // each frame, so ring opacity transitions automatically.
+    //
+    // Full rebuildScene is only needed when a node became visible in
+    // the new tier but has no mesh in nodeMeshes (e.g., a candidate
+    // that was filtered out at FAR tier becoming visible at MID).
+    let needsFullRebuild = false;
+    for (const node of sceneData.nodes) {
+      const mesh = nodeMeshes.get(node.id);
+      if (mesh?.parent) {
+        (mesh.parent as THREE.Group).visible = node.visible;
+      } else if (node.visible) {
+        // Node is now visible but has no mesh — fall back to full rebuild
+        // (rare; happens crossing into higher-LOD where new clusters
+        // become visible).
+        needsFullRebuild = true;
+      }
+    }
+    if (needsFullRebuild) {
       rebuildScene(sceneData);
     }
   }

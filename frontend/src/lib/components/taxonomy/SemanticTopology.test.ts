@@ -2414,4 +2414,29 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // accidentally relaxed.
     expect(src).toMatch(/if\s*\(node\.state\s*!==\s*['"]domain['"]\)\s*continue/);
   });
+
+  it('source: handleLodChange uses lightweight visibility update — no unconditional rebuildScene', () => {
+    const src = _semTopSrc();
+    // Click-zoom bug fix: handleLodChange must NOT call rebuildScene on
+    // every LOD tier change. The previous implementation triggered a
+    // full rebuild mid-focus-animation (when the camera crossed an LOD
+    // boundary), producing the visible "reset and zoom again" artifact
+    // the user reported.
+    //
+    // Verifies the gated rebuild pattern: rebuildScene only fires when
+    // `needsFullRebuild` is true (a newly-visible node has no mesh).
+    const handleLodChangeMatch = src.match(
+      /function\s+handleLodChange\s*\([^)]*\)\s*:\s*void\s*\{[\s\S]*?\n\s\s\}/,
+    );
+    expect(handleLodChangeMatch).not.toBeNull();
+    if (!handleLodChangeMatch) return;
+    const body = handleLodChangeMatch[0];
+    // Must declare the gate flag.
+    expect(body).toMatch(/needsFullRebuild\s*=\s*false/);
+    // Must do per-mesh visibility toggling.
+    expect(body).toMatch(/nodeMeshes\.get\([^)]+\)/);
+    expect(body).toMatch(/\.parent\s*as\s*THREE\.Group\)\.visible\s*=\s*node\.visible/);
+    // Must gate the rebuildScene call on the flag (prevents unconditional rebuild).
+    expect(body).toMatch(/if\s*\(\s*needsFullRebuild\s*\)\s*\{\s*\n\s*rebuildScene\(sceneData\)/);
+  });
 });
