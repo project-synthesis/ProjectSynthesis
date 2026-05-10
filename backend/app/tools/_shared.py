@@ -1,8 +1,22 @@
-"""Shared state and helpers for MCP tool handlers.
+"""Shared module-level singletons for tool handlers + FastAPI routers.
 
-Module-level state is initialised by ``mcp_server.py``'s lifespan via the
-``init_*`` / ``set_*`` helpers below.  Tool handler modules import from here
-rather than referencing ``mcp_server`` globals directly.
+Originally scoped to MCP tool handlers only (set by ``mcp_server.py``'s
+lifespan). Several FastAPI backend routers — ``github_auth``,
+``providers``, ``strategies`` — also import the ``get_*`` accessors here
+because they have no ``Request.app.state`` access at call time (lazy
+imports inside ``submit_batch`` closures, async helper functions, etc.).
+Both processes therefore initialise these singletons in their respective
+lifespans:
+
+* MCP server (``mcp_server.py``) — sets them all on its lifespan startup.
+* FastAPI backend (``main.py``) — sets ``_write_queue`` alongside
+  ``register_process_write_queue`` (and other singletons as needed).
+
+Each Python process has its own module-level state, so the two lifespans
+do not interfere. A backend router calling ``get_write_queue()`` retrieves
+the FastAPI process's queue; an MCP tool handler calling the same
+function retrieves the MCP process's queue. They are bound to the same
+underlying SQLite writer engine (each process has one writer slot).
 
 Copyright 2025-2026 Project Synthesis contributors.
 """

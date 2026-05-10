@@ -397,6 +397,49 @@ class TestLifespanOrdering:
         assert "wq.stop(" in src
         assert "WRITE_QUEUE_DRAIN_TIMEOUT_SECONDS" in src
 
+    def test_lifespan_wires_tools_shared_write_queue_singleton(self):
+        """Live reference (2026-05-10) — `app.tools._shared._write_queue` is
+        consumed by 9 FastAPI router callsites (github_auth, providers,
+        strategies) via `from app.tools._shared import get_write_queue`.
+        That module was originally documented as MCP-only ("Module-level
+        state is initialised by mcp_server.py's lifespan"), so the FastAPI
+        backend lifespan never set it — `get_write_queue()` raised
+        `ValueError("WriteQueue not initialized")` from those routers.
+
+        Surfaced when GitHub Device Flow auth actually completed and tried
+        to persist the token at `github_auth.py:748`. The FastAPI lifespan
+        now wires both singletons (process-dependency
+        `register_process_write_queue` + tools-shared `set_write_queue`)
+        alongside each other so backend + MCP processes are symmetric.
+
+        Pin the wiring via source inspection — the FastAPI lifespan must
+        call `_shared.set_write_queue` directly after starting the
+        WriteQueue.
+        """
+        import inspect
+
+        import app.main as main_mod
+
+        src = inspect.getsource(main_mod.lifespan)
+        # Must import the alias from `_shared` and call it inside lifespan.
+        assert "from app.tools._shared import set_write_queue" in src
+        assert "_set_shared_write_queue(write_queue)" in src
+        # And `register_process_write_queue` must also still be there
+        # (both singletons wired side-by-side).
+        assert "register_process_write_queue(write_queue)" in src
+        # Order check — `_shared` set must come AFTER the queue is
+        # constructed and `register_process_write_queue` is called, so
+        # the queue is fully ready before any tools-shared consumer can
+        # access it.
+        idx_register = src.find("register_process_write_queue(write_queue)")
+        idx_shared = src.find("_set_shared_write_queue(write_queue)")
+        assert idx_register > 0
+        assert idx_shared > idx_register, (
+            "tools._shared singleton must be set after the dependency "
+            "register completes — both consumers see a fully-initialised "
+            "queue"
+        )
+
     def test_lifespan_cancels_recurring_tasks_before_write_queue_stop(self):
         """HIGH-8 — recurring tasks cancelled in Phase 2, BEFORE the queue
         stop in Phase 5a. Verified via source inspection.

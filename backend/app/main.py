@@ -1106,6 +1106,21 @@ async def lifespan(app: FastAPI):
         # fire-and-forget telemetry from inside heuristic analysis)
         # can reach the queue via ``get_process_write_queue()``.
         register_process_write_queue(write_queue)
+        # Also wire the `app.tools._shared` module-level singleton. That
+        # module was originally documented as MCP-only ("Module-level
+        # state is initialised by mcp_server.py's lifespan"), but several
+        # FastAPI routers (github_auth, providers, strategies — 9
+        # callsites total) import `get_write_queue` from `_shared`
+        # because they have no `Request.app.state` access at call time
+        # (lazy imports inside `submit_batch` closures, async helpers,
+        # etc.). Without this set, `get_write_queue()` raises
+        # `ValueError("WriteQueue not initialized")` from those routers
+        # — surfaced live 2026-05-10 when the GitHub Device Flow auth
+        # actually completed and tried to persist the token. Wiring
+        # both singletons (process-dependency + tools-shared) keeps the
+        # backend and MCP processes symmetric.
+        from app.tools._shared import set_write_queue as _set_shared_write_queue
+        _set_shared_write_queue(write_queue)
         app.state.lifespan_order.append("write_queue_started")
         logger.info(
             "WriteQueue started: max_depth=%d default_timeout=%.1fs",
