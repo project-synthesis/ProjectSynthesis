@@ -171,7 +171,7 @@ When showing before/after or side-by-side results:
 
 ### Taxonomy Visualization (3D Topology)
 
-The 3D Pattern Graph is a **separate medium** with its own grammar. **Rendering rules, hover semantics, and material recipes are governed by [`references/3d-visualization.md`](3d-visualization.md) (canon F1–F18) — not by the 2D-UI Zero-Effects Directive in SKILL.md.** This section only covers chromatic encoding (which color source feeds which node type); the rendering technique that displays the color is canonical 3D (`MeshStandardMaterial` + emission, glowing energy cores, Neural Dust backdrop, organic breathing, bloom + film post-processing — all canonical, all per `references/3d-visualization.md`).
+The 3D Pattern Graph is a **separate medium** with its own grammar. **Rendering rules, hover semantics, and material recipes are governed by [`references/3d-visualization.md`](3d-visualization.md) (canon F1–F19) — not by the 2D-UI Zero-Effects Directive in SKILL.md.** This section only covers chromatic encoding (which color source feeds which node type); the rendering technique that displays the color is canonical 3D (`MeshStandardMaterial` + emission, glowing energy cores, Neural Dust backdrop, organic breathing, bloom + film post-processing — all canonical, all per `references/3d-visualization.md`).
 
 **Chromatic encoding** (color sourcing per node type — applied via `node.color` in `TopologyData.ts`, then scaled by F1's `fillScalar` in the cluster fill material):
 
@@ -188,7 +188,7 @@ OKLab-from-UMAP-position is the assignment algorithm for **newly discovered doma
 **Cross-cutting rules** (the 3D-specific rendering rules live in `references/3d-visualization.md`):
 - LOD tiers: far (persistence ≥ 0.4), mid (≥ 0.2), near (≥ 0.0) — domain nodes always visible at all tiers
 - Labels: billboard text, white on transparent, auto-hide at far LOD for non-domain nodes
-- Hover, selection, breathing, bloom interaction — see canon F1–F18 in `references/3d-visualization.md`
+- Hover, selection, breathing, bloom interaction — see canon F1–F19 in `references/3d-visualization.md`
 
 **Lifecycle state badge colors** (used in Inspector, ClusterNavigator filter tabs):
 

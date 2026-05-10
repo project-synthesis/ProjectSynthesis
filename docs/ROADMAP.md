@@ -656,7 +656,7 @@ The takeaway is a working principle now captured in `.claude/skills/brand-guidel
 3. **Add progressive shader uniforms** when geometry has extent the visual should travel along — the `uHead` 0..1 + `smoothstep(uHead + 0.04, uHead - 0.02, vUv.x)` mask pattern is reusable for any directional/extending energy effect (linear beam, radial pulse, surface-traversing wave).
 4. **Update the canon doc to match what shipped**, never argue from "the spec says X."
 
-**F1–F18 timing constants potentially due for the same review** (none confirmed wrong — listed as audit candidates if/when polish cycles touch the Pattern Graph):
+**F1–F19 timing constants potentially due for the same review** (none confirmed wrong — listed as audit candidates if/when polish cycles touch the Pattern Graph; F19's own constants were just re-tuned in this branch and remain candidates for further iteration):
 - **F5** hierarchical edge `uTime` pulse — pulse frequency + amplitude have not been re-evaluated since initial implementation
 - **F8** organic breathing oscillation — `_breathingTime += 0.016` per frame produces a fixed ~0.95Hz cycle; ±2% amplitude (±12% on hover) has never been user-tuned
 - **F10** Neural Dust slow XY rotation — rotation speed is a magic number that may read either too static or too restless
@@ -668,7 +668,7 @@ The takeaway is a working principle now captured in `.claude/skills/brand-guidel
 1. User reports any 3D effect lands "too soon," "too late," "too fast," "too slow," or "not smooth" — apply the default fixes above and update the canon doc.
 2. A code-quality pass touches one of the F-feature implementations — opportunistically re-evaluate its timing constants against the latest user feedback signal.
 3. A new 3D effect is added — borrow the `uHead`-style progressive-uniform pattern from F19 if the new effect has any directional or extending visual character (don't default to "fade in along full length" again).
-4. A formal polish cycle is scheduled — sweep all F1–F18 timing constants with a structured review, ideally side-by-side comparing baseline-vs-tuned recordings.
+4. A formal polish cycle is scheduled — sweep all F1–F19 timing constants with a structured review, ideally side-by-side comparing baseline-vs-tuned recordings.
 
 **No spec, no plan, no version target.** Reactive discipline note. The principle lives in `feedback_visual_feel_over_spec.md` (memory) + canon F7/F19 (this repo); this entry exists to surface it on the roadmap so future polish cycles have a discoverable touchpoint instead of re-learning the lesson per feature.
 
