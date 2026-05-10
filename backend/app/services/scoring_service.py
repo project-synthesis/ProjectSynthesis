@@ -23,8 +23,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 logger = logging.getLogger(__name__)
 
 
@@ -45,22 +43,26 @@ async def score_passthrough(
     raw_prompt: str | None,
     optimized_prompt: str,
     external_scores: dict[str, float] | None,
-    db: AsyncSession,
+    historical_stats: dict[str, Any] | None,
     scoring_enabled: bool = True,
 ) -> PassthroughScoringResult:
     """Orchestrate passthrough scoring: heuristic → blend → deltas.
 
-    Shared by ``tools/save_result.py`` and ``routers/optimize.py`` to
-    eliminate the 95% duplication between those two call sites.
+    Foundation P4 Cycle 1 restructure: pure compute on injected inputs.
+    Caller's read step pre-fetches `historical_stats` via
+    `_fetch_historical_stats(db, exclude_scoring_modes=...)` and passes it
+    here. This function holds no DB session.
 
     Args:
-        raw_prompt: Original prompt (for delta computation). None if unavailable.
+        raw_prompt: Original prompt for delta computation. None if unavailable.
         optimized_prompt: The optimized prompt text to score.
         external_scores: IDE/external LLM dimension scores (optional).
             Keys: clarity, specificity, structure, faithfulness, conciseness.
             Values clamped to [1.0, 10.0] internally.
-        db: Async DB session for historical stats fetch.
-        scoring_enabled: From preferences. When False, returns mode="skipped".
+        historical_stats: Pre-fetched score distribution from prior persists
+            (excluding scoring_modes=['heuristic', 'hybrid_passthrough'] for
+            Cycle 1 callers). None bypasses z-score normalization.
+        scoring_enabled: From preferences. When False, returns mode='skipped'.
 
     Returns:
         PassthroughScoringResult with all scoring artifacts.
@@ -84,26 +86,14 @@ async def score_passthrough(
     )
     heur_original = HeuristicScorer.score_prompt(raw_prompt) if raw_prompt else {}
 
-    # 2. Fetch historical stats for z-score normalization
-    # Exclude heuristic and hybrid_passthrough — passthrough scores are
-    # externally provided, not calibrated against internal distribution.
-    historical_stats: dict[str, Any] | None = None
-    try:
-        from app.services.optimization_service import OptimizationService
-
-        opt_svc = OptimizationService(db)
-        historical_stats = await opt_svc.get_score_distribution(
-            exclude_scoring_modes=["heuristic", "hybrid_passthrough"],
-        )
-    except Exception as exc:
-        logger.debug("Historical stats unavailable for normalization: %s", exc)
+    # 2. historical_stats arrives pre-fetched from the caller's read step.
+    #    No DB call here — that's the Cycle 1 contract.
 
     # 3. Blend external scores with heuristic (or use heuristic-only)
     scoring_mode = "heuristic"
     divergence_flags: list[str] = []
 
     if external_scores:
-        # Clamp external scores to valid range
         clean = {k: max(1.0, min(10.0, float(v))) for k, v in external_scores.items()}
         try:
             ide_dims = DimensionScores.from_dict(clean)
@@ -118,10 +108,9 @@ async def score_passthrough(
             logger.warning("Hybrid blending failed, falling back to heuristic: %s", exc)
             opt_dims = DimensionScores.from_dict(heur_optimized)
     else:
-        # Heuristic-only — no blending, no z-score normalization
         opt_dims = DimensionScores.from_dict(heur_optimized)
 
-    # 4. Original scores (symmetric with optimized path)
+    # 4. Original scores (symmetric with optimized)
     if raw_prompt and heur_original:
         if scoring_mode == "hybrid_passthrough":
             try:
