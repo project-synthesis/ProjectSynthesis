@@ -173,7 +173,7 @@
   let _templateRingWarnedThisRebuild = false;
 
   function _createTemplateRingMesh(): THREE.Mesh {
-    const geom = new THREE.RingGeometry(1.25, 1.35, 32);
+    const geom = new THREE.RingGeometry(1.25, 1.35, 64); // canon F3 — 64 segments
     const mat = new THREE.MeshBasicMaterial({
       color: 0x00e5ff,
       transparent: true,
@@ -398,6 +398,23 @@
   const _readinessRings: Map<string, ReadinessRingEntry> = new Map();
   let _readinessRingGroup: THREE.Group | null = null;
   let _removeReadinessBillboard: (() => void) | null = null;
+
+  // ── Atmospheric layer state (canon F5/F8/F10) ────────────────────
+  // Per-frame animation handles + accumulators for the cinematic layers
+  // documented in `references/3d-visualization.md`:
+  //   F5 — hierarchical edges pulse (uTime uniform driven by _removeEdgeAnim)
+  //   F8 — organic breathing oscillation on every cluster mesh + ring
+  //   F10 — Neural Dust ambient particle backdrop (3000-point galaxy)
+  // All three callbacks are registered against renderer.addAnimationCallback
+  // and torn down by the cleanup return in onMount.
+  let _edgeUniforms: Record<string, THREE.IUniform>[] = [];
+  let _removeEdgeAnim: (() => void) | null = null;
+  let _edgeTime = 0;
+
+  let _dustPoints: THREE.Points | null = null;
+  let _removeDustAnim: (() => void) | null = null;
+  let _breathingAnim: (() => void) | null = null;
+  let _breathingTime = 0;
 
   /** Single source of truth for readiness ring geometry. Used by both the
    *  initial-build path and the size-drift rebuild path in `rebuildScene`
@@ -796,17 +813,42 @@
         edges.scale.setScalar(node.size);
         group.add(edges); // child 1: edges
 
-        // Domain: vertex anchor points — bright dots at each structural corner
+        // Domain: vertex anchor points — glowing energy cores (canon F2).
+        // Lazily build the radial-gradient CanvasTexture once per session.
+        // JSDOM stability: if the 2D canvas context isn't available (headless
+        // tests), set the global to undefined and let the points fall back to
+        // sprite-less rendering (size + color still convey the data).
+        if (!(globalThis as any).__semTopGlowTexture) {
+          const canvas = document.createElement('canvas');
+          canvas.width = 64; canvas.height = 64;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.8)');
+            gradient.addColorStop(0.6, 'rgba(255, 255, 255, 0.2)');
+            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            (globalThis as any).__semTopGlowTexture = new THREE.CanvasTexture(canvas);
+          } else {
+            (globalThis as any).__semTopGlowTexture = undefined; // JSDOM fallback
+          }
+        }
+
         const pointsMat = new THREE.PointsMaterial({
           color: node.color,
-          size: 0.12,
+          size: 0.35, // larger to accommodate the soft glow falloff
+          map: (globalThis as any).__semTopGlowTexture,
           transparent: true,
           opacity: node.opacity * 0.95,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
           sizeAttenuation: true,
         });
         const points = new THREE.Points(domainPointsGeo, pointsMat);
         points.scale.setScalar(node.size);
-        group.add(points); // child 2: vertex points
+        group.add(points); // child 2: vertex glowing energy cores
 
         domainGroups.push(group);
       } else {
@@ -868,6 +910,7 @@
         transparent: true,
         opacity: node.opacity * READINESS_RING_OPACITY_FACTOR,
         depthWrite: false,
+        side: THREE.DoubleSide, // canon F4 — visible from below the canopy
       });
       const mesh = new THREE.Mesh(geom, mat);
       mesh.position.set(...node.position);
@@ -893,6 +936,32 @@
       renderer.scene.add(_readinessRingGroup);
     }
 
+    // Neural Dust — galaxy-style ambient backdrop (canon F10).
+    // 3000-particle Points cloud uniformly distributed in 300^3 space,
+    // additively-blended cool-blue, slow XY drift via _removeDustAnim.
+    // Single-instance: created once, persists across rebuildScene calls
+    // (re-added to scene after the scene-clear traverse).
+    if (!_dustPoints) {
+      const DUST_COUNT = 3000;
+      const dustGeo = new THREE.BufferGeometry();
+      const dustPositions = new Float32Array(DUST_COUNT * 3);
+      for (let i = 0; i < DUST_COUNT * 3; i++) {
+        dustPositions[i] = (Math.random() - 0.5) * 300;
+      }
+      dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+      const dustMat = new THREE.PointsMaterial({
+        color: 0x88ccff,
+        size: 0.15,
+        transparent: true,
+        opacity: 0.25,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      _dustPoints = new THREE.Points(dustGeo, dustMat);
+      _dustPoints.userData = { isNeuralDust: true };
+    }
+    renderer.scene.add(_dustPoints);
+
     // Per-frame billboard — one callback iterates all rings, mirroring the
     // `_removeDomainRotation` pattern. OrbitControls rotates the camera
     // around the scene, so a one-time lookAt goes stale; re-orient each
@@ -913,6 +982,91 @@
     _removeDomainRotation = renderer.addAnimationCallback(() => {
       for (const g of domainGroups) {
         g.rotation.y += 0.002;
+      }
+    });
+
+    // Edge animation pulse — drives uTime uniform on each hierarchical
+    // edge's ShaderMaterial (canon F5). Edges register their uniforms into
+    // _edgeUniforms during the build loop below; this callback advances
+    // _edgeTime ~60Hz and writes it to every registered edge uniform set.
+    _removeEdgeAnim?.();
+    _edgeUniforms = [];
+    _removeEdgeAnim = renderer.addAnimationCallback(() => {
+      _edgeTime += 0.016;
+      for (const u of _edgeUniforms) {
+        if (u.uTime) u.uTime.value = _edgeTime;
+      }
+    });
+
+    // Neural Dust slow drift (canon F10) — y rotates ~0.0003/frame,
+    // x rotates ~0.0001/frame, giving a perceptible but unobtrusive
+    // parallax that makes the void feel like real volume.
+    _removeDustAnim?.();
+    _removeDustAnim = renderer.addAnimationCallback(() => {
+      if (_dustPoints) {
+        _dustPoints.rotation.y += 0.0003;
+        _dustPoints.rotation.x += 0.0001;
+      }
+    });
+
+    // Organic breathing oscillation (canon F8) — every cluster mesh's
+    // scale oscillates ±2% via sin wave; hovered clusters amplify to
+    // ±12% (scaleBase * 1.1). Template indicator rings spin + pulse
+    // opacity when hovered. Readiness rings scale to match the cluster.
+    //
+    // Allocation budget: this callback uses _scratchVec3a + Z_AXIS from
+    // the module-level scratch table (canon "Per-Frame Allocation
+    // Budget"). The legacy `new THREE.Vector3()` form is banned — the
+    // perf-budget regression test would fail.
+    _breathingAnim?.();
+    _breathingAnim = renderer.addAnimationCallback(() => {
+      _breathingTime += 0.016;
+      const scaleBase = Math.sin(_breathingTime * 1.5) * 0.02 + 1.0;
+      for (const [nodeId, mesh] of nodeMeshes) {
+        const node = _sceneNodeMap.get(nodeId);
+        if (!node) continue;
+
+        // Hover resonance pushes scale higher on the hovered cluster.
+        const isHovered = (hoveredNodeId === nodeId);
+        const targetScaleMultiplier = isHovered ? scaleBase * 1.1 : scaleBase;
+        const targetScale = node.size * targetScaleMultiplier;
+
+        // Smoothly lerp into the target scale via the canonical scratch
+        // vector (no per-frame Vector3 allocation).
+        mesh.scale.lerp(_scratchVec3a.set(targetScale, targetScale, targetScale), 0.1);
+
+        // Sibling group children (edges, glowing cores) follow the fill.
+        const parentGroup = mesh.parent;
+        if (parentGroup) {
+          parentGroup.children.forEach(child => {
+            if (child !== mesh && child.type !== 'Group') {
+              child.scale.copy(mesh.scale);
+            }
+          });
+        }
+
+        // Readiness ring scales with the cluster + spins on hover.
+        const ring = _readinessRings.get(nodeId);
+        if (ring) {
+          if (isHovered) {
+            ring.mesh.rotateOnAxis(Z_AXIS, 0.02);
+          }
+          ring.mesh.scale.setScalar(targetScaleMultiplier);
+        }
+
+        // Template indicator ring (canon F3) — opacity oscillates and
+        // rotation spins faster when hovered; resting at opacity 0.35.
+        const templateRing = _templateRingById.get(nodeId);
+        if (templateRing) {
+          const mat = templateRing.material as THREE.MeshBasicMaterial;
+          if (isHovered) {
+            templateRing.rotation.z += 0.02;
+            mat.opacity = 0.35 + Math.sin(_breathingTime * 10.0) * 0.15;
+          } else {
+            mat.opacity = 0.35;
+          }
+          templateRing.scale.setScalar(targetScaleMultiplier);
+        }
       }
     });
 
@@ -960,6 +1114,7 @@
         ? parseInt(parentNode.color.replace('#', ''), 16)
         : EDGE_COLOR;
       const uniforms = createEdgeDepthUniforms(edgeColor, opacity);
+      _edgeUniforms.push(uniforms); // canon F5 — driven by _removeEdgeAnim
       const mat = new THREE.ShaderMaterial({
         uniforms,
         vertexShader: EDGE_DEPTH_VERTEX,
@@ -1705,6 +1860,18 @@
       _removeDomainRotation?.();
       _removeReadinessBillboard?.();
       _removeReadinessBillboard = null;
+      // Atmospheric cancellers (canon F5/F8/F10).
+      _removeEdgeAnim?.();
+      _removeEdgeAnim = null;
+      _edgeUniforms = [];
+      _removeDustAnim?.();
+      _removeDustAnim = null;
+      _breathingAnim?.();
+      _breathingAnim = null;
+      // Neural Dust survives across remounts intentionally — disposing it
+      // would force a 3000-particle re-allocation on every taxonomy_changed
+      // event. The dust geometry + material are released alongside the
+      // renderer in the scene.traverse below.
       // Cancel in-flight tier tweens before disposing materials (use-after-free guard).
       for (const entry of _readinessRings.values()) {
         disposeRingEntry(entry);
