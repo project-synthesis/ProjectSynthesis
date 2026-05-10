@@ -126,14 +126,22 @@ export class TopologyRenderer {
     this.renderer.setSize(width, height, false);
   }
 
-  /** Animate camera to look at a target position.
+  /** Animate camera to look at a target position (canon F14).
+   *
+   *  Adaptive distance: when `distance` is omitted, the existing camera
+   *  zoom is preserved (clamped to `[5, 25]`) so a new selection doesn't
+   *  yank the user out of their current zoom level. Explicit `distance`
+   *  overrides — e.g. `focusOn(origin, 80)` for the deselect-to-overview.
    *
    *  Endpoint math is delegated to `computeFocusEndpoint` (pure function,
-   *  unit-tested in `focus-math.test.ts`) for adaptive-distance clamping
-   *  to `[controls.minDistance, controls.maxDistance]` and zero-length
-   *  direction guard (camera-on-target case). The animation glue (RAF +
-   *  `lerpVectors`) lives here. */
-  focusOn(target: THREE.Vector3, distance = 20, duration = 600): void {
+   *  unit-tested in `focus-math.test.ts`) for the zero-length direction
+   *  guard. The animation glue (RAF + `lerpVectors`) lives here.
+   *
+   *  `_checkLod()` is fired per-frame inside the animate loop because
+   *  `OrbitControls.update()` does NOT fire 'change' events when camera
+   *  position is mutated programmatically without damping residual.
+   *  Without this call, LOD tier changes silently lag the camera. */
+  focusOn(target: THREE.Vector3, distance?: number, duration = 600): void {
     // Cancel any in-flight focus animation
     if (this._focusAnimId != null) {
       cancelAnimationFrame(this._focusAnimId);
@@ -143,11 +151,18 @@ export class TopologyRenderer {
 
     const startPos = this.camera.position.clone();
     const startTarget = this.controls.target.clone();
+
+    // Adaptive default: preserve current zoom if `distance` omitted.
+    const currentDist = startPos.distanceTo(startTarget);
+    const targetDist = distance !== undefined
+      ? distance
+      : Math.max(5, Math.min(currentDist, 25));
+
     const { endPos, endTarget } = computeFocusEndpoint(
       startPos,
       startTarget,
       target,
-      distance,
+      targetDist,
       {
         minDistance: this.controls.minDistance,
         maxDistance: this.controls.maxDistance,
@@ -164,6 +179,11 @@ export class TopologyRenderer {
       this.camera.position.lerpVectors(startPos, endPos, ease);
       this.controls.target.lerpVectors(startTarget, endTarget, ease);
       this.controls.update();
+
+      // Canon F14: programmatic position mutation does not fire OrbitControls
+      // 'change' events when there's no damping residual — _checkLod must be
+      // called explicitly to keep LOD tier in sync with camera distance.
+      this._checkLod();
 
       if (t < 1) {
         this._focusAnimId = requestAnimationFrame(animate);
