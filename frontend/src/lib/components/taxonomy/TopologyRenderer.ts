@@ -50,6 +50,31 @@ export class TopologyRenderer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
+    // Shadow map: PCFShadowMap is the canonical replacement for the
+    // deprecated PCFSoftShadowMap (removed in three@0.170+). Brand reference:
+    // .claude/skills/brand-guidelines/references/3d-visualization.md "ShadowMap defaults".
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+
+    // Lighting — three lights per brand reference "Lighting Setups":
+    //   AmbientLight     — baseline scene fill, intensity 0.3, white.
+    //   DirectionalLight — primary key light at +5 +10 +5, intensity 0.7,
+    //                      white, castShadow with 1024² map.
+    //   HemisphereLight  — sky #1a1a2e (matches DEFAULT_BG) / ground
+    //                      #06060c, intensity 0.2 — gives the dark void
+    //                      a top-down organic feel.
+    const ambient = new THREE.AmbientLight(0xffffff, 0.3);
+    this.scene.add(ambient);
+
+    const directional = new THREE.DirectionalLight(0xffffff, 0.7);
+    directional.position.set(5, 10, 5);
+    directional.castShadow = true;
+    directional.shadow.mapSize.set(1024, 1024);
+    this.scene.add(directional);
+
+    const hemisphere = new THREE.HemisphereLight(0x1a1a2e, 0x06060c, 0.2);
+    this.scene.add(hemisphere);
+
     // Controls
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
