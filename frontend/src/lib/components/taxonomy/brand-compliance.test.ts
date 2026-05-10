@@ -8,7 +8,7 @@
  * from the 2D-UI vocabulary ban (per AGENTS.md amendment + brand guidelines
  * "3D Visualization Scope"). Canonical features use the words `glow`,
  * `halo`, `bloom`, `radiance`, `breathing`, `dust`, `pulse`, `flash` —
- * those are the names of the features (canon F1–F18). Banning them
+ * those are the names of the features (canon F1–F19). Banning them
  * would break the actual canon.
  *
  * What this gate enforces (only the things that genuinely don't carry
