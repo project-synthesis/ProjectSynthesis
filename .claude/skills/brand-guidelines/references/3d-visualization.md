@@ -187,7 +187,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 | `DirectionalLight` | `(0xffffff, 0.7)` | `(5, 10, 5)` | Primary key. `castShadow=true`. `shadow.mapSize.set(1024, 1024)` |
 | `HemisphereLight` | `(0x1a1a2e, 0x06060c, 0.2)` | n/a | Sky/ground organic. Sky matches `DEFAULT_BG = 0x06060c` |
 | `PointLight` | optional | hero focal | **Permitted** as a focal accent on the user-selected cluster only. Never as ambient atmosphere |
-| `SpotLight` | — | — | Banned. Cone halos contradict signal-over-noise — they emphasize empty space |
+| `SpotLight` | — | — | Banned. Cone falloff contradicts signal-over-noise — it emphasizes empty space rather than a data-bearing surface. (`halo` in this document is reserved for the F3 template indicator ring.) |
 
 ### F12 — Shadow Map
 
@@ -370,7 +370,7 @@ Run through each numbered feature. **The implementation passes if every line bel
 - [ ] `renderer.dispose()` + `renderer.forceContextLoss()`
 - [ ] Pool retention: `_templateRingPool` array preserved across unmount (high-water mark)
 
-If every box is checked: **🟢 PERFECT.** The implementation matches the canon.
+If every box is checked: **PASS.** The implementation matches the canon.
 
 ## Acceptance for changes
 

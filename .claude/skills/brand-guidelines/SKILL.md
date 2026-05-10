@@ -71,6 +71,8 @@ Interactions feel like precision hardware — immediate, tactile, and determinis
 | `box-shadow` | Any value with spread or blur | `inset 0 0 0 Npx` only (contour ring) |
 | `text-shadow` | All usage | None. Never. |
 | `filter: drop-shadow()` | All usage | None. |
+| `filter: blur()` | All usage on UI elements | None. (3D Pattern Graph WebGL post-processing is governed by `references/3d-visualization.md` F13 — UnrealBloomPass / FilmPass — not by this row.) |
+| `backdrop-filter: blur()` | All usage **except** glass-morphism surfaces with documented blur values | 4px (light) / 8px (medium) on glass surfaces only — see "Glass Morphism" section below |
 | `radial-gradient` | Fading to transparent around elements | Data visualizations only |
 | `@keyframes` | Pulse, breathe, radiate outward | Scale, translate, opacity-in/out, rotation |
 
@@ -207,7 +209,9 @@ Before adding/removing/modifying anything in `frontend/src/lib/components/taxono
 
 ### Word usage in 3D code
 
-The Canon Terminology table (Use: contour / flash / tint / emission. Avoid: glow / radiance / bloom / halo) **applies to 3D code comments, shader uniforms, and class names** even though the rendering technique differs. Write `emissiveColor` not `glowingColor`. Write `pulseEmission` not `pulseGlow`. Write `cluster.emissive` not `cluster.glow`.
+3D Pattern Graph identifiers, shader uniforms, and code comments use the **Canon Vocabulary** documented at `references/3d-visualization.md` "Canon Vocabulary" table. The words `glow`, `halo`, `bloom`, `radiance`, `breathing`, `dust`, `pulse`, `flash` are canonical names of specific data-bearing features there (F1–F10). Identifiers like `_haloPool` / `_templateRingPool`, `glowingColor` (HDR boost into the bloom pass per F5/F7), `_breathingAnim`, `_removeDustAnim` are all canonical and intentional.
+
+The 2D-UI Canon Terminology table below (`Use: contour/flash/tint/emission` / `Avoid: glow/radiance/bloom/halo`) governs **2D HTML/CSS code + user-facing copy + prose comments in the 2D workbench codebase** (`frontend/src/lib/components/{layout,editor,refinement,shared,landing}/`). It does **not** govern `frontend/src/lib/components/taxonomy/` — that directory is 3D scope and uses the canon vocabulary in `references/3d-visualization.md`.
 
 For detailed material recipes, lighting setups, post-processing decision trees, perf invariants, disposal contracts, and shader patterns, see [`references/3d-visualization.md`](references/3d-visualization.md).
 
@@ -368,6 +372,8 @@ Technical over emotional, precise over vague. Like a confident instrument panel.
 
 ### Canon Terminology
 
+**Scope:** 2D-UI code + user-facing copy + prose comments in `frontend/src/lib/components/{layout,editor,refinement,shared,landing}/`. The 3D Pattern Graph (`frontend/src/lib/components/taxonomy/`) uses a different canon — see [`references/3d-visualization.md`](references/3d-visualization.md) "Canon Vocabulary" — where `glow`, `halo`, `bloom`, `radiance` are CANONICAL feature names.
+
 | Use | Avoid |
 |-----|-------|
 | Forge / Optimize | Submit / Process |
@@ -386,21 +392,23 @@ Technical over emotional, precise over vague. Like a confident instrument panel.
 
 ## Anti-Patterns
 
-If any of these appear in code, it is a bug:
+**Scope:** 2D HTML/CSS UI only. The 3D Pattern Graph (`frontend/src/lib/components/taxonomy/`) is governed by [`references/3d-visualization.md`](references/3d-visualization.md) and many of these "anti-patterns" are canonical 3D techniques (radial-gradient glow textures per F2, sin-wave breathing pulse per F8, HDR-boosted emission per F5/F7, bloom + film post-processing per F13). Do not apply this table to 3D code.
+
+If any of these appear in **2D-UI** code, it is a bug:
 
 | Anti-Pattern | Correct Alternative |
 |-------------|---------------------|
 | `box-shadow: 0 4px 12px rgba(...)` | `border: 1px solid` + background shift |
 | `text-shadow: 0 0 8px #00e5ff` | Brighter text color or increased `font-weight` |
 | `filter: drop-shadow(...)` | `border` or `outline` |
-| `animation: pulse 2s infinite` | `copy-flash` (one-shot) or static contour |
-| `radial-gradient(circle, #00e5ff, transparent)` | Solid `background-color` at low opacity |
+| `animation: pulse 2s infinite` (on 2D UI elements) | `copy-flash` (one-shot) or static contour. (Note: 3D cluster meshes pulse via canon F8 sin-wave breathing — that is canonical, not this anti-pattern.) |
+| `radial-gradient(circle, #00e5ff, transparent)` (on 2D HTML elements) | Solid `background-color` at low opacity. (Note: 2D data visualizations carve out radial-gradient per Zero-Effects Directive; 3D `CanvasTexture` glow per canon F2 is unrelated to this row.) |
 | Opacity *decreasing* on hover | Opacity always *increases* on hover |
-| `border: 2px solid` | `border: 1px solid` always |
+| `border: 2px solid` (on 2D UI elements) | `border: 1px solid` always |
 | `color: white` / `#ffffff` in body | `var(--color-text-primary)` (#e4e4f0) |
 | `font-family: monospace` for body text | Mono only for scores, badges, chips, metadata |
 | Staggered transition declarations | Single `transition:` declaration, same duration |
-| `.glow-effect` / `--glow-color` / `/* add glow */` | "contour," "tint," or "flash" |
+| `.glow-effect` / `--glow-color` / `/* add glow */` (in 2D-UI directories) | "contour," "tint," or "flash" |
 | `z-index: 999` or unlisted value | Use one of the 9 defined layers |
 
 ---

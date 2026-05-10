@@ -171,21 +171,24 @@ When showing before/after or side-by-side results:
 
 ### Taxonomy Visualization (3D Topology)
 
-Domain and cluster nodes in the SemanticTopology (Three.js) follow chromatic encoding rules:
+The 3D Pattern Graph is a **separate medium** with its own grammar. **Rendering rules, hover semantics, and material recipes are governed by [`references/3d-visualization.md`](3d-visualization.md) (canon F1–F18) — not by the 2D-UI Zero-Effects Directive in SKILL.md.** This section only covers chromatic encoding (which color source feeds which node type); the rendering technique that displays the color is canonical 3D (`MeshStandardMaterial` + emission, glowing energy cores, Neural Dust backdrop, organic breathing, bloom + film post-processing — all canonical, all per `references/3d-visualization.md`).
+
+**Chromatic encoding** (color sourcing per node type — applied via `node.color` in `TopologyData.ts`, then scaled by F1's `fillScalar` in the cluster fill material):
 
 | Node type | Size | Color source | Opacity | Persistence |
 |-----------|------|-------------|---------|-------------|
-| **Domain** (`state="domain"`) | 2x base radius | Pinned `color_hex` from DB | 1.0 (always visible) | 1.0 (maximum) |
-| **Active cluster** | 1x base radius | OKLab from UMAP position | 1.0 | Computed from HDBSCAN |
-| **Candidate cluster** | 1x base radius | OKLab from UMAP position | 0.4 (dimmed) | Low |
-| **Mature cluster** | 1.2x base radius | OKLab from UMAP position | 1.0 | High |
-| **Template cluster** | 1.5x base radius | Overridden to neon-cyan `#00e5ff` | 1.0 | Very high |
+| **Domain** (`state="domain"`) | 2x base radius | Pinned `color_hex` from DB (set at domain creation via `domainStore.colorFor()` / `colors.ts`) | 1.0 (always visible) | 1.0 (maximum) |
+| **Active cluster** | 1x base radius | Inherited from parent domain hex | 1.0 | Computed from HDBSCAN |
+| **Candidate cluster** | 1x base radius | Inherited from parent domain hex | 0.4 (dimmed) | Low |
+| **Mature cluster** | 1.2x base radius | Inherited from parent domain hex | 1.0 | High |
+| **Template cluster** | 1.5x base radius | Overridden to neon-cyan `#00e5ff` (the cyan template indicator ring sits on top — canon F3) | 1.0 | Very high |
 
-**Node rendering rules:**
-- Wireframe contour over dark fill (zero-effects directive: no glow, no emission bloom)
+OKLab-from-UMAP-position is the assignment algorithm for **newly discovered domain colors only** (cold path; see "Domain Color Coding" earlier in this file). Once a domain is created, its hex is pinned in the DB and child clusters inherit from it — no per-cluster recoloring.
+
+**Cross-cutting rules** (the 3D-specific rendering rules live in `references/3d-visualization.md`):
 - LOD tiers: far (persistence ≥ 0.4), mid (≥ 0.2), near (≥ 0.0) — domain nodes always visible at all tiers
 - Labels: billboard text, white on transparent, auto-hide at far LOD for non-domain nodes
-- Raycasting: hover highlight via contour intensification (1px → 2px border), not color change
+- Hover, selection, breathing, bloom interaction — see canon F1–F18 in `references/3d-visualization.md`
 
 **Lifecycle state badge colors** (used in Inspector, ClusterNavigator filter tabs):
 
