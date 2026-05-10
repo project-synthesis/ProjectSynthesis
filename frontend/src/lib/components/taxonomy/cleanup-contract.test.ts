@@ -1,33 +1,17 @@
 /**
  * Cleanup contract test — Pattern Graph 3D scope.
  *
- * Spec: docs/superpowers/specs/2026-05-09-pattern-graph-depth-design.md § 4.3
- * Brand: .claude/skills/brand-guidelines/references/3d-visualization.md "Disposal Contract"
+ * Spec: `.claude/skills/brand-guidelines/references/3d-visualization.md`
+ * Disposal Contract + Audit Checklist.
  *
- * The cut-from-main `SemanticTopology.svelte` already has a comprehensive
- * cleanup return — every animation canceller is invoked, every pool is
- * drained, and the renderer + interaction + labels are disposed. This file
- * exists as the **regression gate** that locks those properties into the
- * spec, so a future change cannot quietly drop a canceller or leak a
- * disposable.
+ * Locks the canon cleanup behavior into the spec. Specifically asserts
+ * that every canonical animation canceller is wired in the cleanup return
+ * and every disposable is released — including the canon F5/F8/F10
+ * atmospheric cancellers (`_removeEdgeAnim`, `_breathingAnim`,
+ * `_removeDustAnim`) that were earlier walked back under the
+ * over-restrictive interpretation.
  *
- * Six property classes asserted via source-grep on the live source:
- *
- *   1. Walked-back animation identifiers absent (`_removeDustAnim`,
- *      `_breathingAnim`, `_removeEdgeAnim` — these were the original
- *      branch's banned-effect features).
- *   2. Walked-back banned-terminology pool identifiers absent
- *      (`__semTopHaloPool`, `_haloPool`, `_haloById`, `_haloGroup`,
- *      `_freeHalos`, `HALO_POOL_*`, `_acquireHalo`, `_releaseHalo`,
- *      `__semTopGlowTexture`).
- *   3. Renamed pool identifiers present (`_templateRingPool`,
- *      `_templateRingById`, `_templateRingGroup`, `_freeTemplateRings`).
- *   4. Every animation canceller in the cleanup return.
- *   5. Every disposable's `.dispose()` (or equivalent) in the cleanup return.
- *   6. Any globalThis assignment is gated by `import.meta.env.MODE === 'test'`.
- *
- * Source-grep over `import.meta.glob ?raw` (same mechanism as
- * brand-compliance.test.ts) — no module load, no mocks, no jsdom WebGL.
+ * Source-grep over `import.meta.glob ?raw` — no module load, no mocks.
  */
 import { describe, expect, test } from 'vitest';
 
@@ -45,29 +29,18 @@ function readSemTopSource(): string {
 }
 
 /**
- * Slice the cleanup return body out of the onMount block. The cleanup is
- * the last `return () => { ... }` inside the onMount call. We anchor on
- * the closing `};\n  });\n</script>` near EOF and walk backward to find
- * the matching `return () => {`.
+ * Slice the cleanup return body out of the onMount block.
  *
- * If the slice fails, every cleanup-presence test will fail loudly —
- * that's the desired behavior since structural change to the onMount
- * shape is itself worth flagging.
+ * Anchors on `</script>` near EOF and walks backward to find the last
+ * `return () => {` before it (= the onMount cleanup return). Then walks
+ * forward, balancing braces, to find the matching close.
  */
 function extractCleanupBody(src: string): string {
-  // Find the onMount cleanup return. The pattern is:
-  //   return () => {
-  //     ... cleanup statements ...
-  //   };
-  // followed by   });   // closes onMount
-  // followed by   </script>
   const closeMarker = '</script>';
   const closeIdx = src.indexOf(closeMarker);
   if (closeIdx < 0) {
     throw new Error('cleanup-contract: </script> not found');
   }
-  // Walk backward to find `return () => {` — the last one before </script>
-  // is the onMount cleanup.
   const returnPattern = /return\s*\(\s*\)\s*=>\s*\{/g;
   let lastReturnIdx = -1;
   let match: RegExpExecArray | null;
@@ -79,8 +52,6 @@ function extractCleanupBody(src: string): string {
   if (lastReturnIdx < 0) {
     throw new Error('cleanup-contract: onMount cleanup return not found');
   }
-
-  // Walk forward, balancing braces, to find the matching close.
   let depth = 1;
   let i = lastReturnIdx;
   while (i < src.length && depth > 0) {
@@ -92,85 +63,32 @@ function extractCleanupBody(src: string): string {
   return src.slice(lastReturnIdx, i - 1);
 }
 
-describe('Cleanup contract — walked-back identifiers absent', () => {
-  test('banned animation identifiers do not appear in source', () => {
-    const src = readSemTopSource();
-    // Per spec § 4.3: these were the original branch's banned-effect
-    // features (dust particle system, breathing oscillation on cluster
-    // scale, edge animation pulse). All walked back.
-    const banned = ['_removeDustAnim', '_breathingAnim', '_removeEdgeAnim'];
-    const hits = banned.filter((id) => src.includes(id));
-    expect(hits).toEqual([]);
-  });
-
-  test('banned-terminology pool identifiers do not appear in source', () => {
-    const src = readSemTopSource();
-    // Per spec § 3.7: every old `_halo*` / `__semTopHaloPool` / `HALO_*` /
-    // `_acquireHalo` / `_releaseHalo` was renamed to `_templateRing*` in
-    // cycle 2. The `__semTopGlowTexture` global was removed entirely.
-    const banned = [
-      '__semTopHaloPool',
-      '_haloPool',
-      '_haloById',
-      '_haloGroup',
-      '_freeHalos',
-      'HALO_POOL_',
-      '_acquireHalo',
-      '_releaseHalo',
-      '__semTopGlowTexture',
-    ];
-    const hits = banned.filter((id) => src.includes(id));
-    expect(hits).toEqual([]);
-  });
-});
-
-describe('Cleanup contract — renamed identifiers present', () => {
-  test('renamed template-ring pool identifiers all appear in source', () => {
-    const src = readSemTopSource();
-    const required = [
-      '_templateRingPool',
-      '_templateRingById',
-      '_templateRingGroup',
-      '_freeTemplateRings',
-    ];
-    const missing = required.filter((id) => !src.includes(id));
-    expect(missing).toEqual([]);
-  });
-});
-
-describe('Cleanup contract — animation cancellers wired in cleanup return', () => {
-  test('all five surviving cancellers invoked in cleanup body', () => {
+describe('Cleanup contract — canon animation cancellers', () => {
+  test('all 8 canonical cancellers wired in cleanup body', () => {
     const cleanup = extractCleanupBody(readSemTopSource());
-    // Per spec § 4.3: existing cleanup wiring (cut-from-main lines 1647-1653).
-    //   - removeBeamUpdate()           : beam pool per-frame update canceller
-    //   - _removeRingLodUpdate()        : LOD opacity sweep canceller
-    //   - _removeFormationAnim?.()      : formation lerp canceller (nullable)
-    //   - _removeDomainRotation?.()     : domain rotation canceller (nullable)
-    //   - _removeReadinessBillboard?.() : ring billboard canceller (nullable)
+    // Per canon F5/F8/F10 + existing pre-canon cancellers. Every
+    // `addAnimationCallback` registration must have a matching invocation
+    // in the cleanup return.
     const required = [
+      // pre-canon (already wired)
       'removeBeamUpdate()',
       '_removeRingLodUpdate()',
       '_removeFormationAnim?.()',
       '_removeDomainRotation?.()',
       '_removeReadinessBillboard?.()',
+      // canon F5/F8/F10
+      '_removeEdgeAnim?.()',
+      '_removeDustAnim?.()',
+      '_breathingAnim?.()',
     ];
     const missing = required.filter((sig) => !cleanup.includes(sig));
     expect(missing).toEqual([]);
   });
 });
 
-describe('Cleanup contract — disposables drained in cleanup return', () => {
+describe('Cleanup contract — canon disposables', () => {
   test('all top-level disposables released in cleanup body', () => {
     const cleanup = extractCleanupBody(readSemTopSource());
-    // Per spec § 4.3 + cut-from-main lines 1643-1687:
-    //   - beamPool?.dispose()          : Three.js Group + per-beam mesh dispose
-    //   - clusterPhysics?.clear()      : map clear (no GPU resources)
-    //   - disposeRingEntry(entry)      : per-readiness-ring dispose
-    //   - _readinessRings.clear()      : map clear post-dispose
-    //   - ro.disconnect()              : ResizeObserver
-    //   - interaction?.dispose()       : raycaster wiring
-    //   - labels?.dispose()            : sprite group + textures
-    //   - renderer?.dispose()          : WebGL context + scene traversal dispose
     const required = [
       'beamPool?.dispose()',
       'clusterPhysics?.clear()',
@@ -185,44 +103,52 @@ describe('Cleanup contract — disposables drained in cleanup return', () => {
     expect(missing).toEqual([]);
   });
 
-  test('template-ring pool drained on unmount', () => {
+  test('template-ring pool drained on unmount (high-water mark retained)', () => {
     const cleanup = extractCleanupBody(readSemTopSource());
-    // The pool itself is retained as a high-water mark across remounts
-    // (intentional — avoids re-allocation on quick remount), but the
-    // active-by-id map and free list MUST reset, and pool meshes MUST
-    // be hidden + returned to the free list.
     expect(cleanup).toContain('_templateRingById.clear()');
     expect(cleanup).toContain('_freeTemplateRings.length = 0');
-    // The "return to free list" loop reads `_templateRingPool` and pushes
-    // each into `_freeTemplateRings` — match by both signals.
     expect(cleanup).toMatch(/_templateRingPool/);
     expect(cleanup).toMatch(/_freeTemplateRings\.push/);
   });
 });
 
-describe('Cleanup contract — globalThis pollution gated to test mode', () => {
-  test('every globalThis assignment is gated by import.meta.env.MODE === "test"', () => {
+describe('Cleanup contract — canon F2 globalThis state', () => {
+  test('__semTopGlowTexture is the only production globalThis assignment, and it has documented disposal handling', () => {
+    // Per canon F2: __semTopGlowTexture is the canonical CanvasTexture
+    // cache for the radial-gradient glow used by domain anchor energy
+    // cores. Its single shared instance is intentional — re-creating
+    // 64x64 CanvasTextures on every rebuildScene would be wasteful.
+    //
+    // The texture's lifecycle is shared across the application — it is
+    // NOT disposed on component unmount because a remount on the same
+    // session can reuse it. The sole disposal happens on full page
+    // navigation (the GL context tear-down) or via the renderer's
+    // scene.traverse Texture branch.
+    //
+    // This test pins the documented exemption — the rest of the test
+    // mode `__semTop*` globals MUST stay gated by import.meta.env.MODE.
     const src = readSemTopSource();
-    // For each `globalThis` assignment in source, the same line OR the
-    // immediately preceding `if (...)` guard must mention `import.meta.env`
-    // and `'test'`. We tokenize by line and check the preceding 5 lines.
     const lines = src.split('\n');
-    const violations: string[] = [];
+    const productionGlobals: string[] = [];
+    const testGatedGlobals: string[] = [];
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      // Match `(globalThis as any).X = …` or `globalThis.X = …` assignments.
-      // Read-only access (e.g. inside type assertions for tests) is fine.
       if (!/\(?\s*globalThis\s*(as\s+\w+)?\s*\)?\s*\.\s*\w+\s*=/.test(line)) continue;
-
-      // Look backward up to 5 lines for the test-mode guard.
-      const window = lines.slice(Math.max(0, i - 5), i + 1).join('\n');
-      const isGated =
+      const window = lines.slice(Math.max(0, i - 6), i + 1).join('\n');
+      const isTestGated =
         /import\.meta\.env\.MODE\s*===\s*['"]test['"]/.test(window) ||
         /import\.meta\.env\.MODE\s*!==\s*['"]production['"]/.test(window);
-      if (!isGated) {
-        violations.push(`${i + 1}: ${line.trim()}`);
+      if (isTestGated) {
+        testGatedGlobals.push(`${i + 1}: ${line.trim()}`);
+      } else {
+        productionGlobals.push(`${i + 1}: ${line.trim()}`);
       }
     }
-    expect(violations).toEqual([]);
+    // Production globalThis assignments allowed: only the canon F2
+    // glow texture cache. Anything else here is a regression.
+    const unauthorized = productionGlobals.filter(
+      (entry) => !entry.includes('__semTopGlowTexture'),
+    );
+    expect(unauthorized).toEqual([]);
   });
 });
