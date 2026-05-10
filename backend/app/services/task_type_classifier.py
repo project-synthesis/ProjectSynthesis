@@ -778,21 +778,33 @@ def rescue_task_type_via_structural_evidence(
 
 async def classify_with_llm(
     raw_prompt: str,
-    db: AsyncSession,
+    db: AsyncSession | None = None,
     *,
     provider: Any | None = None,
+    operation_label: str = "task_type_telemetry_insert",
 ) -> tuple[str, str] | None:
-    """Fast LLM classification fallback using Haiku (A4 gate).
+    """LLM-based task_type + domain classifier (Haiku, A4 fallback).
 
-    Returns ``(task_type, domain)`` or ``None`` on failure.  Only called
-    when heuristic confidence is ambiguous — minimal prompt (~500 input
-    tokens, ~20 output tokens).  Wrapped in ``call_provider_with_retry``
-    so transient rate-limit / overload errors retry once; non-retryable
-    errors and final-attempt failures return None and the caller degrades
-    to the heuristic result.
+    Foundation P4 Cycle 1 changes:
+    - `db: AsyncSession` relaxed to `AsyncSession | None = None` — enables
+      `HeuristicAnalyzer.analyze_no_session` to invoke A4 without a session.
+      The `db` parameter is only used to gate the telemetry queue-submit path;
+      the inner `_do_telemetry` callback receives its own writer session from
+      the queue worker, so `db=None` is functionally equivalent.
+    - `operation_label` keyword-only parameter — parameterizes the queue label
+      for the telemetry write so call sites are distinguishable in audit logs.
+      Default 'task_type_telemetry_insert' preserves behavior for legacy
+      callers (`HeuristicAnalyzer._analyze_inner`). `analyze_no_session`
+      passes 'task_type_telemetry_no_session'.
 
-    The ``db`` parameter is currently unused but retained for future
-    affordances (e.g. domain-specific classifier seeds from the taxonomy).
+    Args:
+        raw_prompt: Prompt to classify.
+        db: Optional AsyncSession (vestigial — telemetry uses queue's own session).
+        provider: LLM provider for the Haiku call.
+        operation_label: Queue operation label for the telemetry write.
+
+    Returns:
+        (task_type, domain) tuple if classification succeeded, else None.
     """
     try:
         from pydantic import BaseModel as _BaseModel
@@ -881,7 +893,7 @@ async def classify_with_llm(
                     try:
                         await _wq.submit(
                             _do_telemetry,
-                            operation_label="task_type_telemetry_insert",
+                            operation_label=operation_label,
                         )
                     except Exception as exc:
                         logger.debug(
