@@ -564,7 +564,7 @@ async def mcp_test_client():
         yield client
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def async_session_factory_override(tmp_path, monkeypatch):
     """In-memory SQLite session factory for Foundation P4 integration tests.
 
