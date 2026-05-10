@@ -28,10 +28,10 @@ The following words refer to **specific data-bearing visual features** described
 | `halo` | A banner/template indicator ring drawn around clusters that have been forked into a `PromptTemplate`. Cyan (`0x00e5ff`), `MeshBasicMaterial`, `depthWrite:false`. Implementation pool: `_templateRingPool` (renamed from `_haloPool` for clarity, both names are acceptable in canon vocabulary). |
 | `bloom` | The `UnrealBloomPass` post-processing layer that amplifies bright pixels into surrounding ones. Canonical for the 3D Pattern Graph at parameters `(strength: 1.5, radius: 0.4, threshold: 0.85)`. |
 | `radiance` | Outgoing light from emissive surfaces post-bloom. The visible signal that conveys "this cluster is alive". |
-| `breathing` | Per-frame `±2%` sin-wave scale oscillation on every cluster mesh. Hovered clusters amplify to `±10%`. The data signal: clusters are alive, not freeze-framed. |
+| `breathing` | Per-frame `±2%` sin-wave scale oscillation on every cluster mesh. Hovered clusters amplify to `±12%`. The data signal: clusters are alive, not freeze-framed. |
 | `dust` | The 3000-particle ambient `Points` cloud (`Neural Dust`) that fills the 300³ scene void. Slow X+Y rotation. Provides depth perception. |
 | `pulse` | Time-driven shader uniform updates (e.g., `uTime`) that animate edge color/intensity at ~60Hz. Carries data flow signal. |
-| `flash` | Brief, high-intensity emission lift on selection (1 frame at intensity ~3×, decays via spring). |
+| `flash` | Brief emission lift on the per-node `MeshStandardMaterial.emissiveIntensity` at beam impact — 80ms cubic ease-out ramp from baseline to 4× baseline (`FLASH_PEAK_MULTIPLIER`), 280ms cubic ease-out decay back. Implemented per F19 (`flashEmissive` + `_tickFlashStates`); fires from the beam's `onImpact` callback so it synchronizes with the plasma envelopement and cluster-physics ripple. |
 
 **Banned terms** are functional, not lexical. The following PASSES are banned because they don't carry data signal — not because their NAMES are bad:
 
@@ -399,10 +399,10 @@ Run through each numbered feature. **The implementation passes if every line bel
 - [ ] **F16**: `applyHighlight(focusedNodeId)` at end of `rebuildScene`
 - [ ] **F16**: `applyHighlight` flips both `color` AND `emissive`
 - [ ] **F17**: `_hasAutoFocused` guard — bird's-eye-view zoom runs exactly once per lifecycle
-- [ ] **F18**: external selection triggers `clusterPhysics.onBeamImpact` + `beamPool.acquire` — both via `onImpact` callback (NEVER synchronous)
+- [ ] **F18**: external selection wraps `clusterPhysics.onBeamImpact` (and the F19 envelope + flash) inside the `beamPool.acquire(...)` config's `onImpact` callback — never synchronously alongside `acquire()`
 - [ ] **F19**: `EnvelopePool` constructed in `onMount`; envelope geometry shape literals match `node.state === 'domain' ? 'domain' : 'cluster'`
 - [ ] **F19**: `flashEmissive` uses baseline-capture pattern — rapid re-fires reuse prior `baselineEmissive`
-- [ ] **F19**: causal-ordering invariant — `clusterPhysics.onBeamImpact` is NEVER called synchronously inside the click `$effect`; lives only inside the `onImpact: () =>` callback body
+- [ ] **F19**: causal-ordering invariant — every `beamPool.acquire(...)` site (click `$effect`, entrance materialization burst, post-growth burst) wires `clusterPhysics.onBeamImpact` (and envelope/flash) inside `onImpact: () =>`, never synchronously alongside `acquire()`
 
 ### Performance + lifecycle
 - [ ] Module-level scratch table declared (`_scratchVec3a`, `_scratchQuat`, `_scratchColor`, `Z_AXIS`)

@@ -209,7 +209,7 @@ Before adding/removing/modifying anything in `frontend/src/lib/components/taxono
 
 ### Word usage in 3D code
 
-3D Pattern Graph identifiers, shader uniforms, and code comments use the **Canon Vocabulary** documented at `references/3d-visualization.md` "Canon Vocabulary" table. The words `glow`, `halo`, `bloom`, `radiance`, `breathing`, `dust`, `pulse`, `flash` are canonical names of specific data-bearing features there (F1–F10). Identifiers like `_haloPool` / `_templateRingPool`, `glowingColor` (HDR boost into the bloom pass per F5/F7), `_breathingAnim`, `_removeDustAnim` are all canonical and intentional.
+3D Pattern Graph identifiers, shader uniforms, and code comments use the **Canon Vocabulary** documented at `references/3d-visualization.md` "Canon Vocabulary" table. The words `glow`, `halo`, `bloom`, `radiance`, `breathing`, `dust`, `pulse`, `flash` are canonical names of specific data-bearing features distributed across F1–F19 (e.g., `bloom` is F13's `UnrealBloomPass`; `flash` is the F19 emissive burst at beam impact). Identifiers like `_haloPool` / `_templateRingPool`, `glowingColor` (HDR boost into the bloom pass per F5/F7), `_breathingAnim`, `_removeDustAnim`, `flashEmissive` are all canonical and intentional.
 
 The 2D-UI Canon Terminology table below (`Use: contour/flash/tint/emission` / `Avoid: glow/radiance/bloom/halo`) governs **2D HTML/CSS code + user-facing copy + prose comments in the 2D workbench codebase** (`frontend/src/lib/components/{layout,editor,refinement,shared,landing}/`). It does **not** govern `frontend/src/lib/components/taxonomy/` — that directory is 3D scope and uses the canon vocabulary in `references/3d-visualization.md`.
 
