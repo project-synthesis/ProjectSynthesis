@@ -758,36 +758,81 @@ Per-evaluation alarm computation silent in JSONL (would be noisy at 30s cache ca
 
 **JSONL trace:** replay runs get `phase="replay_run"` trace. Suite creates/retires get `phase="validation_suite"`.
 
-## 10 Testing strategy — 16 TDD cycles
+## 10 Testing strategy — 16 cycles, 7-dispatch TDD per cycle
 
-Per `feedback_tdd_protocol.md`: RED → GREEN → REFACTOR per cycle; three implementer dispatches per cycle before code-review gate.
+### Protocol — `feedback_tdd_protocol.md` canon
 
-| Cycle | Scope | ~RED tests | Surface |
-|---|---|---|---|
-| **A — Substrate (1-4)** | | | |
-| 1 | Migration + `ValidationSuite` ORM | 7 | models, alembic |
-| 2 | `ValidationSuiteService.create_from_run` + snapshot inputs | 11 | service, schemas |
-| 3 | `.retire`, `.get`, `.list`, `.list_replays` | 9 | service |
-| 4 | `.compute_regression_alarm` + 30s TTL cache | 7 | service |
-| **B — REST + Generators (5-9)** | | | |
-| 5 | `routers/suites.py` (6 endpoints, rate limits, error envelopes) | 15 | router |
-| 6 | `ReplayRunGenerator` + `RunOrchestrator.dispatch` extension | 11 | generator, orchestrator |
-| 7 | Topic-only mode — `TopicProbeGenerator` branch + 2nd template | 9 | generator, prompt template, validator |
-| 8 | 202+polling on `POST /api/probes` + `dispatch_async` | 7 | router, orchestrator |
-| 9 | `/api/health` regression_alarm block | 5 | router |
-| **C — MCP (10)** | | | |
-| 10 | `synthesis_save_suite` + `synthesis_replay_suite` | 9 | tools, mcp_server |
-| **D — Frontend (11-13)** | | | |
-| 11 | Topic Probe tab + form + report card (Vitest + Playwright) | 18 | new components |
-| 12 | SuitesPanel + SuiteRow + SuiteDetailView + RegressionBadge + SuitesStore | 14 | components + store |
-| 13 | 202+polling abstraction in probesStore | 7 | store + tests |
-| **E — Quality (14)** | | | |
-| 14 | Brand audit + a11y audit (axe-core) | n/a | — |
-| **F — Flip + Release (15-16)** | | | |
-| 15 | Audit-hook RAISE flip + new regression test + extended integration test | 3 | config, tests |
-| 16 | E2E validation workflow + soak grep verification | n/a (smoke) | — |
+> **REQUIRED SUB-SKILL:** Use `superpowers:subagent-driven-development`. Each cycle dispatches **5 fresh implementer subagents** (RED → GREEN → REFACTOR → INTEGRATE → OPERATE) followed by **2 independent validators** (spec-compliance reviewer + code-quality reviewer), iterated until **ZERO inconsistencies**. `APPROVED-WITH-MINOR` triggers re-dispatch — NOT proceed-with-notes. **Total: 7 dispatches per cycle. No phase skipping. No exceptions for "small" changes.**
+
+```
+RED ─▶ GREEN ─▶ REFACTOR ─▶ INTEGRATE ─▶ OPERATE ─▶ Validator 1 ─▶ Validator 2
+ │       │         │            │            │            │              │
+ │       │         │            │            │            └ spec compliance
+ │       │         │            │            │                           │
+ │       │         │            │            │                  ZERO inconsistencies?
+ │       │         │            │            │                  ├ no → re-dispatch failing phase
+ │       │         │            │            │                  └ yes → proceed
+ │       │         │            │            │
+ │       │         │            │            └ dynamic verification under live load
+ │       │         │            └ canonical-pattern parity (static review)
+ │       │         └ local code quality (lint, types, edges, docstrings)
+ │       └ minimal implementation
+ └ failing test documenting the contract
+```
+
+### Phase responsibility (per `feedback_tdd_protocol.md`)
+
+| Defect class | Owning phase | Action |
+|---|---|---|
+| Missing test for new behavior | **RED** | Write failing test documenting contract |
+| Code doesn't pass the test | **GREEN** | Minimal implementation |
+| Lint / type / edge cases / error handling / DRY / docstrings | **REFACTOR** | Local code quality (ruff + mypy on touched files) |
+| Service-call signature wrong / fictional kwargs (A1-A6) | **INTEGRATE** | Open target's `def`; column-by-column / kwarg-by-kwarg diff against canonical |
+| User-visible end-state never queried / writer contention / cancellation / timeouts / cross-process / orphan rows (O1-O8) | **OPERATE** | Live concurrency run with full stack + DB inspection by ID |
+| Cross-cycle architectural fit | **Independent code-reviewer** | Strategic concerns post-OPERATE |
+
+### Cycle-specific INTEGRATE / OPERATE attention table
+
+For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitly catch (in addition to running the full checklists):
+
+| Cycle | Scope | ~RED tests | INTEGRATE focus | OPERATE focus |
+|---|---|---|---|---|
+| **A — Substrate (1-4)** | | | | |
+| 1 | Migration + `ValidationSuite` ORM | 7 | A5 (test fixtures use real `ValidationSuite()` constructor, not `MagicMock`) | O2 (migration completes under WriteQueue active) |
+| 2 | `ValidationSuiteService.create_from_run` + snapshot inputs | 11 | A4 (`SuiteSnapshotInputs` populates ALL columns; column-by-column diff against `ValidationSuite` ORM) · A5 | O1 (`SELECT * FROM validation_suite WHERE id=:s` after create — confirm row exists) |
+| 3 | `.retire`, `.get`, `.list`, `.list_replays` | 9 | A4 (retire updates only `retired_at`/`retired_reason` — no other column mutated) | O1 (re-retire is idempotent and persists no-op) |
+| 4 | `.compute_regression_alarm` + 30s TTL cache | 7 | A3 (Python-side filter matches canonical alarm-evaluation logic) | O2 (alarm query under concurrent `replay_run` writes — no inconsistent snapshots) · O6 (cross-process replay writes from MCP) |
+| **B — REST + Generators (5-9)** | | | | |
+| 5 | `routers/suites.py` (6 endpoints, rate limits, error envelopes) | 15 | A2 (use `WriteQueue.submit()` — do NOT re-implement persistence) · A4 (response payloads populate all `ValidationSuiteOut` fields) | O5 (client disconnects mid-replay-dispatch — no orphan rows) |
+| 6 | `ReplayRunGenerator` + `RunOrchestrator.dispatch` extension | 11 | A2 (use `batch_pipeline.run_single_prompt` — NOT a hand-rolled inner pipeline) · A6 (every prompt receives full enrichment context — codebase + strategy intelligence + applied patterns) · A1 (read every field of `RunResult` — not just `overall`) | O8 (cancel mid-replay — `RunRow.status` reaches terminal `failed` via shielded write) · O4 (warm-engine debounce fires mid-replay — no contention) · O7 (replay's worst-case 30min duration — every timeout in path ≥ that plus buffer) |
+| 7 | Topic-only mode — `TopicProbeGenerator` branch + 2nd template | 9 | A2 (don't re-implement Phase 2 generation — call existing `probe_generation.generate_probe_prompts`) · A3 (consume same return shape, both modes) | O1 (RunRow.topic_probe_meta.grounding_mode='topic_only' persisted and queryable) |
+| 8 | 202+polling on `POST /api/probes` + `dispatch_async` | 7 | A2 (`dispatch_async` reuses existing `RunOrchestrator` lifecycle — no parallel codepath) | O8 (202 caller closes connection — task survives via `asyncio.shield()`) · O1 (poll endpoint reflects committed row immediately after 202 returns — INSERT awaited before response) · O5 (curl `--max-time` shorter than poll cadence — server-side state remains consistent) |
+| 9 | `/api/health` regression_alarm block | 5 | A4 (RegressionAlarmEntry populates all required fields from joined query — no NULL leakage) | O2 (alarm query coexists with active replays — no read-write contention) |
+| **C — MCP (10)** | | | | |
+| 10 | `synthesis_save_suite` + `synthesis_replay_suite` | 9 | A2 (call `ValidationSuiteService` methods — don't re-implement) · A4 (`SaveSuiteResult` + `ReplayInitiatedResult` populate all fields) | O6 (cross-process MCP→backend bridge for `replay_run` writes works under load) · O5 (MCP client disconnects after `save_suite` returns — write completed and queryable) |
+| **D — Frontend (11-13)** | | | | |
+| 11 | Topic Probe tab + form + report card (Vitest + Playwright) | 18 | A2 (use existing `api.ts` helpers — don't fetch directly) · A3 (consume existing `RunOut` shape — every field rendered or intentionally hidden) | O1 (browser smoke: SeedModal renders, form submits, report card displays with all fields) |
+| 12 | SuitesPanel + SuiteRow + SuiteDetailView + RegressionBadge + SuitesStore | 14 | A3 (suite list rows render every field; `ReplayRunOut.warnings` displayed when present) | O1 (browser smoke: SuitesPanel renders for empty / nominal / firing states; RegressionBadge transitions on SSE) |
+| 13 | 202+polling abstraction in probesStore | 7 | A2 (single async-iterable contract — SSE + poll paths emit identical event shapes; no two-codepath divergence in consumers) | O5 (browser tab closes mid-probe — store cleans up poll interval) · O7 (long probe runs >10min — poll cadence persists, no client-side timeout) |
+| **E — Quality (14)** | | | | |
+| 14 | Brand audit + a11y audit (axe-core) | n/a | n/a | n/a (audit phase — no code) |
+| **F — Flip + Release (15-16)** | | | | |
+| 15 | Audit-hook RAISE flip + new regression test + extended integration test | 3 | A2 (no behavioral logic change — only the default flips) | **All O1-O8** — the extended integration test exercises every T2 write path under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True` and must emit zero `read-engine audit:` lines |
+| 16 | E2E validation workflow + soak grep verification | n/a (smoke) | n/a | O1 (probe → save-as-suite → replay → alarm round-trip with DB-level inspection at each stage) · O6 (full stack — backend + MCP + frontend — coexists during round-trip) |
 
 **~131 new RED tests** + extended integration + E2E smoke. Backend ≥90% coverage, frontend ≥80%.
+
+### Hard invariants (non-negotiable per `feedback_tdd_protocol.md`)
+
+- The RED test still passes after every subsequent phase
+- No new features / no scope creep beyond cycle's RED+GREEN scope
+- Reviewers receive polished code at post-OPERATE handoff — focused on strategic concerns, not mechanical items the prior phases should have caught
+- For cycles touching user-visible state: live integration evidence is part of the OPERATE completion claim. Claiming "OPERATE done, ready for review" without that evidence is incomplete
+- Pure constants / pure schemas without a failing consumer test = scaffolding, NOT TDD — fold into the GREEN step of the consumer's cycle rather than committing as standalone RED work
+
+### Validators — APPROVED-ZERO-INCONSISTENCIES bar
+
+Both validator subagents (spec-compliance + code-quality) must return APPROVED-ZERO-INCONSISTENCIES. `APPROVED-WITH-MINOR` triggers re-dispatch of the failing phase — never proceed-with-notes per `feedback_tdd_protocol.md` precedent (foundation-p3 spec went 5 review rounds; foundation-p4 plan went 1).
 
 ## 11 Release sequencing
 
@@ -804,7 +849,7 @@ Per `feedback_tdd_protocol.md`: RED → GREEN → REFACTOR per cycle; three impl
 2026-06-01 ─────────── Latest realistic v0.4.22 ship date
 ```
 
-**Single feature branch** `feature/probe-tier-2`. **Rebase-merge** per `feedback_pr_merge_strategy.md`. Estimated 80-120 commits.
+**Single feature branch** `feature/probe-tier-2`. **Rebase-merge** per `feedback_pr_merge_strategy.md`. Estimated **~140-170 commits** (16 cycles × 7 dispatches = ~112 implementer+validator commits + spec/plan/CHANGELOG/release commits + iteration commits when validators return inconsistencies). Foundation P3's 95-commit and P4's ~50-commit baselines provide reasonable bracketing.
 
 ### Pre-release checklist (gated)
 
@@ -874,7 +919,7 @@ Per `feedback_tdd_protocol.md`: RED → GREEN → REFACTOR per cycle; three impl
 T2 ships when ALL true:
 
 1. **Schema** — `validation_suite` + `ix_run_row_suite_id` exist; `alembic upgrade head` + `downgrade -1` round-trip cleanly on fresh test DB
-2. **Cycle completion** — All 16 TDD cycles RED→GREEN→REFACTOR + code-review APPROVED-ZERO; ~131 new RED tests all GREEN
+2. **Cycle completion** — All 16 cycles complete the full 7-dispatch pipeline (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 spec-compliance → Validator 2 code-quality) with **APPROVED-ZERO-INCONSISTENCIES** on both validators; ~131 new RED tests all GREEN; **no phase skipped** per `feedback_tdd_protocol.md` hard invariants
 3. **Coverage** — Backend ≥90%, frontend ≥80%
 4. **E2E round-trip** — Manual: probe → save-as-suite → manually degrade scoring weights → replay → alarm fires red on `/api/health` → revert weights → replay → alarm clears green
 5. **Audit-hook flip** — `WRITE_QUEUE_AUDIT_HOOK_RAISE` defaults `True`; `test_audit_hook_emits_zero_warn_under_full_t2_pipeline` PASS; 7-day soak grep clean
