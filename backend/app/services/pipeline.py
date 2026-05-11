@@ -568,6 +568,14 @@ class PipelineOrchestrator:
                     data={"stage": "score", "state": "running", "model": model_ids["score"]},
                 )
 
+                # Foundation P4 Cycle 3: pre-fetch historical_stats in a short
+                # read session BEFORE the LLM call so the helper stays pure
+                # compute over the LLM call + injected stats.
+                from app.tools._shared import _fetch_historical_stats
+                historical_stats = await _fetch_historical_stats(
+                    db, exclude_scoring_modes=["heuristic"],
+                )
+
                 scoring = await run_hybrid_scoring(
                     raw_prompt=raw_prompt,
                     optimization=optimization,
@@ -580,7 +588,7 @@ class PipelineOrchestrator:
                     prefs_snapshot=prefs_snapshot,
                     scorer_model=scorer_model,
                     trace_id=trace_id,
-                    db=db,
+                    historical_stats=historical_stats,
                     call_provider=self._call_provider,
                 )
 

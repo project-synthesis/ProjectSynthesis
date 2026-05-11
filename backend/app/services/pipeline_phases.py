@@ -717,7 +717,7 @@ async def run_hybrid_scoring(
     prefs_snapshot: dict,
     scorer_model: str,
     trace_id: str,
-    db: AsyncSession,
+    historical_stats: dict[str, dict[str, float | int]] | None = None,
     call_provider: Callable,
 ) -> ScoringOutput:
     """Run Phase 3: A/B scoring LLM call + hybrid blend + drift check.
@@ -725,6 +725,12 @@ async def run_hybrid_scoring(
     Returns a ``ScoringOutput`` ready for persistence.  The orchestrator
     wraps this with the ``status running/complete`` events and the
     ``score_card`` payload emission.
+
+    Foundation P4 Cycle 3 restructure: drops ``db: AsyncSession``. Caller
+    pre-fetches ``historical_stats`` via ``_fetch_historical_stats(db,
+    exclude_scoring_modes=['heuristic'])`` inside a short read session BEFORE
+    calling this helper. Helper becomes pure compute over the LLM call +
+    injected stats (parallel to Cycle 1 ``score_passthrough`` restructure).
     """
     # Randomize A/B assignment
     original_first = random.choice([True, False])
@@ -789,16 +795,6 @@ async def run_hybrid_scoring(
         optimization.optimized_prompt,
         original=raw_prompt,
     )
-
-    historical_stats: dict | None = None
-    try:
-        from app.services.optimization_service import OptimizationService
-        opt_svc = OptimizationService(db)
-        historical_stats = await opt_svc.get_score_distribution(
-            exclude_scoring_modes=["heuristic"],
-        )
-    except Exception as exc:
-        logger.debug("Historical stats unavailable for normalization: %s", exc)
 
     blended_original = blend_scores(
         llm_original_scores, heur_original, historical_stats,
