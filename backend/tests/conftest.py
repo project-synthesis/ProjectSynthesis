@@ -602,6 +602,7 @@ async def async_session_factory_override(tmp_path, monkeypatch):
 
     # Patch every consumer's locally rebound `async_session_factory`.
     monkeypatch.setattr("app.database.async_session_factory", factory)
+    monkeypatch.setattr("app.tools.refine.async_session_factory", factory)
     monkeypatch.setattr("app.tools.save_result.async_session_factory", factory)
     monkeypatch.setattr("app.tools._shared.async_session_factory", factory)
 
