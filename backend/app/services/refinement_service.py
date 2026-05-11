@@ -13,7 +13,7 @@ import random
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F401  (re-used by Task 4-6 method params)
@@ -40,6 +40,12 @@ from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.score_blender import blend_scores
 from app.services.strategy_loader import StrategyLoader
+
+if TYPE_CHECKING:
+    from app.services.refinement_context import (
+        _InitialTurnPayload,
+        _OptSnapshot,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -127,55 +133,62 @@ class RefinementService:
     # Public methods
     # ------------------------------------------------------------------
 
-    async def create_initial_turn(
+    def build_initial_turn_payload(
         self,
-        optimization_id: str,
-        prompt: str,
-        scores_dict: dict[str, Any],
-        strategy_used: str,
-    ) -> RefinementTurn:
-        """Create the first branch and version-1 turn for an optimization.
+        opt_snapshot: "_OptSnapshot",
+        initial_scores_dict: dict[str, float],
+    ) -> "_InitialTurnPayload":
+        """Pure-compute payload builder for the seed branch + initial turn.
+
+        Replaces `create_initial_turn` (Cycle 2 rename). No DB writes — caller
+        submits the actual INSERT via `WriteQueue.submit(operation_label=
+        "refine_initial_turn")` using the returned kwargs.
 
         Args:
-            optimization_id: The parent optimization ID.
-            prompt: The optimized prompt text.
-            scores_dict: Score dimensions as a dict.
-            strategy_used: Strategy name used for the optimization.
+            opt_snapshot: Frozen snapshot of the Optimization row.
+            initial_scores_dict: Pre-computed score dict from
+                `build_scores_dict(opt)` inside the read session.
 
         Returns:
-            The newly created RefinementTurn (version=1).
+            Frozen `_InitialTurnPayload` with `branch_kwargs` + `turn_kwargs`
+            ready to splat into RefinementBranch / RefinementTurn constructors.
         """
-        branch = RefinementBranch(
-            id=str(uuid.uuid4()),
-            optimization_id=optimization_id,
-            parent_branch_id=None,
-            forked_at_version=None,
-        )
-        self.db.add(branch)
+        import uuid as _uuid
 
-        turn = RefinementTurn(
-            id=str(uuid.uuid4()),
-            optimization_id=optimization_id,
-            version=1,
-            branch_id=branch.id,
-            parent_version=None,
-            refinement_request=None,
-            prompt=prompt,
-            scores=scores_dict,
-            deltas=None,
-            deltas_from_original=None,
-            strategy_used=strategy_used,
-            suggestions=None,
-            trace_id=None,
-        )
-        self.db.add(turn)
-        await self.db.commit()
+        from app.services.refinement_context import _InitialTurnPayload
 
-        logger.info(
-            "Initial refinement turn created: optimization_id=%s branch_id=%s",
-            optimization_id, branch.id,
+        branch_id = str(_uuid.uuid4())
+        turn_id = str(_uuid.uuid4())
+
+        branch_kwargs = {
+            "id": branch_id,
+            "optimization_id": opt_snapshot.id,
+            "parent_branch_id": None,
+            "forked_at_version": None,
+        }
+        # parent_version=None and refinement_request=None for the seed turn —
+        # matches the existing `create_initial_turn` defaults at
+        # refinement_service.py:141-142.
+        turn_kwargs = {
+            "id": turn_id,
+            "optimization_id": opt_snapshot.id,
+            "branch_id": branch_id,
+            "version": 1,
+            "parent_version": None,
+            "prompt": opt_snapshot.optimized_prompt,
+            "refinement_request": None,
+            "scores": initial_scores_dict,
+            "deltas": None,
+            "deltas_from_original": None,
+            "strategy_used": opt_snapshot.strategy_used or "auto",
+            "suggestions": None,
+            "trace_id": None,
+        }
+
+        return _InitialTurnPayload(
+            branch_kwargs=branch_kwargs,
+            turn_kwargs=turn_kwargs,
         )
-        return turn
 
     async def create_refinement_turn(
         self,
