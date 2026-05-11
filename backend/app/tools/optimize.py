@@ -29,6 +29,7 @@ from app.tools._shared import (
     get_context_service,
     get_routing,
     get_taxonomy_engine,
+    get_write_queue,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,7 +146,6 @@ async def handle_optimize(
             db.add(pending)
             # NO commit — submit() handles it
 
-        from app.tools._shared import get_write_queue
         await get_write_queue().submit(
             _persist_pending_passthrough,
             operation_label="optimize_passthrough_pending_insert",
@@ -204,7 +204,14 @@ async def handle_optimize(
         len(prompt), effective_strategy, effective_repo,
     )
 
-    async with async_session_factory() as db:
+    # Foundation P4 Cycle 3 Task 3: orchestrator.run() now opens its own
+    # transitional read session internally (Task 4 will split it into 5
+    # short sessions). The wrapper here is intentionally retained as
+    # ``async with ... as _db:`` so the orchestration scope remains
+    # well-defined for sampling/passthrough symmetry; the bound name is
+    # unused. Removing the wrapper entirely is scoped to a later
+    # Cycle 3 task (Test 1 RED → GREEN).
+    async with async_session_factory() as _db:  # noqa: F841 (unused — see comment)
         orchestrator = PipelineOrchestrator(prompts_dir=PROMPTS_DIR)
 
         # Forward key pipeline events to the event bus so the web UI
@@ -227,7 +234,7 @@ async def handle_optimize(
         async for event in orchestrator.run(
             raw_prompt=prompt,
             provider=provider,  # type: ignore[arg-type]
-            db=db,
+            write_queue=get_write_queue(),
             provider_instances=provider_instances,
             strategy_override=effective_strategy if effective_strategy != "auto" else None,
             codebase_context=enrichment.codebase_context,
@@ -310,7 +317,6 @@ async def _persist_sampling_failure(
 
     v0.4.13 cycle 9: routes through MCP WriteQueue when available.
     """
-    from app.tools._shared import get_write_queue
     error_msg = f"Sampling pipeline failed: {type(exc).__name__}: {exc}"
 
     async def _persist(db):  # type: ignore[no-untyped-def]
