@@ -1084,6 +1084,14 @@ async def test_invoke_refinement_pipeline_emits_refinement_complete(monkeypatch)
         prompts_dir=Path("/tmp/test-prompts"),
     )
 
+    # Stub PromptLoader/StrategyLoader since /tmp/test-prompts has no files —
+    # the pipeline only needs the rendered text to be non-empty (LLM is
+    # mocked below).
+    svc.prompt_loader.load = MagicMock(return_value="stub")  # type: ignore[method-assign]
+    svc.prompt_loader.render = MagicMock(return_value="stub")  # type: ignore[method-assign]
+    svc.strategy_loader.load = MagicMock(return_value="stub")  # type: ignore[method-assign]
+    svc.strategy_loader.format_available = MagicMock(return_value="auto")  # type: ignore[method-assign]
+
     # Mock _call_provider to return stub phase outputs
     call_count = [0]
 
@@ -1096,8 +1104,9 @@ async def test_invoke_refinement_pipeline_emits_refinement_complete(monkeypatch)
                 task_type="general",
                 domain="general",
                 weaknesses=[],
-                analysis_summary="ok",
+                strengths=[],
                 selected_strategy="auto",
+                strategy_rationale="stub",
                 intent_label="general",
                 confidence=0.8,
             )
@@ -1116,7 +1125,6 @@ async def test_invoke_refinement_pipeline_emits_refinement_complete(monkeypatch)
                     clarity=8.0, specificity=8.0, structure=8.0,
                     faithfulness=8.0, conciseness=8.0,
                 ),
-                analysis="good",
             )
         elif output_format is SuggestionsOutput:
             return SuggestionsOutput(suggestions=[])
