@@ -48,6 +48,9 @@ class TestOptimizePendingPassthroughBehavior:
         await wq.start()
         try:
             from app.tools import _shared
+            # P4-integration-review: snapshot prior value so teardown restores
+            # rather than clobbering to None (which would leak across tests).
+            _prior_wq = _shared._write_queue
             _shared.set_write_queue(wq)
             submit_calls: list[str] = []
             orig_submit = wq.submit
@@ -106,7 +109,7 @@ class TestOptimizePendingPassthroughBehavior:
                 f"operation_label='optimize_passthrough_pending_insert' (saw: {submit_calls})"
             )
         finally:
-            _shared.set_write_queue(None)
+            _shared.set_write_queue(_prior_wq)
             await wq.stop(drain_timeout=2.0)
 
 

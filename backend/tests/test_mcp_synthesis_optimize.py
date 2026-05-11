@@ -60,11 +60,19 @@ async def test_synthesis_optimize_with_provider():
     mock_provider = AsyncMock()
     mock_provider.name = "mock_provider"
 
+    # P4-integration-review (2026-05-10): ``optimize.py:234`` injects
+    # ``write_queue=get_write_queue()`` into ``orchestrator.run()``. With the
+    # mocked orchestrator the queue is never actually used, but the
+    # ``get_write_queue()`` call itself raises ``WriteQueue not initialized``
+    # when the singleton is unset — patch it so this test no longer relies
+    # on the (now-fixed) cross-test singleton leak.
+    mock_session_local = AsyncMock()
     with (
         patch("app.tools._shared._routing", _mock_routing(
             "internal", provider=mock_provider, provider_name="mock_provider",
         )),
         patch("app.tools._shared._context_service", _mock_context_service(guidance="guidance")),
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(mock_session_local)),
         patch("app.tools.optimize.async_session_factory") as mock_session_factory,
         patch("app.tools.optimize.PipelineOrchestrator") as mock_orchestrator,
         patch("app.tools.optimize.notify_event_bus", new_callable=AsyncMock) as mock_notify,
@@ -178,11 +186,16 @@ async def test_synthesis_optimize_pipeline_error():
     mock_provider = AsyncMock()
     mock_provider.name = "mock_provider"
 
+    # P4-integration-review (2026-05-10): patch ``_write_queue`` so
+    # ``optimize.py:234``'s ``get_write_queue()`` call doesn't blow up before
+    # the mocked orchestrator reaches the simulated error event.
+    mock_session_local = AsyncMock()
     with (
         patch("app.tools._shared._routing", _mock_routing(
             "internal", provider=mock_provider, provider_name="mock_provider",
         )),
         patch("app.tools._shared._context_service", _mock_context_service()),
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(mock_session_local)),
         patch("app.tools.optimize.async_session_factory") as mock_session_factory,
         patch("app.tools.optimize.PipelineOrchestrator") as mock_orchestrator,
         patch("app.tools.optimize.PreferencesService") as mock_prefs_service,
