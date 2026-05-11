@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import DATA_DIR
+from app.database import async_session_factory
 from app.providers.base import LLMProvider, TokenUsage, call_provider_with_retry
 from app.schemas.pipeline_contracts import (
     AnalysisResult,
@@ -51,6 +52,7 @@ from app.services.preferences import PreferencesService
 from app.services.prompt_loader import PromptLoader
 from app.services.strategy_loader import StrategyLoader
 from app.services.trace_logger import TraceLogger
+from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -161,9 +163,9 @@ class PipelineOrchestrator:
     async def run(
         self,
         raw_prompt: str,
-        provider: LLMProvider,
-        db: AsyncSession,
         *,
+        provider: LLMProvider,
+        write_queue: WriteQueue,
         provider_instances: dict[str, LLMProvider] | None = None,
         strategy_override: str | None = None,
         codebase_context: str | None = None,
@@ -178,9 +180,23 @@ class PipelineOrchestrator:
         heuristic_task_type: str | None = None,
         heuristic_domain: str | None = None,
         divergence_alerts: str | None = None,
-        write_queue: Any | None = None,
     ) -> AsyncGenerator[PipelineEvent, None]:
         """Execute the full pipeline, yielding SSE events.
+
+        Foundation P4 Cycle 3 (Task 3): the ``db: AsyncSession`` parameter
+        is dropped. Each db-taking helper call site will be wrapped in its
+        own short read session inside this method's body (Task 4
+        restructure). For Task 3 a transitional single read session is
+        opened at the top of the body to preserve internal ``db``
+        references unchanged — Task 4 will dismantle this scaffold and
+        split into 5 short sessions.
+
+        ``write_queue`` is now REQUIRED (no None fallback). Passing
+        ``write_queue=None`` raises ``ValueError("write_queue is
+        required")`` before any yield, so callers cannot accidentally
+        slip through the legacy transient-queue path. Callers should
+        pass ``app.state.write_queue`` (backend) or
+        ``get_write_queue()`` (MCP).
 
         ``project_id`` is frozen at entry by the caller (router / MCP tool) —
         no persist-time resolution happens inside the pipeline.  This
@@ -190,14 +206,13 @@ class PipelineOrchestrator:
         row will land with ``project_id=NULL`` and the next
         ``_backfill_project_ids`` sweep at startup will repair it.
 
-        ``write_queue`` (v0.4.13 cycle 7.5) threads the WriteQueue
-        singleton through to ``persist_and_propagate``, which collapsed
-        to require a queue argument after the polymorphic dispatch
-        retirement. Callers should pass ``request.app.state.write_queue``.
-        When ``None`` the helper builds a transient in-process queue
-        from the global engine -- adequate for tests + boot but the
-        canonical path is explicit injection.
+        Raises:
+            ValueError("write_queue is required") on first yield if
+                ``write_queue`` is None.
         """
+        if write_queue is None:
+            raise ValueError("write_queue is required")
+
         trace_id = str(uuid.uuid4())
         opt_id = str(uuid.uuid4())
         start_time = time.monotonic()
@@ -232,6 +247,16 @@ class PipelineOrchestrator:
         phase_durations: dict[str, int] = {}
         effective_strategy: str | None = None
 
+        # Foundation P4 Cycle 3 Task 3 transitional scaffold: open a single
+        # read session manually here so the body's existing ``db``
+        # references keep working. Task 4 will dismantle this and replace
+        # with 5 short sessions, one per db-taking helper call site, so no
+        # session crosses an LLM call boundary. For Task 3 we keep the
+        # single session intentionally — the public signature change is
+        # the only observable behavior delta in this commit. Cleanup is
+        # handled in the outer ``finally`` block to avoid re-indenting the
+        # entire try-body for a scaffold that Task 4 removes.
+        db: AsyncSession = async_session_factory()
         try:
             # ---------------------------------------------------------------
             # Enrichment trace — log what context was provided (no LLM call)
@@ -665,37 +690,11 @@ class PipelineOrchestrator:
                 taxonomy_engine=taxonomy_engine,
                 divergence_flags=scoring.divergence_flags if scoring else [],
             )
-            # v0.4.13 cycle 7.5: persist_and_propagate requires write_queue
-            # post-collapse. When the orchestrator caller doesn't supply
-            # one (legacy / test paths), build a transient queue from
-            # the engine the request-scoped db is bound to (so test
-            # in-memory engines work too) -- falling back to the global
-            # engine only if db.bind is unresolvable.
-            _wq = write_queue
-            _transient_pwq = False
-            if _wq is None:
-                from app.services.write_queue import WriteQueue
-                _engine = None
-                try:
-                    _engine = db.bind
-                except Exception:
-                    _engine = None
-                if _engine is None:
-                    from app.database import engine as _global_engine
-                    _engine = _global_engine
-                _wq = WriteQueue(_engine)
-                await _wq.start()
-                _transient_pwq = True
-            try:
-                await persist_and_propagate(persist_inputs, write_queue=_wq)
-            finally:
-                if _transient_pwq:
-                    try:
-                        await _wq.stop(drain_timeout=2.0)
-                    except Exception:
-                        logger.debug(
-                            "transient write_queue stop failed", exc_info=True,
-                        )
+            # Foundation P4 Cycle 3 Task 3: write_queue is now REQUIRED.
+            # The ValueError guard at the top of run() ensures it's non-None
+            # here, so we can call persist_and_propagate directly without
+            # the transient-queue fallback the v0.4.13 codepath needed.
+            await persist_and_propagate(persist_inputs, write_queue=write_queue)
 
             # ---------------------------------------------------------------
             # Final event
@@ -768,6 +767,16 @@ class PipelineOrchestrator:
             })
 
         finally:
+            # Task 3 transitional scaffold cleanup: close the manually
+            # opened read session. Task 4 will remove this when the body
+            # is restructured into short per-helper sessions.
+            try:
+                await db.close()
+            except Exception:
+                logger.debug(
+                    "transitional db.close() failed (non-fatal)", exc_info=True,
+                )
+
             # Drain coordination — always decrement, even on error,
             # so the inflight tracker stays balanced. ``begin`` may
             # have failed silently above; ``end`` is wrapped in the

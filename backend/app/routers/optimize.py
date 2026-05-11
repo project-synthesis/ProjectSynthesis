@@ -295,7 +295,9 @@ async def optimize(
         })
         try:
             async for event in orchestrator.run(
-                raw_prompt=body.prompt, provider=decision.provider, db=db,
+                raw_prompt=body.prompt,
+                provider=decision.provider,
+                write_queue=request.app.state.write_queue,
                 strategy_override=effective_strategy if effective_strategy != "auto" else None,
                 codebase_context=enrichment.codebase_context,
                 strategy_intelligence=enrichment.strategy_intelligence,
@@ -308,7 +310,6 @@ async def optimize(
                 heuristic_task_type=enrichment.task_type,
                 heuristic_domain=enrichment.domain_value,
                 divergence_alerts=enrichment.divergence_alerts,
-                write_queue=getattr(request.app.state, "write_queue", None),
             ):
                 yield format_sse(event.event, event.data)
         except Exception as exc:
