@@ -712,12 +712,21 @@ async def passthrough_save(
 
     if scoring_enabled:
         from app.services.scoring_service import score_passthrough
+        from app.tools._shared import _fetch_historical_stats
 
+        # Pre-fetch historical_stats inside the existing request session.
+        # The router's FastAPI Depends(get_db) session is appropriate here —
+        # this site has no LLM call holding the session beyond enrich's A4
+        # carve-out (per spec §1 invariant).
+        historical_stats = await _fetch_historical_stats(
+            db,
+            exclude_scoring_modes=["heuristic", "hybrid_passthrough"],
+        )
         score_result = await score_passthrough(
             raw_prompt=opt.raw_prompt,
             optimized_prompt=cleaned_prompt,
             external_scores=body.scores,
-            db=db,
+            historical_stats=historical_stats,
             scoring_enabled=scoring_enabled,
         )
         optimized_scores = score_result.optimized_scores
