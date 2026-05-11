@@ -55,13 +55,13 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 
 | Component | Change |
 |---|---|
-| `models.py` | NEW `ValidationSuite` ORM (12 cols + 3 indexes); `RunRow.mode` gains string-convention value `'replay_run'`; `RunRow.__table_args__` gains `Index("ix_run_row_suite_id", "suite_id", text("started_at DESC"))` to keep `alembic check` clean per `bdd8e96cf489` precedent |
+| `models.py` | NEW `ValidationSuite` ORM (11 cols + 3 indexes); `RunRow.mode` gains string-convention value `'replay_run'`; `RunRow.__table_args__` gains `Index("ix_run_row_suite_id", "suite_id", started_at.desc())` to keep `alembic check` clean per `bdd8e96cf489` precedent |
 | `schemas/runs.py` | EXTEND — extend `Literal["topic_probe", "seed_agent"]` to `Literal["topic_probe", "seed_agent", "replay_run"]` on `RunRequest.mode`, `RunSummary.mode`, `RunResult.mode` (3 sites in schema file + `routers/runs.py::list_runs::mode` Query param = **4 sites total**) |
 | `schemas/probes.py` | EXTEND — relax `ProbeContext.repo_full_name: str` → `str \| None = None`; add `commit_sha: str \| None = None`; add `topic_only: bool = False`. NOTE: existing fields `intent_hint: Literal["audit", "refactor", "explore", "regression-test"] = "explore"` (line 19) and `scope: str = "**/*"` (line 18) are NOT relaxed — defaults handle the topic-only path (the `model_config={"extra": "forbid"}` is preserved). |
 | `schemas/validation_suite.py` | NEW — Pydantic models (request/response + nested payload types `PromptSnapshotItem`, `PerPromptScore`, `BaselineScoresPayload`) |
 | `schemas/mcp_models.py` | EXTEND — `SaveSuiteResult`, `ReplayInitiatedResult` |
 | `services/validation_suite_service.py` | NEW — `create_from_run()`, `retire()`, `get()`, `list()`, `list_replays()`, `compute_regression_alarm()` |
-| `services/run_orchestrator.py` | EXTEND `_persist_final()` signature to take `mode: str` so the operation_label can be mode-keyed (`replay_run_persist` for replay, existing `run_orchestrator.persist_final` otherwise); update the single existing caller at `:86` to thread `mode` through. EXTEND `_extract_probe_meta()` (`:142`) to include `grounding_mode: request.payload.get('grounding_mode', 'codebase')` in the returned dict so `RunRow.topic_probe_meta.grounding_mode` is persisted + queryable. EXTEND lifespan registration to add `'replay_run'` generator (dispatch is generator-dict-based via `self._generators[mode]` — body unchanged). NEW private helper `_run_generator_and_persist(mode, request, run_id)` extracted from `run()` body and shared with the new `_run_to_completion` wrapper. NEW `dispatch_async()` for 202 callers (awaits initial `INSERT` only, spawns shielded background task with explicit `current_run_id` ContextVar set inside the spawned task). REFACTOR `run()` to a thin wrapper that calls `dispatch_async()` then awaits a completion event — preserves the "blocks until terminal" contract for SSE callers + tests while sharing the dispatch body. |
+| `services/run_orchestrator.py` | EXTEND `_persist_final()` signature to take `mode: str` so the operation_label can be mode-keyed (`replay_run_persist` for replay, existing `run_orchestrator.persist_final` otherwise); update the single existing caller at `:86` to thread `mode` through. EXTEND `_extract_probe_meta()` (`:142`) to include `grounding_mode: request.payload.get('grounding_mode', 'codebase')` in the returned dict so `RunRow.topic_probe_meta.grounding_mode` is persisted + queryable. **`_extract_probe_meta()` continues to gate on `mode == "topic_probe"`** — `replay_run` rows have `RunRow.topic_probe_meta = NULL` (matches the existing `_extract_seed_meta()` mode-gating pattern at `run_orchestrator.py:155-163`). EXTEND `_create_row()` body to include `suite_id=request.payload.get("suite_id")` in the `RunRow(...)` constructor (today's body at `:119-133` enumerates which columns it sets; `suite_id` is added to that enumeration). EXTEND lifespan registration to add `'replay_run'` generator (dispatch is generator-dict-based via `self._generators[mode]` — body unchanged). NEW private helper `_run_generator_and_persist(mode, request, run_id)` extracted from `run()` body and shared with the new `_run_to_completion` wrapper. NEW `dispatch_async()` for 202 callers (awaits initial `INSERT` only, spawns shielded background task with explicit `current_run_id` ContextVar set inside the spawned task). REFACTOR `run()` to a thin wrapper that calls `dispatch_async()` then awaits a completion event — preserves the "blocks until terminal" contract for SSE callers + tests while sharing the dispatch body. |
 | `services/generators/replay_run_generator.py` | NEW — `RunGenerator` Protocol impl; consumes `RunRequest(mode='replay_run', payload={"suite_id": ..., "project_id": ..., "repo_full_name": ...})`. `__init__` takes the union of collaborators needed by `batch_pipeline.run_single_prompt`: `(provider, prompt_loader, embedding_service, session_factory, taxonomy_engine, domain_resolver, context_service, write_queue)` — this is a **NEW richer collaborator graph** (not a literal mirror of `SeedAgentGenerator.__init__` which is `(seed_orchestrator, write_queue)` only, nor of `TopicProbeGenerator.__init__` which is `(provider, repo_index_query, taxonomy_engine, *, context_service, embedding_service, session_factory, write_queue)`). Replay is structurally novel: it iterates prompts directly through `run_single_prompt` without going through a batch orchestrator or a probe-grounding phase, so its constructor takes the run_single_prompt collaborator union. Pre-fetches `historical_stats` once via `OptimizationService(read_db).get_score_distribution(exclude_scoring_modes=["heuristic"])` and threads to per-prompt children, matching `batch_orchestrator.run_batch:113-126` pattern. Reruns each prompt via `batch_pipeline.run_single_prompt`; routing tier = `internal` (deterministic regression detection — no sampling-driven nondeterminism) |
 | `services/generators/topic_probe_generator.py` | EXTEND — read `grounding_mode: Literal['codebase', 'topic_only']` from `request.payload`; topic_only skips Phase 1. **No concurrency refactor in T2** — `PROBE_PROMPT_CONCURRENCY` is forward-declared per §5 concurrency note, not consumed in this release. |
 | `services/generators/_constants.py` | NEW — module-level constants for the generators subpackage: `PROBE_PROMPT_CONCURRENCY: int = 5` (forward-declared value chosen to align with the batch-seeding `API=5` budget noted in root `CLAUDE.md` line 70 — different surface, but same single-user dev-tool latency profile). **NOT consumed in T2.** Reserved for T3+ parallelization with proper exception handling (see §5 concurrency note). |
@@ -80,8 +80,8 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 | Frontend `components/suites/{SuitesPanel,SuiteRow,SuiteDetailView,RegressionBadge}.svelte` | NEW |
 | Frontend `components/taxonomy/SeedModal.svelte`, `components/layout/StatusBar.svelte` | EXTEND — note: `SeedModal.svelte` lives in `components/taxonomy/` (3D-scope directory) but is a 2D modal; T2 narrows the cycle-14 banned-vocab audit to `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/` to avoid false positives on the 3D canon vocabulary used elsewhere in `taxonomy/` (per `.claude/skills/brand-guidelines/SKILL.md` line 81 / line 214) |
 | Frontend `stores/probesStore.ts`, NEW `stores/suitesStore.ts`, `lib/api.ts` | EXTEND / NEW |
-| Frontend `lib/utils/copy-feedback.svelte.ts` | REUSE existing `useCopyFlash()` primitive (canonical green `#22ff88` `copy-flash`; duration governed by the shipped `--duration-copy-flash` token in `app.css`, currently 1500ms — `component-patterns.md` line 219 records the original 600ms target, to be doc-sync'd to the shipped value at T2 release) — no new copy-feedback timing |
-| `.claude/skills/brand-guidelines/SKILL.md` | EXTEND — update canonical 2D-UI directory list at lines 79, 214, 375, 395 from `{layout,editor,refinement,shared,landing}` to `{layout,editor,refinement,shared,landing,probes,suites}` so the brand canon and the cycle-14 audit scope agree |
+| Frontend `frontend/src/lib/utils/copy-feedback.svelte.ts` | REUSE existing `useCopyFlash()` primitive (canonical green `#22ff88` `copy-flash`; duration governed by the shipped `--duration-copy-flash` token in `app.css`, currently 1500ms — `component-patterns.md` line 219 records the original 600ms target, to be doc-sync'd to the shipped value at T2 release) — no new copy-feedback timing |
+| `.claude/skills/brand-guidelines/SKILL.md` | EXTEND — (a) update canonical 2D-UI directory list at lines 79, 214, 375 from `{layout,editor,refinement,shared,landing}` to `{layout,editor,refinement,shared,landing,probes,suites}` so the brand canon and the cycle-14 audit scope agree; (b) update StatusBar height at line 140 from `22px` to `20px` per shipped `StatusBar.svelte:251` reality (parallels the `copy-flash` ship-vs-canon reconciliation) |
 | `.claude/skills/brand-guidelines/references/component-patterns.md` | EXTEND — update `copy-flash` row (line 219) from `600ms` to the shipped `1500ms` per `--duration-copy-flash` token reality (doc-sync follow-up) |
 
 ## 3 Data model
@@ -91,7 +91,7 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 | Column | Type | Constraint | Purpose |
 |---|---|---|---|
 | `id` | `String` PK | `uuid4().hex` | Stable identifier |
-| `source_run_id` | `String` FK → `run_row.id` `ondelete=SET NULL`, NOT NULL on insert | Provenance |
+| `source_run_id` | `String` FK → `run_row.id` `ondelete=SET NULL`, **nullable=True** (becomes NULL when source run is later deleted; suite remains intact for replay-history audit. NOT NULL would contradict SET NULL — picked nullability to honor the SET NULL semantics) | Provenance |
 | `prompts_snapshot` | `JSON` NOT NULL | `[{raw_prompt, intent_label, original_optimization_id?}]` |
 | `baseline_scores` | `JSON` NOT NULL | `{mean_overall, p5, p95, per_prompt: [{raw_prompt_idx, overall, dimensions}], task_type_distribution}` |
 | `tolerance_abs` | `Float` NOT NULL, default `0.5` | Absolute point delta on 10-pt scale (ROADMAP-aligned) |
@@ -111,7 +111,7 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 
 - **Add FK** `fk_run_row_suite_id` on `suite_id` → `validation_suite.id` `ondelete=SET NULL` (via `batch_alter_table` for SQLite — table rebuild)
 - **Add index** `ix_run_row_suite_id` on `(suite_id, started_at DESC)` — backs regression-alarm query (descending by `started_at` to serve "latest replay per suite" pattern)
-- **Add `Index(...)` to `RunRow.__table_args__`** mirroring the migration: `Index("ix_run_row_suite_id", "suite_id", text("started_at DESC"))` — required for `alembic check` clean exit per `bdd8e96cf489_consolidate_lifespan_ddl_into_alembic.py` precedent. Without this, the migration adds an index that the ORM doesn't declare and `alembic check` (CI gate) flags drift.
+- **Add `Index(...)` to `RunRow.__table_args__`** mirroring the migration: `Index("ix_run_row_suite_id", "suite_id", started_at.desc())` — required for `alembic check` clean exit per `bdd8e96cf489_consolidate_lifespan_ddl_into_alembic.py` precedent. Without this, the migration adds an index that the ORM doesn't declare and `alembic check` (CI gate) flags drift.
 - `mode` string-convention value `'replay_run'` added at the DB level (no DDL — column is `String`); update class docstring. **Pydantic surface extensions (4 sites)**: `schemas/runs.py::RunRequest.mode` + `RunSummary.mode` + `RunResult.mode` Literal extends from `["topic_probe", "seed_agent"]` to `["topic_probe", "seed_agent", "replay_run"]`; `routers/runs.py::list_runs(mode: Literal[...] | None = Query(None))` query param adds the same value. Public API consequence: `GET /api/runs?mode=replay_run` becomes a documented filter.
 
 ### Key invariants
@@ -133,7 +133,7 @@ def upgrade() -> None:
         op.create_table(
             "validation_suite",
             sa.Column("id", sa.String(), primary_key=True),
-            sa.Column("source_run_id", sa.String(), nullable=False),
+            sa.Column("source_run_id", sa.String(), nullable=True),  # SET NULL semantics require nullable; suite stays intact when source run deleted
             sa.Column("prompts_snapshot", sa.JSON(), nullable=False),
             sa.Column("baseline_scores", sa.JSON(), nullable=False),
             sa.Column("tolerance_abs", sa.Float(), nullable=False, server_default="0.5"),
@@ -203,8 +203,11 @@ class ValidationSuite(Base):
     __tablename__ = "validation_suite"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    source_run_id: Mapped[str] = mapped_column(
-        String, ForeignKey("run_row.id", ondelete="SET NULL"), nullable=False,
+    source_run_id: Mapped[str | None] = mapped_column(
+        # SET NULL semantics require nullable=True; suite stays intact when
+        # source run row is later deleted. NOT NULL would conflict with SET NULL
+        # at delete time — pick nullable to honor the cascade contract.
+        String, ForeignKey("run_row.id", ondelete="SET NULL"), nullable=True,
     )
     prompts_snapshot: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
     baseline_scores: Mapped[dict] = mapped_column(JSON, nullable=False)
@@ -251,7 +254,7 @@ The migration's `op.create_index("ix_run_row_suite_id", "run_row", ["suite_id", 
 | Method + Path | Body / Query | Status | Rate limit | Returns |
 |---|---|---|---|---|
 | `POST /api/probes/{run_id}/save-as-suite` | `{label: str[1..120], tolerance_abs?: float = 0.5}` | 201 | 20/min | `ValidationSuiteOut` |
-| `GET /api/suites` | `?project_id=&repo_full_name=&include_retired=false&limit=20&offset=0` | 200 | — | `RunListResponse`-style envelope of `ValidationSuiteListItem` (matches `RunListResponse` pagination shape: `{total, count, offset, items, has_more, next_offset}`) |
+| `GET /api/suites` | `?project_id=&repo_full_name=&include_retired=false&limit=20&offset=0` | 200 | — | `ValidationSuiteListResponse` (concrete Pydantic envelope; see §4 schemas block — same shape as `RunListResponse`: `{total, count, offset, items: list[ValidationSuiteListItem], has_more, next_offset}`) |
 | `GET /api/suites/{suite_id}` | — | 200 / 404 | — | `ValidationSuiteOut` |
 | `GET /api/suites/{suite_id}/replays` | `?limit=20&offset=0` | 200 | — | `RunListResponse` (canonical — `items: list[RunSummary]` filtered to `mode='replay_run' AND suite_id={suite_id}`) |
 | `POST /api/suites/{suite_id}/replay` | — | 202 | 5/min | `ReplayRunOut` |
@@ -321,7 +324,7 @@ Listings deliberately REST-only (matches `synthesis_history` precedent — no `s
 | `invalid_tolerance` | 400 | outside `[0.1, 5.0]` |
 | `suite_not_found` | 404 | get/replay/retire missing suite |
 | `suite_retired` | 409 | replay on retired suite |
-| `topic_only_unavailable` | 400 | (defensive — reserved for kill-switch) |
+| `topic_only_unavailable` | 400 | Reserved for future kill-switch via `TOPIC_ONLY_MODE_ENABLED` env var (T2 ships with this default `True`; setting `False` causes `POST /api/probes` with `grounding_mode='topic_only'` to return this error). Defensive — provisioned in T2 so a future operator-flip doesn't need a schema migration. **NOT in T2 IN-scope per §14** — kill-switch implementation deferred; only the error code envelope is reserved. |
 | `link_repo_first` | 400 | (existing) `grounding_mode='codebase'` without linked repo |
 
 `suite_repo_drift` is **informational, not an error** — returned as `ReplayRunOut.warnings: ['repo_drift']` (200 OK) when suite vs current linked repo names differ.
@@ -391,7 +394,21 @@ class RegressionAlarmBlock(BaseModel):
     suites_total: int
     suites_in_alarm: int
     latest_alarms: list[RegressionAlarmEntry]
+
+
+class ValidationSuiteListResponse(BaseModel):
+    """Pagination envelope for GET /api/suites — mirrors RunListResponse shape
+    per the project's canonical pagination convention (schemas/runs.py:55-63).
+    """
+    total: int
+    count: int
+    offset: int
+    items: list[ValidationSuiteListItem]
+    has_more: bool
+    next_offset: int | None
 ```
+
+Update `GET /api/suites` (§4 REST table) returns `ValidationSuiteListResponse` directly — supersedes the prior "`RunListResponse`-style envelope" wording.
 
 ### Write-queue operation labels (new)
 
@@ -945,8 +962,9 @@ Brand gradient (`cyan → purple`) deliberately NOT used on Save-as-Suite — so
 | Surface | Height | Padding | Gap | Type |
 |---|---|---|---|---|
 | SeedModal tab bar | h-7 | px-2 | gap-1 | text-[11px] |
-| Tab cell (TOPIC PROBE) | h-7 | px-1.5 | gap-0.5 | text-[11px] uppercase 700 `font-display` |
-| Form rows | h-7 (toolbar) | px-1.5 | gap-1.5 | text-[11px] |
+| Tab cell (TOPIC PROBE) | — (inherits bar height h-7) | px-1.5 | gap-0.5 | text-[11px] uppercase 700 `font-display` |
+| Form rows (input fields) | h-5 (canon "Select/input fields | 20px" per `SKILL.md` line 139) | px-1 | gap-1.5 | text-[11px] |
+| Form toolbar (action buttons grouped above/below form, if present) | h-7 (canon "Toolbar bars") | px-1.5 | gap-1.5 | text-[11px] |
 | Run / Save-Suite / Replay buttons | **h-5** | px-2 | — | text-[10px] mono, line-height 18px |
 | Copy-md icon button | 20×20 | — | — | 16px icon, centered |
 | Suite list rows | h-5 | px-1 | — | text-[10px], labels `text-dim` |
@@ -957,11 +975,13 @@ Brand gradient (`cyan → purple`) deliberately NOT used on Save-as-Suite — so
 | Score values | — | — | — | text-[10px] `font-mono` tabular |
 | TaxonomyMiniView row | h-4 | px-1 | — | text-[10px] `font-mono` for counts |
 | `NEW` chip | h-3.5 | px-1 | — | text-[9px] `font-mono` 500, 1px neon-teal contour |
-| StatusBar regression badge | full bar height (no explicit `h-*`) | `px-1.5 py-0` | — | text-[10px] `font-mono`, edge-to-edge inside 22px bar (matches `TierBadge`/`UpdateBadge`/`ProviderBadge` precedent — sub-height stamps inside the StatusBar create a "stamp on bar" visual layer that breaks bar flush-alignment) |
+| StatusBar regression badge | full bar height (no explicit `h-*`) | `px-1.5 py-0` | — | text-[10px] `font-mono`, edge-to-edge inside the bar — matches `TierBadge`/`UpdateBadge`/`ProviderBadge` precedent. **Bar height reconciliation**: `SKILL.md` line 140 canon is 22px; shipped `StatusBar.svelte:251` ships 20px. Per `feedback_visual_feel_over_spec.md` ("update spec to match what shipped, not the other way around"), the shipped 20px is authoritative for layout. The badge fills the bar regardless. Doc-sync to `SKILL.md` line 140 from 22px → 20px is a §11 pre-release item, paralleling the `copy-flash` 600ms → 1500ms reconciliation. |
 
 **Banned (asserted at cycle 14 audit, scope narrowed to 2D-UI directories ONLY):**
-- CSS: `p-2`+, `gap-2`+, `h-7` on buttons, `px-2.5`+ on tab cells, `border: 2px`, any `box-shadow` with spread/blur, any `text-shadow`/`filter`/`radial-gradient` to transparent on UI elements
-- Vocab: `glow`/`halo`/`bloom`/`radiance`/`breathing`/`dust`/`pulse`/`flash` (canonical 3D-feature names per `references/3d-visualization.md` "Canon Vocabulary") — banned in `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/` only. The `frontend/src/lib/components/taxonomy/` directory is **3D-scope** (3D-visualization canon directory per `SKILL.md` line 81 / line 214) and is **explicitly excluded** from this sweep — `taxonomy/SeedModal.svelte` lives there for legacy reasons but is a 2D modal. T2 narrows the audit grep `--include-dir` to the 7 directories above; if any new 2D component is introduced under `taxonomy/`, it must be re-pathed before merge.
+- CSS: `p-2`+, `gap-2`+, `h-7` on buttons, `px-2.5`+ on tab cells **or buttons** (per `SKILL.md` line 149 — `px-2` is the canon ceiling for both), `border: 2px`, any `box-shadow` with spread/blur, any `text-shadow`/`filter`/`radial-gradient` to transparent on UI elements
+- Vocab: standalone-word `glow`/`halo`/`bloom`/`radiance`/`breathing`/`dust`/`pulse`/`flash` (canonical 3D-feature names per `references/3d-visualization.md` "Canon Vocabulary") — banned in `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/` only.
+- **Hyphenated canonical identifiers are PERMITTED in all directories**: `copy-flash` (canonical 2D animation in `component-patterns.md` line 219), `forge-spark`, `scale-in`, `slide-in-right`, `slide-up-in`, `dialog-in`, `useCopyFlash` (camelCase function name), `flash-emissive` (3D), etc. Audit grep uses word-boundary form `(?<![-\w])(glow|halo|bloom|radiance|breathing|dust|pulse|flash)(?![-\w])` (or equivalent `\b...\b` with hyphen-exclusion) to avoid false positives on these compounds.
+- The `frontend/src/lib/components/taxonomy/` directory is **3D-scope** (3D-visualization canon directory per `SKILL.md` line 81 / line 214) and is **explicitly excluded** from this sweep — `taxonomy/SeedModal.svelte` lives there for legacy reasons but is a 2D modal. T2 narrows the audit grep `--include-dir` to the 7 directories above; if any new 2D component is introduced under `taxonomy/`, it must be re-pathed before merge.
 
 ### Contour-intensity tier mapping
 
@@ -1001,7 +1021,7 @@ This applies uniformly to: Run probe button, Save-Suite, Replay, Copy-md icon, t
 
 | Action | Stage | Animation (per `component-patterns.md` canonical definitions) |
 |---|---|---|
-| Run probe (click) | Optimize | `scale-in` 300ms `cubic-bezier(0.16, 1, 0.3, 1)` |
+| Run probe (click) — progress view mounts | Optimize | `scale-in` 300ms `cubic-bezier(0.16, 1, 0.3, 1)` applies to the `TopicProbeProgressView` panel as it enters the layout, NOT to the button itself (buttons get the standard 200ms hover transition only) |
 | Save-as-Suite (click → toast) | Validate | `forge-spark` one-shot on button (yellow flash + scale 1.2→1.0 + rotation per the canonical `@keyframes forge-spark` definition — do not re-derive the rotation value at spec time) → toast `slide-in-right` 300ms |
 | Replay (click) | Strategy | `slide-in-right` on new replay row (decisive lateral snap) |
 | Emergent taxonomy node | Validate | `forge-spark` on the new node |
@@ -1018,14 +1038,21 @@ All respect `prefers-reduced-motion → 0.01ms`.
 |---|---|
 | Save button | `SAVE SUITE` |
 | Replay button | `REPLAY` |
-| Badge nominal | `12 OK` |
-| Badge firing | `2 ALARM` |
+| Badge nominal | `12 ok` (title/lower-case, matches shipped `statusLabel()` pattern in `SeedModal.svelte:222-228` — "the voice is technical/precise rather than shouting all-caps" per the existing run-status convention) |
+| Badge firing | `2 alarm` (same — lower-case noun; the chromatic color [red] carries the urgency signal, not the case) |
 | Save toast | `Suite saved: <label>` |
 | Empty SuitesPanel | `No suites. Save a probe to create one.` |
 | Topic-only hint | `Prompts without code grounding.` |
 | Regression tooltip | `2 suites · mean below tolerance` |
 | Replay-complete (alarm) | `<label> · −0.64 vs baseline` |
 | Replay-complete (nominal) | `<label> · within tolerance` |
+
+**Casing conventions across surfaces** (clarifies which surface gets which case to avoid future drift):
+- **Button labels** (Save-Suite, Replay, Run): UPPERCASE via `font-display` + `text-transform: uppercase` per the canonical action-button pattern (`SKILL.md` line 303 + shipped `SEED TAXONOMY` modal title in `SeedModal.svelte:239`)
+- **Section / sub-section headings**: UPPERCASE via Syne + `letter-spacing: 0.1em` (per `SKILL.md` line 290-291)
+- **Toast messages, empty states, tooltips, status-condition badges**: Title- or lower-case (per shipped `statusLabel()` pattern + standard prose conventions)
+- **Numerics with units**: no space, no case (`8.2/10`, `42%`, `−0.64`)
+- Anchor: `SKILL.md` line 303 + shipped `SeedModal.svelte:222-228` `statusLabel()` for the badge precedent.
 
 ### NEW components
 
@@ -1214,13 +1241,13 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 | Cycle | Scope | ~RED tests | INTEGRATE focus | OPERATE focus |
 |---|---|---|---|---|
 | **A — Substrate (1-4)** | | | | |
-| 1 | Migration + `ValidationSuite` ORM + `RunRow.__table_args__` `ix_run_row_suite_id` declaration | **6** (pure-schema invariants — `inspector.has_table('validation_suite')`, column-existence asserts for 11 cols, FK reflection check, 3 index reflection checks, partial-index `WHERE retired_at IS NULL` predicate check, `RunRow.suite_id` FK reflection check. **All 6 are themselves consumer tests for the ORM + migration code** — they assert reflected DB state via SQLAlchemy `inspect()`, which satisfies "Scaffolding ≠ TDD" without cross-cycle hand-off.) | A2 (migration follows `bdd8e96cf489_consolidate_lifespan_ddl_into_alembic.py` precedent — single forward-only migration; `alembic check` exits clean post-upgrade; `inspector.has_table()` idempotency guard matches consolidation style; ORM `__table_args__` index declarations match migration `op.create_index` calls so `alembic check` reports zero drift; SQLite FK addition uses `batch_alter_table("run_row", recreate="always")` per `a2f6d8e31b09:76,97` precedent) · A5 (test fixtures construct real `ValidationSuite(...)` instances, no `MagicMock`) | O2 (migration completes cleanly under WriteQueue active; `alembic upgrade head` + `downgrade -1` round-trip on fresh DB; `tests/test_main_lifespan_no_ddl.py` continues to pass) |
+| 1 | Migration + `ValidationSuite` ORM + `RunRow.__table_args__` `ix_run_row_suite_id` declaration | **7** (pure-schema invariants — `inspector.has_table('validation_suite')`, column-existence asserts for 11 cols, FK reflection check, **4 index reflection checks** [`ix_validation_suite_project_id`, `ix_validation_suite_source_run_id`, `ix_validation_suite_active`, plus `ix_run_row_suite_id`], partial-index `WHERE retired_at IS NULL` predicate check, `RunRow.suite_id` FK reflection check. **All 6 are themselves consumer tests for the ORM + migration code** — they assert reflected DB state via SQLAlchemy `inspect()`, which satisfies "Scaffolding ≠ TDD" without cross-cycle hand-off.) | A2 (migration follows `bdd8e96cf489_consolidate_lifespan_ddl_into_alembic.py` precedent — single forward-only migration; `alembic check` exits clean post-upgrade; `inspector.has_table()` idempotency guard matches consolidation style; ORM `__table_args__` index declarations match migration `op.create_index` calls so `alembic check` reports zero drift; SQLite FK addition uses `batch_alter_table("run_row", recreate="always")` per `a2f6d8e31b09:76,97` precedent) · A5 (test fixtures construct real `ValidationSuite(...)` instances, no `MagicMock`) | O2 (migration completes cleanly under WriteQueue active; `alembic upgrade head` + `downgrade -1` round-trip on fresh DB; `tests/test_main_lifespan_no_ddl.py` continues to pass) |
 | 2 | `ValidationSuiteService.create_from_run` + `SuiteSnapshotInputs` | 11 | A4 (`SuiteSnapshotInputs` populates ALL columns; column-by-column diff against `ValidationSuite` ORM) · A5 (real `RunRow` rows in fixtures, not mocked) | O1 (`SELECT * FROM validation_suite WHERE id=:s` after create — confirm row exists with all columns populated; **never trust the function's return value as evidence persistence happened** per O1 canon) |
 | 3 | `.retire`, `.get`, `.list`, `.list_replays` + `SuiteRetireInputs` + `validation_suite_retire` operation label | 9 | A4 (retire updates only `retired_at`/`retired_reason` — no other column mutated; column-by-column post-update diff) · A2 (use `WriteQueue.submit()` — do not write directly) | O1 (re-retire is idempotent and persists no-op; `validation_suite_retired` event NOT emitted on re-retire — assert via event-bus subscription) |
 | 4 | `.compute_regression_alarm` + 30s TTL cache + `regression_alarm_transition` event | 7 | A3 (Python-side filter matches canonical alarm-evaluation logic; cite the spec's SQL + Python filter as the canonical reference) · A1 (alarm-query result columns ALL consumed — none silently dropped) | O2 (alarm query under concurrent `replay_run` writes — no inconsistent snapshots; verify with concurrent writer harness) · O6 (cross-process replay writes from MCP do not corrupt alarm state) |
 | **B — REST + Generators (5-9)** | | | | |
 | 5 | `routers/suites.py` (6 endpoints, rate limits, error envelopes) | 15 | A2 (use `WriteQueue.submit()` indirectly via `ValidationSuiteService` — do NOT re-implement persistence in the router) · A4 (response payloads populate all `ValidationSuiteOut` / `ReplayRunOut` / `RunListResponse` fields — no NULL leakage from JOIN queries) | O5 (client disconnects mid-replay-dispatch — no orphan rows; test with `curl --max-time 0.1` against `POST /api/suites/{id}/replay`) · O8 (replay endpoint INSERT-then-spawn — cancellation between INSERT commit and task spawn must be reconciled by `_gc_orphan_runs` within TTL) |
-| 6 | `ReplayRunGenerator` + lifespan registration extension | 11 | A2 (use `batch_pipeline.run_single_prompt` — NOT a hand-rolled inner pipeline) · A3 (diff `ReplayRunGenerator.run()` return shape against `TopicProbeGenerator.run()` and `SeedAgentGenerator.run()`; any `GeneratorResult` field the canonical generators populate that replay leaves None must have documented justification — `taxonomy_delta={}` and `final_report=None` are justified inline in spec §5) · A5 (replay tests construct real `ValidationSuite(...)` rows and real `SuiteSnapshotInputs` instances; no MagicMock for the snapshot dataclasses) · A6 (every prompt receives full enrichment context — codebase + strategy intelligence + applied patterns — same as `batch_orchestrator.run_batch` canonical pattern) · A1 (read every field of `run_single_prompt`'s `OptimizationResult` — not just `overall`) | O3 (per-prompt persistence routes through queue in short batches — replay's 30-min worst-case duration must NOT hold any single write transaction >5s; verify warm-engine debounce + hot-path commits do not starve under sequential-replay load) · O4 (warm-engine debounce fires mid-replay — no contention) · O7 (replay's worst-case 30-min duration — every timeout in path: LLM provider, HTTP client, async_wait_for — must be ≥ that plus buffer) · O8 (cancel mid-replay — `RunRow.status` reaches terminal `failed` via `asyncio.shield()` write; test by killing the spawned task at every per-prompt boundary) |
+| 6 | `ReplayRunGenerator` + lifespan registration extension | 11 | A2 (use `batch_pipeline.run_single_prompt` — NOT a hand-rolled inner pipeline) · A3 (diff `ReplayRunGenerator.run()` return shape against `TopicProbeGenerator.run()` and `SeedAgentGenerator.run()`; any `GeneratorResult` field the canonical generators populate that replay leaves None must have documented justification — `taxonomy_delta={}` and `final_report=None` are justified inline in spec §5) · A5 (replay tests construct real `ValidationSuite(...)` rows and real `SuiteSnapshotInputs` instances; no MagicMock for the snapshot dataclasses) · A6 (every prompt receives full enrichment context — codebase + strategy intelligence + applied patterns — same as `batch_orchestrator.run_batch` canonical pattern) · A1 (read every field of `run_single_prompt`'s **`PendingOptimization`** — not just `overall_score`; the 5 score dimensions, `id`, `task_type` are each used by the replay result-handler per §5) | O3 (per-prompt persistence routes through queue in short batches — replay's 30-min worst-case duration must NOT hold any single write transaction >5s; verify warm-engine debounce + hot-path commits do not starve under sequential-replay load) · O4 (warm-engine debounce fires mid-replay — no contention) · O7 (replay's worst-case 30-min duration — every timeout in path: LLM provider, HTTP client, async_wait_for — must be ≥ that plus buffer) · O8 (cancel mid-replay — `RunRow.status` reaches terminal `failed` via `asyncio.shield()` write; test by killing the spawned task at every per-prompt boundary) |
 | 7 | Topic-only mode — `TopicProbeGenerator` branch + 2nd template + `probe_generation` signature extension + `ProbeContext` schema extension | 9 | A2 (don't re-implement Phase 2 generation — call existing `probe_generation.generate_probe_prompts` with new `mode`/`template_name` kwargs) · A3 (consume same return shape across both modes; downstream phases handle empty `relevant_files`/`None` `explore_synthesis_excerpt` as valid degenerate state) | O1 (`RunRow.topic_probe_meta.grounding_mode='topic_only'` persisted and queryable via `GET /api/runs/{id}`) |
 | 8 | 202+polling on `POST /api/probes` + `dispatch_async` + `current_run_id` ContextVar transfer | 7 | A2 (`dispatch_async` reuses existing `RunOrchestrator._create_row` + `_persist_final` lifecycle; SSE entry path refactors to internally call `dispatch_async` — single-codepath body shared between SSE + 202) | O1 (poll endpoint reflects committed row immediately after 202 returns — INSERT awaited before response; verify with race-stress test: dispatch_async + immediate GET, 1000 iterations) · O5 (curl `--max-time` shorter than initial INSERT — server-side state remains consistent under client disconnect mid-INSERT) · O7 (inventory every timeout in `dispatch_async` path: initial-INSERT WriteQueue timeout, spawned-task max duration, `_gc_orphan_runs` TTL; longest must ≥ worst-case probe duration plus buffer) · O8 (spawned task survives 202 caller's connection close via `asyncio.shield`; verify by closing connection mid-spawn and checking `RunRow` reaches terminal status) |
 | 9 | `/api/health` regression_alarm block | 5 | A4 (`RegressionAlarmEntry` populates all required fields from joined query — no NULL leakage; column-by-column diff against the join-SQL result columns in spec §5) | O2 (alarm query coexists with active replays — no read-write contention; verify with 30 concurrent `/api/health` polls during an active replay) |
@@ -1236,7 +1263,7 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 | 15 | Audit-hook RAISE flip + new regression test + extended integration test | 3 | A2 (no behavioral logic change — only the default in `app/config.py` flips `False → True`) | **All O1-O8** — the extended integration test `test_audit_hook_emits_zero_warn_under_full_t2_pipeline` exercises every T2 write path under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True` (save-as-suite, replay, topic-only probe, retire, regression-alarm computation) and must emit zero `read-engine audit:` lines. Existing P4 test `test_audit_hook_emits_zero_warn_under_full_pipeline` must continue PASSing. |
 | 16 | E2E validation workflow + soak grep verification — **GATE CYCLE, not a 7-dispatch protocol cycle.** No new RED tests; runs Validator 1 (round-trip success) + Validator 2 (soak-log grep) only. | n/a | n/a | n/a |
 
-**~131 new RED tests** (sum: 6+11+9+7+15+11+9+7+5+9+18+14+7+3 = 131) + extended integration + E2E smoke. Backend ≥90% coverage, frontend ≥80%.
+**~132 new RED tests** (sum: 7+11+9+7+15+11+9+7+5+9+18+14+7+3 = 132) + extended integration + E2E smoke. Backend ≥90% coverage, frontend ≥80%.
 
 **Pydantic schemas + operation-label cycle assignment** (per "Scaffolding ≠ TDD" hard invariant):
 
@@ -1292,41 +1319,43 @@ Both validator subagents (spec-compliance + code-quality) must return APPROVED-Z
 1. `grep -E "audit_drift|read-engine audit:" data/backend.log | tail -100` — zero unexpected sources in last 7 days
 2. All 16 cycles GREEN — `pytest --cov=app -v` ≥90% backend coverage
 3. `npm run test:coverage` ≥80% frontend coverage
-4. Brand audit pass — no `box-shadow` with spread/blur, no `text-shadow`, no `filter: drop-shadow`, no banned vocab in `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/`
+4. Brand audit pass — no `box-shadow` with spread/blur, no `text-shadow`, no `filter: drop-shadow`, no banned-vocab standalone-word hits (word-boundary regex `(?<![-\w])(glow|halo|bloom|radiance|breathing|dust|pulse|flash)(?![-\w])` — permits hyphenated canon like `copy-flash`/`forge-spark`/`useCopyFlash`) in `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/`
 5. A11y audit pass — axe-core clean on all new components
 6. `alembic check` clean
 7. `init.sh restart` smoke test — all services green
 8. E2E validation: probe → save-as-suite → replay → regression detection round-trip
 9. Backward-compat smoke: `POST /api/probes` without `Prefer:` header — SSE response unchanged
 10. CHANGELOG entry written in canon voice (per `feedback_changelog_voice.md`)
-11. Stale-doc fix: `backend/CLAUDE.md` T2/T3/T4 minor numbers harmonized with ROADMAP; `docs/ROADMAP.md` line 333 (`POST /api/probes/{id}/replay`) updated to reflect the relocated endpoint `POST /api/suites/{suite_id}/replay`; `.claude/skills/brand-guidelines/SKILL.md` lines 79/214/375/395 extended from 5-directory to 7-directory scope; `.claude/skills/brand-guidelines/references/component-patterns.md` line 219 `copy-flash` updated from 600ms to shipped 1500ms.
+11. Stale-doc fix: `backend/CLAUDE.md` T2/T3/T4 minor numbers harmonized with ROADMAP; `docs/ROADMAP.md` line 333 (`POST /api/probes/{id}/replay`) updated to reflect the relocated endpoint `POST /api/suites/{suite_id}/replay`; `.claude/skills/brand-guidelines/SKILL.md` lines 79/214/375 (line 395 is a prose scope statement without an enumerated directory list — exclude from substitution) extended from 5-directory to 7-directory scope; `.claude/skills/brand-guidelines/SKILL.md` line 140 StatusBar height updated 22px → 20px per shipped reality; `.claude/skills/brand-guidelines/references/component-patterns.md` line 219 `copy-flash` updated from 600ms to shipped 1500ms. **Cycle assignment for these doc-sync changes**: land in the same PR as Cycle 12 (frontend SuitesPanel/RegressionBadge) since the canon updates live adjacent to the new consumers — keeps doc + impl in lock-step.
 
 ### CHANGELOG preview (canon voice)
 
-```
-## v0.4.22 — 2026-MM-DD
+The example below is a CHANGELOG fragment; the leading `##` and `###` markers are markdown literal text inside a code fence and do NOT participate in this spec's heading outline. The spec's own section numbering remains 1-14 sequential.
 
-### Added
-- POST /api/probes/{id}/save-as-suite forks completed topic-probe runs into immutable ValidationSuite fixtures.
-- POST /api/suites/{id}/replay re-runs frozen suites through the full pipeline; produces RunRow(mode='replay_run', suite_id=...).
-- GET /api/suites + GET /api/suites/{id} + GET /api/suites/{id}/replays paginated views.
-- POST /api/suites/{id}/retire soft-deletes a suite (idempotent).
-- /api/health regression_alarm block surfaces suite-level mean drops below per-suite tolerance_abs (default 0.5).
-- POST /api/probes accepts Prefer: respond-async header — returns 202 Accepted + Location + Retry-After; client polls GET /api/probes/{id} until terminal.
-- Topic-only grounding mode (grounding_mode='topic_only') — skips Phase 1 codebase grounding; no linked-repo requirement.
-- 2 new MCP tools: synthesis_save_suite, synthesis_replay_suite (15 → 17 tools).
-- Topic Probe SeedModal tab + final report card with copy-as-markdown.
-- SuitesPanel + SuiteDetailView for suite lifecycle management.
-- StatusBar regression alarm badge — neon-green nominal, neon-red firing.
-- New prompt template prompts/probe-agent-topic-only.md.
-- New events (4): validation_suite_created, validation_suite_retired, probe_warning, regression_alarm_transition. Replay terminal events reuse existing probe_completed event type.
-- New operation labels (3): validation_suite_create, validation_suite_retire, replay_run_persist (mode-keyed via RunOrchestrator._persist_final).
+```text
+    ## v0.4.22 — 2026-MM-DD
 
-### Changed
-- WRITE_QUEUE_AUDIT_HOOK_RAISE default flipped True. Writes to the read engine outside the allow-list now raise WriteOnReadEngineError. 7-day post-v0.4.21 soak window cleared. Operators can set WRITE_QUEUE_AUDIT_HOOK_RAISE=false as a kill switch.
-- RunRow.suite_id gains FK to validation_suite.id (ON DELETE SET NULL) plus ix_run_row_suite_id index.
-- RunRow.mode adds string-convention value 'replay_run' (no enum migration).
-- backend/CLAUDE.md T2/T3/T4 minor numbers harmonized with docs/ROADMAP.md.
+    ### Added
+    - POST /api/probes/{id}/save-as-suite forks completed topic-probe runs into immutable ValidationSuite fixtures.
+    - POST /api/suites/{id}/replay re-runs frozen suites through the full pipeline; produces RunRow(mode='replay_run', suite_id=...).
+    - GET /api/suites + GET /api/suites/{id} + GET /api/suites/{id}/replays paginated views.
+    - POST /api/suites/{id}/retire soft-deletes a suite (idempotent).
+    - /api/health regression_alarm block surfaces suite-level mean drops below per-suite tolerance_abs (default 0.5).
+    - POST /api/probes accepts Prefer: respond-async header — returns 202 Accepted + Location + Retry-After; client polls GET /api/probes/{id} until terminal.
+    - Topic-only grounding mode (grounding_mode='topic_only') — skips Phase 1 codebase grounding; no linked-repo requirement.
+    - 2 new MCP tools: synthesis_save_suite, synthesis_replay_suite (15 → 17 tools).
+    - Topic Probe SeedModal tab + final report card with copy-as-markdown.
+    - SuitesPanel + SuiteDetailView for suite lifecycle management.
+    - StatusBar regression alarm badge — neon-green nominal, neon-red firing.
+    - New prompt template prompts/probe-agent-topic-only.md.
+    - New events (4): validation_suite_created, validation_suite_retired, probe_warning, regression_alarm_transition. Replay terminal events reuse existing probe_completed event type.
+    - New operation labels (3): validation_suite_create, validation_suite_retire, replay_run_persist (mode-keyed via RunOrchestrator._persist_final).
+
+    ### Changed
+    - WRITE_QUEUE_AUDIT_HOOK_RAISE default flipped True. Writes to the read engine outside the allow-list now raise WriteOnReadEngineError. 7-day post-v0.4.21 soak window cleared. Operators can set WRITE_QUEUE_AUDIT_HOOK_RAISE=false as a kill switch.
+    - RunRow.suite_id gains FK to validation_suite.id (ON DELETE SET NULL) plus ix_run_row_suite_id index.
+    - RunRow.mode adds string-convention value 'replay_run' (no enum migration).
+    - backend/CLAUDE.md T2/T3/T4 minor numbers harmonized with docs/ROADMAP.md.
 ```
 
 ## 12 Risk register
@@ -1356,13 +1385,13 @@ Both validator subagents (spec-compliance + code-quality) must return APPROVED-Z
 T2 ships when ALL true:
 
 1. **Schema** — `validation_suite` table + 3 indexes (`ix_validation_suite_project_id`, `ix_validation_suite_source_run_id`, `ix_validation_suite_active` partial-on `retired_at IS NULL DESC on created_at`) + `ix_run_row_suite_id` on `(suite_id, started_at DESC)` + `fk_run_row_suite_id` FK all exist on a freshly migrated DB; ORM `__table_args__` declarations match the migration (zero `alembic check` drift); `alembic upgrade head` + `downgrade -1` round-trip cleanly on fresh test DB
-2. **Cycle completion** — All **14 protocol cycles** (1-13, 15) complete the full 7-dispatch pipeline (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 spec-compliance → Validator 2 code-quality) with **APPROVED-ZERO-INCONSISTENCIES** on both validators. **Cycles 14 (brand/a11y audit) and 16 (E2E smoke + soak grep) are gate-only checkpoints** — Validator 1 + Validator 2 only, no RED→GREEN code change. **No protocol phase is skipped** per `feedback_tdd_protocol.md` hard invariants. ~131 new RED tests all GREEN.
+2. **Cycle completion** — All **14 protocol cycles** (1-13, 15) complete the full 7-dispatch pipeline (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 spec-compliance → Validator 2 code-quality) with **APPROVED-ZERO-INCONSISTENCIES** on both validators. **Cycles 14 (brand/a11y audit) and 16 (E2E smoke + soak grep) are gate-only checkpoints** — Validator 1 + Validator 2 only, no RED→GREEN code change. **No protocol phase is skipped** per `feedback_tdd_protocol.md` hard invariants. ~132 new RED tests all GREEN.
 3. **Coverage** — Backend ≥90%, frontend ≥80%
 4. **E2E round-trip** — Manual: probe → save-as-suite → manually degrade scoring weights → replay → alarm fires red on `/api/health` → revert weights → replay → alarm clears green
 5. **Audit-hook flip** — `WRITE_QUEUE_AUDIT_HOOK_RAISE` defaults `True`; **both** `test_audit_hook_emits_zero_warn_under_full_pipeline` (P4 test) AND `test_audit_hook_emits_zero_warn_under_full_t2_pipeline` (T2 test) PASS; 7-day soak grep clean
 6. **Backward compat** — `POST /api/probes` without `Prefer:` header returns SSE response identical to v0.4.21; T1 probes work end-to-end with zero behavior change; existing seed agent flows unchanged; `GET /api/runs?mode=...` accepts the new `replay_run` Literal value (Pydantic schemas extended without breaking existing `topic_probe`/`seed_agent` callers)
 7. **MCP** — `synthesis_save_suite` + `synthesis_replay_suite` structured_output verified; error envelopes for `run_not_completed`, `run_missing_aggregate`, `suite_retired`
-8. **Brand audit** — Cycle 14 grep returns zero hits for `box-shadow.*[1-9]px [1-9]`, `text-shadow`, `filter: drop-shadow`, `(glow|halo|bloom|radiance|breathing|dust|pulse|flash)` in `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/` (`taxonomy/` directory explicitly excluded per 3D-scope canon)
+8. **Brand audit** — Cycle 14 grep returns zero hits for `box-shadow.*[1-9]px [1-9]`, `text-shadow`, `filter: drop-shadow`, and **standalone-word-only** `(?<![-\w])(glow|halo|bloom|radiance|breathing|dust|pulse|flash)(?![-\w])` in `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/` (`taxonomy/` directory explicitly excluded per 3D-scope canon; hyphenated canonical identifiers like `copy-flash`, `forge-spark`, `useCopyFlash` are permitted via word-boundary regex)
 9. **A11y audit** — axe-core clean on all new components
 10. **Observability** — All **4 new events** (`validation_suite_created`, `validation_suite_retired`, `probe_warning`, `regression_alarm_transition`) emit via JSONL + ring buffer + SSE; visible in `ActivityPanel` filtered to `path=validation_suite` or `path=regression_alarm`. Replay terminal events surface via the reused `probe_completed` event type.
 11. **Health endpoint** — `regression_alarm` block valid shape under all conditions; 30s cache respected
