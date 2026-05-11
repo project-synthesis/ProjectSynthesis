@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F401  (re-used by Task 4-6 method params)
 
 from app.config import DATA_DIR, settings
 from app.models import Optimization, RefinementBranch, RefinementTurn
@@ -51,22 +51,42 @@ logger = logging.getLogger(__name__)
 
 class RefinementService:
     """Manages refinement sessions with version history, branching, and
-    suggestion generation."""
+    suggestion generation.
+
+    Foundation P4 Cycle 2: constructor is keyword-only and does NOT hold a
+    DB session. Each method takes `db: AsyncSession` as a method-level
+    parameter where DB access is needed. The LLM-pipeline method
+    `invoke_refinement_pipeline(ctx)` takes a `RefinementContext` instead
+    of session+ORM rows.
+    """
 
     def __init__(
         self,
-        db: AsyncSession,
-        provider: LLMProvider,
+        *,
+        provider: LLMProvider | None = None,
         prompts_dir: Path,
         data_dir: Path | None = None,
     ) -> None:
-        self.db = db
+        """Construct a RefinementService.
+
+        Keyword-only (`*,` separator) because `provider` has a default but
+        `prompts_dir` does not — Python's "non-default arg after default"
+        rule would raise `SyntaxError` with positional args.
+
+        Args:
+            provider: LLM provider for invoke_refinement_pipeline. Optional
+                so read-only callers (get_versions, get_branches) and rollback
+                (no LLM, but does write) can construct without a provider.
+                Methods that require a provider raise `ValueError("provider
+                required")` if `self.provider is None`.
+            prompts_dir: Required path to the prompts directory.
+            data_dir: Optional override for preferences. Defaults to
+                config.DATA_DIR. Matches PipelineOrchestrator pattern for
+                test isolation.
+        """
         self.provider = provider
         self.prompt_loader = PromptLoader(prompts_dir)
         self.strategy_loader = StrategyLoader(prompts_dir / "strategies")
-        # data_dir overrides the global DATA_DIR for preferences.  Same
-        # rationale as PipelineOrchestrator — tests isolate their own
-        # preferences file instead of reading production data/.
         self._data_dir: Path = data_dir or DATA_DIR
 
     # ------------------------------------------------------------------
