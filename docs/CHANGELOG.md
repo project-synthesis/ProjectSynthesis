@@ -4,6 +4,9 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Changed
+- Restructured `tools/save_result.py` + `routers/optimize.py` passthrough scoring path: heuristic + A4 LLM analysis now run outside any DB session, and persistence routes through `WriteQueue.submit(operation_label="save_result_persist")`. Added `HeuristicAnalyzer.analyze_no_session()` for queue-based telemetry (`task_type_telemetry_no_session`). `score_passthrough()` becomes pure compute on injected `historical_stats`. `classify_with_llm()` parameterized via `operation_label` keyword to support distinguishable telemetry labels per caller. Foundation P4 Cycle 1.
+
 ## v0.4.20 — 2026-05-10
 
 ### Added
