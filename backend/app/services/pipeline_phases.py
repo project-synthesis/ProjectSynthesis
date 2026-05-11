@@ -1351,9 +1351,30 @@ async def persist_failed_optimization(
     model_ids: dict[str, str],
     error_message: str,
 ) -> None:
-    """Roll back + write a ``status='failed'`` Optimization row + publish event."""
+    """Persist a ``status='failed'`` Optimization row + publish event.
+
+    Foundation P4 Cycle 3: runs inside a ``WriteQueue.submit()`` callback
+    against a fresh writer session. Previously the helper began with
+    ``await db.rollback()`` to clear partial work on the orchestrator's
+    read-engine session — that's no longer needed because the
+    orchestrator's read sessions are short-lived and close themselves on
+    exception. The leading ``rollback()`` is removed; the fresh writer
+    session has no pending state to clear.
+
+    Args:
+        db: Writer session (provided by ``WriteQueue`` callback).
+        opt_id: Optimization UUID.
+        raw_prompt: Original user prompt.
+        trace_id: Pipeline trace ID for cross-correlation.
+        duration_ms: Wall-clock duration of the failed run.
+        provider: Resolved LLM provider instance.
+        optimizer_model: Model ID used for optimize phase (if reached).
+        model_ids: Per-phase model ID dict (analyze/optimize/score/suggest).
+        error_message: Exception message (already truncated by caller).
+    """
+    # NOTE: Cycle 3 removed `await db.rollback()` here — fresh writer
+    # session has no pending state to clear.
     try:
-        await db.rollback()
         failed_opt = Optimization(
             id=opt_id,
             raw_prompt=raw_prompt,

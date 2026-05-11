@@ -767,21 +767,39 @@ class PipelineOrchestrator:
             except Exception:
                 pass
 
-            # Session 5: persist_failed_optimization — short session in the
-            # except block. Task 5 will further restructure this into a queue
-            # closure; Task 4 just wraps it in a short read session for now.
-            async with async_session_factory() as db:
+            # Foundation P4 Cycle 3: persist failed Optimization via queue.
+            #
+            # The closure ``_persist_failed_callback`` captures 8 required
+            # kwargs from the enclosing ``run()`` scope. It runs inside the
+            # ``WriteQueue`` worker against a fresh writer session — the
+            # read-engine session is no longer held through the write.
+            #
+            # ``failure_provider`` is resolved per Hybrid Phase Routing
+            # (matches the structured-error-log call site above).
+            error_message = str(exc)[:2000]
+            failure_provider = (
+                provider_instances.get("optimize", provider)
+                if provider_instances
+                else provider
+            )
+
+            async def _persist_failed_callback(write_db: AsyncSession) -> None:
                 await persist_failed_optimization(
-                    db,
+                    write_db,
                     opt_id=opt_id,
                     raw_prompt=raw_prompt,
                     trace_id=trace_id,
                     duration_ms=duration_ms,
-                    provider=provider_instances.get("optimize", provider) if provider_instances else provider,
+                    provider=failure_provider,
                     optimizer_model=optimizer_model,
                     model_ids=model_ids,
-                    error_message=str(exc),
+                    error_message=error_message,
                 )
+
+            await write_queue.submit(
+                _persist_failed_callback,
+                operation_label="pipeline_failed_optimization_persist",
+            )
 
             yield PipelineEvent(event="error", data={
                 "trace_id": trace_id,
