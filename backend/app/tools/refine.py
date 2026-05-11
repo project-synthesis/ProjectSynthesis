@@ -302,10 +302,13 @@ async def handle_refine(
         # singleton from app.tools._shared (matches existing convention).
         # Tests may not initialize the singleton; degrade to a stub EnrichedContext
         # so the LLM phase still runs against the frozen RefinementContext.
+        # `opt.optimized_prompt` is Mapped[str | None]; coerce to "" so the
+        # downstream contract types stay `str` and mypy is happy.
+        _raw_prompt: str = opt.optimized_prompt or ""
         try:
             context_service = get_context_service()
             enrichment = await context_service.enrich(
-                raw_prompt=opt.optimized_prompt,
+                raw_prompt=_raw_prompt,
                 tier=_tier,
                 db=db,
                 workspace_path=workspace_path,
@@ -322,7 +325,7 @@ async def handle_refine(
             from app.services.context_enrichment import EnrichedContext
 
             enrichment = EnrichedContext(
-                raw_prompt=opt.optimized_prompt,
+                raw_prompt=_raw_prompt,
                 analysis=None,
                 codebase_context=None,
                 strategy_intelligence=None,
