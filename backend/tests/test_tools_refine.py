@@ -231,6 +231,7 @@ async def test_refine_persistence_routes_through_write_queue(
         optimized_prompt="refined v2",
         scores={"overall": 8.0},
     ))
+    mock_provider.complete_parsed_streaming = mock_provider.complete_parsed
     mock_provider.name = "mock"
 
     monkeypatch.setattr(
@@ -575,6 +576,7 @@ async def test_refine_full_pipeline_persists_new_turn(
         scores={"overall": 8.0, "clarity": 8, "specificity": 8,
                 "structure": 8, "faithfulness": 8, "conciseness": 8},
     ))
+    mock_provider.complete_parsed_streaming = mock_provider.complete_parsed
     mock_provider.name = "mock"
     monkeypatch.setattr(
         refine_module, "get_routing",
@@ -727,6 +729,7 @@ async def test_refine_emits_refinement_turn_event(
         analysis="ok", suggested_strategy="auto",
         optimized_prompt="refined", scores={"overall": 8.0},
     ))
+    mock_provider.complete_parsed_streaming = mock_provider.complete_parsed
     mock_provider.name = "mock"
     monkeypatch.setattr(
         refine_module, "get_routing",
