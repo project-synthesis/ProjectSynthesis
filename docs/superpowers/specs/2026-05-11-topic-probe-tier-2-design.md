@@ -57,15 +57,15 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 |---|---|
 | `models.py` | NEW `ValidationSuite` ORM (12 cols + 3 indexes); `RunRow.mode` gains string-convention value `'replay_run'`; `RunRow.__table_args__` gains `Index("ix_run_row_suite_id", "suite_id", text("started_at DESC"))` to keep `alembic check` clean per `bdd8e96cf489` precedent |
 | `schemas/runs.py` | EXTEND — extend `Literal["topic_probe", "seed_agent"]` to `Literal["topic_probe", "seed_agent", "replay_run"]` on `RunRequest.mode`, `RunSummary.mode`, `RunResult.mode` (3 sites in schema file + `routers/runs.py::list_runs::mode` Query param = **4 sites total**) |
-| `schemas/probes.py` | EXTEND — relax `ProbeContext.repo_full_name: str` → `str \| None = None`; add `commit_sha: str \| None = None`; add `topic_only: bool = False` |
+| `schemas/probes.py` | EXTEND — relax `ProbeContext.repo_full_name: str` → `str \| None = None`; add `commit_sha: str \| None = None`; add `topic_only: bool = False`. NOTE: existing fields `intent_hint: Literal["audit", "refactor", "explore", "regression-test"] = "explore"` (line 19) and `scope: str = "**/*"` (line 18) are NOT relaxed — defaults handle the topic-only path (the `model_config={"extra": "forbid"}` is preserved). |
 | `schemas/validation_suite.py` | NEW — Pydantic models (request/response + nested payload types `PromptSnapshotItem`, `PerPromptScore`, `BaselineScoresPayload`) |
 | `schemas/mcp_models.py` | EXTEND — `SaveSuiteResult`, `ReplayInitiatedResult` |
 | `services/validation_suite_service.py` | NEW — `create_from_run()`, `retire()`, `get()`, `list()`, `list_replays()`, `compute_regression_alarm()` |
-| `services/run_orchestrator.py` | EXTEND lifespan registration to add `'replay_run'` generator (dispatch is generator-dict-based via `self._generators[mode]` — body unchanged); NEW `dispatch_async()` for 202 callers (awaits initial `INSERT` only, spawns shielded background task with explicit `current_run_id` ContextVar transfer to spawned task) |
-| `services/generators/replay_run_generator.py` | NEW — `RunGenerator` Protocol impl; consumes `RunRequest(mode='replay_run', payload={"suite_id": ..., "project_id": ..., "repo_full_name": ...})`; collaborator graph mirrors `SeedAgentGenerator.__init__` (provider, prompt_loader, embedding_service, session_factory, taxonomy_engine, domain_resolver, context_service); pre-fetches `historical_stats` once via `OptimizationService.get_score_distribution()` and threads to per-prompt children, matching `batch_orchestrator.run_batch` pattern; reruns each prompt via `batch_pipeline.run_single_prompt`; routing tier = `internal` (deterministic regression detection — no sampling-driven nondeterminism) |
-| `services/generators/topic_probe_generator.py` | EXTEND — read `grounding_mode: Literal['codebase', 'topic_only']` from `request.payload`; topic_only skips Phase 1; refactor to consume `PROBE_PROMPT_CONCURRENCY` constant (see new constants file below) |
-| `services/generators/_constants.py` | NEW — module-level constants for the generators subpackage: `PROBE_PROMPT_CONCURRENCY: int = 5` (matches root CLAUDE.md "Concurrency: CLI=10, API=5, sampling=2" — replay + probe share this single semaphore source) |
-| `services/probe_generation.py` | EXTEND — add `mode: Literal['codebase', 'topic_only'] = 'codebase'` + `template_name: str = 'probe-agent.md'` kwargs to `generate_probe_prompts()`; `mode='topic_only'` selects the inverted validator (`_lacks_backtick` predicate + `<5% backtick density` drop threshold) and renders `template_name` (defaults preserve backward-compat with all current callers) |
+| `services/run_orchestrator.py` | EXTEND `_persist_final()` signature to take `mode: str` so the operation_label can be mode-keyed (`replay_run_persist` for replay, existing `run_orchestrator.persist_final` otherwise); update the single existing caller at `:86` to thread `mode` through. EXTEND `_extract_probe_meta()` (`:142`) to include `grounding_mode: request.payload.get('grounding_mode', 'codebase')` in the returned dict so `RunRow.topic_probe_meta.grounding_mode` is persisted + queryable. EXTEND lifespan registration to add `'replay_run'` generator (dispatch is generator-dict-based via `self._generators[mode]` — body unchanged). NEW private helper `_run_generator_and_persist(mode, request, run_id)` extracted from `run()` body and shared with the new `_run_to_completion` wrapper. NEW `dispatch_async()` for 202 callers (awaits initial `INSERT` only, spawns shielded background task with explicit `current_run_id` ContextVar set inside the spawned task). REFACTOR `run()` to a thin wrapper that calls `dispatch_async()` then awaits a completion event — preserves the "blocks until terminal" contract for SSE callers + tests while sharing the dispatch body. |
+| `services/generators/replay_run_generator.py` | NEW — `RunGenerator` Protocol impl; consumes `RunRequest(mode='replay_run', payload={"suite_id": ..., "project_id": ..., "repo_full_name": ...})`. `__init__` takes the union of collaborators needed by `batch_pipeline.run_single_prompt`: `(provider, prompt_loader, embedding_service, session_factory, taxonomy_engine, domain_resolver, context_service, write_queue)` — this is a **NEW richer collaborator graph** (not a literal mirror of `SeedAgentGenerator.__init__` which is `(seed_orchestrator, write_queue)` only, nor of `TopicProbeGenerator.__init__` which is `(provider, repo_index_query, taxonomy_engine, *, context_service, embedding_service, session_factory, write_queue)`). Replay is structurally novel: it iterates prompts directly through `run_single_prompt` without going through a batch orchestrator or a probe-grounding phase, so its constructor takes the run_single_prompt collaborator union. Pre-fetches `historical_stats` once via `OptimizationService(read_db).get_score_distribution(exclude_scoring_modes=["heuristic"])` and threads to per-prompt children, matching `batch_orchestrator.run_batch:113-126` pattern. Reruns each prompt via `batch_pipeline.run_single_prompt`; routing tier = `internal` (deterministic regression detection — no sampling-driven nondeterminism) |
+| `services/generators/topic_probe_generator.py` | EXTEND — read `grounding_mode: Literal['codebase', 'topic_only']` from `request.payload`; topic_only skips Phase 1. **No concurrency refactor in T2** — `PROBE_PROMPT_CONCURRENCY` is forward-declared per §5 concurrency note, not consumed in this release. |
+| `services/generators/_constants.py` | NEW — module-level constants for the generators subpackage: `PROBE_PROMPT_CONCURRENCY: int = 5` (forward-declared value chosen to align with the batch-seeding `API=5` budget noted in root `CLAUDE.md` line 70 — different surface, but same single-user dev-tool latency profile). **NOT consumed in T2.** Reserved for T3+ parallelization with proper exception handling (see §5 concurrency note). |
+| `services/probe_generation.py` | EXTEND — add `mode: Literal['codebase', 'topic_only'] = 'codebase'` + `template_name: str = 'probe-agent.md'` kwargs to `generate_probe_prompts()`. `mode='topic_only'` selects the **inverted per-prompt predicate** (`_lacks_backtick` defined as `<5%` backtick density per prompt, i.e. drop prompts WITH backticks); the **batch drop threshold stays at `>50%`** (`_DROP_THRESHOLD=0.5`) per the existing F1 contract — the two thresholds operate at different levels and remain distinct. Defaults preserve backward-compat with all current callers. |
 | `routers/suites.py` | NEW — 6 endpoints |
 | `routers/probes.py` | EXTEND — `grounding_mode` body field on `ProbeRequest`; `Prefer: respond-async` header → 202 |
 | `routers/runs.py` | EXTEND — `list_runs` `mode: Literal[...]` Query extended with `replay_run` |
@@ -80,7 +80,9 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 | Frontend `components/suites/{SuitesPanel,SuiteRow,SuiteDetailView,RegressionBadge}.svelte` | NEW |
 | Frontend `components/taxonomy/SeedModal.svelte`, `components/layout/StatusBar.svelte` | EXTEND — note: `SeedModal.svelte` lives in `components/taxonomy/` (3D-scope directory) but is a 2D modal; T2 narrows the cycle-14 banned-vocab audit to `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/` to avoid false positives on the 3D canon vocabulary used elsewhere in `taxonomy/` (per `.claude/skills/brand-guidelines/SKILL.md` line 81 / line 214) |
 | Frontend `stores/probesStore.ts`, NEW `stores/suitesStore.ts`, `lib/api.ts` | EXTEND / NEW |
-| Frontend `lib/utils/copy-feedback.svelte.ts` | REUSE existing `useCopyFlash()` primitive (canonical 600ms green `#22ff88` `copy-flash` per `component-patterns.md` line 219) — no new copy-feedback timing |
+| Frontend `lib/utils/copy-feedback.svelte.ts` | REUSE existing `useCopyFlash()` primitive (canonical green `#22ff88` `copy-flash`; duration governed by the shipped `--duration-copy-flash` token in `app.css`, currently 1500ms — `component-patterns.md` line 219 records the original 600ms target, to be doc-sync'd to the shipped value at T2 release) — no new copy-feedback timing |
+| `.claude/skills/brand-guidelines/SKILL.md` | EXTEND — update canonical 2D-UI directory list at lines 79, 214, 375, 395 from `{layout,editor,refinement,shared,landing}` to `{layout,editor,refinement,shared,landing,probes,suites}` so the brand canon and the cycle-14 audit scope agree |
+| `.claude/skills/brand-guidelines/references/component-patterns.md` | EXTEND — update `copy-flash` row (line 219) from `600ms` to the shipped `1500ms` per `--duration-copy-flash` token reality (doc-sync follow-up) |
 
 ## 3 Data model
 
@@ -154,7 +156,12 @@ def upgrade() -> None:
             sqlite_where=sa.text("retired_at IS NULL"),
         )
 
-    with op.batch_alter_table("run_row") as batch:
+    # SQLite cannot ALTER a constraint in place — batch_alter_table with
+    # recreate="always" triggers the canonical table-rebuild workaround.
+    # Precedent: alembic/versions/a2f6d8e31b09_cascade_optimization_fks.py:76,97
+    # which documents this requirement in its module docstring (lines 16-18).
+    # Without recreate="always", the FK addition silently no-ops on SQLite.
+    with op.batch_alter_table("run_row", recreate="always") as batch:
         batch.create_foreign_key(
             "fk_run_row_suite_id", "validation_suite",
             ["suite_id"], ["id"], ondelete="SET NULL",
@@ -168,7 +175,9 @@ def downgrade() -> None:
     # dangling-reference state persists if the migration is later re-upgraded.
     op.execute("UPDATE run_row SET suite_id = NULL WHERE suite_id IS NOT NULL")
     op.drop_index("ix_run_row_suite_id", table_name="run_row")
-    with op.batch_alter_table("run_row") as batch:
+    # recreate="always" is also required on downgrade for SQLite to actually
+    # drop the FK constraint via table rebuild.
+    with op.batch_alter_table("run_row", recreate="always") as batch:
         batch.drop_constraint("fk_run_row_suite_id", type_="foreignkey")
     op.drop_index("ix_validation_suite_active", table_name="validation_suite")
     op.drop_index("ix_validation_suite_source_run_id", table_name="validation_suite")
@@ -224,14 +233,16 @@ class ValidationSuite(Base):
 
 ### RunRow declaration update
 
-In addition to the FK + migration, the existing `RunRow.__table_args__` tuple must be extended to declare the new index, mirroring `ix_taxonomy_snapshot_created_at`'s `created_at.desc()` precedent at `models.py:350`:
+In addition to the FK + migration, the existing `RunRow.__table_args__` tuple must be extended to declare the new index. Use the column-object `.desc()` precedent established at `models.py:125, 250, 350` (every existing DESC index in `models.py` uses `column.desc()`, never `text("...DESC")`):
 
 ```python
-# Inside RunRow.__table_args__ (existing tuple — extend, do not replace):
-Index("ix_run_row_suite_id", "suite_id", text("started_at DESC")),
+# Inside RunRow.__table_args__ (existing tuple — extend, do not replace).
+# started_at is the column reference declared earlier in the class body;
+# it's accessible at __table_args__ scope.
+Index("ix_run_row_suite_id", "suite_id", started_at.desc()),
 ```
 
-Without this matching declaration, `alembic check` fails CI per the post-`bdd8e96cf489` schema-drift invariants.
+The migration's `op.create_index("ix_run_row_suite_id", "run_row", ["suite_id", sa.text("started_at DESC")])` is functionally equivalent in the produced SQL — they generate the same `CREATE INDEX ... (suite_id, started_at DESC)` — so the ORM declaration and the migration agree on what the DB ends up looking like. Without this matching ORM declaration, `alembic check` fails CI per the post-`bdd8e96cf489` schema-drift invariants.
 
 ## 4 REST + MCP surface
 
@@ -450,7 +461,23 @@ class ValidationSuiteService:
             "baseline_mean": snapshot.baseline_scores["mean_overall"],
             "project_id": snapshot.project_id,
         })
-        return ValidationSuiteOut.from_snapshot(snapshot)
+        # Build the response from the snapshot via Pydantic's default validator —
+        # no custom from_snapshot() classmethod required. The snapshot dataclass
+        # has the same field names as ValidationSuiteOut (minus retired_at/reason
+        # which default to None on fresh creates).
+        return ValidationSuiteOut.model_validate({
+            "id": snapshot.suite_id,
+            "source_run_id": snapshot.source_run_id,
+            "label": snapshot.label,
+            "tolerance_abs": snapshot.tolerance_abs,
+            "project_id": snapshot.project_id,
+            "repo_full_name": snapshot.repo_full_name,
+            "created_at": snapshot.created_at,
+            "retired_at": None,
+            "retired_reason": None,
+            "prompts_snapshot": snapshot.prompts_snapshot,
+            "baseline_scores": snapshot.baseline_scores,
+        })
 
     async def retire(
         self, suite_id: str, *, reason: str,
@@ -550,10 +577,20 @@ class ReplayRunGenerator:
         taxonomy_engine: TaxonomyEngine,
         domain_resolver: DomainResolver,
         context_service: ContextEnrichmentService,
+        write_queue: WriteQueue,
     ) -> None:
-        """Collaborator graph mirrors SeedAgentGenerator (which itself routes
-        through batch_orchestrator.run_batch). Per Foundation P3:
-        generators MUST NOT touch RunRow — RunOrchestrator owns row writes.
+        """Collaborator graph = the union needed by batch_pipeline.run_single_prompt.
+
+        NOT a literal mirror of SeedAgentGenerator.__init__ (which is
+        (seed_orchestrator, write_queue) only — seed runs delegate to a
+        seed_orchestrator that owns its own collaborator wiring internally).
+        Replay iterates run_single_prompt directly, so its constructor takes
+        the run_single_prompt collaborator union explicitly.
+
+        Per Foundation P3: generators MUST NOT touch RunRow — RunOrchestrator
+        owns row writes. write_queue is held only for future per-prompt
+        observability writes (e.g. T3 progress checkpoints); T2's body does
+        not write to RunRow from inside the generator.
         """
         self._provider = provider
         self._prompt_loader = prompt_loader
@@ -562,12 +599,14 @@ class ReplayRunGenerator:
         self._taxonomy_engine = taxonomy_engine
         self._domain_resolver = domain_resolver
         self._context_service = context_service
+        self._write_queue = write_queue
 
     async def run(
         self, request: RunRequest, *, run_id: str,
     ) -> GeneratorResult:
         # Read fields out of request.payload — matches TopicProbeGenerator /
-        # SeedAgentGenerator canonical pattern.
+        # SeedAgentGenerator canonical pattern (both read from request.payload
+        # rather than a typed-dataclass request).
         suite_id: str = request.payload["suite_id"]
         project_id: str | None = request.payload.get("project_id")
         repo_full_name: str | None = request.payload.get("repo_full_name")
@@ -589,10 +628,12 @@ class ReplayRunGenerator:
             })
 
         # 3. Pre-fetch historical_stats ONCE — threaded to all per-prompt
-        # children. Matches batch_orchestrator.run_batch pattern; avoids N+1.
+        # children. Mirrors batch_orchestrator.run_batch:113-126 (the actual
+        # prefetch pattern: OptimizationService(read_db).get_score_distribution
+        # with exclude_scoring_modes=["heuristic"], single DB hit per batch).
         async with self._session_factory() as read_db:
-            historical_stats = await _fetch_historical_stats(
-                read_db, exclude_scoring_modes=("passthrough",),
+            historical_stats = await OptimizationService(read_db).get_score_distribution(
+                exclude_scoring_modes=["heuristic"],
             )
 
         # 4. Per-prompt execution — SEQUENTIAL loop with per-iteration
@@ -606,7 +647,13 @@ class ReplayRunGenerator:
         prompt_results: list[dict] = []
         for idx, item in enumerate(suite_snapshot.prompts_snapshot):
             try:
-                opt_result = await batch_pipeline.run_single_prompt(
+                # batch_pipeline.run_single_prompt returns
+                # services.batch_pipeline.PendingOptimization (NOT an
+                # OptimizationResult). PendingOptimization is a flat dataclass
+                # with id + score_clarity/specificity/structure/faithfulness/
+                # conciseness + overall_score (the final blended score).
+                # See batch_pipeline.py:97-156.
+                pending: PendingOptimization = await batch_pipeline.run_single_prompt(
                     raw_prompt=item["raw_prompt"],
                     tier="internal",  # Deterministic regression detection;
                                        # sampling tier introduces caller-side
@@ -622,18 +669,24 @@ class ReplayRunGenerator:
                     project_id=project_id,
                     repo_full_name=repo_full_name,
                 )
-                overall = opt_result.scores.compute_overall(opt_result.task_type)
+                overall = pending.overall_score or 0.0
                 baseline_overall = (
                     suite_snapshot.baseline_scores["per_prompt"][idx]["overall"]
                 )
                 prompt_results.append({
                     "raw_prompt": item["raw_prompt"],
                     "raw_prompt_idx": idx,
-                    "optimization_id": opt_result.optimization_id,
+                    "optimization_id": pending.id,
                     "overall": overall,
-                    "dimensions": asdict(opt_result.scores),
+                    "dimensions": {
+                        "clarity": pending.score_clarity,
+                        "specificity": pending.score_specificity,
+                        "structure": pending.score_structure,
+                        "faithfulness": pending.score_faithfulness,
+                        "conciseness": pending.score_conciseness,
+                    },
                     "intent_label": item["intent_label"],
-                    "task_type": opt_result.task_type,
+                    "task_type": pending.task_type,
                     "baseline_overall": baseline_overall,
                     "delta": overall - baseline_overall,
                     "status": "completed",
@@ -695,7 +748,7 @@ class ReplayRunGenerator:
 
 **Event reuse (decision):** replay emits ONLY `probe_prompt_completed` + `probe_completed` — same event types as topic probe. **`probe_replay_completed` is deliberately NOT introduced.** SSE consumers don't learn a new event family; SuitesPanel/RegressionBadge filter on `RunRow.mode == 'replay_run'` from the polled state, not on event type. New event introduced by T2: `probe_warning(code='repo_drift', ...)` only.
 
-**Collaborator-graph rationale:** every collaborator is the same one `SeedAgentGenerator` takes. No new infrastructure surfaces. `batch_pipeline.run_single_prompt` is the canonical primitive (A2-compliant — no re-implementation); full enrichment context flows in (A6-compliant — no scoring without enrichment). Pre-fetched `historical_stats` mirrors `batch_orchestrator.run_batch:447-460` to avoid N+1 query (`OptimizationService.get_score_distribution()` is a single DB hit threaded to all children).
+**Collaborator-graph rationale:** the constructor takes the union needed by `batch_pipeline.run_single_prompt`. This is a **new richer graph** specific to replay's structural shape — not a literal mirror of `SeedAgentGenerator.__init__(seed_orchestrator, write_queue)` (which delegates collaborator wiring to its `seed_orchestrator`) nor of `TopicProbeGenerator.__init__(provider, repo_index_query, taxonomy_engine, *, context_service, embedding_service, session_factory, write_queue)` (which uses `repo_index_query` for Phase 1 grounding — irrelevant to replay). `batch_pipeline.run_single_prompt` is the canonical primitive (A2-compliant — no re-implementation); full enrichment context flows in (A6-compliant — no scoring without enrichment). Pre-fetched `historical_stats` mirrors `batch_orchestrator.run_batch:113-126` (single DB hit threaded to all per-prompt children — `OptimizationService(read_db).get_score_distribution(exclude_scoring_modes=["heuristic"])`).
 
 ### EXTEND `app/services/generators/topic_probe_generator.py`
 
@@ -721,9 +774,20 @@ async def run(self, request: RunRequest, *, run_id: str) -> GeneratorResult:
             run_id=run_id,
         )
     else:
+        # intent_hint is Literal["audit","refactor","explore","regression-test"]
+        # with default "explore" — passing None would fail Pydantic validation.
+        # Coerce via fallback to default for the topic-only path.
+        valid_intents = ("audit", "refactor", "explore", "regression-test")
+        safe_intent_hint = intent_hint if intent_hint in valid_intents else "explore"
+        # scope: str = "**/*" default — preserved unchanged for topic_only path
+        # (the wildcard scope is informational; topic_only ignores it during
+        # Phase 2 generation per the topic-only template's lack of scope refs).
         probe_context = ProbeContext(
-            topic=topic, intent_hint=intent_hint,
-            relevant_files=[], explore_synthesis_excerpt=None,
+            topic=topic,
+            intent_hint=safe_intent_hint,
+            scope=scope or "**/*",
+            relevant_files=[],
+            explore_synthesis_excerpt=None,
             known_domains=[],
             repo_full_name=None,             # ProbeContext schema relaxed in §2
             commit_sha=None,                  # ProbeContext schema extended
@@ -782,15 +846,26 @@ app.state.run_orchestrator = RunOrchestrator(
 
 `RunRow.suite_id` is set on the initial INSERT for `mode='replay_run'` — orchestrator's `_create_row()` reads `request.payload.get("suite_id")` and populates the column when present. Existing `current_run_id` ContextVar lifecycle, `asyncio.shield()` cancellation handling, and 4-status terminal transitions all apply unchanged.
 
-**Persistence:** `RunOrchestrator._persist_final()` (existing method at `run_orchestrator.py:209`) is extended to **mode-key** the operation label: `replay_run_persist` for `mode='replay_run'`, `run_orchestrator.persist_final` for `topic_probe` and `seed_agent` (preserved). The persist body is otherwise unchanged — same `WriteQueue.submit()` call, same SQL, same shielded cancellation; only the label differs.
+**Persistence:** `RunOrchestrator._persist_final()` is extended to **mode-key** the operation label. The current signature at `run_orchestrator.py:186` is `_persist_final(self, run_id: str, result: GeneratorResult)` — `mode` is NOT in scope. T2 extends the signature to take `mode` as a new parameter, and the single existing caller at `:86` (`await self._persist_final(run_id, result)`) is updated to thread `mode` through. The new caller path inside `_run_to_completion` likewise threads `mode`.
 
 ```python
-# Inside _persist_final() — single-line extension:
-operation_label = (
-    "replay_run_persist" if mode == "replay_run"
-    else "run_orchestrator.persist_final"
-)
+# NEW signature (mode parameter added — not a single-line change; existing caller updated):
+async def _persist_final(
+    self, run_id: str, mode: str, result: GeneratorResult,
+) -> None:
+    ...
+    operation_label = (
+        "replay_run_persist" if mode == "replay_run"
+        else "run_orchestrator.persist_final"
+    )
+    await self._write_queue.submit(
+        partial(_persist_callback, ...),
+        operation_label=operation_label,
+        ...
+    )
 ```
+
+The persist body is otherwise unchanged — same `WriteQueue.submit()` call, same SQL, same shielded cancellation; only the operation_label is selected by mode.
 
 ### NEW `dispatch_async()` for 202+polling callers
 
@@ -815,16 +890,24 @@ async def _run_to_completion(self, *, mode, request, run_id) -> None:
     """Body that does generator.run() + _persist_final() with shielded cleanup.
     Sets current_run_id ContextVar inside the spawned task — parent's token
     binding is not inherited deterministically across copy_context().
+
+    Cleanup paths mirror the existing run() body at run_orchestrator.py:87-102:
+    every _mark_failed call is wrapped in contextlib.suppress(Exception) so a
+    cleanup-path failure (e.g., WriteQueue at capacity) does NOT shadow the
+    original cancellation or generator exception. _mark_failed already
+    truncates error to 2000 chars internally (`_mark_failed` body at :223);
+    callers pass the unmangled error string.
     """
     token = current_run_id.set(run_id)
     try:
         await self._run_generator_and_persist(mode, request, run_id)
     except asyncio.CancelledError:
-        # Shielded mark-failed write — survives caller cancellation.
-        await asyncio.shield(self._mark_failed(run_id, error="cancelled"))
+        with contextlib.suppress(Exception):
+            await asyncio.shield(self._mark_failed(run_id, error="cancelled"))
         raise
-    except Exception as e:
-        await asyncio.shield(self._mark_failed(run_id, error=str(e)[:2000]))
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            await self._mark_failed(run_id, error=f"{type(exc).__name__}: {exc}")
         raise
     finally:
         current_run_id.reset(token)
@@ -885,20 +968,22 @@ Brand gradient (`cyan → purple`) deliberately NOT used on Save-as-Suite — so
 | Button | Tier | Resting | Hover | Active |
 |---|---|---|---|---|
 | Save-Suite | **Hero** | `1px solid neon-purple` + 8% fill | 14% fill + `translateY(-1px)` | `translateY(0)`, border mutes |
-| Replay | **Medium** | `1px solid border-subtle` | `1px solid neon-blue` + 12% fill | `inset 0 0 0 1px rgba(77, 142, 255, 0.4)`, `translateY(0)` |
+| Replay | **Medium** | `1px solid border-subtle` | `1px solid neon-blue` + 12% fill | `inset 0 0 0 1px rgba(77, 142, 255, 0.4)` (no `translateY` — Medium tier; lift is Hero-only per `component-patterns.md` Recipe E) |
 | Copy-md icon | **Small** | `1px solid border-subtle` + `bg-input` | `1px solid neon-cyan` + 8% fill | `inset 0 0 0 1px rgba(0, 229, 255, 0.4)` |
 | Run | **Hero** (cyan) | `1px solid neon-cyan` + 8% fill | 14% fill + `translateY(-1px)` | `translateY(0)` |
 | Tab (active) | **Micro** | transparent bottom border | dim teal bottom border | full teal bottom border |
 | Suite row | **Recipe A** (border + bg-tint) — NOT Large tier; h-5 data rows are too compact for the inset-contour visual weight reserved for ~80px+ card surfaces | `1px solid border-subtle` `bg-card` | `1px solid border-accent` `bg-bg-hover/40` (matches HistoryEntry/ProjectItem sidebar-row precedent) | no `translateY` (active-state lift is reserved for Hero buttons per `component-patterns.md` Recipe E; meaningless on 20px row) |
 
-Multi-property transitions in a single declaration:
+Multi-property transitions in a single declaration with **uniform duration** per axiom 5 ("multi-property transitions fire simultaneously as one atomic event", `SKILL.md` line 59 + 335). Hover-in:
 
 ```css
 transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
             border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-            transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
+            transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
             color 200ms cubic-bezier(0.16, 1, 0.3, 1);
 ```
+
+Tighter active-press feedback (Hero buttons only) uses a separate single-duration transition rule at `150ms` on `:active`, mirroring the canonical Recipe E pattern in `component-patterns.md` — keeps the atomic-event rule intact within each state declaration.
 
 Exit easing: `cubic-bezier(0.4, 0, 1, 1)`.
 
@@ -917,11 +1002,11 @@ This applies uniformly to: Run probe button, Save-Suite, Replay, Copy-md icon, t
 | Action | Stage | Animation (per `component-patterns.md` canonical definitions) |
 |---|---|---|
 | Run probe (click) | Optimize | `scale-in` 300ms `cubic-bezier(0.16, 1, 0.3, 1)` |
-| Save-as-Suite (click → toast) | Validate | `forge-spark` one-shot on button (yellow flash + scale 1.2→1.0 + 3° rotation) → toast `slide-in-right` 300ms |
+| Save-as-Suite (click → toast) | Validate | `forge-spark` one-shot on button (yellow flash + scale 1.2→1.0 + rotation per the canonical `@keyframes forge-spark` definition — do not re-derive the rotation value at spec time) → toast `slide-in-right` 300ms |
 | Replay (click) | Strategy | `slide-in-right` on new replay row (decisive lateral snap) |
 | Emergent taxonomy node | Validate | `forge-spark` on the new node |
 | Regression nominal → firing | Validate | `forge-spark` on StatusBar badge once, then static red |
-| Copy-as-markdown | Validate | `copy-flash` (canon: 600ms ease-out, **green** `#22ff88` per `component-patterns.md` line 219) + check icon swap. **Reuses existing `useCopyFlash()` primitive at `src/lib/utils/copy-feedback.svelte.ts`** — do NOT re-derive timings; the `--duration-copy-flash` CSS token in `app.css` is the single source of truth. |
+| Copy-as-markdown | Validate | `copy-flash` — **green `#22ff88` tint** (color is the load-bearing anchor: success/health per `SKILL.md` line 233). Duration governed by the shipped `--duration-copy-flash` token in `app.css:110` (currently 1500ms; `component-patterns.md` line 219 records the original 600ms target — the implementation has drifted and is the authoritative source per `feedback_visual_feel_over_spec.md` "Update spec to match what shipped, not the other way around"). T2 ships **REUSE** of the existing `useCopyFlash()` primitive at `src/lib/utils/copy-feedback.svelte.ts` — do NOT re-derive timings; the CSS token is the single source of truth. Follow-up doc sync: `component-patterns.md` line 219 to be updated to the shipped 1500ms value at T2 release time. |
 | Report card mount | Optimize | `dialog-in` 300ms (canon: scale `0.95→1` + opacity 0→1, centered, per `component-patterns.md` line 213) |
 | Per-prompt progress strip cell fill | Analyze | `slide-up-in` per cell as events arrive (200ms entrance) |
 
@@ -959,7 +1044,7 @@ All respect `prefers-reduced-motion → 0.01ms`.
 
 | Path | Change |
 |---|---|
-| `frontend/src/lib/components/taxonomy/SeedModal.svelte` | Sixth tab "TOPIC PROBE" added (SeedModal currently lives in `taxonomy/` directory but is a 2D modal — see §2 path-mismatch note for the cycle-14 banned-vocab audit scope narrowing) |
+| `frontend/src/lib/components/taxonomy/SeedModal.svelte` | **Third tab** "TOPIC PROBE" added — current SeedModal has 2 tabs (`'generate'` and `'provide'`, verified at lines 38, 255-263); T2 adds `'topic_probe'` as the third. SeedModal lives in `taxonomy/` directory but is a 2D modal — see §2 path-mismatch note for the cycle-14 banned-vocab audit scope narrowing. |
 | `frontend/src/lib/components/layout/StatusBar.svelte` | Mount RegressionBadge |
 | Left-nav (Navigator, real path varies — verify under `frontend/src/lib/components/layout/`) | "SUITES" entry → routes to SuitesPanel |
 
@@ -1129,7 +1214,7 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 | Cycle | Scope | ~RED tests | INTEGRATE focus | OPERATE focus |
 |---|---|---|---|---|
 | **A — Substrate (1-4)** | | | | |
-| 1 | Migration + `ValidationSuite` ORM + `RunRow.__table_args__` `ix_run_row_suite_id` declaration | 7 (mix of pure-schema invariants + 1 explicit **consumer test** asserting `_persist_suite_create` round-trips through the migrated schema — Cycle 2's GREEN code lands the consumer; Cycle 1's RED has the failing assertion against the stub-or-empty service) | A2 (migration follows `bdd8e96cf489_consolidate_lifespan_ddl_into_alembic.py` precedent — single forward-only migration; `alembic check` exits clean post-upgrade; `inspector.has_table()` idempotency guard matches consolidation style; ORM `__table_args__` index declarations match migration `op.create_index` calls so `alembic check` reports zero drift) · A5 (test fixtures construct real `ValidationSuite(...)` instances, no `MagicMock`) | O2 (migration completes cleanly under WriteQueue active; `alembic upgrade head` + `downgrade -1` round-trip on fresh DB; `tests/test_main_lifespan_no_ddl.py` continues to pass) |
+| 1 | Migration + `ValidationSuite` ORM + `RunRow.__table_args__` `ix_run_row_suite_id` declaration | **6** (pure-schema invariants — `inspector.has_table('validation_suite')`, column-existence asserts for 11 cols, FK reflection check, 3 index reflection checks, partial-index `WHERE retired_at IS NULL` predicate check, `RunRow.suite_id` FK reflection check. **All 6 are themselves consumer tests for the ORM + migration code** — they assert reflected DB state via SQLAlchemy `inspect()`, which satisfies "Scaffolding ≠ TDD" without cross-cycle hand-off.) | A2 (migration follows `bdd8e96cf489_consolidate_lifespan_ddl_into_alembic.py` precedent — single forward-only migration; `alembic check` exits clean post-upgrade; `inspector.has_table()` idempotency guard matches consolidation style; ORM `__table_args__` index declarations match migration `op.create_index` calls so `alembic check` reports zero drift; SQLite FK addition uses `batch_alter_table("run_row", recreate="always")` per `a2f6d8e31b09:76,97` precedent) · A5 (test fixtures construct real `ValidationSuite(...)` instances, no `MagicMock`) | O2 (migration completes cleanly under WriteQueue active; `alembic upgrade head` + `downgrade -1` round-trip on fresh DB; `tests/test_main_lifespan_no_ddl.py` continues to pass) |
 | 2 | `ValidationSuiteService.create_from_run` + `SuiteSnapshotInputs` | 11 | A4 (`SuiteSnapshotInputs` populates ALL columns; column-by-column diff against `ValidationSuite` ORM) · A5 (real `RunRow` rows in fixtures, not mocked) | O1 (`SELECT * FROM validation_suite WHERE id=:s` after create — confirm row exists with all columns populated; **never trust the function's return value as evidence persistence happened** per O1 canon) |
 | 3 | `.retire`, `.get`, `.list`, `.list_replays` + `SuiteRetireInputs` + `validation_suite_retire` operation label | 9 | A4 (retire updates only `retired_at`/`retired_reason` — no other column mutated; column-by-column post-update diff) · A2 (use `WriteQueue.submit()` — do not write directly) | O1 (re-retire is idempotent and persists no-op; `validation_suite_retired` event NOT emitted on re-retire — assert via event-bus subscription) |
 | 4 | `.compute_regression_alarm` + 30s TTL cache + `regression_alarm_transition` event | 7 | A3 (Python-side filter matches canonical alarm-evaluation logic; cite the spec's SQL + Python filter as the canonical reference) · A1 (alarm-query result columns ALL consumed — none silently dropped) | O2 (alarm query under concurrent `replay_run` writes — no inconsistent snapshots; verify with concurrent writer harness) · O6 (cross-process replay writes from MCP do not corrupt alarm state) |
@@ -1146,12 +1231,12 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 | 12 | SuitesPanel + SuiteRow + SuiteDetailView + RegressionBadge + SuitesStore | 14 | A3 (suite list rows render every field of `ValidationSuiteListItem`; `ReplayRunOut.warnings` displayed when present; SuiteDetailView consumes full `ValidationSuiteOut` including `baseline_scores.per_prompt`) | O1 (browser smoke: SuitesPanel renders for empty / nominal / firing states; RegressionBadge transitions correctly on SSE-emitted `regression_alarm_transition` events) |
 | 13 | 202+polling abstraction in probesStore | 7 | A2 (single async-iterable contract — SSE + poll paths emit identical event shapes; consumers must not branch on source) | O5 (browser tab closes mid-probe — store cleans up poll interval, no leaked timers) · O7 (long probe runs >10min — poll cadence persists, no client-side timeout) |
 | **E — Quality (14, gate-only)** | | | | |
-| 14 | Brand audit + a11y audit (axe-core) — **GATE CYCLE, not a 7-dispatch protocol cycle.** No RED→GREEN code change. Runs Validator 1 (brand-canon compliance) + Validator 2 (axe-core a11y) only. | n/a | n/a | n/a |
+| 14 | Brand audit + a11y audit (axe-core) — **GATE CYCLE, not a 7-dispatch protocol cycle.** No RED→GREEN code change. Runs Validator 1 (brand-canon compliance — banned-vocab + banned-CSS grep against the canonical 7-directory scope `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/`; `taxonomy/` directory explicitly excluded per 3D-scope canon, see §6 banned-list + §13.8 + pre-release checklist item 4) + Validator 2 (axe-core a11y) only. Any violations found here loop back to the cycle where the offending code lives (typically 11-13). | n/a | n/a | n/a |
 | **F — Flip + Release (15-16)** | | | | |
 | 15 | Audit-hook RAISE flip + new regression test + extended integration test | 3 | A2 (no behavioral logic change — only the default in `app/config.py` flips `False → True`) | **All O1-O8** — the extended integration test `test_audit_hook_emits_zero_warn_under_full_t2_pipeline` exercises every T2 write path under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True` (save-as-suite, replay, topic-only probe, retire, regression-alarm computation) and must emit zero `read-engine audit:` lines. Existing P4 test `test_audit_hook_emits_zero_warn_under_full_pipeline` must continue PASSing. |
 | 16 | E2E validation workflow + soak grep verification — **GATE CYCLE, not a 7-dispatch protocol cycle.** No new RED tests; runs Validator 1 (round-trip success) + Validator 2 (soak-log grep) only. | n/a | n/a | n/a |
 
-**~131 new RED tests** + extended integration + E2E smoke. Backend ≥90% coverage, frontend ≥80%.
+**~131 new RED tests** (sum: 6+11+9+7+15+11+9+7+5+9+18+14+7+3 = 131) + extended integration + E2E smoke. Backend ≥90% coverage, frontend ≥80%.
 
 **Pydantic schemas + operation-label cycle assignment** (per "Scaffolding ≠ TDD" hard invariant):
 
@@ -1214,7 +1299,7 @@ Both validator subagents (spec-compliance + code-quality) must return APPROVED-Z
 8. E2E validation: probe → save-as-suite → replay → regression detection round-trip
 9. Backward-compat smoke: `POST /api/probes` without `Prefer:` header — SSE response unchanged
 10. CHANGELOG entry written in canon voice (per `feedback_changelog_voice.md`)
-11. Stale-doc fix: `backend/CLAUDE.md` T2/T3/T4 minor numbers harmonized with ROADMAP; `docs/ROADMAP.md` line 333 (`POST /api/probes/{id}/replay`) updated to reflect the relocated endpoint `POST /api/suites/{suite_id}/replay`
+11. Stale-doc fix: `backend/CLAUDE.md` T2/T3/T4 minor numbers harmonized with ROADMAP; `docs/ROADMAP.md` line 333 (`POST /api/probes/{id}/replay`) updated to reflect the relocated endpoint `POST /api/suites/{suite_id}/replay`; `.claude/skills/brand-guidelines/SKILL.md` lines 79/214/375/395 extended from 5-directory to 7-directory scope; `.claude/skills/brand-guidelines/references/component-patterns.md` line 219 `copy-flash` updated from 600ms to shipped 1500ms.
 
 ### CHANGELOG preview (canon voice)
 
@@ -1311,7 +1396,7 @@ T2 ships when ALL true:
 
 **DEFERRED to T4 (v0.4.24) — ROADMAP-locked:**
 
-- Final UI consolidation: SeedModal collapses to one tab with two modes (template-driven / topic-driven)
+- Final UI consolidation: SeedModal collapses from **3 tabs** (post-T2: `generate` / `provide` / `topic_probe`) to **1 unified tab with two modes** (template-driven / topic-driven) sharing the form scaffold
 - Single history surface backed by `RunRow` + `GET /api/runs`
 
 **NEVER (in scope hardness; user-driven if demand surfaces):**
