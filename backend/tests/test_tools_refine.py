@@ -27,6 +27,49 @@ def _read_source(rel_path: str) -> str:
     return (repo_root / rel_path).read_text(encoding="utf-8")
 
 
+async def _stub_refine_call_provider(self, **kwargs):
+    """Shared `RefinementService._call_provider` stub returning Pydantic models.
+
+    Used by Tests 3, 8, 10 to drive the full refinement pipeline end-to-end
+    with typed phase outputs (the bare MagicMock pattern produces child mocks
+    for `score_result.prompt_a_scores.clarity` that downstream `blend_scores`
+    can't compare to floats). Mirrors the inline stub in Test 9.
+    """
+    from app.schemas.pipeline_contracts import (
+        AnalysisResult,
+        DimensionScores,
+        OptimizationResult,
+        ScoreResult,
+        SuggestionsOutput,
+    )
+    fmt = kwargs.get("output_format")
+    if fmt is AnalysisResult:
+        return AnalysisResult(
+            task_type="general",
+            domain="general",
+            weaknesses=[],
+            strengths=[],
+            selected_strategy="auto",
+            strategy_rationale="stub",
+            intent_label="general",
+            confidence=0.8,
+        )
+    if fmt is OptimizationResult:
+        return OptimizationResult(
+            optimized_prompt="refined prompt v2",
+            changes_summary="stub",
+        )
+    if fmt is ScoreResult:
+        scores = DimensionScores(
+            clarity=8.0, specificity=8.0, structure=8.0,
+            faithfulness=8.0, conciseness=8.0,
+        )
+        return ScoreResult(prompt_a_scores=scores, prompt_b_scores=scores)
+    if fmt is SuggestionsOutput:
+        return SuggestionsOutput(suggestions=[])
+    raise RuntimeError(f"Unexpected output_format: {fmt}")
+
+
 # --- Test 1: AST handler invariant — no LLM/session overlap ----------------
 
 def test_refine_handler_does_not_open_long_lived_session():
@@ -226,14 +269,12 @@ async def test_refine_persistence_routes_through_write_queue(
         await db.commit()
 
     mock_provider = AsyncMock()
-    mock_provider.complete_parsed = AsyncMock(return_value=MagicMock(
-        analysis="ok", suggested_strategy="auto",
-        optimized_prompt="refined v2",
-        scores={"overall": 8.0},
-    ))
-    mock_provider.complete_parsed_streaming = mock_provider.complete_parsed
     mock_provider.name = "mock"
 
+    monkeypatch.setattr(
+        "app.services.refinement_service.RefinementService._call_provider",
+        _stub_refine_call_provider,
+    )
     monkeypatch.setattr(
         refine_module, "get_routing",
         lambda: type("R", (), {"state": type("S", (), {"provider": mock_provider})()})(),
@@ -569,15 +610,23 @@ async def test_refine_full_pipeline_persists_new_turn(
 
     monkeypatch.setattr(refine_module, "notify_event_bus", AsyncMock())
 
+    # Conftest `async_session_factory_override` patches `_shared.get_write_queue`
+    # but `refine.py` rebinds it at module load — patch the rebound name so
+    # persist routes through a working queue, otherwise it raises "WriteQueue
+    # not initialized" and the pipeline never lands a version=2 row.
+    class _FakeQueue:
+        async def submit(self, work, *, timeout=None, operation_label=None):
+            async with factory() as write_db:
+                return await work(write_db)
+
+    monkeypatch.setattr(refine_module, "get_write_queue", lambda: _FakeQueue())
+
     mock_provider = AsyncMock()
-    mock_provider.complete_parsed = AsyncMock(return_value=MagicMock(
-        analysis="ok", suggested_strategy="auto",
-        optimized_prompt="refined v2",
-        scores={"overall": 8.0, "clarity": 8, "specificity": 8,
-                "structure": 8, "faithfulness": 8, "conciseness": 8},
-    ))
-    mock_provider.complete_parsed_streaming = mock_provider.complete_parsed
     mock_provider.name = "mock"
+    monkeypatch.setattr(
+        "app.services.refinement_service.RefinementService._call_provider",
+        _stub_refine_call_provider,
+    )
     monkeypatch.setattr(
         refine_module, "get_routing",
         lambda: type("R", (), {"state": type("S", (), {"provider": mock_provider})()})(),
@@ -724,13 +773,23 @@ async def test_refine_emits_refinement_turn_event(
         ))
         await db.commit()
 
+    # Conftest `async_session_factory_override` patches `_shared.get_write_queue`
+    # but `refine.py` rebinds it at module load — patch the rebound name so
+    # persist routes through a working queue (otherwise "WriteQueue not
+    # initialized" prevents the refinement_turn event from ever firing).
+    class _FakeQueue:
+        async def submit(self, work, *, timeout=None, operation_label=None):
+            async with factory() as write_db:
+                return await work(write_db)
+
+    monkeypatch.setattr(refine_module, "get_write_queue", lambda: _FakeQueue())
+
     mock_provider = AsyncMock()
-    mock_provider.complete_parsed = AsyncMock(return_value=MagicMock(
-        analysis="ok", suggested_strategy="auto",
-        optimized_prompt="refined", scores={"overall": 8.0},
-    ))
-    mock_provider.complete_parsed_streaming = mock_provider.complete_parsed
     mock_provider.name = "mock"
+    monkeypatch.setattr(
+        "app.services.refinement_service.RefinementService._call_provider",
+        _stub_refine_call_provider,
+    )
     monkeypatch.setattr(
         refine_module, "get_routing",
         lambda: type("R", (), {"state": type("S", (), {"provider": mock_provider})()})(),
