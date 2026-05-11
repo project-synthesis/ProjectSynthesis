@@ -10,11 +10,31 @@ import ast
 import logging
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 # --- Fixtures ------------------------------------------------------------
+
+
+def _make_routing_stub(provider):
+    """Build a get_routing() stub with both `state.provider` AND `resolve()`.
+
+    The new handle_optimize calls routing.resolve(ctx_routing) to get the
+    tier decision; older tests stubbed only `.state.provider`. This helper
+    returns a fake routing object satisfying both contracts.
+    """
+    decision = SimpleNamespace(
+        tier="internal",
+        provider=provider,
+        force_passthrough=False,
+        sampling_capable=False,
+    )
+    return SimpleNamespace(
+        state=SimpleNamespace(provider=provider),
+        resolve=lambda ctx: decision,
+    )
 
 def _read_source(rel_path: str) -> str:
     """Read a source file relative to the repo root.
@@ -287,7 +307,7 @@ async def test_pipeline_full_run_emits_canonical_sse_events(
 
     monkeypatch.setattr(
         opt_module, "get_routing",
-        lambda: type("R", (), {"state": type("S", (), {"provider": mock_provider})()})(),
+        lambda: _make_routing_stub(mock_provider),
     )
 
     try:
@@ -489,7 +509,7 @@ async def test_optimize_handler_internal_tier_full_path(
 
     monkeypatch.setattr(
         opt_module, "get_routing",
-        lambda: type("R", (), {"state": type("S", (), {"provider": mock_provider})()})(),
+        lambda: _make_routing_stub(mock_provider),
     )
 
     try:
@@ -715,7 +735,7 @@ async def test_pipeline_orchestrator_reentrancy_guard_logs_warning(
     monkeypatch.setattr(opt_module, "notify_event_bus", AsyncMock())
     monkeypatch.setattr(
         opt_module, "get_routing",
-        lambda: type("R", (), {"state": type("S", (), {"provider": mock_provider})()})(),
+        lambda: _make_routing_stub(mock_provider),
     )
 
     try:
