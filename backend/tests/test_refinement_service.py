@@ -90,7 +90,7 @@ def data_dir(tmp_path):
 @pytest.fixture
 def service(db_session, mock_provider, prompts_dir, data_dir):
     return RefinementService(
-        db=db_session, provider=mock_provider,
+        provider=mock_provider,
         prompts_dir=prompts_dir, data_dir=data_dir,
     )
 

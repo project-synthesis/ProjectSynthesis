@@ -193,7 +193,7 @@ class TestGetVersions:
         from app.services.refinement_service import RefinementService
 
         # Seed an initial turn directly via the service
-        ref_svc = RefinementService(db=db_session, provider=None, prompts_dir=PROMPTS_DIR)
+        ref_svc = RefinementService(provider=None, prompts_dir=PROMPTS_DIR)
         await ref_svc.create_initial_turn(
             optimization_id="refine-opt-1",
             prompt="Write a Python function...",
@@ -220,7 +220,7 @@ class TestRollback:
         from app.config import PROMPTS_DIR
         from app.services.refinement_service import RefinementService
 
-        ref_svc = RefinementService(db=db_session, provider=None, prompts_dir=PROMPTS_DIR)
+        ref_svc = RefinementService(provider=None, prompts_dir=PROMPTS_DIR)
         initial = await ref_svc.create_initial_turn(
             optimization_id="refine-opt-1",
             prompt="Write a Python function...",
@@ -282,7 +282,7 @@ class TestRefinementStrategyFidelity:
         from app.services.refinement_service import RefinementService
 
         # Seed an initial turn carrying the "real" strategy chosen earlier.
-        ref_svc = RefinementService(db=db_session, provider=None, prompts_dir=PROMPTS_DIR)
+        ref_svc = RefinementService(provider=None, prompts_dir=PROMPTS_DIR)
         await ref_svc.create_initial_turn(
             optimization_id="refine-opt-1",
             prompt="Write a Python function...",
