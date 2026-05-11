@@ -6,6 +6,30 @@ For active work, see [`ROADMAP.md`](ROADMAP.md). For per-change detail with file
 
 ---
 
+### v0.4.21 — Foundation P4: long-handler restructures (2026-05-11)
+
+Closes the final v0.4.13 SQLite migration tail. 3 long-running MCP tool handlers restructured so each LLM call lives outside any DB session and persistence boundaries route through `WriteQueue.submit()`. Implementation followed strict 7-dispatch TDD per cycle (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → V1 spec compliance → V2 code quality) — one cycle per handler site.
+
+**3 implementation cycles, all RED → GREEN → REFACTOR → INTEGRATE → OPERATE:**
+
+| # | Cycle | Site | Restructure summary |
+|---|---|---|---|
+| 1 | `tools/save_result.py` + passthrough scoring path | Heuristic + A4 LLM analysis moved outside DB session; persistence routes through `WriteQueue.submit(operation_label="save_result_persist")`. New `HeuristicAnalyzer.analyze_no_session()` for queue-based telemetry (`task_type_telemetry_no_session`). `score_passthrough()` becomes pure compute on injected `historical_stats`. `classify_with_llm()` parameterized via `operation_label` keyword. |
+| 2 | `tools/refine.py` + 3 sites in `routers/refinement.py` | 4-LLM-call refinement pipeline no longer holds a DB session. `RefinementService` constructor becomes keyword-only `(*, provider=None, prompts_dir, data_dir=None)`. `create_refinement_turn` → `invoke_refinement_pipeline(ctx: RefinementContext)` with NEW terminal `refinement_complete` event (6 payload keys). `create_initial_turn` → `build_initial_turn_payload` (pure compute returning `_InitialTurnPayload`). `rollback`/`get_versions`/`get_branches` take `db: AsyncSession` as method-level parameter. NEW `services/refinement_context.py` with 6 frozen dataclasses for detached-ORM safety (snapshot scalars only). Three new operation labels: `refine_initial_turn`, `refine_persist_turn`, `refine_rollback`. |
+| 3 | `tools/optimize.py` (internal tier) + `routers/optimize.py:297` + `pipeline.PipelineOrchestrator.run()` + 4 `pipeline_phases.py` helpers | ~60-180s wrapping read session replaced with 6 short read sessions opened at each db-taking helper call site inside `run()` (`resolve_blocked_strategies`, `resolve_post_analyze_state`, `_auto_inject_patterns`, `resolve_strategy_intelligence` fallback, `build_optimize_context`, `_fetch_historical_stats`). `PipelineOrchestrator.run()` no longer takes `db`; `write_queue` becomes required. `run_hybrid_scoring` drops `db`, takes `historical_stats: dict[str, dict[str, float \| int]] \| None`. `persist_failed_optimization` removes its leading `db.rollback()`. One new operation label: `pipeline_failed_optimization_persist`. Sampling tier and passthrough tier byte-identical pre/post. |
+
+**Integration test (Cycle 3 follow-up):** `test_audit_hook_emits_zero_warn_under_full_pipeline` (`@pytest.mark.integration`) covers all 3 sites under a realistic pipeline run. Pins the precondition for the v0.4.22 audit-hook WARN→RAISE flip — verified PASS at branch HEAD.
+
+**Backward compat preserved across all surfaces:** REST endpoints (`POST /api/optimize`, `POST /api/refinement/*`, `POST /api/passthrough/save`), MCP tools, SSE event shapes. Sampling and passthrough tiers byte-identical pre/post.
+
+**Stats:** 44+ commits on `feat/foundation-p4`. Backend regression: 3636 passed / 79 skipped (57 documented legacy SKIPs + 22 other pre-existing skips, zero P4 regressions after the 12-regression fix commit). Frontend: existing vitest suite passes, npm run check clean (P4 backend-only). `./init.sh restart` brings up 3 services cleanly with zero `audit_drift` / `audit_hook_warn` / read-engine-audit WARN entries in `data/backend.log` post-restart.
+
+**Foundation phase status:** P1 + P2 Path A + P3 + P4 complete. P2 Path B deferred indefinitely. Probe T2-T4 follow at v0.4.22-v0.4.24, all building natively on the unified `RunRow` substrate with the audit-hook WARN→RAISE flip riding v0.4.22's release window.
+
+**Plan:** `docs/superpowers/plans/2026-05-10-foundation-p4-integration.md`.
+
+---
+
 ### v0.4.18 — Foundation P3: substrate unification + DDL hygiene + drift cleanup (2026-05-09)
 
 The largest single architectural commitment of the foundation phase. Collapses the asymmetric probe/seed run surfaces into a unified substrate so Probe Tier 2/3/4 features can build natively on row-state rather than retrofitting persistence twice. Implementation followed plan APPROVED-ZERO-V5 with strict 7-dispatch TDD per cycle (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → V1 spec compliance → V2 code quality). Both spec and plan went through 5 independent subagent review rounds before APPROVED-ZERO; V1 of the spec surfaced 8 critical issues including the original incorrect "collapse SeedRun + ProbeRun" framing — verified that no `SeedRun` model has ever existed; only `ProbeRun` did, with 17 columns.
@@ -40,7 +64,7 @@ The largest single architectural commitment of the foundation phase. Collapses t
 
 **Stats:** 95+ commits across `release/v0.4.18`. ~94 net new tests across 12 categories per spec § 9 (cat 1 RunRow + migration: 8 tests; cat 2 RunOrchestrator lifecycle: 14; cat 3 RunGenerator protocol: 7; cat 4 TopicProbeGenerator: 14; cat 5 SeedAgentGenerator: 10; cat 6 probes shim: 13; cat 7 seed shim: 8; cat 8 MCP tools: 7; cat 9 /api/runs: 7; cat 10 GC sweep: 4; cat 11 cross-process correlation: 4; cat 12 ProbeRun ORM removal: 6). Backend regression: 3648 passed / 4 skipped (2 pre-existing `test_main.py` lifespan hangs filtered, verified pre-existing on parent commit `2bb8de9a`). Frontend: 1566 passed / 0 failed (97 files). ruff + svelte-check + alembic check all clean.
 
-**Foundation phase status:** P1 + P2 Path A + P3 complete. P4 (long-handler restructures) next at v0.4.19. Probe T2-T4 follow at v0.4.20-v0.4.22 — all building natively on the unified `RunRow` substrate with zero retroactive migration.
+**Foundation phase status:** P1 + P2 Path A + P3 complete. P4 (long-handler restructures) shipped at v0.4.21 (2026-05-11). Probe T2-T4 follow at v0.4.22-v0.4.24 — all building natively on the unified `RunRow` substrate with zero retroactive migration.
 
 **Spec:** `docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md` (V5 APPROVED-ZERO via 5 independent review cycles). **Plan:** `docs/superpowers/plans/2026-05-06-foundation-p3-substrate-unification.md` (~5400 LOC, 16 cycles + Cycle 3.5 fixture cycle, V5 APPROVED-ZERO via 5 independent review cycles). **Migration:** `58510d3f6b81_add_run_row_table_foundation_p3.py` (atomic, with matched-state idempotency guard + reversible downgrade). **PR:** [#70](https://github.com/project-synthesis/ProjectSynthesis/pull/70).
 
