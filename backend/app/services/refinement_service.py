@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,6 +42,7 @@ from app.services.strategy_loader import StrategyLoader
 if TYPE_CHECKING:
     from app.services.refinement_context import (
         RefinementContext,
+        RollbackPayload,
         _InitialTurnPayload,
         _OptSnapshot,
     )
@@ -480,86 +480,102 @@ class RefinementService:
 
     async def get_versions(
         self,
+        db: AsyncSession,
         optimization_id: str,
         branch_id: str | None = None,
     ) -> list[RefinementTurn]:
-        """Get refinement turns for an optimization, optionally filtered by branch.
+        """Return all turns for an optimization, ordered by version ASC.
 
-        Args:
-            optimization_id: The parent optimization ID.
-            branch_id: If given, filter to this branch only.
-
-        Returns:
-            List of RefinementTurn objects ordered by version ascending.
+        Cycle 2: takes `db` as method-level parameter (drops `self.db`).
+        Pure read; no writes.
         """
-        stmt = (
-            select(RefinementTurn)
-            .where(RefinementTurn.optimization_id == optimization_id)
-            .order_by(RefinementTurn.version.asc())
+        stmt = select(RefinementTurn).where(
+            RefinementTurn.optimization_id == optimization_id,
         )
-
         if branch_id is not None:
             stmt = stmt.where(RefinementTurn.branch_id == branch_id)
-
-        result = await self.db.execute(stmt)
+        stmt = stmt.order_by(RefinementTurn.version.asc())
+        result = await db.execute(stmt)
         return list(result.scalars().all())
 
     async def rollback(
         self,
+        db: AsyncSession,
         optimization_id: str,
         to_version: int,
-    ) -> RefinementBranch:
-        """Create a new branch forked from a specific version.
+    ) -> "RollbackPayload":
+        """Build a new branch forked at `to_version`. Returns an un-attached
+        `RollbackPayload` — caller persists via WriteQueue.submit().
+
+        Cycle 2: drops inline `db.commit()` AND drops `self.db` (db is now
+        a method param). Pure read + payload construction. The actual
+        INSERT runs inside the caller's queue callback.
 
         Args:
-            optimization_id: The parent optimization ID.
-            to_version: The version number to fork from.
+            db: Read session (for verifying the to_version exists).
+            optimization_id: Target optimization.
+            to_version: Version to fork from.
 
         Returns:
-            The newly created RefinementBranch.
+            Frozen RollbackPayload with `branch_kwargs` ready to splat
+            into RefinementBranch(...).
+
+        Raises:
+            ValueError if `to_version` does not exist for `optimization_id`.
         """
-        # Find the turn at the requested version
-        result = await self.db.execute(
-            select(RefinementTurn).where(
-                RefinementTurn.optimization_id == optimization_id,
-                RefinementTurn.version == to_version,
+        import uuid as _uuid
+
+        from app.services.refinement_context import RollbackPayload
+
+        # Verify the to_version exists
+        verify_stmt = select(RefinementTurn).where(
+            RefinementTurn.optimization_id == optimization_id,
+            RefinementTurn.version == to_version,
+        ).limit(1)
+        result = await db.execute(verify_stmt)
+        target_turn = result.scalar_one_or_none()
+        if target_turn is None:
+            raise ValueError(
+                f"Cannot rollback: version {to_version} not found for "
+                f"optimization {optimization_id}"
             )
-        )
-        source_turn = result.scalar_one()
 
-        new_branch = RefinementBranch(
-            id=str(uuid.uuid4()),
-            optimization_id=optimization_id,
-            parent_branch_id=source_turn.branch_id,
-            forked_at_version=to_version,
+        # Build kwargs for the new branch (parent_branch_id is the current
+        # latest branch at to_version)
+        parent_branch_stmt = select(RefinementBranch).where(
+            RefinementBranch.id == target_turn.branch_id,
         )
-        self.db.add(new_branch)
-        await self.db.commit()
+        parent_result = await db.execute(parent_branch_stmt)
+        parent_branch = parent_result.scalar_one_or_none()
+        if parent_branch is None:
+            raise ValueError(
+                f"Cannot rollback: parent branch {target_turn.branch_id} not found"
+            )
 
-        logger.info(
-            "Rollback branch created: optimization_id=%s from_version=%d new_branch_id=%s",
-            optimization_id, to_version, new_branch.id,
-        )
+        new_branch_id = str(_uuid.uuid4())
+        branch_kwargs = {
+            "id": new_branch_id,
+            "optimization_id": optimization_id,
+            "parent_branch_id": parent_branch.id,
+            "forked_at_version": to_version,
+        }
 
-        return new_branch
+        return RollbackPayload(branch_kwargs=branch_kwargs)
 
     async def get_branches(
         self,
+        db: AsyncSession,
         optimization_id: str,
     ) -> list[RefinementBranch]:
-        """Get all branches for an optimization.
+        """Return all branches for an optimization, ordered by created_at ASC.
 
-        Args:
-            optimization_id: The parent optimization ID.
-
-        Returns:
-            List of RefinementBranch objects.
+        Cycle 2: takes `db` as method-level parameter (drops `self.db`).
+        Pure read; no writes.
         """
-        result = await self.db.execute(
-            select(RefinementBranch)
-            .where(RefinementBranch.optimization_id == optimization_id)
-            .order_by(RefinementBranch.created_at.asc())
-        )
+        stmt = select(RefinementBranch).where(
+            RefinementBranch.optimization_id == optimization_id,
+        ).order_by(RefinementBranch.created_at.asc())
+        result = await db.execute(stmt)
         return list(result.scalars().all())
 
     # ------------------------------------------------------------------
