@@ -4,13 +4,29 @@ Comprehensive save_result tests (with real DB) live in test_mcp_tools.py.
 These tests verify specific mocking scenarios.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.mcp_server import synthesis_save_result
 
 pytestmark = pytest.mark.asyncio
+
+
+def _make_fake_write_queue(mock_db):
+    """Build a fake WriteQueue whose submit() invokes work_fn(mock_db) directly.
+
+    Foundation P4 Cycle 1: save_result persist routes through WriteQueue —
+    tests mocking ``async_session_factory`` must also route the persist
+    closure through the mocked db.
+    """
+    fake_wq = MagicMock()
+
+    async def _fake_submit(work, *, timeout=None, operation_label=None):
+        return await work(mock_db)
+
+    fake_wq.submit = AsyncMock(side_effect=_fake_submit)
+    return fake_wq
 
 
 async def test_synthesis_save_result(db_session):
@@ -23,7 +39,10 @@ async def test_synthesis_save_result(db_session):
         "conciseness": 5.0,
     }
 
-    with patch("app.tools.save_result.async_session_factory") as mock_factory:
+    with (
+        patch("app.tools.save_result.async_session_factory") as mock_factory,
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
+    ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -44,7 +63,10 @@ async def test_synthesis_save_result(db_session):
 
 async def test_synthesis_save_result_standalone(db_session):
     """Save result without prior prepare: creates standalone record (no error)."""
-    with patch("app.tools.save_result.async_session_factory") as mock_factory:
+    with (
+        patch("app.tools.save_result.async_session_factory") as mock_factory,
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
+    ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 

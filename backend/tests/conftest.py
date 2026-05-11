@@ -626,6 +626,15 @@ async def async_session_factory_override(tmp_path, monkeypatch):
         "app.tools._shared.get_write_queue",
         lambda: test_wq,
     )
+    # Foundation P4 Cycle 1 GREEN: `app.tools.save_result` now imports
+    # `get_write_queue` from `_shared` at module load, so patching ONLY
+    # `_shared.get_write_queue` doesn't reach the rebound name in
+    # `save_result`. Patch the save_result-module-level binding too.
+    # Cycles 2/3: extend with their respective consumers when they land.
+    monkeypatch.setattr(
+        "app.tools.save_result.get_write_queue",
+        lambda: test_wq,
+    )
 
     yield factory
 

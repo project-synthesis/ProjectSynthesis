@@ -175,7 +175,11 @@ async def test_save_result_returns_model(db_session) -> None:
         "conciseness": 8.0,
     }
 
-    with patch("app.tools.save_result.async_session_factory") as mock_factory:
+    with (
+        patch("app.tools.save_result.async_session_factory") as mock_factory,
+        # Foundation P4 Cycle 1: save_result persist routes through WriteQueue
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
+    ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -209,7 +213,11 @@ async def test_save_result_returns_model(db_session) -> None:
 
 async def test_save_result_without_scores(db_session) -> None:
     """Saving without IDE scores falls back to heuristic scoring."""
-    with patch("app.tools.save_result.async_session_factory") as mock_factory:
+    with (
+        patch("app.tools.save_result.async_session_factory") as mock_factory,
+        # Foundation P4 Cycle 1: save_result persist routes through WriteQueue
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
+    ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -280,7 +288,11 @@ async def test_save_result_stores_codebase_context(db_session) -> None:
     """Passing codebase_context persists it (truncated) on the optimization record."""
     context_text = "Project uses FastAPI + SvelteKit. Key patterns: async, runes."
 
-    with patch("app.tools.save_result.async_session_factory") as mock_factory:
+    with (
+        patch("app.tools.save_result.async_session_factory") as mock_factory,
+        # Foundation P4 Cycle 1: save_result persist routes through WriteQueue
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
+    ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
