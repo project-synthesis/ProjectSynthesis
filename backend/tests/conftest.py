@@ -605,6 +605,7 @@ async def async_session_factory_override(tmp_path, monkeypatch):
     monkeypatch.setattr("app.tools.refine.async_session_factory", factory)
     monkeypatch.setattr("app.tools.save_result.async_session_factory", factory)
     monkeypatch.setattr("app.tools._shared.async_session_factory", factory)
+    monkeypatch.setattr("app.tools.optimize.async_session_factory", factory)
 
     # DEFENSIVE: patch `writer_engine` + `writer_session_factory` even though
     # the fixture's own `WriteQueue(test_engine)` builds its internal
@@ -634,6 +635,14 @@ async def async_session_factory_override(tmp_path, monkeypatch):
     # Cycles 2/3: extend with their respective consumers when they land.
     monkeypatch.setattr(
         "app.tools.save_result.get_write_queue",
+        lambda: test_wq,
+    )
+    # Foundation P4 Cycle 3 review-round-2: `app.tools.optimize` imports
+    # `get_write_queue` from `_shared` at module load (same pattern as
+    # save_result). Patch the optimize-module-level binding so integration
+    # tests driving `handle_optimize` end-to-end see the test queue.
+    monkeypatch.setattr(
+        "app.tools.optimize.get_write_queue",
         lambda: test_wq,
     )
 
