@@ -59,13 +59,13 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 | `schemas/runs.py` | EXTEND — extend `Literal["topic_probe", "seed_agent"]` to `Literal["topic_probe", "seed_agent", "replay_run"]` on `RunRequest.mode`, `RunSummary.mode`, `RunResult.mode` (3 sites in schema file + `routers/runs.py::list_runs::mode` Query param = **4 sites total**) |
 | `schemas/probes.py` | EXTEND — relax `ProbeContext.repo_full_name: str` → `str \| None = None`; add `commit_sha: str \| None = None`; add `topic_only: bool = False`. NOTE: existing fields `intent_hint: Literal["audit", "refactor", "explore", "regression-test"] = "explore"` (line 19) and `scope: str = "**/*"` (line 18) are NOT relaxed — defaults handle the topic-only path (the `model_config={"extra": "forbid"}` is preserved). |
 | `schemas/validation_suite.py` | NEW — Pydantic models (request/response + nested payload types `PromptSnapshotItem`, `PerPromptScore`, `BaselineScoresPayload`) |
-| `schemas/mcp_models.py` | EXTEND — `SaveSuiteResult`, `ReplayInitiatedResult` |
+| `schemas/mcp_models.py` | EXTEND — `SaveSuiteOutput`, `ReplayInitiatedOutput` |
 | `services/validation_suite_service.py` | NEW — `create_from_run()`, `retire()`, `get()`, `list()`, `list_replays()`, `compute_regression_alarm()` |
-| `services/run_orchestrator.py` | EXTEND `_persist_final()` signature to take `mode: str` so the operation_label can be mode-keyed (`replay_run_persist` for replay, existing `run_orchestrator.persist_final` otherwise); update the single existing caller at `:86` to thread `mode` through. EXTEND `_extract_probe_meta()` (`:142`) to include `grounding_mode: request.payload.get('grounding_mode', 'codebase')` in the returned dict so `RunRow.topic_probe_meta.grounding_mode` is persisted + queryable. **`_extract_probe_meta()` continues to gate on `mode == "topic_probe"`** — `replay_run` rows have `RunRow.topic_probe_meta = NULL` (matches the existing `_extract_seed_meta()` mode-gating pattern at `run_orchestrator.py:151-163` (full function — gating check at `:152-153`, payload dict at `:155-163`)). EXTEND `_create_row()` body to **mode-gate** the `suite_id` assignment: `suite_id=(request.payload.get("suite_id") if mode == "replay_run" else None)`. This mirrors the existing mode-gated extraction pattern of `_extract_probe_meta`/`_extract_seed_meta` and enforces the §3 Key Invariant 4 (`RunRow.suite_id IS NOT NULL iff mode='replay_run'`) at the write site — a buggy caller that accidentally threads `suite_id` into a non-replay payload cannot break the invariant. Today's body at `:119-133` enumerates which columns it sets; the mode-gated `suite_id` is added to that enumeration. EXTEND lifespan registration to add `'replay_run'` generator (dispatch is generator-dict-based via `self._generators[mode]` — body unchanged). NEW private helper `_run_generator_and_persist(mode, request, run_id)` extracted from `run()` body and shared with the new `_run_to_completion` wrapper. NEW `dispatch_async()` for 202 callers (awaits initial `INSERT` only, spawns shielded background task with explicit `current_run_id` ContextVar set inside the spawned task). REFACTOR `run()` to a thin wrapper that calls `dispatch_async()` then awaits a completion event — preserves the "blocks until terminal" contract for SSE callers + tests while sharing the dispatch body. |
+| `services/run_orchestrator.py` | EXTEND `_persist_final()` signature to take `mode: str` so the operation_label can be mode-keyed (`replay_run_persist` for replay, existing `run_orchestrator.persist_final` otherwise); update the single existing caller at `:86` to thread `mode` through. EXTEND `_extract_probe_meta()` (`:142`) to include `grounding_mode: request.payload.get('grounding_mode', 'codebase')` in the returned dict so `RunRow.topic_probe_meta.grounding_mode` is persisted + queryable. **`_extract_probe_meta()` continues to gate on `mode == "topic_probe"`** — `replay_run` rows have `RunRow.topic_probe_meta = NULL` (matches the existing `_extract_seed_meta()` mode-gating pattern at `run_orchestrator.py:151-163` (full function — gating check at `:152-153`, payload dict at `:154-163`)). EXTEND `_create_row()` body to **mode-gate** the `suite_id` assignment: `suite_id=(request.payload.get("suite_id") if mode == "replay_run" else None)`. This mirrors the existing mode-gated extraction pattern of `_extract_probe_meta`/`_extract_seed_meta` and enforces the §3 Key Invariant 4 (`RunRow.suite_id IS NOT NULL iff mode='replay_run'`) at the write site — a buggy caller that accidentally threads `suite_id` into a non-replay payload cannot break the invariant. Today's body at `:119-133` enumerates which columns it sets; the mode-gated `suite_id` is added to that enumeration. EXTEND lifespan registration to add `'replay_run'` generator (dispatch is generator-dict-based via `self._generators[mode]` — body unchanged). NEW private helper `_run_generator_and_persist(mode, request, run_id)` extracted from `run()` body and shared with the new `_run_to_completion` wrapper. NEW `dispatch_async()` for 202 callers (awaits initial `INSERT` only, spawns shielded background task with explicit `current_run_id` ContextVar set inside the spawned task). REFACTOR `run()` to a thin wrapper that calls `dispatch_async()` then awaits a completion event — preserves the "blocks until terminal" contract for SSE callers + tests while sharing the dispatch body. |
 | `services/generators/replay_run_generator.py` | NEW — `RunGenerator` Protocol impl; consumes `RunRequest(mode='replay_run', payload={"suite_id": ..., "project_id": ..., "repo_full_name": ...})`. `__init__` takes the union of collaborators needed by `batch_pipeline.run_single_prompt`: `(provider, prompt_loader, embedding_service, session_factory, taxonomy_engine, domain_resolver, context_service, write_queue)` — this is a **NEW richer collaborator graph** (not a literal mirror of `SeedAgentGenerator.__init__` which is `(seed_orchestrator, write_queue)` only, nor of `TopicProbeGenerator.__init__` which is `(provider, repo_index_query, taxonomy_engine, *, context_service, embedding_service, session_factory, write_queue)`). Replay is structurally novel: it iterates prompts directly through `run_single_prompt` without going through a batch orchestrator or a probe-grounding phase, so its constructor takes the run_single_prompt collaborator union. Pre-fetches `historical_stats` once via `OptimizationService(read_db).get_score_distribution(exclude_scoring_modes=["heuristic"])` and threads to per-prompt children, matching `batch_orchestrator.run_batch:113-126` pattern. Reruns each prompt via `batch_pipeline.run_single_prompt`; routing tier = `internal` (deterministic regression detection — no sampling-driven nondeterminism) |
 | `services/generators/topic_probe_generator.py` | EXTEND — read `grounding_mode: Literal['codebase', 'topic_only']` from `request.payload`; topic_only skips Phase 1. **No concurrency refactor in T2** — `PROBE_PROMPT_CONCURRENCY` is forward-declared per §5 concurrency note, not consumed in this release. |
 | `services/generators/_constants.py` | NEW — module-level constants for the generators subpackage: `PROBE_PROMPT_CONCURRENCY: int = 5` (forward-declared value chosen to align with the batch-seeding `API=5` budget noted in root `CLAUDE.md` line 70 — different surface, but same single-user dev-tool latency profile). **NOT consumed in T2.** Reserved for T3+ parallelization with proper exception handling (see §5 concurrency note). |
-| `services/generators/_aggregate.py` | NEW — shared aggregate-builder helper `compute_run_aggregate(prompt_results: list[dict]) -> dict` (extracted from the existing `TopicProbeGenerator._build_aggregate` instance method at `topic_probe_generator.py:406-444`). Produces `mean_overall`, `p5`/`p50`/`p95`, `completed_count`/`failed_count`, `task_type_distribution`, and replay-only additive keys (when `prompt_results` items carry `baseline_overall` + `delta`, the helper emits `replay_warnings`, `replay_n_completed`, `replay_n_failed` — purely additive, ignored by non-replay callers). Both `TopicProbeGenerator` and `ReplayRunGenerator` import + call this helper; `_build_aggregate` instance method is refactored to a thin delegate. |
+| `services/generators/_aggregate.py` | NEW — shared aggregate-builder helper `compute_run_aggregate(prompt_results: list[dict]) -> dict` (extracted from the existing `TopicProbeGenerator._build_aggregate` instance method at `topic_probe_generator.py:406-444`). **Output keys mirror the canonical aggregate verbatim** to preserve any downstream consumers of `RunRow.aggregate`: `mean_overall`, `p5_overall`, `p50_overall`, `p95_overall`, `completed_count`, `failed_count`, `f5_flag_fires`, `scoring_formula_version`. **NEW additive keys** introduced by T2 (NOT in the canonical `_build_aggregate` — these are extensions to the contract, documented as such): `task_type_distribution: dict[str, int]`, plus replay-only additive keys `replay_warnings: list[str]`, `replay_n_completed: int`, `replay_n_failed: int`, `replay_suite_id: str` (emitted when `prompt_results` items carry `baseline_overall` + `delta` markers — purely additive, ignored by non-replay callers). The `BaselineScoresPayload` Pydantic model in §4 uses the same `p5_overall`/`p95_overall` key naming to match. Both `TopicProbeGenerator` and `ReplayRunGenerator` import + call this helper; `_build_aggregate` instance method is refactored to a thin delegate that calls `compute_run_aggregate` (no caller-visible change since output keys are preserved). |
 | `services/probe_generation.py` | EXTEND — add `mode: Literal['codebase', 'topic_only'] = 'codebase'` + `template_name: str = 'probe-agent.md'` kwargs to `generate_probe_prompts()`. `mode='topic_only'` selects the **inverted per-prompt predicate** (`_lacks_backtick` defined as `<5%` backtick density per prompt, i.e. drop prompts WITH backticks); the **batch drop threshold stays at `>50%`** (`_DROP_THRESHOLD=0.5`) per the existing F1 contract — the two thresholds operate at different levels and remain distinct. Defaults preserve backward-compat with all current callers. |
 | `routers/suites.py` | NEW — 6 endpoints |
 | `routers/probes.py` | EXTEND — `grounding_mode` body field on `ProbeRequest`; `Prefer: respond-async` header → 202 |
@@ -94,7 +94,7 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 | `id` | `String` PK | `uuid4().hex` | Stable identifier |
 | `source_run_id` | `String` FK → `run_row.id` `ondelete=SET NULL`, **nullable=True** (becomes NULL when source run is later deleted; suite remains intact for replay-history audit. NOT NULL would contradict SET NULL — picked nullability to honor the SET NULL semantics) | Provenance |
 | `prompts_snapshot` | `JSON` NOT NULL | `[{raw_prompt, intent_label, original_optimization_id?}]` |
-| `baseline_scores` | `JSON` NOT NULL | `{mean_overall, p5, p95, per_prompt: [{raw_prompt_idx, overall, dimensions}], task_type_distribution}` |
+| `baseline_scores` | `JSON` NOT NULL | `{mean_overall, p5_overall, p50_overall, p95_overall, per_prompt: [{raw_prompt_idx, overall, dimensions}], task_type_distribution}` — key names match the canonical `compute_run_aggregate` output (see §2 `_aggregate.py` row) verbatim to preserve downstream-consumer compatibility with existing `RunRow.aggregate` readers |
 | `tolerance_abs` | `Float` NOT NULL, default `0.5` | Absolute point delta on 10-pt scale (ROADMAP-aligned) |
 | `label` | `String(120)` NOT NULL | User-supplied; trimmed; `1..120` chars |
 | `project_id` | `String` FK → `prompt_cluster.id`, nullable | ADR-005 multi-project |
@@ -308,8 +308,10 @@ Replay endpoint **always 202** — replays are full pipeline runs with no <30s c
 
 | Tool | Args | Output |
 |---|---|---|
-| `synthesis_save_suite` | `run_id, label[1..120], tolerance_abs?: float = 0.5` | `SaveSuiteResult{suite_id, source_run_id, label, baseline_mean, tolerance_abs, prompts_count, created_at}` |
-| `synthesis_replay_suite` | `suite_id` | `ReplayInitiatedResult{run_id, suite_id, mode: 'replay_run', poll_url, started_at}` |
+| `synthesis_save_suite` | `run_id, label[1..120], tolerance_abs?: float = 0.5` | `SaveSuiteOutput{suite_id, source_run_id, label, baseline_mean, tolerance_abs, prompts_count, created_at}` |
+| `synthesis_replay_suite` | `suite_id` | `ReplayInitiatedOutput{run_id, suite_id, mode: 'replay_run', poll_url, started_at}` |
+
+**MCP naming convention**: `*Output` suffix matches 15 of 16 existing `schemas/mcp_models.py` classes (OptimizeOutput, AnalyzeOutput, PrepareOutput, SaveResultOutput, FeedbackOutput, RefineOutput, HistoryOutput, MatchOutput, StrategiesOutput, DeleteOptimizationOutput, OptimizationDetailOutput, HealthOutput, etc.). The single outlier `ExplainResult` is legacy; T2 conforms to the dominant `*Output` convention.
 
 Listings deliberately REST-only (matches `synthesis_history` precedent — no `synthesis_list_runs` either).
 
@@ -348,10 +350,16 @@ class PerPromptScore(BaseModel):
     dimensions: dict[str, float]
 
 class BaselineScoresPayload(BaseModel):
-    """Shape of validation_suite.baseline_scores JSON column."""
+    """Shape of validation_suite.baseline_scores JSON column.
+
+    Key names match the canonical compute_run_aggregate output verbatim —
+    p5_overall/p50_overall/p95_overall (not p5/p50/p95) to preserve
+    downstream-consumer compatibility with existing RunRow.aggregate readers.
+    """
     mean_overall: float
-    p5: float
-    p95: float
+    p5_overall: float
+    p50_overall: float
+    p95_overall: float
     per_prompt: list[PerPromptScore]
     task_type_distribution: dict[str, int]
 
@@ -365,6 +373,12 @@ class RetireSuiteRequest(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500)
 
 class ValidationSuiteOut(BaseModel):
+    # model_config=ConfigDict(from_attributes=True) so model_validate() can
+    # introspect ORM instance attributes (used at the create/get/retire call
+    # sites where the service hands a ValidationSuite ORM row to the schema).
+    # Matches the existing pattern in schemas/templates.py:16.
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     # source_run_id nullable matches column nullability — becomes None
     # if/when the source run is later deleted (ondelete=SET NULL fires).
@@ -770,8 +784,16 @@ class ReplayRunGenerator:
             taxonomy_delta={},          # Replay produces no taxonomy delta —
                                          # the suite's prompts already exist in
                                          # taxonomy from the source probe.
-            final_report=None,          # Replay UI surfaces baseline diff via
-                                         # SuiteDetailView, not narrative.
+            # final_report: stub non-None string (one short markdown line —
+            # the suite-detail UI surfaces the baseline diff, not narrative).
+            # RunResult.final_report is `str` (non-nullable per schemas/runs.py:49);
+            # passing None would fail Pydantic validation on subsequent
+            # GET /api/runs/{id}. Stub is intentionally minimal — the UI's
+            # SuiteDetailView reads aggregate + suite_id, not final_report.
+            final_report=(
+                f"# Replay — suite_id={suite_id}\n"
+                f"See SuiteDetailView for the baseline-vs-latest diff."
+            ),
         )
 ```
 
@@ -795,7 +817,10 @@ async def run(self, request: RunRequest, *, run_id: str) -> GeneratorResult:
     topic: str = request.payload["topic"]
     n_prompts: int = request.payload.get("n_prompts", 12)
     intent_hint: str | None = request.payload.get("intent_hint")
-    scope: list[str] | None = request.payload.get("scope")
+    # scope: ProbeContext.scope is `str = "**/*"` per schemas/probes.py:18;
+    # the canonical extraction pattern at topic_probe_generator.py:106 is
+    # `str(payload.get("scope") or "**/*")` — keep that exact form.
+    scope: str = str(request.payload.get("scope") or "**/*")
     project_id: str | None = request.payload.get("project_id")
     repo_full_name: str | None = request.payload.get("repo_full_name")
     grounding_mode: Literal["codebase", "topic_only"] = (
@@ -1106,7 +1131,10 @@ The project's frontend API client is split into **per-domain modules** under `fr
 
 ```typescript
 // frontend/src/lib/api/suites.ts (NEW)
-import { client } from './client';
+// Imports the canonical apiFetch helper — matches the existing pattern in
+// frontend/src/lib/api/seed.ts:2 + runs.ts (verified). `client.ts` exports
+// apiFetch / tryFetch / streamSSE, NOT a `client` object.
+import { apiFetch } from './client';
 
 export function saveSuite(runId: string, label: string, toleranceAbs?: number): Promise<ValidationSuiteOut>
 export function replaySuite(suiteId: string): Promise<ReplayRunOut>
@@ -1275,7 +1303,7 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 | 8 | 202+polling on `POST /api/probes` + `dispatch_async` + `current_run_id` ContextVar transfer | 7 | A2 (`dispatch_async` reuses existing `RunOrchestrator._create_row` + `_persist_final` lifecycle; SSE entry path refactors to internally call `dispatch_async` — single-codepath body shared between SSE + 202) | O1 (poll endpoint reflects committed row immediately after 202 returns — INSERT awaited before response; verify with race-stress test: dispatch_async + immediate GET, 1000 iterations) · O5 (curl `--max-time` shorter than initial INSERT — server-side state remains consistent under client disconnect mid-INSERT) · O7 (inventory every timeout in `dispatch_async` path: initial-INSERT WriteQueue timeout, spawned-task max duration, `_gc_orphan_runs` TTL; longest must ≥ worst-case probe duration plus buffer) · O8 (spawned task survives 202 caller's connection close via `asyncio.shield`; verify by closing connection mid-spawn and checking `RunRow` reaches terminal status) |
 | 9 | `/api/health` regression_alarm block | 5 | A4 (`RegressionAlarmEntry` populates all required fields from joined query — no NULL leakage; column-by-column diff against the join-SQL result columns in spec §5) | O2 (alarm query coexists with active replays — no read-write contention; verify with 30 concurrent `/api/health` polls during an active replay) |
 | **C — MCP (10)** | | | | |
-| 10 | `synthesis_save_suite` + `synthesis_replay_suite` | 9 | A2 (MCP handlers call `ValidationSuiteService` methods — don't re-implement persistence) · A4 (`SaveSuiteResult` + `ReplayInitiatedResult` populate all fields per `schemas/mcp_models.py` extensions) · A5 (MCP test fixtures use real `RunRow` + `ValidationSuite` rows, not mocked) | O6 (cross-process MCP→backend bridge for `replay_run` writes works under load — verify with concurrent MCP `synthesis_replay_suite` from 3 clients) · O5 (MCP client disconnects after `synthesis_save_suite` returns — write already committed; verify by inspecting DB after disconnect) |
+| 10 | `synthesis_save_suite` + `synthesis_replay_suite` | 9 | A2 (MCP handlers call `ValidationSuiteService` methods — don't re-implement persistence) · A4 (`SaveSuiteOutput` + `ReplayInitiatedOutput` populate all fields per `schemas/mcp_models.py` extensions) · A5 (MCP test fixtures use real `RunRow` + `ValidationSuite` rows, not mocked) | O6 (cross-process MCP→backend bridge for `replay_run` writes works under load — verify with concurrent MCP `synthesis_replay_suite` from 3 clients) · O5 (MCP client disconnects after `synthesis_save_suite` returns — write already committed; verify by inspecting DB after disconnect) |
 | **D — Frontend (11-13)** | | | | |
 | 11 | Topic Probe tab + form + report card (Vitest + Playwright) | 18 | A2 (use existing per-domain modules under `frontend/src/lib/api/` — `runs.ts`/`seed.ts`/`suites.ts` (NEW) — do not fetch directly; the project has no monolithic `api.ts`, verified by `ls frontend/src/lib/api/`; confirm `suites.ts` is imported by SuiteRow/SuiteDetailView/RegressionBadge consumers, not duplicated inline) · A3 (consume canonical `RunListResponse` / `RunSummary` / `RunResult` shapes from `schemas/runs.py` — every field rendered or intentionally hidden; no fictional `RunOut`) | O1 (browser smoke: SeedModal renders the Topic Probe tab, form submits, report card displays with all fields populated from `RunResult`) |
 | 12 | SuitesPanel + SuiteRow + SuiteDetailView + RegressionBadge + SuitesStore | 14 | A3 (suite list rows render every field of `ValidationSuiteListItem`; `ReplayRunOut.warnings` displayed when present; SuiteDetailView consumes full `ValidationSuiteOut` including `baseline_scores.per_prompt`) | O1 (browser smoke: SuitesPanel renders for empty / nominal / firing states; RegressionBadge transitions correctly on SSE-emitted `regression_alarm_transition` events) |
@@ -1299,9 +1327,9 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 | `ReplayRunOut` | Cycle 5 (consumed by `POST /api/suites/{id}/replay` router) |
 | `replay_run_persist` op label | Cycle 6 (consumed by `RunOrchestrator._persist_final()` mode-keyed label selection) |
 | `services/generators/_aggregate.py::compute_run_aggregate()` shared helper | Cycle 6 (consumed by `ReplayRunGenerator.run()` aggregation step; `TopicProbeGenerator._build_aggregate` refactored to thin delegate in the same cycle to share the helper) |
-| `services/probes.py::ProbeContext` schema extensions (`repo_full_name: str \| None`, `commit_sha`, `topic_only`) | Cycle 7 (consumed by `TopicProbeGenerator` topic-only branch; the schema relaxation is scaffolding without the branch consuming it) |
+| `schemas/probes.py::ProbeContext` schema extensions (`repo_full_name: str \| None`, `commit_sha`, `topic_only`) | Cycle 7 (consumed by `TopicProbeGenerator` topic-only branch; the schema relaxation is scaffolding without the branch consuming it) |
 | `RegressionAlarmEntry`, `RegressionAlarmBlock` | Cycle 9 (consumed by `/api/health` block) |
-| `SaveSuiteResult`, `ReplayInitiatedResult` (`schemas/mcp_models.py` extensions) | Cycle 10 (consumed by MCP handlers) |
+| `SaveSuiteOutput`, `ReplayInitiatedOutput` (`schemas/mcp_models.py` extensions) | Cycle 10 (consumed by MCP handlers) |
 | `services/generators/_constants.py::PROBE_PROMPT_CONCURRENCY` | **CANON DEVIATION FOOTNOTE** — this constant is explicitly *not consumed in T2* (forward-declared per §5 concurrency note). The canon's "Scaffolding ≠ TDD" rule would prefer the constant be deferred to T3+ alongside its first consumer. T2 ships it now to lock the single-source-of-truth path so probe + replay won't accidentally pick different values when parallelization lands. **Intentional documented deviation** — NO new RED test is added for the constant (would itself violate the canon's "pure constant without a failing consumer test" prohibition). The constant lands as a 1-line module-level definition in Cycle 6 GREEN step alongside `services/generators/_aggregate.py` (both house "shared generator-subpackage scaffolding for replay's structural extraction"). Reviewer should accept this as an explicit, documented exception rather than a scaffolding violation. |
 
 Most pure types ride in the GREEN step of their first consumer cycle per the canon's anti-scaffolding rule. The single explicit exception is `PROBE_PROMPT_CONCURRENCY` — forward-declared without a T2 consumer, with rationale documented above.
