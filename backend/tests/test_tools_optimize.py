@@ -756,30 +756,49 @@ async def test_pipeline_orchestrator_reentrancy_guard_logs_warning(
 async def test_run_hybrid_scoring_drops_db_param():
     """Cycle 3 RED test 12: run_hybrid_scoring(...) without db= and with
     historical_stats=... succeeds; with db=... raises TypeError."""
-    from app.services.pipeline_phases import run_hybrid_scoring
+    import tempfile
 
-    # New signature: succeeds without db
+    from app.schemas.pipeline_contracts import (
+        AnalysisResult,
+        DimensionScores,
+        OptimizationResult,
+        ScoreResult,
+    )
+    from app.services.pipeline_phases import run_hybrid_scoring
+    from app.services.preferences import PreferencesService
+
+    async def stub_call(*args, **kwargs):
+        scores = DimensionScores(
+            clarity=8, specificity=8, structure=8, faithfulness=8, conciseness=8,
+        )
+        return ScoreResult(prompt_a_scores=scores, prompt_b_scores=scores)
+
+    # Build minimal valid input objects
+    opt_result = OptimizationResult(optimized_prompt="opt", changes_summary="ok")
+    analysis = AnalysisResult(
+        task_type="general", weaknesses=[], strengths=[],
+        selected_strategy="auto", strategy_rationale="stub", confidence=0.8,
+        intent_label="general", domain="general",
+    )
+    prompt_loader = MagicMock()
+    prefs = PreferencesService(Path(tempfile.mkdtemp()))
     mock_provider = AsyncMock()
     mock_provider.name = "mock"
 
-    async def stub_call(*args, **kwargs):
-        from app.schemas.pipeline_contracts import ScoreResult
-        return ScoreResult(
-            scores={"clarity": 8, "specificity": 8, "structure": 8,
-                    "faithfulness": 8, "conciseness": 8},
-            analysis="ok",
-        )
-
-    # Result must be constructible without db
+    # New signature: succeeds without db
     result = await run_hybrid_scoring(
-        raw_prompt="raw",
-        optimized_prompt="opt",
-        external_scores=None,
-        historical_stats=None,
-        scoring_enabled=True,
-        task_type="general",
+        raw_prompt="test prompt",
+        optimization=opt_result,
+        analysis=analysis,
+        effective_strategy="auto",
         provider=mock_provider,
+        prompt_loader=prompt_loader,
+        trace_logger=None,
+        prefs=prefs,
+        prefs_snapshot={},
+        scorer_model="claude-haiku",
         trace_id="trace-1",
+        historical_stats=None,
         call_provider=stub_call,
     )
     assert result is not None
@@ -787,14 +806,18 @@ async def test_run_hybrid_scoring_drops_db_param():
     # Old signature with db= must raise TypeError
     with pytest.raises(TypeError, match=r"unexpected keyword argument 'db'"):
         await run_hybrid_scoring(  # type: ignore[call-arg]
-            raw_prompt="raw",
-            optimized_prompt="opt",
-            external_scores=None,
-            historical_stats=None,
-            scoring_enabled=True,
-            task_type="general",
+            raw_prompt="test prompt",
+            optimization=opt_result,
+            analysis=analysis,
+            effective_strategy="auto",
             provider=mock_provider,
+            prompt_loader=prompt_loader,
+            trace_logger=None,
+            prefs=prefs,
+            prefs_snapshot={},
+            scorer_model="claude-haiku",
             trace_id="trace-1",
+            historical_stats=None,
             call_provider=stub_call,
             db=MagicMock(),
         )
