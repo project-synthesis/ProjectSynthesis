@@ -422,7 +422,7 @@ Update `GET /api/suites` (§4 REST table) returns `ValidationSuiteListResponse` 
 ### Write-queue operation labels (new)
 
 - `validation_suite_create` — `ValidationSuiteService.create_from_run()` terminal write
-- `validation_suite_retire` — `ValidationSuiteService.retire()` terminal write (idempotent — labelled even on no-op re-retire submissions, so observability counts retry attempts)
+- `validation_suite_retire` — `ValidationSuiteService.retire()` terminal write. Labelled ONLY on first-retire (state-transition) submissions; idempotent re-retires short-circuit before `WriteQueue.submit()` per §5 service body (line 526-528), so no operation_label is recorded on no-op re-retries. This matches the §9 `validation_suite_retired` event-emission contract ("ONLY when state actually transitioned").
 - `replay_run_persist` — `RunOrchestrator._persist_final()` terminal write **when `mode='replay_run'`**. The orchestrator's persist path is otherwise unchanged from Foundation P3 — it is the same `_persist_final()` body, but the operation_label is mode-keyed: `run_orchestrator.persist_final` for `topic_probe`/`seed_agent` (existing), `replay_run_persist` for `replay_run` (new). The mode-keying is the ONLY behavioral diff in the orchestrator, surfaced for JSONL trace filterability.
 
 ## 5 Services + generators + topic-only mode
@@ -1116,7 +1116,7 @@ export function getSuiteReplays(suiteId: string): Promise<RunListResponse>  // i
 export function retireSuite(suiteId: string, reason: string): Promise<ValidationSuiteOut>
 ```
 
-`ValidationSuiteListResponse` is the Pydantic envelope defined in §4 (mirrors the `RunListResponse` shape: `{total, count, offset, items, has_more, next_offset}`). `RunListResponse` (no type parameter) is the existing concrete envelope `{... items: RunSummary[] ...}` used by `GET /api/runs` + `GET /api/seed` + `GET /api/probes`. Frontend consumers import from `$lib/api/suites` (matching the `$lib/api/runs` precedent).
+`ValidationSuiteListResponse` is the Pydantic envelope defined in §4 (mirrors the `RunListResponse` shape: `{total, count, offset, items, has_more, next_offset}`). `RunListResponse` (no type parameter) is the existing concrete envelope `{... items: RunSummary[] ...}` used by `GET /api/runs` + `GET /api/seed` only. (`GET /api/probes` uses the parallel `ProbeListResponse` envelope keyed off `ProbeRunResult` items — distinct shape, NOT reused by suites; verified at `routers/probes.py:258` + `schemas/probes.py:190`.) Frontend consumers import from `$lib/api/suites` (matching the `$lib/api/runs` precedent).
 
 ### Accessibility
 
@@ -1277,7 +1277,7 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 | **C — MCP (10)** | | | | |
 | 10 | `synthesis_save_suite` + `synthesis_replay_suite` | 9 | A2 (MCP handlers call `ValidationSuiteService` methods — don't re-implement persistence) · A4 (`SaveSuiteResult` + `ReplayInitiatedResult` populate all fields per `schemas/mcp_models.py` extensions) · A5 (MCP test fixtures use real `RunRow` + `ValidationSuite` rows, not mocked) | O6 (cross-process MCP→backend bridge for `replay_run` writes works under load — verify with concurrent MCP `synthesis_replay_suite` from 3 clients) · O5 (MCP client disconnects after `synthesis_save_suite` returns — write already committed; verify by inspecting DB after disconnect) |
 | **D — Frontend (11-13)** | | | | |
-| 11 | Topic Probe tab + form + report card (Vitest + Playwright) | 18 | A2 (use existing `api.ts` helpers — don't fetch directly) · A3 (consume canonical `RunListResponse` / `RunSummary` / `RunResult` shapes from `schemas/runs.py` — every field rendered or intentionally hidden; no fictional `RunOut`) | O1 (browser smoke: SeedModal renders the Topic Probe tab, form submits, report card displays with all fields populated from `RunResult`) |
+| 11 | Topic Probe tab + form + report card (Vitest + Playwright) | 18 | A2 (use existing per-domain modules under `frontend/src/lib/api/` — `runs.ts`/`seed.ts`/`suites.ts` (NEW) — do not fetch directly; the project has no monolithic `api.ts`, verified by `ls frontend/src/lib/api/`; confirm `suites.ts` is imported by SuiteRow/SuiteDetailView/RegressionBadge consumers, not duplicated inline) · A3 (consume canonical `RunListResponse` / `RunSummary` / `RunResult` shapes from `schemas/runs.py` — every field rendered or intentionally hidden; no fictional `RunOut`) | O1 (browser smoke: SeedModal renders the Topic Probe tab, form submits, report card displays with all fields populated from `RunResult`) |
 | 12 | SuitesPanel + SuiteRow + SuiteDetailView + RegressionBadge + SuitesStore | 14 | A3 (suite list rows render every field of `ValidationSuiteListItem`; `ReplayRunOut.warnings` displayed when present; SuiteDetailView consumes full `ValidationSuiteOut` including `baseline_scores.per_prompt`) | O1 (browser smoke: SuitesPanel renders for empty / nominal / firing states; RegressionBadge transitions correctly on SSE-emitted `regression_alarm_transition` events) |
 | 13 | 202+polling abstraction in probesStore | 7 | A2 (single async-iterable contract — SSE + poll paths emit identical event shapes; consumers must not branch on source) | O5 (browser tab closes mid-probe — store cleans up poll interval, no leaked timers) · O7 (long probe runs >10min — poll cadence persists, no client-side timeout) |
 | **E — Quality (14, gate-only)** | | | | |
@@ -1290,17 +1290,21 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 
 **Pydantic schemas + operation-label cycle assignment** (per "Scaffolding ≠ TDD" hard invariant):
 
-| Schema / label | Lands in cycle (GREEN step) |
+| Schema / label / helper | Lands in cycle (GREEN step) |
 |---|---|
 | `SaveSuiteRequest`, `ValidationSuiteOut`, `SuiteSnapshotInputs`, nested `PromptSnapshotItem`/`PerPromptScore`/`BaselineScoresPayload`, `validation_suite_create` op label | Cycle 2 (consumed by `create_from_run`) |
 | `RetireSuiteRequest`, `SuiteRetireInputs`, `validation_suite_retire` op label | Cycle 3 (consumed by `retire`) |
-| `ValidationSuiteListItem` | Cycle 3 (consumed by `list`) |
+| `ValidationSuiteListItem`, `ValidationSuiteListResponse` | Cycle 3 (consumed by `list`) |
+| `schemas/runs.py::RunRequest.mode` + `RunSummary.mode` + `RunResult.mode` Literal extensions to add `'replay_run'` (3 sites) + `routers/runs.py::list_runs::mode` Query Literal extension (4th site — public-API surface change) | Cycle 5 (consumed by `POST /api/suites/{id}/replay` router which dispatches `mode='replay_run'`; the Pydantic Literal extensions are scaffolding without these consumer endpoints, so they land here) |
 | `ReplayRunOut` | Cycle 5 (consumed by `POST /api/suites/{id}/replay` router) |
 | `replay_run_persist` op label | Cycle 6 (consumed by `RunOrchestrator._persist_final()` mode-keyed label selection) |
+| `services/generators/_aggregate.py::compute_run_aggregate()` shared helper | Cycle 6 (consumed by `ReplayRunGenerator.run()` aggregation step; `TopicProbeGenerator._build_aggregate` refactored to thin delegate in the same cycle to share the helper) |
+| `services/probes.py::ProbeContext` schema extensions (`repo_full_name: str \| None`, `commit_sha`, `topic_only`) | Cycle 7 (consumed by `TopicProbeGenerator` topic-only branch; the schema relaxation is scaffolding without the branch consuming it) |
 | `RegressionAlarmEntry`, `RegressionAlarmBlock` | Cycle 9 (consumed by `/api/health` block) |
-| `SaveSuiteResult`, `ReplayInitiatedResult` (schemas/mcp_models.py extensions) | Cycle 10 (consumed by MCP handlers) |
+| `SaveSuiteResult`, `ReplayInitiatedResult` (`schemas/mcp_models.py` extensions) | Cycle 10 (consumed by MCP handlers) |
+| `services/generators/_constants.py::PROBE_PROMPT_CONCURRENCY` | **CANON DEVIATION FOOTNOTE** — this constant is explicitly *not consumed in T2* (forward-declared per §5 concurrency note). The canon's "Scaffolding ≠ TDD" rule would prefer the constant be deferred to T3+ alongside its first consumer. T2 ships it now to lock the single-source-of-truth path so probe + replay won't accidentally pick different values when parallelization lands. **Intentional documented deviation** — NO new RED test is added for the constant (would itself violate the canon's "pure constant without a failing consumer test" prohibition). The constant lands as a 1-line module-level definition in Cycle 6 GREEN step alongside `services/generators/_aggregate.py` (both house "shared generator-subpackage scaffolding for replay's structural extraction"). Reviewer should accept this as an explicit, documented exception rather than a scaffolding violation. |
 
-None of these pure types are introduced in a standalone RED cycle — they ride in the GREEN step of their first consumer, per the canon's anti-scaffolding rule.
+Most pure types ride in the GREEN step of their first consumer cycle per the canon's anti-scaffolding rule. The single explicit exception is `PROBE_PROMPT_CONCURRENCY` — forward-declared without a T2 consumer, with rationale documented above.
 
 ### Hard invariants (non-negotiable per `feedback_tdd_protocol.md`)
 
@@ -1329,13 +1333,13 @@ Both validator subagents (spec-compliance + code-quality) must return APPROVED-Z
 2026-06-01 ─────────── Latest realistic v0.4.22 ship date
 ```
 
-**Single feature branch** `feature/probe-tier-2`. **Rebase-merge** per `feedback_pr_merge_strategy.md`. Estimated **~135-170 commits**:
+**Single feature branch** `feature/probe-tier-2`. **Rebase-merge** per `feedback_pr_merge_strategy.md`. Estimated **~137-172 commits**:
 - 14 protocol cycles × 7 dispatches = 98 implementer+validator commits (cycles 1-13, 15)
 - 2 gate cycles × 2 validators = 4 commits (cycles 14, 16)
 - + ~5-10 process commits (spec, plan, CHANGELOG, release-script bump)
 - + ~30-60 iteration commits when validators return APPROVED-WITH-MINOR / FINDINGS PRESENT and behavior-affecting fixes cascade through INTEGRATE+OPERATE+both validators
 
-= 102 baseline + 35-70 iteration ≈ 135-170 total. Foundation P3 (95 commits, 5 spec review rounds) and P4 (~50 commits, 1 plan review round) provide reasonable bracketing.
+= 98 + 4 = **102 baseline** + (5-10 process) + (30-60 iteration) = **35-70 above baseline** = **137-172 total**. Foundation P3 (95 commits, 5 spec review rounds) and P4 (~50 commits, 1 plan review round) provide reasonable bracketing.
 
 ### Pre-release checklist (gated)
 
