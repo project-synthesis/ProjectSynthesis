@@ -204,110 +204,107 @@ async def handle_optimize(
         len(prompt), effective_strategy, effective_repo,
     )
 
-    # Foundation P4 Cycle 3 Task 3: orchestrator.run() now opens its own
-    # transitional read session internally (Task 4 will split it into 5
-    # short sessions). The wrapper here is intentionally retained as
-    # ``async with ... as _db:`` so the orchestration scope remains
-    # well-defined for sampling/passthrough symmetry; the bound name is
-    # unused. Removing the wrapper entirely is scoped to a later
-    # Cycle 3 task (Test 1 RED → GREEN).
-    async with async_session_factory() as _db:  # noqa: F841 (unused — see comment)
-        orchestrator = PipelineOrchestrator(prompts_dir=PROMPTS_DIR)
+    # Foundation P4 Cycle 3 Task 6: no wrapping async-with-async_session_factory
+    # block. The orchestrator opens its own short read sessions internally at
+    # each db-taking helper call site (Task 4). write_queue is explicitly
+    # injected via get_write_queue(); the orchestrator no longer takes a db
+    # parameter.
+    orchestrator = PipelineOrchestrator(prompts_dir=PROMPTS_DIR)
 
-        # Forward key pipeline events to the event bus so the web UI
-        # shows live progress (phase transitions, scores, model IDs)
-        # when the optimization is triggered from the IDE via MCP.
-        # Note: events are prefixed with "optimization_" for the event bus,
-        # so "status" → "optimization_status", etc.
-        forward_events = {"status", "score_card", "prompt_preview", "suggestions"}
-        # optimization_start already has the prefix — forward without double-prefixing.
-        forward_verbatim = {"optimization_start"}
+    # Forward key pipeline events to the event bus so the web UI
+    # shows live progress (phase transitions, scores, model IDs)
+    # when the optimization is triggered from the IDE via MCP.
+    # Note: events are prefixed with "optimization_" for the event bus,
+    # so "status" → "optimization_status", etc.
+    forward_events = {"status", "score_card", "prompt_preview", "suggestions"}
+    # optimization_start already has the prefix — forward without double-prefixing.
+    forward_verbatim = {"optimization_start"}
 
-        pipeline_result: dict | None = None
-        # Resolve domain resolver for the internal pipeline
-        try:
-            from app.tools._shared import get_domain_resolver
-            _mcp_domain_resolver = get_domain_resolver()
-        except (ValueError, Exception):
-            _mcp_domain_resolver = None
+    pipeline_result: dict | None = None
+    # Resolve domain resolver for the internal pipeline
+    try:
+        from app.tools._shared import get_domain_resolver
+        _mcp_domain_resolver = get_domain_resolver()
+    except (ValueError, Exception):
+        _mcp_domain_resolver = None
 
-        async for event in orchestrator.run(
-            raw_prompt=prompt,
-            provider=provider,  # type: ignore[arg-type]
-            write_queue=get_write_queue(),
-            provider_instances=provider_instances,
-            strategy_override=effective_strategy if effective_strategy != "auto" else None,
-            codebase_context=enrichment.codebase_context,
-            strategy_intelligence=enrichment.strategy_intelligence,
-            context_sources=enrichment.context_sources_dict,
-            repo_full_name=effective_repo,
-            project_id=_effective_project_id,
-            applied_pattern_ids=applied_pattern_ids,
-            taxonomy_engine=get_taxonomy_engine(),
-            domain_resolver=_mcp_domain_resolver,
-            heuristic_task_type=enrichment.task_type,
-            heuristic_domain=enrichment.domain_value,
-            divergence_alerts=enrichment.divergence_alerts,
-        ):
-            if event.event in forward_events:
-                await notify_event_bus(f"optimization_{event.event}", event.data)
-            elif event.event in forward_verbatim:
-                await notify_event_bus(event.event, event.data)
-            if event.event == "optimization_complete":
-                pipeline_result = event.data
-            elif event.event == "error":
-                error_msg = event.data.get("error", "Pipeline failed")
-                logger.error("synthesis_optimize pipeline error: %s", error_msg)
-                raise ValueError(error_msg)
+    async for event in orchestrator.run(
+        raw_prompt=prompt,
+        provider=provider,  # type: ignore[arg-type]
+        write_queue=get_write_queue(),
+        provider_instances=provider_instances,
+        strategy_override=effective_strategy if effective_strategy != "auto" else None,
+        codebase_context=enrichment.codebase_context,
+        strategy_intelligence=enrichment.strategy_intelligence,
+        context_sources=enrichment.context_sources_dict,
+        repo_full_name=effective_repo,
+        project_id=_effective_project_id,
+        applied_pattern_ids=applied_pattern_ids,
+        taxonomy_engine=get_taxonomy_engine(),
+        domain_resolver=_mcp_domain_resolver,
+        heuristic_task_type=enrichment.task_type,
+        heuristic_domain=enrichment.domain_value,
+        divergence_alerts=enrichment.divergence_alerts,
+    ):
+        if event.event in forward_events:
+            await notify_event_bus(f"optimization_{event.event}", event.data)
+        elif event.event in forward_verbatim:
+            await notify_event_bus(event.event, event.data)
+        if event.event == "optimization_complete":
+            pipeline_result = event.data
+        elif event.event == "error":
+            error_msg = event.data.get("error", "Pipeline failed")
+            logger.error("synthesis_optimize pipeline error: %s", error_msg)
+            raise ValueError(error_msg)
 
-        if not pipeline_result:
-            raise ValueError(
-                "Pipeline completed but produced no result. Check server logs for details."
-            )
-
-        elapsed_ms = int((time.monotonic() - start) * 1000)
-        logger.info(
-            "synthesis_optimize completed in %dms: optimization_id=%s strategy=%s",
-            elapsed_ms, pipeline_result.get("id", ""), pipeline_result.get("strategy_used", ""),
+    if not pipeline_result:
+        raise ValueError(
+            "Pipeline completed but produced no result. Check server logs for details."
         )
 
-        # Notify backend event bus (MCP runs in a separate process)
-        await notify_event_bus("optimization_created", {
-            "id": pipeline_result.get("id", ""),
-            "trace_id": pipeline_result.get("trace_id", ""),
-            "task_type": pipeline_result.get("task_type", ""),
-            "intent_label": pipeline_result.get("intent_label", "general"),
-            "domain": pipeline_result.get("domain", "general"),
-            "domain_raw": pipeline_result.get("domain_raw", "general"),
-            "strategy_used": pipeline_result.get("strategy_used", ""),
-            "overall_score": pipeline_result.get("overall_score"),
-            "provider": (
-                decision.provider_name if decision.tier == "internal"
-                else ("mcp_sampling" if decision.tier == "sampling" else "unknown")
-            ),
-            "status": "completed",
-        })
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    logger.info(
+        "synthesis_optimize completed in %dms: optimization_id=%s strategy=%s",
+        elapsed_ms, pipeline_result.get("id", ""), pipeline_result.get("strategy_used", ""),
+    )
 
-        return OptimizeOutput(
-            status="completed",
-            pipeline_mode=decision.tier,
-            optimization_id=pipeline_result.get("id", ""),
-            optimized_prompt=pipeline_result.get("optimized_prompt", ""),
-            task_type=pipeline_result.get("task_type", ""),
-            strategy_used=pipeline_result.get("strategy_used", ""),
-            changes_summary=pipeline_result.get("changes_summary", ""),
-            scores=pipeline_result.get("optimized_scores", pipeline_result.get("scores", {})),
-            original_scores=pipeline_result.get("original_scores", {}),
-            score_deltas=pipeline_result.get("score_deltas", {}),
-            scoring_mode=pipeline_result.get("scoring_mode", "independent"),
-            suggestions=pipeline_result.get("suggestions", []),
-            warnings=pipeline_result.get("warnings", []),
-            model_used=pipeline_result.get("model_used"),
-            models_by_phase=pipeline_result.get("models_by_phase"),
-            intent_label=pipeline_result.get("intent_label"),
-            domain=pipeline_result.get("domain"),
-            trace_id=pipeline_result.get("trace_id"),
-        )
+    # Notify backend event bus (MCP runs in a separate process)
+    await notify_event_bus("optimization_created", {
+        "id": pipeline_result.get("id", ""),
+        "trace_id": pipeline_result.get("trace_id", ""),
+        "task_type": pipeline_result.get("task_type", ""),
+        "intent_label": pipeline_result.get("intent_label", "general"),
+        "domain": pipeline_result.get("domain", "general"),
+        "domain_raw": pipeline_result.get("domain_raw", "general"),
+        "strategy_used": pipeline_result.get("strategy_used", ""),
+        "overall_score": pipeline_result.get("overall_score"),
+        "provider": (
+            decision.provider_name if decision.tier == "internal"
+            else ("mcp_sampling" if decision.tier == "sampling" else "unknown")
+        ),
+        "status": "completed",
+    })
+
+    return OptimizeOutput(
+        status="completed",
+        pipeline_mode=decision.tier,
+        optimization_id=pipeline_result.get("id", ""),
+        optimized_prompt=pipeline_result.get("optimized_prompt", ""),
+        task_type=pipeline_result.get("task_type", ""),
+        strategy_used=pipeline_result.get("strategy_used", ""),
+        changes_summary=pipeline_result.get("changes_summary", ""),
+        scores=pipeline_result.get("optimized_scores", pipeline_result.get("scores", {})),
+        original_scores=pipeline_result.get("original_scores", {}),
+        score_deltas=pipeline_result.get("score_deltas", {}),
+        scoring_mode=pipeline_result.get("scoring_mode", "independent"),
+        suggestions=pipeline_result.get("suggestions", []),
+        warnings=pipeline_result.get("warnings", []),
+        model_used=pipeline_result.get("model_used"),
+        models_by_phase=pipeline_result.get("models_by_phase"),
+        intent_label=pipeline_result.get("intent_label"),
+        domain=pipeline_result.get("domain"),
+        trace_id=pipeline_result.get("trace_id"),
+    )
 
 
 async def _persist_sampling_failure(
