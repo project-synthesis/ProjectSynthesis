@@ -247,16 +247,16 @@ class PipelineOrchestrator:
         phase_durations: dict[str, int] = {}
         effective_strategy: str | None = None
 
-        # Foundation P4 Cycle 3 Task 3 transitional scaffold: open a single
-        # read session manually here so the body's existing ``db``
-        # references keep working. Task 4 will dismantle this and replace
-        # with 5 short sessions, one per db-taking helper call site, so no
-        # session crosses an LLM call boundary. For Task 3 we keep the
-        # single session intentionally — the public signature change is
-        # the only observable behavior delta in this commit. Cleanup is
-        # handled in the outer ``finally`` block to avoid re-indenting the
-        # entire try-body for a scaffold that Task 4 removes.
-        db: AsyncSession = async_session_factory()
+        # Foundation P4 Cycle 3 Task 4: body restructured into short read
+        # sessions, one per db-taking helper call site. Each session opens
+        # immediately before its helper and closes BEFORE the LLM call that
+        # follows it — no session ever crosses an LLM call boundary. The
+        # five named helpers (resolve_blocked_strategies, resolve_post_
+        # analyze_state, build_optimize_context, _fetch_historical_stats,
+        # persist_failed_optimization) each get their own session. The two
+        # additional db-using sites between analyze and optimize
+        # (_auto_inject_patterns, resolve_strategy_intelligence fallback)
+        # also use short sessions for the same invariant.
         try:
             # ---------------------------------------------------------------
             # Enrichment trace — log what context was provided (no LLM call)
@@ -290,10 +290,12 @@ class PipelineOrchestrator:
             strategy_intel_enabled = prefs.get(
                 "pipeline.enable_strategy_intelligence", prefs_snapshot,
             )
-            blocked_strategies = await resolve_blocked_strategies(
-                db, enabled=bool(strategy_intel_enabled),
-                strategy_override=strategy_override,
-            )
+            # Session 1: resolve_blocked_strategies — closes BEFORE analyze LLM.
+            async with async_session_factory() as db:
+                blocked_strategies = await resolve_blocked_strategies(
+                    db, enabled=bool(strategy_intel_enabled),
+                    strategy_override=strategy_override,
+                )
             available_strategies = self.strategy_loader.format_available(
                 blocked=blocked_strategies,
             )
@@ -355,20 +357,23 @@ class PipelineOrchestrator:
             # ---------------------------------------------------------------
             # Phase 1.5: Post-analyze state resolution
             # ---------------------------------------------------------------
-            post_analyze = await resolve_post_analyze_state(
-                raw_prompt=raw_prompt,
-                analysis=analysis,
-                db=db,
-                strategy_loader=self.strategy_loader,
-                domain_resolver=domain_resolver,
-                taxonomy_engine=taxonomy_engine,
-                strategy_override=strategy_override,
-                blocked_strategies=blocked_strategies,
-                heuristic_task_type=heuristic_task_type,
-                heuristic_domain=heuristic_domain,
-                applied_pattern_ids=applied_pattern_ids,
-                trace_id=trace_id,
-            )
+            # Session 2: resolve_post_analyze_state — opens after analyze LLM,
+            # closes before the next LLM call (optimize).
+            async with async_session_factory() as db:
+                post_analyze = await resolve_post_analyze_state(
+                    raw_prompt=raw_prompt,
+                    analysis=analysis,
+                    db=db,
+                    strategy_loader=self.strategy_loader,
+                    domain_resolver=domain_resolver,
+                    taxonomy_engine=taxonomy_engine,
+                    strategy_override=strategy_override,
+                    blocked_strategies=blocked_strategies,
+                    heuristic_task_type=heuristic_task_type,
+                    heuristic_domain=heuristic_domain,
+                    applied_pattern_ids=applied_pattern_ids,
+                    trace_id=trace_id,
+                )
             effective_strategy = post_analyze.effective_strategy
 
             # A1 follow-up: reconcile the enrichment_meta.domain_signals block
@@ -392,16 +397,21 @@ class PipelineOrchestrator:
             auto_injected_cluster_ids: list[str] = []
             if taxonomy_engine is not None:
                 try:
-                    auto_injected_patterns, auto_injected_cluster_ids = (
-                        await self._auto_inject_patterns(
-                            raw_prompt=raw_prompt,
-                            taxonomy_engine=taxonomy_engine,
-                            db=db,
-                            trace_id=trace_id,
-                            optimization_id=opt_id,
-                            project_id=project_id,
+                    # Short session for auto-inject — closes before the
+                    # optimize LLM call (and any other LLM call). This is
+                    # an additional db-using site between analyze and
+                    # optimize beyond the 5 named helpers.
+                    async with async_session_factory() as db:
+                        auto_injected_patterns, auto_injected_cluster_ids = (
+                            await self._auto_inject_patterns(
+                                raw_prompt=raw_prompt,
+                                taxonomy_engine=taxonomy_engine,
+                                db=db,
+                                trace_id=trace_id,
+                                optimization_id=opt_id,
+                                project_id=project_id,
+                            )
                         )
-                    )
                     if auto_injected_patterns:
                         yield PipelineEvent(
                             event="context_injected",
@@ -457,28 +467,34 @@ class PipelineOrchestrator:
             ):
                 try:
                     from app.services.context_enrichment import resolve_strategy_intelligence
-                    strategy_intelligence, _ = await resolve_strategy_intelligence(
-                        db, analysis.task_type, analysis.domain or "general",
-                    )
+                    # Short session for strategy-intel fallback — closes
+                    # before the optimize LLM call. Additional db-using
+                    # site beyond the 5 named helpers.
+                    async with async_session_factory() as db:
+                        strategy_intelligence, _ = await resolve_strategy_intelligence(
+                            db, analysis.task_type, analysis.domain or "general",
+                        )
                 except Exception as exc:
                     logger.debug("Strategy intelligence unavailable: %s", exc)
 
-            optimize_bundle = await build_optimize_context(
-                raw_prompt=raw_prompt,
-                analysis=analysis,
-                effective_strategy=effective_strategy,
-                effective_domain=post_analyze.effective_domain,
-                prompt_loader=self.prompt_loader,
-                strategy_loader=self.strategy_loader,
-                db=db,
-                applied_pattern_ids=applied_pattern_ids,
-                auto_injected_patterns=auto_injected_patterns,
-                codebase_context=codebase_context,
-                strategy_intelligence=strategy_intelligence,
-                divergence_alerts=divergence_alerts,
-                prompt_embedding=post_analyze.prompt_embedding,
-                trace_id=trace_id,
-            )
+            # Session 3: build_optimize_context — closes BEFORE optimize LLM.
+            async with async_session_factory() as db:
+                optimize_bundle = await build_optimize_context(
+                    raw_prompt=raw_prompt,
+                    analysis=analysis,
+                    effective_strategy=effective_strategy,
+                    effective_domain=post_analyze.effective_domain,
+                    prompt_loader=self.prompt_loader,
+                    strategy_loader=self.strategy_loader,
+                    db=db,
+                    applied_pattern_ids=applied_pattern_ids,
+                    auto_injected_patterns=auto_injected_patterns,
+                    codebase_context=codebase_context,
+                    strategy_intelligence=strategy_intelligence,
+                    divergence_alerts=divergence_alerts,
+                    prompt_embedding=post_analyze.prompt_embedding,
+                    trace_id=trace_id,
+                )
 
             if optimize_bundle.context_updates:
                 if context_sources is None:
@@ -593,13 +609,15 @@ class PipelineOrchestrator:
                     data={"stage": "score", "state": "running", "model": model_ids["score"]},
                 )
 
-                # Foundation P4 Cycle 3: pre-fetch historical_stats in a short
-                # read session BEFORE the LLM call so the helper stays pure
-                # compute over the LLM call + injected stats.
+                # Session 4: _fetch_historical_stats — pre-fetch historical
+                # stats in a short read session BEFORE the score LLM call so
+                # run_hybrid_scoring stays pure compute over the LLM call +
+                # injected stats. Closes BEFORE the score LLM invocation.
                 from app.tools._shared import _fetch_historical_stats
-                historical_stats = await _fetch_historical_stats(
-                    db, exclude_scoring_modes=["heuristic"],
-                )
+                async with async_session_factory() as db:
+                    historical_stats = await _fetch_historical_stats(
+                        db, exclude_scoring_modes=["heuristic"],
+                    )
 
                 scoring = await run_hybrid_scoring(
                     raw_prompt=raw_prompt,
@@ -749,17 +767,21 @@ class PipelineOrchestrator:
             except Exception:
                 pass
 
-            await persist_failed_optimization(
-                db,
-                opt_id=opt_id,
-                raw_prompt=raw_prompt,
-                trace_id=trace_id,
-                duration_ms=duration_ms,
-                provider=provider_instances.get("optimize", provider) if provider_instances else provider,
-                optimizer_model=optimizer_model,
-                model_ids=model_ids,
-                error_message=str(exc),
-            )
+            # Session 5: persist_failed_optimization — short session in the
+            # except block. Task 5 will further restructure this into a queue
+            # closure; Task 4 just wraps it in a short read session for now.
+            async with async_session_factory() as db:
+                await persist_failed_optimization(
+                    db,
+                    opt_id=opt_id,
+                    raw_prompt=raw_prompt,
+                    trace_id=trace_id,
+                    duration_ms=duration_ms,
+                    provider=provider_instances.get("optimize", provider) if provider_instances else provider,
+                    optimizer_model=optimizer_model,
+                    model_ids=model_ids,
+                    error_message=str(exc),
+                )
 
             yield PipelineEvent(event="error", data={
                 "trace_id": trace_id,
@@ -767,16 +789,6 @@ class PipelineOrchestrator:
             })
 
         finally:
-            # Task 3 transitional scaffold cleanup: close the manually
-            # opened read session. Task 4 will remove this when the body
-            # is restructured into short per-helper sessions.
-            try:
-                await db.close()
-            except Exception:
-                logger.debug(
-                    "transitional db.close() failed (non-fatal)", exc_info=True,
-                )
-
             # Drain coordination — always decrement, even on error,
             # so the inflight tracker stays balanced. ``begin`` may
             # have failed silently above; ``end`` is wrapped in the
