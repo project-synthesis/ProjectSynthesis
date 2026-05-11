@@ -61,10 +61,11 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 | `schemas/validation_suite.py` | NEW — Pydantic models (request/response + nested payload types `PromptSnapshotItem`, `PerPromptScore`, `BaselineScoresPayload`) |
 | `schemas/mcp_models.py` | EXTEND — `SaveSuiteResult`, `ReplayInitiatedResult` |
 | `services/validation_suite_service.py` | NEW — `create_from_run()`, `retire()`, `get()`, `list()`, `list_replays()`, `compute_regression_alarm()` |
-| `services/run_orchestrator.py` | EXTEND `_persist_final()` signature to take `mode: str` so the operation_label can be mode-keyed (`replay_run_persist` for replay, existing `run_orchestrator.persist_final` otherwise); update the single existing caller at `:86` to thread `mode` through. EXTEND `_extract_probe_meta()` (`:142`) to include `grounding_mode: request.payload.get('grounding_mode', 'codebase')` in the returned dict so `RunRow.topic_probe_meta.grounding_mode` is persisted + queryable. **`_extract_probe_meta()` continues to gate on `mode == "topic_probe"`** — `replay_run` rows have `RunRow.topic_probe_meta = NULL` (matches the existing `_extract_seed_meta()` mode-gating pattern at `run_orchestrator.py:151-163` (full function — gating check at `:152-153`, payload dict at `:155-163`)). EXTEND `_create_row()` body to include `suite_id=request.payload.get("suite_id")` in the `RunRow(...)` constructor (today's body at `:119-133` enumerates which columns it sets; `suite_id` is added to that enumeration). EXTEND lifespan registration to add `'replay_run'` generator (dispatch is generator-dict-based via `self._generators[mode]` — body unchanged). NEW private helper `_run_generator_and_persist(mode, request, run_id)` extracted from `run()` body and shared with the new `_run_to_completion` wrapper. NEW `dispatch_async()` for 202 callers (awaits initial `INSERT` only, spawns shielded background task with explicit `current_run_id` ContextVar set inside the spawned task). REFACTOR `run()` to a thin wrapper that calls `dispatch_async()` then awaits a completion event — preserves the "blocks until terminal" contract for SSE callers + tests while sharing the dispatch body. |
+| `services/run_orchestrator.py` | EXTEND `_persist_final()` signature to take `mode: str` so the operation_label can be mode-keyed (`replay_run_persist` for replay, existing `run_orchestrator.persist_final` otherwise); update the single existing caller at `:86` to thread `mode` through. EXTEND `_extract_probe_meta()` (`:142`) to include `grounding_mode: request.payload.get('grounding_mode', 'codebase')` in the returned dict so `RunRow.topic_probe_meta.grounding_mode` is persisted + queryable. **`_extract_probe_meta()` continues to gate on `mode == "topic_probe"`** — `replay_run` rows have `RunRow.topic_probe_meta = NULL` (matches the existing `_extract_seed_meta()` mode-gating pattern at `run_orchestrator.py:151-163` (full function — gating check at `:152-153`, payload dict at `:155-163`)). EXTEND `_create_row()` body to **mode-gate** the `suite_id` assignment: `suite_id=(request.payload.get("suite_id") if mode == "replay_run" else None)`. This mirrors the existing mode-gated extraction pattern of `_extract_probe_meta`/`_extract_seed_meta` and enforces the §3 Key Invariant 4 (`RunRow.suite_id IS NOT NULL iff mode='replay_run'`) at the write site — a buggy caller that accidentally threads `suite_id` into a non-replay payload cannot break the invariant. Today's body at `:119-133` enumerates which columns it sets; the mode-gated `suite_id` is added to that enumeration. EXTEND lifespan registration to add `'replay_run'` generator (dispatch is generator-dict-based via `self._generators[mode]` — body unchanged). NEW private helper `_run_generator_and_persist(mode, request, run_id)` extracted from `run()` body and shared with the new `_run_to_completion` wrapper. NEW `dispatch_async()` for 202 callers (awaits initial `INSERT` only, spawns shielded background task with explicit `current_run_id` ContextVar set inside the spawned task). REFACTOR `run()` to a thin wrapper that calls `dispatch_async()` then awaits a completion event — preserves the "blocks until terminal" contract for SSE callers + tests while sharing the dispatch body. |
 | `services/generators/replay_run_generator.py` | NEW — `RunGenerator` Protocol impl; consumes `RunRequest(mode='replay_run', payload={"suite_id": ..., "project_id": ..., "repo_full_name": ...})`. `__init__` takes the union of collaborators needed by `batch_pipeline.run_single_prompt`: `(provider, prompt_loader, embedding_service, session_factory, taxonomy_engine, domain_resolver, context_service, write_queue)` — this is a **NEW richer collaborator graph** (not a literal mirror of `SeedAgentGenerator.__init__` which is `(seed_orchestrator, write_queue)` only, nor of `TopicProbeGenerator.__init__` which is `(provider, repo_index_query, taxonomy_engine, *, context_service, embedding_service, session_factory, write_queue)`). Replay is structurally novel: it iterates prompts directly through `run_single_prompt` without going through a batch orchestrator or a probe-grounding phase, so its constructor takes the run_single_prompt collaborator union. Pre-fetches `historical_stats` once via `OptimizationService(read_db).get_score_distribution(exclude_scoring_modes=["heuristic"])` and threads to per-prompt children, matching `batch_orchestrator.run_batch:113-126` pattern. Reruns each prompt via `batch_pipeline.run_single_prompt`; routing tier = `internal` (deterministic regression detection — no sampling-driven nondeterminism) |
 | `services/generators/topic_probe_generator.py` | EXTEND — read `grounding_mode: Literal['codebase', 'topic_only']` from `request.payload`; topic_only skips Phase 1. **No concurrency refactor in T2** — `PROBE_PROMPT_CONCURRENCY` is forward-declared per §5 concurrency note, not consumed in this release. |
 | `services/generators/_constants.py` | NEW — module-level constants for the generators subpackage: `PROBE_PROMPT_CONCURRENCY: int = 5` (forward-declared value chosen to align with the batch-seeding `API=5` budget noted in root `CLAUDE.md` line 70 — different surface, but same single-user dev-tool latency profile). **NOT consumed in T2.** Reserved for T3+ parallelization with proper exception handling (see §5 concurrency note). |
+| `services/generators/_aggregate.py` | NEW — shared aggregate-builder helper `compute_run_aggregate(prompt_results: list[dict]) -> dict` (extracted from the existing `TopicProbeGenerator._build_aggregate` instance method at `topic_probe_generator.py:406-444`). Produces `mean_overall`, `p5`/`p50`/`p95`, `completed_count`/`failed_count`, `task_type_distribution`, and replay-only additive keys (when `prompt_results` items carry `baseline_overall` + `delta`, the helper emits `replay_warnings`, `replay_n_completed`, `replay_n_failed` — purely additive, ignored by non-replay callers). Both `TopicProbeGenerator` and `ReplayRunGenerator` import + call this helper; `_build_aggregate` instance method is refactored to a thin delegate. |
 | `services/probe_generation.py` | EXTEND — add `mode: Literal['codebase', 'topic_only'] = 'codebase'` + `template_name: str = 'probe-agent.md'` kwargs to `generate_probe_prompts()`. `mode='topic_only'` selects the **inverted per-prompt predicate** (`_lacks_backtick` defined as `<5%` backtick density per prompt, i.e. drop prompts WITH backticks); the **batch drop threshold stays at `>50%`** (`_DROP_THRESHOLD=0.5`) per the existing F1 contract — the two thresholds operate at different levels and remain distinct. Defaults preserve backward-compat with all current callers. |
 | `routers/suites.py` | NEW — 6 endpoints |
 | `routers/probes.py` | EXTEND — `grounding_mode` body field on `ProbeRequest`; `Prefer: respond-async` header → 202 |
@@ -79,7 +80,7 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 | Frontend `components/probes/{TopicProbeForm,TopicProbeProgressView,TopicProbeReportCard,TaxonomyMiniView}.svelte` | NEW |
 | Frontend `components/suites/{SuitesPanel,SuiteRow,SuiteDetailView,RegressionBadge}.svelte` | NEW |
 | Frontend `components/taxonomy/SeedModal.svelte`, `components/layout/StatusBar.svelte` | EXTEND — note: `SeedModal.svelte` lives in `components/taxonomy/` (3D-scope directory) but is a 2D modal; T2 narrows the cycle-14 banned-vocab audit to `frontend/src/lib/components/{layout,editor,refinement,shared,landing,probes,suites}/` to avoid false positives on the 3D canon vocabulary used elsewhere in `taxonomy/` (per `.claude/skills/brand-guidelines/SKILL.md` line 81 / line 214) |
-| Frontend `stores/probesStore.ts`, NEW `stores/suitesStore.ts`, `lib/api.ts` | EXTEND / NEW |
+| Frontend `frontend/src/lib/stores/probesStore.ts` (EXTEND), NEW `frontend/src/lib/stores/suitesStore.ts`, NEW `frontend/src/lib/api/suites.ts` (per-domain module matching the existing `runs.ts`/`seed.ts`/`clusters.ts`/... convention under `lib/api/`; the project does NOT have a monolithic `api.ts` — verified by `ls frontend/src/lib/api/`) | EXTEND / NEW |
 | Frontend `frontend/src/lib/utils/copy-feedback.svelte.ts` | REUSE existing `useCopyFlash()` primitive (canonical green `#22ff88` `copy-flash`; duration governed by the shipped `--duration-copy-flash` token in `app.css`, currently 1500ms — `component-patterns.md` line 219 records the original 600ms target, to be doc-sync'd to the shipped value at T2 release) — no new copy-feedback timing |
 | `.claude/skills/brand-guidelines/SKILL.md` | EXTEND — (a) update canonical 2D-UI directory list at lines 79, 214, 375 from `{layout,editor,refinement,shared,landing}` to `{layout,editor,refinement,shared,landing,probes,suites}` so the brand canon and the cycle-14 audit scope agree; (b) update StatusBar height at line 140 from `22px` to `20px` per shipped `StatusBar.svelte:251` reality (parallels the `copy-flash` ship-vs-canon reconciliation) |
 | `.claude/skills/brand-guidelines/references/component-patterns.md` | EXTEND — update `copy-flash` row (line 219) from `600ms` to the shipped `1500ms` per `--duration-copy-flash` token reality (doc-sync follow-up) |
@@ -703,7 +704,14 @@ class ReplayRunGenerator:
                 prompt_results.append({
                     "raw_prompt": item["raw_prompt"],
                     "raw_prompt_idx": idx,
-                    "optimization_id": pending.id,
+                    # NOTE: trace_id (not id). Replay does NOT call bulk_persist
+                    # (see §5 GeneratorResult — taxonomy_delta={}, no Optimization
+                    # row is INSERTed for replay results), so pending.id would be
+                    # an orphan uuid pointing at no DB row. trace_id is the canonical
+                    # correlation id on PendingOptimization (set at batch_pipeline.py:101,217)
+                    # — opaque, NOT a FK to Optimization. Field name disambiguates the
+                    # public RunResult.prompt_results contract.
+                    "trace_id": pending.trace_id,
                     "overall": overall,
                     "dimensions": {
                         "clarity": pending.score_clarity,
@@ -743,7 +751,7 @@ class ReplayRunGenerator:
         else:
             terminal_status = "partial"
 
-        aggregate = _compute_aggregate(prompt_results)
+        aggregate = compute_run_aggregate(prompt_results)  # from services/generators/_aggregate.py (NEW, see §2)
         # Replay-specific telemetry rides in aggregate.* (additive — no schema
         # change needed). Suite linkage already lives in RunRow.suite_id;
         # downstream consumers (regression_alarm query) read RunRow.aggregate
@@ -1092,18 +1100,23 @@ All respect `prefers-reduced-motion → 0.01ms`.
 | `frontend/src/lib/stores/suitesStore.ts` (NEW) | Suites list + selected + regression alarm cache (polled from /api/health, refreshed on `taxonomy_changed` SSE) |
 | `frontend/src/lib/stores/probesStore.ts` (EXTEND) | 202+polling abstraction — `runProbe()` returns an async iterable; source-agnostic for components. Threshold: `n_prompts > 10` → auto-attach `Prefer: respond-async` |
 
-### `frontend/src/lib/api.ts` additions
+### `frontend/src/lib/api/suites.ts` (NEW per-domain module)
+
+The project's frontend API client is split into **per-domain modules** under `frontend/src/lib/api/` (verified live: `client.ts`, `clusters.ts`, `domains.ts`, `observatory.ts`, `optimizations.ts`, `readiness.ts`, `runs.ts`, `seed.ts`). T2 introduces a new `suites.ts` module following this canonical layout — NOT a monolithic `api.ts` (which doesn't exist in the project):
 
 ```typescript
-saveSuite(runId: string, label: string, toleranceAbs?: number): Promise<ValidationSuiteOut>
-replaySuite(suiteId: string): Promise<ReplayRunOut>
-getSuites(filters?: {projectId?, repoFullName?, includeRetired?}): Promise<RunListResponseShape<ValidationSuiteListItem>>
-getSuite(suiteId: string): Promise<ValidationSuiteOut>
-getSuiteReplays(suiteId: string): Promise<RunListResponse>  // items: RunSummary[]
-retireSuite(suiteId: string, reason: string): Promise<ValidationSuiteOut>
+// frontend/src/lib/api/suites.ts (NEW)
+import { client } from './client';
+
+export function saveSuite(runId: string, label: string, toleranceAbs?: number): Promise<ValidationSuiteOut>
+export function replaySuite(suiteId: string): Promise<ReplayRunOut>
+export function getSuites(filters?: {projectId?, repoFullName?, includeRetired?}): Promise<ValidationSuiteListResponse>
+export function getSuite(suiteId: string): Promise<ValidationSuiteOut>
+export function getSuiteReplays(suiteId: string): Promise<RunListResponse>  // items: RunSummary[]
+export function retireSuite(suiteId: string, reason: string): Promise<ValidationSuiteOut>
 ```
 
-`RunListResponseShape<T>` = the canonical pagination envelope `{total, count, offset, items: T[], has_more, next_offset}` per `schemas/runs.py:55-63`. `RunListResponse` (no type parameter) is the existing alias for `RunListResponseShape<RunSummary>` used by `GET /api/runs` + `GET /api/seed` + `GET /api/probes`.
+`ValidationSuiteListResponse` is the Pydantic envelope defined in §4 (mirrors the `RunListResponse` shape: `{total, count, offset, items, has_more, next_offset}`). `RunListResponse` (no type parameter) is the existing concrete envelope `{... items: RunSummary[] ...}` used by `GET /api/runs` + `GET /api/seed` + `GET /api/probes`. Frontend consumers import from `$lib/api/suites` (matching the `$lib/api/runs` precedent).
 
 ### Accessibility
 
@@ -1111,7 +1124,7 @@ retireSuite(suiteId: string, reason: string): Promise<ValidationSuiteOut>
 - `prefers-reduced-motion` → 0.01ms on all keyframes
 - StatusBar regression badge: `aria-live="polite"` `role="status"`
 - Save-Suite / Replay buttons: `aria-label` matches visible text
-- Color paired with text (`● 2 ALARM` not just `●`)
+- Color paired with text (`● 2 alarm` not just `●` — note lower-case noun matches the canonical badge copy at the §6 voice table, anchored to the shipped `statusLabel()` pattern in `SeedModal.svelte:222-228`)
 
 ## 7 Audit-hook WARN→RAISE flip
 
