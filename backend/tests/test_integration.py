@@ -54,8 +54,28 @@ class TestEndToEndFlow:
     """Full pipeline flow using mocked provider but real router -> service -> DB path."""
 
     async def test_optimize_refine_feedback_history(
-        self, app_client, mock_provider, db_session,
+        self, app_client, mock_provider, db_session, monkeypatch,
     ):
+        # P4-integration-review (2026-05-10): Cycle 2's restructured
+        # ``handle_refine`` opens its own session via module-level
+        # ``async_session_factory`` (decoupled from the router's
+        # ``Depends(get_db)``). Patch the rebound name to return the same
+        # in-memory ``db_session`` used by the optimize/history/feedback
+        # endpoints so the refine path can see the optimization persisted
+        # in Step 1.
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _yield_db_session():
+            yield db_session
+
+        def _fake_factory():
+            return _yield_db_session()
+
+        monkeypatch.setattr(
+            "app.tools.refine.async_session_factory", _fake_factory,
+        )
+
         # --- Step 1: Optimize ---
         mock_provider.complete_parsed.side_effect = [
             AnalysisResult(
@@ -190,11 +210,22 @@ class TestEndToEndFlow:
 
         refine_events = _parse_sse_events(resp.text)
         refine_event_types = [e.get("event") for e in refine_events]
-        # Refinement pipeline should emit analyze, refine, score, and suggest phases
-        assert "status" in refine_event_types
-        assert "prompt_preview" in refine_event_types
-        assert "score_card" in refine_event_types
-        assert "suggestions" in refine_event_types
+        # P4 Cycle 2 restructure: refinement endpoint now synthesizes a 2-event
+        # SSE stream (``started`` + ``refinement_turn``) preserving the
+        # client-facing event contract. The legacy ``status/prompt_preview/
+        # score_card/suggestions`` events were emitted by the pre-Cycle 2
+        # async-generator pipeline; the new ``handle_refine`` returns a
+        # single ``RefineOutput`` payload (see commit 623226e4).
+        assert "started" in refine_event_types
+        assert "refinement_turn" in refine_event_types
+        refine_turn_event = next(
+            (e for e in refine_events if e.get("event") == "refinement_turn"),
+            None,
+        )
+        assert refine_turn_event is not None
+        assert refine_turn_event.get("refined_prompt")
+        assert refine_turn_event.get("scores")
+        assert refine_turn_event.get("suggestions") is not None
 
         # --- Step 6: Get refinement versions ---
         resp = await app_client.get(

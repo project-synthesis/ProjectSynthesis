@@ -364,7 +364,14 @@ async def test_optimize_passthrough_then_save_full_flow(db_session) -> None:
     trace_id = pending.trace_id
 
     # Step 2: Save the external LLM's result
-    with patch("app.tools.save_result.async_session_factory") as mock_factory:
+    # P4-integration-review (2026-05-10): Cycle 1's restructured save_result.py
+    # routes the persist through ``get_write_queue().submit()``. The second
+    # ``with patch()`` block must also patch ``_write_queue`` — the first
+    # block's patch has been exited by now.
+    with (
+        patch("app.tools.save_result.async_session_factory") as mock_factory,
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
+    ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -411,7 +418,13 @@ async def test_optimize_passthrough_save_without_scores(db_session) -> None:
 
     trace_id = pending.trace_id
 
-    with patch("app.tools.save_result.async_session_factory") as mock_factory:
+    # P4-integration-review (2026-05-10): save_result persist routes through
+    # ``get_write_queue().submit()``; patch the queue here too (the optimize
+    # block's patch already exited).
+    with (
+        patch("app.tools.save_result.async_session_factory") as mock_factory,
+        patch("app.tools._shared._write_queue", _make_fake_write_queue(db_session)),
+    ):
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 

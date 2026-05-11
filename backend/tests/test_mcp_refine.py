@@ -15,7 +15,14 @@ pytestmark = pytest.mark.asyncio
 
 
 def _mock_routing(tier="internal", provider=None, provider_name=None):
-    """Create a mock RoutingManager."""
+    """Create a mock RoutingManager.
+
+    P4-integration-review (2026-05-10): Cycle 2's restructured refine path
+    reads ``routing.state.provider`` BEFORE calling ``routing.resolve()``.
+    Pin ``rm.state.provider`` explicitly (defaulting to ``provider`` arg) so
+    the test stub doesn't return an auto-MagicMock (truthy) when callers
+    expect ``None`` (the passthrough rejection branch checks ``is None``).
+    """
     decision = RoutingDecision(
         tier=tier,
         provider=provider,
@@ -24,6 +31,7 @@ def _mock_routing(tier="internal", provider=None, provider_name=None):
     )
     rm = MagicMock()
     rm.resolve.return_value = decision
+    rm.state = MagicMock(provider=provider)
     return rm
 
 
@@ -166,9 +174,46 @@ async def test_refine_happy_path():
     }
 
     # Refinement complete event with suggestions
+    # P4-integration-review (2026-05-10): Cycle 2's restructure renamed
+    # `create_refinement_turn` → `invoke_refinement_pipeline` and expanded
+    # the complete-event payload to 6 keys (the persist closure in
+    # ``app/tools/refine.py:_persist_refinement_turn`` consumes all of them).
+    # Compute expected `overall` for the scores dict — the production
+    # `_persist_refinement_turn` reads `scores["overall"]` to populate
+    # `event_payload["overall_score"]`.
+    from app.schemas.pipeline_contracts import DIMENSION_WEIGHTS as _DW
+    _expected_overall = round(sum(
+        {"clarity": 8.5, "specificity": 7.5, "structure": 8.0,
+         "faithfulness": 8.5, "conciseness": 7.0}[d] * w
+        for d, w in _DW.items()
+    ), 2)
+
     complete_event = PipelineEvent(
         event="refinement_complete",
         data={
+            "optimized_prompt": "Improved prompt with better structure and clarity.",
+            "scores": {
+                "clarity": 8.5,
+                "specificity": 7.5,
+                "structure": 8.0,
+                "faithfulness": 8.5,
+                "conciseness": 7.0,
+                "overall": _expected_overall,
+            },
+            "deltas_from_prev": {
+                "clarity": 1.5,
+                "specificity": 1.0,
+                "structure": 0.5,
+                "faithfulness": 0.5,
+                "conciseness": 1.0,
+            },
+            "deltas_from_original": {
+                "clarity": 1.5,
+                "specificity": 1.0,
+                "structure": 0.5,
+                "faithfulness": 0.5,
+                "conciseness": 1.0,
+            },
             "strategy_used": "chain-of-thought",
             "suggestions": [
                 {"text": "Add concrete examples", "source": "scorer"},
@@ -182,28 +227,69 @@ async def test_refine_happy_path():
         yield PipelineEvent(event="phase_complete", data={"phase": "refine"})
         yield complete_event
 
-    # Sequence of db.execute returns for the 5 queries in handle_refine:
-    # 1. Load optimization (SELECT Optimization WHERE id = ...)
-    # 2. Check existing turns (SELECT RefinementTurn LIMIT 1)
-    # 3. Resolve branch (SELECT RefinementBranch ORDER BY created_at DESC LIMIT 1)
-    # 4. Get latest turn on branch (SELECT RefinementTurn ORDER BY version DESC LIMIT 1)
-    # 5. Fetch new turn after refinement (SELECT RefinementTurn ORDER BY version DESC LIMIT 1)
+    # Sequence of db.execute returns for the 6 queries in handle_refine
+    # (P4 Cycle 2 restructure — see ``app/tools/refine.py``):
+    # STEP 1 read session:
+    #   1. _load_optimization (SELECT Optimization WHERE id = ...)
+    #   2. _check_initial_turn_missing (SELECT COUNT(RefinementTurn))
+    # STEP 1c read session (post-seed):
+    #   3. _load_optimization (re-load fresh row)
+    #   4. _resolve_branch (SELECT RefinementBranch ORDER BY created_at DESC LIMIT 1)
+    #   5. _load_latest_turn (SELECT RefinementTurn ORDER BY version DESC LIMIT 1)
+    #   6. _fetch_historical_stats (P4 Cycle 1 shared helper —
+    #      OptimizationService.get_score_distribution aggregate, uses .one())
+    # The new turn is persisted via WriteQueue.submit(), NOT via the read
+    # session — so mock_new_turn is no longer fetched via db.execute.
     mock_results = []
-    for obj in [mock_opt, mock_initial_turn, mock_branch, mock_latest_turn, mock_new_turn]:
+    for obj in [mock_opt, mock_initial_turn, mock_branch, mock_latest_turn]:
         r = MagicMock()
         r.scalar_one_or_none.return_value = obj
         mock_results.append(r)
+
+    # Insert the STEP 1c _load_optimization re-load BEFORE branch (index 2):
+    # The new flow calls _load_optimization twice (STEP 1 + STEP 1c reload).
+    reload_opt_r = MagicMock()
+    reload_opt_r.scalar_one_or_none.return_value = mock_opt
+    mock_results.insert(2, reload_opt_r)
+
+    # Append the historical_stats no-data row: get_score_distribution calls
+    # .one() returning a 6-column × 3-aggregate (count, avg, avg^2) tuple. All
+    # zeros = no historical data — _fetch_historical_stats returns the dict but
+    # downstream blending degrades gracefully when counts are zero.
+    historical_stats_r = MagicMock()
+    historical_stats_r.one.return_value = (0, 0.0, 0.0) * 6
+    mock_results.append(historical_stats_r)
 
     # Mock context enrichment service
     mock_enrichment = EnrichedContext(raw_prompt="mock")
     mock_ctx_svc = AsyncMock()
     mock_ctx_svc.enrich.return_value = mock_enrichment
 
+    # P4-integration-review (2026-05-10): Cycle 2's restructure routes the
+    # final-turn persist through ``get_write_queue().submit()``. Build a fake
+    # WriteQueue whose submit() invokes the callback directly so the test
+    # doesn't need a real worker. The handler also calls
+    # ``_check_initial_turn_missing`` before reaching the seed path; since
+    # mock_initial_turn is "present" we want that submit gate skipped — the
+    # fake submit handles it transparently if the gate ever fires.
+    async def _fake_submit(work, *, timeout=None, operation_label=None):
+        # The persist callback returns a dict — call it with a stub write_db
+        # that captures the RefinementTurn add for shape verification.
+        # ``write_db.add`` is sync — use MagicMock for it to avoid the
+        # "coroutine was never awaited" warning. ``commit`` is async.
+        stub_write_db = MagicMock()
+        stub_write_db.commit = AsyncMock()
+        return await work(stub_write_db)
+
+    fake_wq = MagicMock()
+    fake_wq.submit = AsyncMock(side_effect=_fake_submit)
+
     with (
         patch("app.tools._shared._routing", _mock_routing(
             "internal", provider=mock_provider, provider_name="test_provider",
         )),
         patch("app.tools._shared._context_service", mock_ctx_svc),
+        patch("app.tools._shared._write_queue", fake_wq),
         patch("app.tools.refine.PreferencesService") as mock_prefs_cls,
         patch("app.tools.refine.async_session_factory") as mock_factory,
         patch("app.tools.refine.RefinementService") as mock_svc_cls,
@@ -220,7 +306,8 @@ async def test_refine_happy_path():
         mock_db.commit = AsyncMock()
 
         mock_svc = MagicMock()
-        mock_svc.create_refinement_turn = _mock_refinement_generator
+        # P4 Cycle 2 rename: `create_refinement_turn` → `invoke_refinement_pipeline`
+        mock_svc.invoke_refinement_pipeline = _mock_refinement_generator
         mock_svc_cls.return_value = mock_svc
 
         result = await synthesis_refine(

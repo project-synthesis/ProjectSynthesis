@@ -194,15 +194,31 @@ async def app_client(mock_provider, db_session, tmp_path):
     # FastAPI dependency override above. Without this, real handlers raise
     # ``ValueError: WriteQueue not initialized`` when calling
     # ``tools._shared.get_write_queue()``.
+    #
+    # P4-integration-review (2026-05-10): snapshot the prior value before
+    # mutating so the teardown restores it instead of clobbering it to None.
+    # The pre-fix teardown set ``_write_queue = None`` unconditionally, which
+    # leaked across the test session and broke any test executed AFTER an
+    # ``app_client``-using test (the singleton stayed None, making
+    # ``get_write_queue()`` raise ``WriteQueue not initialized``).
+    #
+    # P4-integration-review (2026-05-10) also seeds ``_shared._routing`` so
+    # Cycle 2's restructured ``handle_refine`` (which dropped ``app.state.routing``
+    # in favor of ``get_routing()``) resolves the test routing manager. Same
+    # snapshot/restore pattern.
     from app.tools import _shared as _tools_shared
+    _prior_write_queue = _tools_shared._write_queue
+    _prior_routing = _tools_shared._routing
     _tools_shared.set_write_queue(test_write_queue)
+    _tools_shared.set_routing(test_routing)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
     app.dependency_overrides.clear()
-    _tools_shared.set_write_queue(None)
+    _tools_shared.set_write_queue(_prior_write_queue)
+    _tools_shared.set_routing(_prior_routing)
     if hasattr(app.state, "write_queue"):
         del app.state.write_queue
     _cfg.DATA_DIR = original_data_dir
@@ -316,6 +332,47 @@ async def write_queue_inmem(writer_engine_inmem):
 # broader suite.
 
 import pytest  # noqa: E402  (intentional: kept after pytest_asyncio imports)
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_stopped_write_queue_singleton():
+    """Autouse cleanup: drop the ``_shared._write_queue`` singleton if the
+    previous test left a stopped ``WriteQueue`` behind.
+
+    Background (P4-integration-review 2026-05-10): ``test_main.py``'s
+    lifespan tests run the real production lifespan, which calls
+    ``set_write_queue(queue)`` on startup and ``set_write_queue(None)`` is
+    NOT in the shutdown path (the lifespan only clears
+    ``app.state.write_queue`` + ``register_process_write_queue(None)`` —
+    the ``_shared`` singleton is left dangling with a stopped queue).
+
+    The previous fix (snapshot/restore in ``app_client``) cured the prior
+    "WriteQueue not initialized" failure but uncovered this second leak:
+    tests after ``test_lifespan_startup_and_shutdown`` would find a
+    stopped queue in the singleton and raise ``WriteQueueStoppedError``
+    when calling ``.submit()``.
+
+    Cleanest pure-test fix: a function-scoped autouse fixture that runs
+    BEFORE every test (yield comes after setup), checks whether the
+    singleton is a stopped real ``WriteQueue``, and clears it so the test
+    starts from a known clean state. Tests that need a working queue
+    install their own via ``app_client`` / explicit patches.
+    """
+    from app.tools import _shared as _ts
+    wq = _ts._write_queue
+    if wq is not None:
+        # Detect stopped real WriteQueue. The synthetic test queue from
+        # ``app_client`` is a ``_TestWriteQueue`` class instance — it has
+        # no ``_stopping`` / ``_dead`` attrs. Real WriteQueue instances
+        # use ``_stopping: bool`` (set in ``stop()``). Use getattr with
+        # default so the synthetic queue passes through untouched.
+        is_stopped = (
+            getattr(wq, "_stopping", False)
+            or getattr(wq, "_dead", False)
+        )
+        if is_stopped:
+            _ts.set_write_queue(None)
+    yield
 
 
 @pytest.fixture
