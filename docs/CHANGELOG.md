@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.21 — 2026-05-11
+
 ### Added
 - `backend/app/services/refinement_context.py` — 6 frozen dataclasses (`_OptSnapshot`, `_TurnSnapshot`, `_BranchSnapshot`, `RefinementContext`, `_InitialTurnPayload`, `RollbackPayload`) supporting detached-ORM safety (post-LLM code reads scalars only). Snapshot field-scoping rules documented inline with negative-assertion citations. Foundation P4 Cycle 2.
 
