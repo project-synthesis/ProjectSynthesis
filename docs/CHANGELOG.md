@@ -4,8 +4,12 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- `backend/app/services/refinement_context.py` — 6 frozen dataclasses (`_OptSnapshot`, `_TurnSnapshot`, `_BranchSnapshot`, `RefinementContext`, `_InitialTurnPayload`, `RollbackPayload`) supporting detached-ORM safety (post-LLM code reads scalars only). Snapshot field-scoping rules documented inline with negative-assertion citations. Foundation P4 Cycle 2.
+
 ### Changed
 - Restructured `tools/save_result.py` + `routers/optimize.py` passthrough scoring path: heuristic + A4 LLM analysis now run outside any DB session, and persistence routes through `WriteQueue.submit(operation_label="save_result_persist")`. Added `HeuristicAnalyzer.analyze_no_session()` for queue-based telemetry (`task_type_telemetry_no_session`). `score_passthrough()` becomes pure compute on injected `historical_stats`. `classify_with_llm()` parameterized via `operation_label` keyword to support distinguishable telemetry labels per caller. Foundation P4 Cycle 1.
+- Restructured `tools/refine.py` + 3 sites in `routers/refinement.py`: refinement 4-LLM-call pipeline no longer holds a DB session. `RefinementService` constructor becomes keyword-only `(*, provider=None, prompts_dir, data_dir=None)` and drops `db`; `create_refinement_turn` renamed to `invoke_refinement_pipeline(ctx: RefinementContext)` with a NEW terminal `refinement_complete` event carrying 6 payload keys (`optimized_prompt`, `scores`, `deltas_from_prev`, `deltas_from_original`, `strategy_used`, `suggestions`) consumed by the persist callback. `create_initial_turn` renamed to `build_initial_turn_payload` (pure compute returning `_InitialTurnPayload`). `rollback`/`get_versions`/`get_branches` take `db: AsyncSession` as method-level parameter. Three new operation labels: `refine_initial_turn`, `refine_persist_turn`, `refine_rollback`. Foundation P4 Cycle 2.
 
 ## v0.4.20 — 2026-05-10
 
