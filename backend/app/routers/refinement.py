@@ -5,11 +5,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import PROMPTS_DIR
 from app.database import get_db
+from app.dependencies.write_queue import get_write_queue
+from app.services.write_queue import WriteQueue
+from app.tools._shared import PROMPTS_DIR
+from app.tools.refine import handle_refine
 from app.utils.sse import format_sse
 
 logger = logging.getLogger(__name__)
@@ -48,163 +50,30 @@ class RollbackRequest(BaseModel):
 async def refine(
     body: RefineRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
-    """Run a single refinement turn and stream SSE events."""
-    from app.config import DATA_DIR
-    from app.services.preferences import PreferencesService
-    from app.services.routing import RoutingContext
+    """Run a single refinement turn and stream SSE events.
 
-    routing = getattr(request.app.state, "routing", None)
-    if not routing:
-        raise HTTPException(status_code=503, detail="Routing service not initialized.")
-
-    _prefs = PreferencesService(DATA_DIR)
-    prefs_snapshot = _prefs.load()
-    ctx = RoutingContext(preferences=prefs_snapshot, caller="rest")
-    decision = routing.resolve(ctx)
-
-    # Refinement still requires a provider (passthrough refinement UX not designed yet).
-    if decision.tier == "passthrough":
-        logger.warning(
-            "POST /api/refine rejected: tier=passthrough optimization_id=%s",
-            body.optimization_id,
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="Refinement requires a local provider. Configure an API key or install the Claude CLI.",
-        )
-    provider = decision.provider
-    logger.info(
-        "POST /api/refine: tier=%s provider=%s optimization_id=%s",
-        decision.tier, decision.provider_name, body.optimization_id,
-    )
-
-    from app.services.optimization_service import OptimizationService
-    from app.services.refinement_service import RefinementService
-
-    svc = OptimizationService(db)
-    opt = await svc.get_by_id(body.optimization_id)
-    if not opt:
-        raise HTTPException(
-            status_code=404,
-            detail="Optimization not found.",
-        )
-
-    logger.info("POST /api/refine: optimization_id=%s branch=%s", body.optimization_id, body.branch_id)
-
-    ref_svc = RefinementService(db=db, provider=provider, prompts_dir=PROMPTS_DIR)
-
-    # Ensure initial turn exists
-    versions = await ref_svc.get_versions(body.optimization_id)
-    if not versions:
-        scores_dict = {
-            "clarity": opt.score_clarity,
-            "specificity": opt.score_specificity,
-            "structure": opt.score_structure,
-            "faithfulness": opt.score_faithfulness,
-            "conciseness": opt.score_conciseness,
-        }
-        initial = await ref_svc.create_initial_turn(
-            opt.id,
-            opt.optimized_prompt or "",
-            scores_dict,
-            opt.strategy_used or "auto",
-        )
-        branch_id = initial.branch_id
-    else:
-        branch_id = body.branch_id or versions[-1].branch_id
-
-    # --- Context enrichment for refinement ---
-    # Use the same ContextEnrichmentService as the optimize endpoint so
-    # refinement gets codebase context (incl. workspace fallback) + strategy intelligence.
-    _codebase_context: str | None = None
-    _strategy_intelligence: str | None = None
-    _divergence_alerts: str | None = None
-    _applied_patterns: str | None = None
-
-    context_service = getattr(request.app.state, "context_service", None)
-    if context_service:
-        try:
-            # Auto-resolve repo from session or optimization's stored repo_full_name
-            _repo = opt.repo_full_name
-            if not _repo:
-                try:
-                    from app.models import LinkedRepo
-                    session_id = request.cookies.get("session_id")
-                    if session_id:
-                        linked = (await db.execute(
-                            select(LinkedRepo).where(LinkedRepo.session_id == session_id)
-                        )).scalar_one_or_none()
-                        if linked:
-                            _repo = linked.full_name
-                except Exception:
-                    pass
-
-            from app.config import PROJECT_ROOT
-
-            # B1/B7: project_id carries over from the original optimization.
-            # Refinement stays in the same project scope as the source prompt.
-            _ref_project_id: str | None = opt.project_id
-            if _ref_project_id is None and _repo:
-                try:
-                    from app.services.project_service import resolve_project_id
-                    _ref_legacy_pid = getattr(
-                        request.app.state, "legacy_project_id", None,
-                    )
-                    _ref_project_id = await resolve_project_id(
-                        db, _repo, legacy_project_id=_ref_legacy_pid,
-                    )
-                except Exception:
-                    _ref_project_id = getattr(
-                        request.app.state, "legacy_project_id", None,
-                    )
-
-            enrichment = await context_service.enrich(
-                raw_prompt=opt.optimized_prompt or opt.raw_prompt,
-                tier=decision.tier,
-                db=db,
-                workspace_path=str(PROJECT_ROOT),
-                repo_full_name=_repo,
-                preferences_snapshot=prefs_snapshot,
-                project_id=_ref_project_id,
-                provider=routing.provider,
-            )
-            _codebase_context = enrichment.codebase_context
-            _strategy_intelligence = enrichment.strategy_intelligence
-            _divergence_alerts = enrichment.divergence_alerts
-            _applied_patterns = enrichment.applied_patterns
-        except Exception:
-            logger.debug("Context enrichment failed for refinement", exc_info=True)
-    else:
-        # Fallback: strategy intelligence only (workspace guidance
-        # requires ContextEnrichmentService which owns WorkspaceIntelligence)
-        _enable_si = prefs_snapshot.get("pipeline", {}).get(
-            "enable_strategy_intelligence", True,
-        )
-        if _enable_si:
-            try:
-                from app.services.context_enrichment import resolve_strategy_intelligence
-                _strategy_intelligence, _ = await resolve_strategy_intelligence(
-                    db, opt.task_type or "general", opt.domain or "general",
-                )
-            except Exception:
-                pass
-
+    Cycle 2 restructure: drops `Depends(get_db)` and delegates to
+    `tools/refine.py:handle_refine` which owns the session+queue pattern
+    (short read session → LLM phase → WriteQueue persist). REST and MCP
+    paths share the substrate byte-for-byte. `handle_refine` returns
+    `RefineOutput` (not an async generator); the router synthesizes a
+    2-event SSE stream (`started` + `refinement_turn`) preserving the
+    client-facing event contract.
+    """
     async def event_stream():
-        yield format_sse("routing", {
-            "tier": decision.tier, "provider": decision.provider_name,
-            "reason": decision.reason, "degraded_from": decision.degraded_from,
-        })
+        yield format_sse("started", {"optimization_id": body.optimization_id})
         try:
-            async for event in ref_svc.create_refinement_turn(
-                body.optimization_id, branch_id, body.refinement_request,
-                codebase_context=_codebase_context,
-                strategy_intelligence=_strategy_intelligence,
-                divergence_alerts=_divergence_alerts,
-                applied_patterns=_applied_patterns,
-            ):
-                yield format_sse(event.event, event.data)
+            result = await handle_refine(
+                optimization_id=body.optimization_id,
+                refinement_request=body.refinement_request,
+                branch_id=body.branch_id,
+                ctx=None,
+            )
+            yield format_sse("refinement_turn", result.model_dump())
+        except ValueError as exc:
+            logger.warning("Refinement rejected: %s", exc)
+            yield format_sse("error", {"error": str(exc)})
         except Exception as exc:
             logger.error("Refinement SSE stream error: %s", exc, exc_info=True)
             from app.providers.base import ProviderError
@@ -232,7 +101,6 @@ async def get_versions(
     db: AsyncSession = Depends(get_db),
 ):
     """Return all refinement turns for an optimization, optionally filtered by branch."""
-    # Verify optimization exists
     from app.services.optimization_service import OptimizationService
     from app.services.refinement_service import RefinementService
     opt_svc = OptimizationService(db)
@@ -243,8 +111,8 @@ async def get_versions(
             detail="Optimization not found.",
         )
 
-    ref_svc = RefinementService(db=db, provider=None, prompts_dir=PROMPTS_DIR)  # type: ignore[arg-type]
-    turns = await ref_svc.get_versions(optimization_id, branch_id=branch_id)
+    ref_svc = RefinementService(prompts_dir=PROMPTS_DIR)
+    turns = await ref_svc.get_versions(db, optimization_id, branch_id=branch_id)
 
     return {
         "optimization_id": optimization_id,
@@ -274,8 +142,15 @@ async def rollback(
     optimization_id: str,
     body: RollbackRequest,
     db: AsyncSession = Depends(get_db),
+    write_queue: WriteQueue = Depends(get_write_queue),
 ):
-    """Create a new branch forked from the given version number."""
+    """Create a new branch forked from the given version number.
+
+    Cycle 2 restructure: `RefinementService.rollback()` returns a pure
+    `RollbackPayload` (un-attached `branch_kwargs`). The actual `INSERT`
+    routes through `WriteQueue.submit(operation_label="refine_rollback")`
+    so SQLite writes funnel through the single-writer queue.
+    """
     from app.services.optimization_service import OptimizationService
     from app.services.refinement_service import RefinementService
 
@@ -287,10 +162,12 @@ async def rollback(
             detail="Optimization not found.",
         )
 
-    ref_svc = RefinementService(db=db, provider=None, prompts_dir=PROMPTS_DIR)  # type: ignore[arg-type]
+    ref_svc = RefinementService(prompts_dir=PROMPTS_DIR)
 
     try:
-        new_branch = await ref_svc.rollback(optimization_id, to_version=body.to_version)
+        payload = await ref_svc.rollback(
+            db, optimization_id, to_version=body.to_version,
+        )
     except Exception as exc:
         # NoResultFound, ValueError, LookupError → 404; others → 400
         from sqlalchemy.exc import NoResultFound
@@ -298,10 +175,30 @@ async def rollback(
         logger.warning("Rollback failed: %s", exc)
         raise HTTPException(status_code=status, detail="Rollback failed.") from exc
 
-    return {
-        "id": new_branch.id,
-        "optimization_id": new_branch.optimization_id,
-        "parent_branch_id": new_branch.parent_branch_id,
-        "forked_at_version": new_branch.forked_at_version,
-        "created_at": new_branch.created_at.isoformat() if new_branch.created_at else None,
-    }
+    branch_kwargs = payload.branch_kwargs
+
+    async def _persist_rollback(write_db: AsyncSession) -> dict:
+        from datetime import UTC, datetime
+
+        from app.models import RefinementBranch
+
+        new_branch = RefinementBranch(**branch_kwargs)
+        write_db.add(new_branch)
+        await write_db.commit()
+        await write_db.refresh(new_branch)
+        return {
+            "id": new_branch.id,
+            "optimization_id": new_branch.optimization_id,
+            "parent_branch_id": new_branch.parent_branch_id,
+            "forked_at_version": new_branch.forked_at_version,
+            "created_at": (
+                new_branch.created_at.isoformat()
+                if new_branch.created_at
+                else datetime.now(UTC).isoformat()
+            ),
+        }
+
+    return await write_queue.submit(
+        _persist_rollback,
+        operation_label="refine_rollback",
+    )
