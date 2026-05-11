@@ -250,10 +250,11 @@ async def handle_save_result(
             opt.model_used = model or "external"
             opt.models_by_phase = {"optimize": model or "external"}
             opt.scoring_mode = score_result.scoring_mode
-            opt.heuristic_flags = (
+            _heuristic_flags = (
                 score_result.divergence_flags
                 if score_result.divergence_flags else None
             )
+            opt.heuristic_flags = _heuristic_flags  # type: ignore[assignment]
             opt.suggestions = suggestions
             opt.status = "completed"
             if context_snapshot:
