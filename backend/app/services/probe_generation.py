@@ -96,17 +96,62 @@ async def generate_probe_prompts(
     """Single Sonnet call to a probe-agent template -> list of prompts.
 
     T2 Cycle 7 (spec §2 + §5):
-      - ``mode='codebase'`` (default) preserves the v0.4.12 contract — drops
-        prompts WITHOUT backtick identifiers (the F1 specificity filter).
-      - ``mode='topic_only'`` inverts the per-prompt predicate — drops
-        prompts WITH backticks (the topic-only template instructs the LLM
-        to produce prose-only prompts).
-      - ``template_name`` selects the template hot-reloaded by
-        ``PromptLoader``; topic-only callers pass ``probe-agent-topic-only.md``.
 
-    The batch-level ``_DROP_THRESHOLD=0.5`` (>50% dropped → error) and the
-    error envelope (``ProbeGenerationError("...backtick...")``) are
-    identical across both modes. See spec §4.4 for full contract.
+    Args:
+        probe_ctx: Phase 1 grounding output. Under codebase mode the
+            context carries the curated retrieval payload (relevant_files
+            + explore_synthesis_excerpt + repo_full_name + known_domains).
+            Under topic-only mode it carries the degenerate state
+            documented in ``ProbeContext`` (``repo_full_name=None``,
+            empty lists, ``topic_only=True``) — the templates handle the
+            empty-context rendering at the manifest level (optional
+            vars).
+        provider: Active ``LLMProvider`` for the Sonnet call. Routed
+            through ``call_provider_with_retry(max_retries=3)``.
+        n_prompts: Target prompt count, clamped to [_MIN_PROMPTS,
+            _MAX_PROMPTS] = [5, 25].
+        mode:
+            -   ``'codebase'`` (default) preserves the v0.4.12 contract —
+                drops prompts WITHOUT backtick code identifiers (the F1
+                specificity filter).
+            -   ``'topic_only'`` inverts the per-prompt predicate —
+                drops prompts WITH any backticks (the topic-only template
+                instructs the LLM to produce prose-only prompts; a
+                stray backtick is signal that the LLM ignored the
+                directive).
+            Both modes share the same ``_DROP_THRESHOLD=0.5`` batch-level
+            envelope (> 50% dropped → ``ProbeGenerationError``) and the
+            same error-message contract (both reference the word
+            ``backtick`` so the test regex ``match=r"backtick"`` covers
+            both directions).
+        template_name: Markdown template file to hot-reload via
+            ``PromptLoader``. Contract:
+            -   The template MUST declare the same variable surface as
+                the canonical ``probe-agent.md`` (topic, scope,
+                intent_hint, n_prompts, known_domains,
+                existing_clusters_brief). ``repo_full_name`` and
+                ``codebase_context`` are optional in the topic-only
+                manifest entry — the template body may omit them, and
+                ``PromptLoader.render`` will substitute empty strings.
+            -   ``manifest.json`` is the source of truth for which
+                variables are required vs optional per template; startup
+                ``PromptLoader.validate_all()`` rejects templates whose
+                body is missing a declared-required placeholder.
+
+    Returns:
+        ``list[str]`` of length ``<= n_prompts`` (the filter may drop
+        items; if it drops more than ``_DROP_THRESHOLD=0.5`` of the
+        batch, ``ProbeGenerationError`` is raised instead).
+
+    Raises:
+        ProbeGenerationError: when the per-prompt filter drops more than
+            50% of the generator's output (under either mode direction).
+            Message always contains the substring ``"backtick"`` so
+            callers can switch on the error envelope without parsing
+            mode out of the exception.
+
+    See spec §4.4 for the full pre-Foundation contract; spec §2 + §5 for
+    the T2 Cycle 7 ``mode`` + ``template_name`` extensions.
     """
     n_prompts = _clamp_n(n_prompts)
 
@@ -142,7 +187,9 @@ async def generate_probe_prompts(
     )
 
     # Per-prompt predicate — flips direction by ``mode`` (T2 Cycle 7).
-    # Both predicates return True iff the prompt PASSES the filter (kept).
+    # Both predicates return True iff the prompt PASSES the filter.
+    # Kept as two distinct functions rather than a single dispatch so
+    # each direction stays grep-able and individually testable.
     predicate = _has_backtick if mode == "codebase" else _lacks_backtick
 
     total = len(result.prompts)
@@ -150,21 +197,10 @@ async def generate_probe_prompts(
     dropped = total - len(valid)
     if total and dropped / total > _DROP_THRESHOLD:
         # Mode-specific error message — both reference "backtick" so the
-        # test's ``pytest.raises(..., match=r"backtick")`` matches under
-        # either direction (codebase: prompts WITHOUT backticks dropped;
-        # topic_only: prompts WITH backticks dropped).
-        if mode == "topic_only":
-            detail = (
-                f"Generator produced too many prompts containing backtick "
-                f"identifiers under topic_only mode: "
-                f"{dropped}/{total} dropped (>{_DROP_THRESHOLD*100:.0f}% threshold)"
-            )
-        else:
-            detail = (
-                f"Generator produced too many prompts without backtick "
-                f"identifiers: "
-                f"{dropped}/{total} dropped (>{_DROP_THRESHOLD*100:.0f}% threshold)"
-            )
+        # test contract ``pytest.raises(..., match=r"backtick")`` matches
+        # under either direction (codebase: prompts WITHOUT backticks
+        # dropped; topic_only: prompts WITH backticks dropped).
+        detail = _build_drop_threshold_error_message(mode, dropped, total)
         logger.warning(
             "probe_generation: drop-threshold exceeded for topic=%r mode=%r "
             "(%d/%d dropped, >%.0f%% threshold) — raising ProbeGenerationError",
@@ -179,3 +215,29 @@ async def generate_probe_prompts(
 
     # Clamp to requested n_prompts (after filter - generator may overproduce).
     return valid[:n_prompts]
+
+
+def _build_drop_threshold_error_message(
+    mode: Literal["codebase", "topic_only"],
+    dropped: int,
+    total: int,
+) -> str:
+    """Build the ``ProbeGenerationError`` detail string for either mode.
+
+    Centralizes the mode-specific phrasing so callers/tests can rely on a
+    single source of truth. Both directions contain the substring
+    ``"backtick"`` to satisfy the ``r"backtick"`` regex contract — a
+    future re-phrasing of either path must preserve that substring.
+    """
+    threshold_pct = f"{_DROP_THRESHOLD*100:.0f}"
+    if mode == "topic_only":
+        return (
+            f"Generator produced too many prompts containing backtick "
+            f"identifiers under topic_only mode: "
+            f"{dropped}/{total} dropped (>{threshold_pct}% threshold)"
+        )
+    return (
+        f"Generator produced too many prompts without backtick "
+        f"identifiers: "
+        f"{dropped}/{total} dropped (>{threshold_pct}% threshold)"
+    )
