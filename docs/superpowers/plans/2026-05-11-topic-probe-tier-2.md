@@ -50,6 +50,7 @@
 | `frontend/src/lib/components/suites/RegressionBadge.svelte` | NEW | StatusBar badge mount (lower-case `12 ok` / `2 alarm`). |
 | `frontend/src/lib/components/taxonomy/SeedModal.svelte` | EXTEND | Third tab "TOPIC PROBE" (matches shipped `.seed-tab` font-mono + letter-spacing 0.05em — canonical font-display migration deferred to T4). |
 | `frontend/src/lib/components/layout/StatusBar.svelte` | EXTEND | Mount RegressionBadge edge-to-edge inside shipped 20px bar. |
+| `frontend/src/lib/components/layout/Navigator.svelte` (or equivalent left-nav module — verify path during Cycle 12 GREEN) | EXTEND | Add SUITES entry that routes to SuitesPanel (per spec §6 "EXTENDED components" Left-nav row). |
 | `frontend/src/app.css` | EXTEND | NEW `@keyframes forge-spark` (0→25→100%: scale 1→1.2→1 + rotate 0→3deg→0 + yellow flash via color/background; 250ms ease-out single-shot). |
 | `frontend/src/lib/api/suites.ts` | NEW | Per-domain module: `saveSuite`, `replaySuite`, `getSuites`, `getSuite`, `getSuiteReplays`, `retireSuite`. Imports `apiFetch` from `./client`. |
 | `frontend/src/lib/stores/suitesStore.ts` | NEW | Suite list + selected + regression alarm cache. |
@@ -97,6 +98,29 @@ RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 (spec) → 
 **Iteration mandate** (spec §10 + `feedback_tdd_protocol.md`): if either validator returns APPROVED-WITH-MINOR or REJECTED, route back to the relevant phase, re-dispatch + cascade through downstream phases if behavior-affecting. Total dispatches per cycle can grow if iteration is needed.
 
 **Gate-only cycles (14, 16):** NO RED→GREEN code change; only the 2 validator dispatches run.
+
+---
+
+## Generic dispatch prompt templates (Cycles 2-13 + 15 reuse these)
+
+Cycle 1's Tasks 1.3-1.7 demonstrate the fully-expanded per-phase dispatch pattern. Cycles 2-13 + 15 use a **collapsed bullet form** for Tasks N.3-N.7 because the per-phase boilerplate is identical across cycles — only the cycle-specific scope/anti-pattern focus varies. Each checkbox in the collapsed form maps to one fresh subagent dispatch using these templates, parameterized by the cycle-specific scope text in that bullet:
+
+**REFACTOR dispatch template (`Task N.3`):**
+> REFACTOR phase for v0.4.22 T2 Cycle N — local code quality only. Touched files: <list from cycle's Files section>. Per `feedback_tdd_protocol.md` REFACTOR section: (1) run `ruff check` + `mypy` on touched files; fix all warnings (no `type: ignore`); (2) walk error paths — every `except` has the right exception class + intentional action; (3) cover edge cases (empty/None/zero/negative/max-int/unicode) — add tests for contract-permitted cases; (4) precise type annotations (no untyped `dict[str, Any]` where a TypedDict/dataclass would be clearer); (5) DRY — extract logic appearing 3+ times within the cycle's diff; (6) local commit hygiene (independent revertable, specific file staging); (7) lint hygiene on test files too; (8) docstrings on non-trivial helpers + inline comments where the *why* isn't obvious. **Cycle-specific scope:** <see the cycle's Task N.3 bullet>. Commit: `refactor(t2-cN): <cycle-specific summary>`.
+
+**INTEGRATE dispatch template (`Task N.4`):**
+> INTEGRATE phase for v0.4.22 T2 Cycle N — canonical-pattern parity (static review). Per `feedback_tdd_protocol.md` INTEGRATE section: (1) open the schema, not the test mock; (2) diff against the canonical caller (column-by-column for persistence, kwarg-by-kwarg for service calls, event-by-event for emission); (3) read every service the cycle calls; (4) trace the user-visible surface code; (5) verify test fixtures construct real production types (no `MagicMock` for typed dataclasses). **Cycle-specific anti-pattern focus:** <see the cycle's Task N.4 bullet — A1-A6 codes named, with cite to canonical reference (spec § / models.py:line / etc.)>. Report APPROVED-ZERO-INCONSISTENCIES or list findings; findings → fix inline + re-run checklist from step 1.
+
+**OPERATE dispatch template (`Task N.5`):**
+> OPERATE phase for v0.4.22 T2 Cycle N — dynamic verification under realistic load. Per `feedback_tdd_protocol.md` OPERATE section: (1) inventory every writer in the process; (2) verify writer-coordination layers (process mutex + busy_timeout + retry-with-backoff); (3) inventory every cancellation surface (every `await` boundary; `asyncio.shield()` around cleanup writes); (4) inventory every timeout in the call path (longest must ≥ worst-case operation duration plus buffer); (5) run the live concurrency test (full stack + concurrent peers); (6) inspect live result against spec (query user-visible surfaces by ID); (7) run it twice back-to-back; (8) run under stress when feasible; (9) test cancellation explicitly (`curl --max-time`). **Cycle-specific anti-pattern focus:** <see the cycle's Task N.5 bullet — O1-O8 codes named with verification command>. Report OPERATE status.
+
+**Validator 1 dispatch template (`Task N.6` — spec compliance):**
+> Spec-compliance review for v0.4.22 T2 Cycle N. Read `docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md` <cycle-specific spec sections>. Read all touched files (per cycle's Files section). Verify implementation matches spec verbatim — column names, types, FK ondelete, error envelope codes, event payload shapes, operation labels, anti-pattern coverage. Report APPROVED-ZERO-INCONSISTENCIES or list findings. Findings → re-dispatch the failing phase (typically REFACTOR or GREEN); if behavior-affecting, cascade through INTEGRATE + OPERATE + BOTH validators fresh.
+
+**Validator 2 dispatch template (`Task N.7` — code quality):**
+> Code-quality review for v0.4.22 T2 Cycle N. Read all touched files. Run `ruff check`, `mypy`, `alembic check` (backend cycles), `svelte-check` + `npm run test` (frontend cycles); inspect output. Verify: test naming clarity, docstrings present on public surfaces, no `type: ignore`, error paths sane, no `MagicMock` for typed dataclasses, migration body matches project conventions, frontend follows brand-canon (h-5 buttons, p-1.5 sidebar, font-mono numerics, lower-case status badges, no banned-vocab in 2D-UI dirs). Report APPROVED-ZERO-INCONSISTENCIES or list findings.
+
+When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet inside is a subagent dispatch using the matching template above. Each checkbox = one dispatch + one verify step (PASS gate).
 
 ---
 
@@ -261,7 +285,7 @@ RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 (spec) → 
 > 7. **`test_create_from_run_position_correspondence_preserved`** — seed run with 10 distinct prompts. Save as suite. Assert `suite.prompts_snapshot[i].raw_prompt == run.prompt_results[i]['raw_prompt']` for all i.
 > 8. **`test_create_from_run_uses_validation_suite_create_operation_label`** — patch `WriteQueue.submit` to record `operation_label`. Save. Assert `operation_label="validation_suite_create"` was called.
 > 9. **`test_create_from_run_detached_orm_safe`** — assert no DB session is held when `WriteQueue.submit` is called (snapshot is frozen dataclass). Patch session.close to count; should fire BEFORE submit.
-> 10. **`test_create_from_run_emits_validation_suite_created_event`** — subscribe to event_bus; save; assert one `validation_suite_created` event with `suite_id`, `source_run_id`, `label`, `tolerance_abs`, `prompts_count`, `baseline_mean`, `project_id`.
+> 10. **`test_create_from_run_emits_validation_suite_created_event`** — subscribe to event_bus; save; assert one `validation_suite_created` event with `suite_id`, `source_run_id`, `label`, `tolerance_abs`, `prompts_count`, `baseline_mean`, `project_id`. ALSO assert JSONL trace `phase="validation_suite"` per spec §9 trace tagging.
 > 11. **`test_create_from_run_baseline_scores_uses_p5_overall_not_p5`** — seed run.aggregate with `p5_overall=6.2` (NOT `p5=6.2`). Save. Assert `suite.baseline_scores['p5_overall'] == 6.2` (canonical key naming).
 >
 > Tests should fail because `ValidationSuiteService` doesn't exist. Commit: `test(t2-c2): RED — create_from_run 11 tests`.
@@ -319,7 +343,7 @@ RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 (spec) → 
 > 1. `test_retire_sets_retired_at_and_reason_writeonly` — first retire writes `retired_at`/`retired_reason`. Verify via DB.
 > 2. `test_retire_does_not_mutate_other_columns` — assert all columns OTHER than `retired_at`/`retired_reason` unchanged.
 > 3. `test_retire_is_idempotent_on_already_retired` — second retire returns success without writing; verify `retired_at` unchanged from first retire timestamp.
-> 4. `test_retire_idempotent_no_event_emitted_on_re_retire` — subscribe to event_bus; first retire emits `validation_suite_retired`; second retire emits ZERO events.
+> 4. `test_retire_idempotent_no_event_emitted_on_re_retire` — subscribe to event_bus; first retire emits `validation_suite_retired` AND JSONL trace `phase="validation_suite"`; second retire emits ZERO events AND ZERO JSONL trace entries.
 > 5. `test_retire_uses_validation_suite_retire_op_label` — patch `WriteQueue.submit`; assert `operation_label="validation_suite_retire"`.
 > 6. `test_retire_raises_suite_not_found_on_missing` — `pytest.raises(ValueError, match="suite_not_found")`.
 > 7. `test_get_returns_full_validation_suite_out_for_existing_id` — seed suite via create_from_run; call `.get(id)`; assert all fields match.
@@ -407,11 +431,30 @@ RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 (spec) → 
 
 > Spec §4 routers/suites.py table — 6 endpoints, rate limits, error codes. Write 15 tests covering:
 >
-> Save-as-suite (6): happy 201 + invalid_label 400 + invalid_tolerance 400 + run_not_found 404 + run_not_completed 409 + not_a_probe_run 400 + run_missing_aggregate 409 + rate limit 20/min header.
+> **Save-as-suite (6):**
+> 1. `test_save_as_suite_happy_path_returns_201_with_validation_suite_out`
+> 2. `test_save_as_suite_invalid_label_returns_400` (label too long / empty)
+> 3. `test_save_as_suite_invalid_tolerance_returns_400` (outside [0.1, 5.0])
+> 4. `test_save_as_suite_run_not_found_returns_404`
+> 5. `test_save_as_suite_combined_run_not_completed_or_not_a_probe_run_or_run_missing_aggregate_409` (one parameterized test covering all 3 service-raised 409s)
+> 6. `test_save_as_suite_rate_limit_20_per_minute_returns_429_after_threshold`
 >
-> Replay (4 — placeholder behavior per Cycle 5 GREEN-step shape): returns 202 with `ReplayRunOut` body + Location + Retry-After headers; initial `RunRow(mode='replay_run', status='running', suite_id=...)` INSERTED; rate limit 5/min; suite_not_found 404; suite_retired 409.
+> **Replay (4 — placeholder behavior per Cycle 5 GREEN-step shape):**
+> 7. `test_replay_returns_202_with_replay_run_out_body_and_location_retry_after_headers`
+> 8. `test_replay_inserts_initial_run_row_mode_replay_run_status_running_suite_id_set`
+> 9. `test_replay_suite_not_found_returns_404` (combined with `suite_retired_returns_409` as parameterized)
+> 10. `test_replay_rate_limit_5_per_minute_returns_429_after_threshold`
 >
-> List/get/replays-list/retire (5): paginated envelope shape; 404 on missing; retire idempotent 200; reason validation 400.
+> **List / get / replays-list / retire (5):**
+> 11. `test_get_suites_paginated_envelope_shape` (validation_suite_list_response fields)
+> 12. `test_get_suite_by_id_returns_404_on_missing`
+> 13. `test_get_suite_replays_returns_run_summary_paginated`
+> 14. `test_retire_returns_200_idempotent`
+> 15. `test_retire_invalid_reason_returns_400` (empty / >500 chars)
+>
+> **Immutability negative assertion (Cycle 5 RED test 15 doubles as scope-hardness gate)**: also assert `PATCH /api/suites/{id}` returns 405 (no PATCH route registered — locks the §14 NEVER list invariant that suites are immutable).
+>
+> **Topic-only-unavailable envelope reservation note**: the `topic_only_unavailable` 400 error code is provisioned in the error-envelope union for future kill-switch (per spec §4 + §14). T2 ships zero RED test for this code (kill-switch implementation deferred to T3+); the envelope reservation is the only T2 deliverable.
 >
 > Commit: `test(t2-c5): RED — routers/suites.py 15 tests`.
 
@@ -462,7 +505,7 @@ RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 (spec) → 
 > 8. `test_replay_run_generator_uses_trace_id_not_id` — assert `prompt_results[i]["trace_id"] == pending_optimization.trace_id` (NOT `pending.id`).
 > 9. `test_replay_run_generator_uses_overall_score_key` — assert per-prompt dict has `"overall_score"` key (matches canonical `_build_aggregate` input contract at `topic_probe_generator.py:414-418`).
 > 10. `test_replay_run_generator_final_report_is_non_none_stub` — assert `GeneratorResult.final_report` is a non-None string (markdown stub).
-> 11. `test_replay_run_generator_persists_via_replay_run_persist_op_label` — patch WriteQueue.submit; assert orchestrator's terminal-persist uses `operation_label="replay_run_persist"` (mode-keyed).
+> 11. `test_replay_run_generator_persists_via_replay_run_persist_op_label_and_is_registered_in_lifespan` — combined assertion: (a) start FastAPI app via TestClient; verify `app.state.run_orchestrator._generators["replay_run"]` is an instance of `ReplayRunGenerator` (locks Cycle 6 GREEN step 7); (b) trigger a replay; patch WriteQueue.submit; assert orchestrator's terminal-persist uses `operation_label="replay_run_persist"` (mode-keyed); (c) assert JSONL trace `phase="replay_run"` per spec §9 trace tagging. Combining lifespan + op-label + JSONL into one test preserves the 11-test count for cycle 6 (matches spec §10 sum invariant 7+11+9+7+15+11+9+7+5+9+18+14+7+3=132).
 >
 > Commit: `test(t2-c6): RED — ReplayRunGenerator 11 tests`.
 
@@ -726,7 +769,7 @@ RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 (spec) → 
 >
 > ReportCard (4): renders top-3 prompts + score distribution + taxonomy delta + follow-ups; Save-as-Suite click triggers save + toast; Copy-md icon triggers copy-flash (green 1500ms); Replay button triggers replay endpoint.
 >
-> TaxonomyMiniView (2): emergent node entry animation 200ms forge-spark; NEW chip on <30s-old nodes.
+> TaxonomyMiniView (2): emergent node entry animation **250ms forge-spark** (matches canonical @keyframes forge-spark duration per spec §2 + file-structure table + Cycle 11 GREEN); NEW chip on <30s-old nodes.
 >
 > SeedModal (2): third tab renders; tab typography matches shipped .seed-tab (font-mono + letter-spacing 0.05em — NOT font-display).
 >
@@ -775,7 +818,31 @@ RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 (spec) → 
 
 - [ ] **Dispatch RED**
 
-> 14 tests covering SuitesPanel (filter by project, hover state Recipe A border+bg-tint with no translateY), SuiteRow (h-5 data row with status dot + delta), SuiteDetailView (replay history + per-prompt baseline-vs-latest), RegressionBadge (nominal `12 ok` vs firing `2 alarm` lower-case, edge-to-edge inside StatusBar, click → SuitesPanel filtered=alarmed, forge-spark on nominal→firing transition), SuitesStore (polled from /api/health, refreshed on `taxonomy_changed` SSE).
+> 14 Vitest + Playwright tests:
+>
+> **SuitesPanel (3):**
+> 1. `test_suites_panel_renders_with_no_suites_empty_state` — assert "No suites. Save a probe to create one." copy.
+> 2. `test_suites_panel_filters_by_project_id_when_set` — multi-project ADR-005 filter applies.
+> 3. `test_suites_panel_navigator_entry_routes_correctly` — clicking SUITES nav entry renders SuitesPanel (verifies the Navigator EXTEND in File Structure).
+>
+> **SuiteRow (3):**
+> 4. `test_suite_row_h_5_data_row_with_status_dot_and_delta` — h-5 height + status dot (6px green/red/grey) + delta text.
+> 5. `test_suite_row_recipe_a_hover_border_plus_bg_tint_no_translate_y` — border-accent + bg-bg-hover/40; assert no `translateY` set.
+> 6. `test_suite_row_click_opens_suite_detail_view` — click navigates to detail.
+>
+> **SuiteDetailView (2):**
+> 7. `test_suite_detail_view_replay_history_table_renders_run_summary_rows` — paginated runs.
+> 8. `test_suite_detail_view_per_prompt_baseline_vs_latest_diff_renders` — pairs `baseline_scores.per_prompt[i].overall` with latest replay's `aggregate.replay_per_prompt[i].overall` + delta column.
+>
+> **RegressionBadge (4):**
+> 9. `test_regression_badge_nominal_lower_case_12_ok` — matches shipped `statusLabel()` lower-case pattern.
+> 10. `test_regression_badge_firing_lower_case_2_alarm` — same.
+> 11. `test_regression_badge_edge_to_edge_inside_status_bar` — px-1.5 py-0 inside shipped 20px bar.
+> 12. `test_regression_badge_nominal_to_firing_transition_fires_forge_spark` — animate `@keyframes forge-spark` 250ms once on state change.
+>
+> **SuitesStore (2):**
+> 13. `test_suites_store_polls_health_for_regression_alarm_state` — auto-polls /api/health every 30s.
+> 14. `test_suites_store_refreshes_on_taxonomy_changed_sse` — SSE event triggers immediate refresh.
 >
 > Commit: `test(t2-c12): RED — SuitesPanel + RegressionBadge 14 tests`.
 
@@ -812,9 +879,17 @@ RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 (spec) → 
 
 - [ ] **Dispatch RED**
 
-> 7 tests: `runProbe()` returns async iterable; n_prompts > 10 auto-attaches `Prefer: respond-async` header; 202 path polls `GET /api/probes/{id}` every 5s via Retry-After; below threshold falls through to SSE; browser tab close cancels poll interval; both paths emit identical event shapes; client-side never times out during long probes.
+> 7 Vitest tests:
 >
-> Commit.
+> 1. `test_run_probe_returns_async_iterable` — `for await (const e of probesStore.runProbe(req))` yields events.
+> 2. `test_run_probe_n_prompts_gt_10_auto_attaches_prefer_respond_async_header` — verify fetch call options include `headers: { 'Prefer': 'respond-async' }`.
+> 3. `test_run_probe_n_prompts_le_10_falls_through_to_sse_path` — no Prefer header sent.
+> 4. `test_run_probe_202_path_polls_every_5s_via_retry_after` — mock 202 response; assert subsequent `GET /api/probes/{id}` fires every 5s (Retry-After).
+> 5. `test_run_probe_browser_tab_close_cancels_poll_interval` — abort signal cancels in-flight poll; no leaked timers.
+> 6. `test_run_probe_sse_and_poll_paths_emit_identical_event_shapes` — consumer reading async-iterable cannot distinguish source.
+> 7. `test_run_probe_never_times_out_client_side_during_long_probes` — 10-min mock probe; no client-side timeout.
+>
+> Commit: `test(t2-c13): RED — probesStore 202+polling 7 tests`.
 
 - [ ] Verify RED.
 
@@ -992,6 +1067,9 @@ If any unexpected WARN source appears, BLOCK Cycle 15 and restructure the offend
 > 9. Backward-compat smoke: `POST /api/probes` without `Prefer:` header — SSE response unchanged from v0.4.21.
 > 10. CHANGELOG entry written under `## v0.4.22 — YYYY-MM-DD` per canon voice (no first-person, no "we observed").
 > 11. Stale-doc fixes: backend/CLAUDE.md T2/T3/T4 numbers harmonized + line 143 probe_taxonomy_change removed; docs/ROADMAP.md line 333 path updated; SKILL.md lines 79/140/214/375 + component-patterns.md lines 219/223 updated.
+> 12. CHANGELOG voice grep — `grep -niE "\\b(we|i|our|us|I'd|I'll|let's|you should|let me|here is what)\\b" docs/CHANGELOG.md | head` returns ZERO hits inside the `## v0.4.22` block (canon-voice gate per `feedback_changelog_voice.md` memory; first-person + conversational framing banned).
+> 13. `docs/SHIPPED.md` gains a `## v0.4.22 — YYYY-MM-DD` section with implementation summary (cycle count, RED test count, dispatch count) before release tag. Verifies spec §13 success criterion 12.
+> 14. Spec §13 success criteria 1-12 verified end-to-end: schema migration round-trip (§13.1), 14 protocol cycles ZERO-INCONSISTENCIES on both validators (§13.2), coverage gates (§13.3), E2E round-trip green (§13.4), audit-hook flip + soak clean (§13.5), backward-compat smoke (§13.6), MCP structured_output (§13.7), brand audit clean (§13.8), a11y audit clean (§13.9), 4 events emit via JSONL+ring buffer+SSE visible in `ActivityPanel` filtered to `path=validation_suite` or `path=regression_alarm` (§13.10), `regression_alarm` block valid under all conditions with 30s cache respected (§13.11), docs hygiene per items 10+11+13 above (§13.12).
 >
 > Report APPROVED-ZERO-INCONSISTENCIES or list findings.
 
