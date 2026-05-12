@@ -74,6 +74,8 @@
       class:nominal={!isFiring}
       class:spark={isFiring && sparkKey > 0}
       use:tooltip={tooltipText}
+      role="status"
+      aria-live="polite"
       aria-label={isFiring
         ? `${block.suites_in_alarm} suites in regression alarm`
         : `${block.suites_total} suites nominal`}
