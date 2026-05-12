@@ -13,7 +13,7 @@ Detached-ORM-safe per Foundation P4 contract:
   successfully — failed writes do NOT publish events.
 
 Cycle 2 ships ``create_from_run`` only. Cycle 3 adds ``retire`` / ``get`` /
-``list``. Cycle 4 adds ``compute_regression_alarm``.
+``list`` / ``list_replays``. Cycle 4 adds ``compute_regression_alarm``.
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
@@ -26,12 +26,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from app import config as _config_mod
 from app import database as _database_mod
 from app.models import RunRow, ValidationSuite
-from app.schemas.validation_suite import ValidationSuiteOut
+from app.schemas.runs import RunListResponse, RunSummary
+from app.schemas.validation_suite import (
+    ValidationSuiteListItem,
+    ValidationSuiteListResponse,
+    ValidationSuiteOut,
+)
 from app.services.event_bus import event_bus
 
 if TYPE_CHECKING:
@@ -89,6 +94,27 @@ class SuiteSnapshotInputs:
     prompts_snapshot: list[dict[str, Any]]
     baseline_scores: dict[str, Any]
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SuiteRetireInputs:
+    """Pure retire-write payload crossing the WriteQueue boundary.
+
+    Spec §5: ``ValidationSuiteService.retire`` builds this dataclass inside
+    its short read session, EXITS the session, then hands the frozen
+    snapshot to ``_persist_suite_retire`` via ``WriteQueue.submit()``. No
+    ORM references leak across the session boundary — Foundation P4
+    detached-ORM-safe contract.
+
+    Only the three state-transition columns are carried (``suite_id`` for
+    the WHERE clause, ``retired_at`` + ``retired_reason`` for the SET
+    clause). Every other column on ``ValidationSuite`` stays untouched —
+    pinned by ``test_retire_does_not_mutate_other_columns``.
+    """
+
+    suite_id: str
+    retired_at: datetime
+    retired_reason: str
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +256,61 @@ async def _persist_suite_create(
     )
     db.add(row)
     await db.commit()
+
+
+async def _persist_suite_retire(
+    db: AsyncSession, *, inputs: SuiteRetireInputs,
+) -> None:
+    """Writer-engine callback — updates ``retired_at`` + ``retired_reason``.
+
+    Runs inside the WriteQueue worker on a fresh writer-engine session. The
+    UPDATE clause is narrowly scoped to the two state-transition columns so
+    no other column can be accidentally rewritten — pinned by
+    ``test_retire_does_not_mutate_other_columns``.
+    """
+    await db.execute(
+        update(ValidationSuite)
+        .where(ValidationSuite.id == inputs.suite_id)
+        .values(
+            retired_at=inputs.retired_at,
+            retired_reason=inputs.retired_reason,
+        ),
+    )
+    await db.commit()
+
+
+def _emit_suite_retire_trace(inputs: SuiteRetireInputs, duration_ms: int) -> None:
+    """Append a ``phase="validation_suite"`` retire entry to today's JSONL.
+
+    Spec §9 trace tagging — both create and retire emit under the same
+    phase; callers filter on ``result.action`` (``create`` vs ``retire``)
+    to disambiguate. Lazy-instantiates ``TraceLogger`` reading
+    ``app.config.DATA_DIR`` at call time so test-side
+    ``monkeypatch.setattr(cfg_mod, "DATA_DIR", tmp_path)`` works.
+    """
+    try:
+        from app.services.trace_logger import TraceLogger
+
+        traces_dir = _config_mod.DATA_DIR / "traces"
+        logger_ = TraceLogger(traces_dir)
+        logger_.log_phase(
+            trace_id=inputs.suite_id,
+            phase="validation_suite",
+            duration_ms=duration_ms,
+            tokens_in=0,
+            tokens_out=0,
+            model="",
+            provider="",
+            result={
+                "action": "retire",
+                "suite_id": inputs.suite_id,
+                "retired_at": inputs.retired_at.isoformat(),
+                "retired_reason": inputs.retired_reason,
+            },
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        # Trace failure must never break suite retire.
+        logger.debug("validation_suite retire trace emission failed: %s", exc)
 
 
 def _emit_suite_create_trace(snapshot: SuiteSnapshotInputs, duration_ms: int) -> None:
@@ -407,6 +488,279 @@ class ValidationSuiteService:
         # Pydantic's default validator handles the dict-to-nested-model
         # coercion (PromptSnapshotItem + BaselineScoresPayload + PerPromptScore).
         return _suite_out_from_snapshot(snapshot)
+
+    async def retire(
+        self,
+        suite_id: str,
+        *,
+        reason: str,
+        db: AsyncSession | None = None,  # noqa: ARG002 — signature parity per spec §5
+        write_queue: WriteQueue,
+    ) -> None:
+        """Idempotent soft-delete of a ValidationSuite.
+
+        Spec §5 retire body:
+        * First retire — read suite → build :class:`SuiteRetireInputs` →
+          submit through ``write_queue`` with
+          ``operation_label='validation_suite_retire'`` → emit
+          ``validation_suite_retired`` event → write JSONL retire trace.
+        * Re-retire of an already-retired suite — short-circuits BEFORE
+          ``WriteQueue.submit()``: no write, no event, no trace.
+
+        The short-circuit ordering matters: the spec §4 operation-label
+        clause + §9 event-emission contract both pin "first retire only"
+        observability, so the `retired_at is not None` guard runs inside
+        the read session, before any queue submission.
+
+        Parameters
+        ----------
+        suite_id : str
+            Target suite. Missing id raises ``ValueError("suite_not_found")``.
+        reason : str
+            Caller-supplied retirement reason. Stripped before persistence
+            (matches the existing P4 routing convention).
+        db : AsyncSession | None
+            Signature-only — the service always opens a short read session
+            via ``async_session_factory`` (Foundation P4 contract).
+        write_queue : WriteQueue
+            Required collaborator — terminal write routes through this queue.
+        """
+        start = time.monotonic()
+
+        # ============ STEP 1: short read session — fetch + idempotency guard ===
+        session_ctx = _database_mod.async_session_factory()
+        read_db = await session_ctx.__aenter__()
+        try:
+            result = await read_db.execute(
+                select(ValidationSuite).where(ValidationSuite.id == suite_id)
+            )
+            suite = result.scalar_one_or_none()
+            if suite is None:
+                raise ValueError("suite_not_found")
+            if suite.retired_at is not None:
+                # Idempotent no-op — spec §5 + §9 + §4 all pin this branch
+                # as "no write / no event / no trace / no op-label". Return
+                # immediately so callers see success but observability stays
+                # silent.
+                return
+            inputs = SuiteRetireInputs(
+                suite_id=suite_id,
+                retired_at=datetime.now(UTC),
+                retired_reason=reason.strip(),
+            )
+        finally:
+            await session_ctx.__aexit__(None, None, None)
+
+        # ============ STEP 2: persist via WriteQueue ============
+        async def _work(writer_db: AsyncSession) -> None:
+            await _persist_suite_retire(writer_db, inputs=inputs)
+
+        await write_queue.submit(
+            _work,
+            timeout=30,
+            operation_label="validation_suite_retire",
+        )
+
+        # ============ STEP 3: post-commit event + trace ============
+        # Spec §9 — emitted ONLY when state actually transitions (first
+        # retire). The idempotency short-circuit above bypasses this block
+        # entirely on no-op re-retires.
+        event_bus.publish("validation_suite_retired", {
+            "suite_id": inputs.suite_id,
+            "reason": inputs.retired_reason,
+        })
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        _emit_suite_retire_trace(inputs, duration_ms)
+
+    async def get(
+        self,
+        suite_id: str,
+        *,
+        db: AsyncSession | None = None,  # noqa: ARG002 — signature parity per spec §5
+    ) -> ValidationSuiteOut:
+        """Return a full :class:`ValidationSuiteOut` for ``suite_id``.
+
+        Spec §5 — thin read-only wrapper. Opens a short read session via
+        ``async_session_factory`` (Foundation P4 contract), fetches the
+        suite, and adapts it through ``ValidationSuiteOut.model_validate``
+        (the schema is configured with ``from_attributes=True``).
+
+        Raises
+        ------
+        ValueError
+            ``suite_not_found`` when ``suite_id`` does not exist — same
+            error code as :meth:`retire` so the REST layer can map both
+            to a single 404 envelope.
+        """
+        session_ctx = _database_mod.async_session_factory()
+        read_db = await session_ctx.__aenter__()
+        try:
+            result = await read_db.execute(
+                select(ValidationSuite).where(ValidationSuite.id == suite_id)
+            )
+            suite = result.scalar_one_or_none()
+            if suite is None:
+                raise ValueError("suite_not_found")
+            return ValidationSuiteOut.model_validate(suite)
+        finally:
+            await session_ctx.__aexit__(None, None, None)
+
+    async def list(
+        self,
+        *,
+        include_retired: bool = False,
+        project_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        db: AsyncSession | None = None,  # noqa: ARG002 — signature parity per spec §5
+    ) -> ValidationSuiteListResponse:
+        """Paginated list of validation suites.
+
+        Spec §4 / §5 — backs ``GET /api/suites``. Default filters out
+        retired suites (``retired_at IS NULL``); ``include_retired=True``
+        returns the full set. ``project_id``, when provided, narrows to
+        suites whose ``project_id`` matches.
+
+        Order is ``created_at DESC`` (newest first) to match the
+        ``ix_validation_suite_active`` partial-index direction.
+
+        Returns the canonical paginated envelope
+        :class:`ValidationSuiteListResponse` — ``total`` reflects the
+        filtered set, NOT the page slice; ``limit`` + ``offset`` shape the
+        ``items`` window only.
+        """
+        session_ctx = _database_mod.async_session_factory()
+        read_db = await session_ctx.__aenter__()
+        try:
+            base = select(ValidationSuite)
+            if not include_retired:
+                base = base.where(ValidationSuite.retired_at.is_(None))
+            if project_id is not None:
+                base = base.where(ValidationSuite.project_id == project_id)
+
+            total_q = select(func.count()).select_from(base.subquery())
+            total = int((await read_db.execute(total_q)).scalar_one())
+
+            page_q = (
+                base.order_by(ValidationSuite.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            rows = (await read_db.execute(page_q)).scalars().all()
+            items = [_suite_list_item_from_orm(row) for row in rows]
+        finally:
+            await session_ctx.__aexit__(None, None, None)
+
+        has_more = offset + len(items) < total
+        next_offset = offset + len(items) if has_more else None
+
+        return ValidationSuiteListResponse(
+            total=total,
+            count=len(items),
+            offset=offset,
+            items=items,
+            has_more=has_more,
+            next_offset=next_offset,
+        )
+
+    async def list_replays(
+        self,
+        suite_id: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        db: AsyncSession | None = None,  # noqa: ARG002 — signature parity per spec §5
+    ) -> RunListResponse:
+        """Paginated list of replay runs scoped to ``suite_id``.
+
+        Spec §4 / §5 — backs ``GET /api/suites/{id}/replays``. Returns
+        rows scoped to BOTH ``RunRow.mode == 'replay_run'`` AND
+        ``RunRow.suite_id == suite_id``. Ordering is ``started_at DESC``
+        per the ``ix_run_row_suite_id (suite_id, started_at DESC)`` index.
+
+        Returns the canonical :class:`RunListResponse` envelope (spec §4
+        line 275) — ``items`` is ``list[RunSummary]`` so the row id is
+        accessible as ``item.id`` and the started timestamp as
+        ``item.started_at``, matching the contract that
+        ``test_list_replays_returns_only_replay_run_mode_rows_for_suite``
+        inspects.
+        """
+        session_ctx = _database_mod.async_session_factory()
+        read_db = await session_ctx.__aenter__()
+        try:
+            base = (
+                select(RunRow)
+                .where(RunRow.mode == "replay_run")
+                .where(RunRow.suite_id == suite_id)
+            )
+            total_q = select(func.count()).select_from(base.subquery())
+            total = int((await read_db.execute(total_q)).scalar_one())
+
+            page_q = (
+                base.order_by(RunRow.started_at.desc()).limit(limit).offset(offset)
+            )
+            rows = (await read_db.execute(page_q)).scalars().all()
+            items = [_run_summary_from_row(row) for row in rows]
+        finally:
+            await session_ctx.__aexit__(None, None, None)
+
+        has_more = offset + len(items) < total
+        next_offset = offset + len(items) if has_more else None
+
+        return RunListResponse(
+            total=total,
+            count=len(items),
+            offset=offset,
+            items=items,
+            has_more=has_more,
+            next_offset=next_offset,
+        )
+
+
+def _suite_list_item_from_orm(row: ValidationSuite) -> ValidationSuiteListItem:
+    """Project a ValidationSuite ORM row into the lightweight list view.
+
+    ``prompts_count`` is derived from ``len(prompts_snapshot)``;
+    ``baseline_mean`` is read out of the JSON column. Both are excluded
+    from the heavy :class:`ValidationSuiteOut` to keep paginated listing
+    cheap (no nested-model parsing per row).
+    """
+    prompts = row.prompts_snapshot or []
+    scores = row.baseline_scores or {}
+    return ValidationSuiteListItem(
+        id=row.id,
+        source_run_id=row.source_run_id,
+        label=row.label,
+        tolerance_abs=row.tolerance_abs,
+        project_id=row.project_id,
+        repo_full_name=row.repo_full_name,
+        created_at=row.created_at,
+        retired_at=row.retired_at,
+        prompts_count=len(prompts),
+        baseline_mean=float(scores.get("mean_overall", 0.0) or 0.0),
+    )
+
+
+def _run_summary_from_row(row: RunRow) -> RunSummary:
+    """Project a RunRow into the canonical :class:`RunSummary` list item.
+
+    Mirrors ``routers/runs.py:_serialize_summary`` exactly so the replay-list
+    envelope is byte-identical to ``GET /api/runs?mode=replay_run`` filtered
+    rows. Used by :meth:`ValidationSuiteService.list_replays`.
+    """
+    return RunSummary(
+        id=row.id,
+        mode=row.mode,  # type: ignore[arg-type]  # plain String column, Literal validates
+        status=row.status,  # type: ignore[arg-type]  # plain String column, Literal validates
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+        project_id=row.project_id,
+        repo_full_name=row.repo_full_name,
+        topic=row.topic,
+        intent_hint=row.intent_hint,
+        prompts_generated=row.prompts_generated or 0,
+    )
 
 
 def _suite_out_from_snapshot(snapshot: SuiteSnapshotInputs) -> ValidationSuiteOut:
