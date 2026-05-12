@@ -16,11 +16,12 @@ describe('ActivityBar', () => {
     expect(screen.getByRole('navigation', { name: 'Activity bar' })).toBeInTheDocument();
   });
 
-  it('renders a tablist with 5 tabs', () => {
+  it('renders a tablist with 6 tabs', () => {
+    // v0.4.22 T2: 'suites' added between 'clusters' and 'github'.
     render(ActivityBar);
     expect(screen.getByRole('tablist', { name: 'Primary sections' })).toBeInTheDocument();
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(5);
+    expect(tabs).toHaveLength(6);
   });
 
   it('renders an Editor tab', () => {
@@ -36,6 +37,12 @@ describe('ActivityBar', () => {
   it('renders a Clusters tab', () => {
     render(ActivityBar);
     expect(screen.getByRole('tab', { name: 'Clusters' })).toBeInTheDocument();
+  });
+
+  it('renders a Suites tab', () => {
+    // v0.4.22 T2: SUITES surface routes to SuitesPanel via Navigator.
+    render(ActivityBar);
+    expect(screen.getByRole('tab', { name: 'Suites' })).toBeInTheDocument();
   });
 
   it('renders a GitHub tab', () => {

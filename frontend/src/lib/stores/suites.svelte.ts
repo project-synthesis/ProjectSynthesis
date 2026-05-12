@@ -54,7 +54,7 @@ import {
   type ValidationSuiteOut,
 } from '$lib/api/suites';
 import { getHealth } from '$lib/api/client';
-import type { RunListResponse } from '$lib/api/runs';
+import { getRun, type RunListResponse, type RunResult } from '$lib/api/runs';
 
 /** Mirrors backend `RegressionAlarmEntry`. */
 export interface RegressionAlarmEntry {
@@ -89,6 +89,13 @@ class SuitesStore {
   selectedSuiteId = $state<string | null>(null);
   detail = $state<ValidationSuiteOut | null>(null);
   replays = $state<RunListResponse | null>(null);
+  // Latest completed replay's full `RunResult` payload. Resolved from the
+  // first `replays.items` row whose status is `completed`/`partial` (the
+  // two terminal states that carry an `aggregate` block). Per spec § 4
+  // `suite_repo_drift` clarification: warning surfacing reads
+  // `aggregate.replay_warnings` from THIS row — never from the immediate
+  // 202 dispatch response (which only carries run_id + poll_url).
+  latestReplay = $state<RunResult | null>(null);
 
   // ── Loading / error transients ───────────────────────────────────
   loading = $state(false);
@@ -122,20 +129,26 @@ class SuitesStore {
   }
 
   /**
-   * Select a suite, fetching detail + replay history. Pass `null` to clear
-   * the selection.
+   * Select a suite, fetching detail + replay history + the latest replay's
+   * full RunResult payload. Pass `null` to clear the selection.
    */
   async select(suiteId: string | null): Promise<void> {
     this.selectedSuiteId = suiteId;
     if (!suiteId) {
       this.detail = null;
       this.replays = null;
+      this.latestReplay = null;
       return;
     }
     await this.loadDetail(suiteId);
   }
 
-  /** Fetch detail + replay history for a specific suite. */
+  /**
+   * Fetch detail + replay history for a specific suite. Resolves the
+   * latest completed replay's full RunResult (carrying `aggregate.
+   * replay_warnings` + per-prompt scores) so SuiteDetailView can pair
+   * baseline vs latest and surface warnings.
+   */
   async loadDetail(suiteId: string): Promise<void> {
     try {
       const [detail, replays] = await Promise.all([
@@ -144,6 +157,26 @@ class SuitesStore {
       ]);
       this.detail = detail;
       this.replays = replays;
+
+      // Resolve the most recent terminal replay (status `completed` or
+      // `partial` — `failed` rows may have no aggregate; `running` rows
+      // have not closed out yet). `getSuiteReplays` returns items sorted
+      // by `started_at desc`, so the first terminal row is the freshest.
+      const latestTerminal = replays.items.find(
+        (r) => r.status === 'completed' || r.status === 'partial',
+      );
+      if (latestTerminal) {
+        try {
+          this.latestReplay = await getRun(latestTerminal.id);
+        } catch {
+          // Detail fetch is best-effort — the panel still renders the
+          // baseline + replay-history without warnings if /api/runs/{id}
+          // is transiently unavailable.
+          this.latestReplay = null;
+        }
+      } else {
+        this.latestReplay = null;
+      }
     } catch (err) {
       this.error = err instanceof Error ? err.message : 'Failed to load suite detail';
     }

@@ -104,6 +104,7 @@
           <SuiteDetailView
             suite={suitesStore.detail}
             replays={suitesStore.replays}
+            latestReplay={suitesStore.latestReplay}
           />
         </div>
       {/if}

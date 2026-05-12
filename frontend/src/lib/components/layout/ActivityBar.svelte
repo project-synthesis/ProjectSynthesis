@@ -4,14 +4,21 @@
   import { ACTIVITY_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import { handleTablistArrowKeys } from '$lib/utils/keyboard';
 
-  type Activity = 'editor' | 'history' | 'clusters' | 'github' | 'settings';
+  type Activity = 'editor' | 'history' | 'clusters' | 'suites' | 'github' | 'settings';
 
   let { active = $bindable('editor') }: { active: Activity } = $props();
 
+  // ── Suites entry (v0.4.22 T2) ────────────────────────────────────────────
+  // The 6th tab routes to `SuitesPanel` (validation suites + replays +
+  // regression alarm surface). Placed between `clusters` and `github`
+  // because the validation surface is taxonomy-adjacent (suites are frozen
+  // snapshots of clusterable prompt sets) rather than auth/source-control
+  // adjacent. Tab count is now 6 (was 5 pre-T2).
   const activities: { id: Activity; label: string }[] = [
     { id: 'editor', label: 'Editor' },
     { id: 'history', label: 'History' },
     { id: 'clusters', label: 'Clusters' },
+    { id: 'suites', label: 'Suites' },
     { id: 'github', label: 'GitHub' },
     { id: 'settings', label: 'Settings' },
   ];
@@ -64,6 +71,11 @@
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 5v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
       {:else if act.id === 'clusters'}
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="4" cy="13" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="14" cy="13" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 6.5L5 11.5M10 6.5L13 11.5M5.5 13L12.5 13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      {:else if act.id === 'suites'}
+        <!-- Suites — stacked-rows glyph evokes the SuitesPanel data-grid
+             surface (h-5 rows, status dots, delta column). 1.5px stroke
+             matches the cluster/history canon weight. -->
+        <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><rect x="3" y="3.5" width="12" height="3" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="7.5" width="12" height="3" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="11.5" width="12" height="3" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5.5" cy="5" r="0.6" fill="currentColor"/><circle cx="5.5" cy="9" r="0.6" fill="currentColor"/><circle cx="5.5" cy="13" r="0.6" fill="currentColor"/></svg>
       {:else if act.id === 'github'}
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="4.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="13.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6 6v6M12 6c0 4-6 4-6 6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
       {:else if act.id === 'settings'}
