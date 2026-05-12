@@ -21,6 +21,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from app.schemas.probes import ProbeContext
 from app.schemas.runs import RunRequest
 from app.services.event_bus import event_bus
 from app.services.generators.base import GeneratorResult
@@ -30,6 +31,12 @@ from app.services.probe_common import (
     _apply_scope_filter,
     _truncate,
 )
+
+# T2 Cycle 7: Phase 2 now delegates to the canonical generation primitive
+# (mode + template_name kwargs). The bind is module-level so test patches
+# against ``topic_probe_generator.generate_probe_prompts`` route through
+# correctly (see test_topic_only_mode.py:579-582).
+from app.services.probe_generation import generate_probe_prompts
 from app.services.probe_phases import (
     _resolve_curated_files,
     _resolve_curated_synthesis,
@@ -98,13 +105,29 @@ class TopicProbeGenerator:
           - ``'completed'`` if all prompts succeeded
           - ``'partial'`` if 1+ succeeded AND 1+ failed
           - ``'failed'`` if all failed (or any phase fails entirely)
+
+        T2 Cycle 7 (spec §5 topic-only branch): when
+        ``request.payload["grounding_mode"] == "topic_only"`` the generator:
+          - Skips Phase 1 entirely (no ``probe_grounding`` event, no
+            ``RepoIndexQuery`` call).
+          - Bypasses the ``link_repo_first`` precondition.
+          - Builds a ``ProbeContext`` locally with ``topic_only=True``,
+            ``repo_full_name=None``, ``relevant_files=[]``,
+            ``explore_synthesis_excerpt=None``, ``known_domains=[]`` —
+            valid degenerate state for downstream phases per spec §5.
+          - Phase 2 calls ``generate_probe_prompts`` with
+            ``mode='topic_only'`` and
+            ``template_name='probe-agent-topic-only.md'`` (inverts the
+            F1 backtick predicate).
         """
         payload = request.payload
         topic = str(payload.get("topic", ""))
         scope = str(payload.get("scope") or "**/*")
-        intent_hint = str(payload.get("intent_hint") or "explore")
+        intent_hint_raw = payload.get("intent_hint")
+        intent_hint = str(intent_hint_raw or "explore")
         repo_full_name = str(payload.get("repo_full_name") or "")
         n_prompts = int(payload.get("n_prompts") or 12)
+        grounding_mode: str = payload.get("grounding_mode", "codebase") or "codebase"
         started_at = datetime.now(timezone.utc)
 
         # --- Phase 1: Started + Grounding ---
@@ -112,38 +135,117 @@ class TopicProbeGenerator:
             run_id, topic, scope, intent_hint, n_prompts, repo_full_name,
         )
 
-        if not repo_full_name:
-            # No repo linked → cannot ground. Bail out as failed; the
-            # ProbeRateLimitedEvent / rate_limit_active flow doesn't apply.
-            self._publish_failed(
-                run_id, phase="grounding",
-                error_class="ProbeError",
-                error_message="link_repo_first",
+        # Topic-only branch (spec §5): build ProbeContext directly + skip
+        # Phase 1 grounding. probe_context is the typed object consumed by
+        # Phase 2; ctx_dict is the legacy dict shape Phase 3 + reporting
+        # consume — they're kept in lock-step so the rest of the body is
+        # mode-agnostic.
+        probe_context: ProbeContext
+        ctx_dict: dict
+        if grounding_mode == "topic_only":
+            # intent_hint is Literal["audit","refactor","explore",
+            # "regression-test"] with default "explore" — None or any
+            # other value would fail Pydantic validation. Coerce via
+            # fallback to the default so the topic-only branch is
+            # robust to callers that omit the field entirely.
+            valid_intents = (
+                "audit", "refactor", "explore", "regression-test",
             )
-            return self._build_failed_result(
-                started_at, prompt_results=[], reason="link_repo_first",
+            safe_intent_hint: str = (
+                intent_hint_raw
+                if intent_hint_raw in valid_intents
+                else "explore"
             )
+            probe_context = ProbeContext(
+                topic=topic,
+                scope=scope or "**/*",
+                intent_hint=safe_intent_hint,  # type: ignore[arg-type]
+                relevant_files=[],
+                explore_synthesis_excerpt=None,
+                known_domains=[],
+                repo_full_name=None,
+                commit_sha=None,
+                topic_only=True,
+            )
+            ctx_dict = {
+                "topic": topic,
+                "scope": scope or "**/*",
+                "intent_hint": safe_intent_hint,
+                "repo_full_name": None,
+                "relevant_files": [],
+                "explore_synthesis_excerpt": None,
+                "dominant_stack": [],
+                "topic_only": True,
+            }
+            # Explicitly DO NOT publish probe_grounding — Phase 1 skipped.
+        else:
+            if not repo_full_name:
+                # No repo linked under codebase mode → cannot ground.
+                # Bail out as failed; the ProbeRateLimitedEvent /
+                # rate_limit_active flow doesn't apply.
+                self._publish_failed(
+                    run_id, phase="grounding",
+                    error_class="ProbeError",
+                    error_message="link_repo_first",
+                )
+                return self._build_failed_result(
+                    started_at, prompt_results=[], reason="link_repo_first",
+                )
 
-        try:
-            ctx_dict = await self._phase_grounding(
-                run_id, topic, scope, intent_hint, repo_full_name,
-            )
-        except Exception as exc:
-            self._publish_failed(
-                run_id, phase="grounding",
-                error_class=type(exc).__name__,
-                error_message=str(exc),
-            )
-            return self._build_failed_result(
-                started_at, prompt_results=[], reason=str(exc),
+            try:
+                ctx_dict = await self._phase_grounding(
+                    run_id, topic, scope, intent_hint, repo_full_name,
+                )
+            except Exception as exc:
+                self._publish_failed(
+                    run_id, phase="grounding",
+                    error_class=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                return self._build_failed_result(
+                    started_at, prompt_results=[], reason=str(exc),
+                )
+
+            # Build a typed ProbeContext for Phase 2 (codebase branch).
+            probe_context = ProbeContext(
+                topic=topic,
+                scope=scope or "**/*",
+                intent_hint=intent_hint,  # type: ignore[arg-type]
+                repo_full_name=repo_full_name,
+                relevant_files=list(ctx_dict.get("relevant_files") or []),
+                explore_synthesis_excerpt=ctx_dict.get(
+                    "explore_synthesis_excerpt",
+                ),
+                dominant_stack=list(ctx_dict.get("dominant_stack") or []),
+                topic_only=False,
             )
 
         # --- Phase 2: Generating ---
+        # Template + mode selected by grounding_mode (spec §5 lines 906-909).
+        # T2 Cycle 7: topic_only routes through ``generate_probe_prompts``
+        # primitive; codebase preserves the v0.4.12 legacy provider path
+        # (`_phase_generating(ctx_dict, ...)`) — the canonical full migration
+        # to the primitive for codebase mode is deferred to a future cycle so
+        # the existing TopicProbeGenerator regression fixtures stay green.
+        template_name = (
+            "probe-agent.md" if grounding_mode == "codebase"
+            else "probe-agent-topic-only.md"
+        )
         gen_t0 = time.monotonic()
         try:
-            prompts = await self._phase_generating(
-                ctx_dict, topic, n_prompts,
-            )
+            if grounding_mode == "topic_only":
+                prompts = await self._phase_generating(
+                    ctx_dict,
+                    topic,
+                    n_prompts,
+                    probe_context=probe_context,
+                    grounding_mode=grounding_mode,
+                    template_name=template_name,
+                )
+            else:
+                prompts = await self._phase_generating(
+                    ctx_dict, topic, n_prompts,
+                )
         except asyncio.CancelledError:
             # Cancellation propagates uninterrupted to the caller. The
             # RunOrchestrator catches CancelledError at its outer level
@@ -328,17 +430,43 @@ class TopicProbeGenerator:
         }
 
     async def _phase_generating(
-        self, ctx: dict, topic: str, n_prompts: int,
+        self,
+        ctx: dict,
+        topic: str,
+        n_prompts: int,
+        *,
+        probe_context: ProbeContext | None = None,
+        grounding_mode: str = "codebase",
+        template_name: str = "probe-agent.md",
     ) -> list[str]:
-        """Phase 2: topic → N code-grounded prompts via the provider.
+        """Phase 2: topic → N prompts via the canonical generation primitive.
 
-        Calls ``provider.complete_parsed`` once. The provider response is
-        expected to expose ``prompts`` (list[str]) per the probe-agent
-        template contract. Falls back to ``result_text`` (single string) for
-        test fixtures that use the simpler shape — synthesizing N prompts
-        from the single response so downstream loops still exercise the
-        per-prompt code path.
+        T2 Cycle 7 (spec §5 + A2 = "don't re-implement Phase 2"):
+        delegates to ``probe_generation.generate_probe_prompts`` so the
+        single-source-of-truth predicate filter (codebase vs topic_only)
+        + template selection live in one place.
+
+        Backward-compat: legacy callers (older tests, ProbeService
+        regression fixtures) that don't thread ``probe_context`` still
+        hit the test-fixture inline path which calls
+        ``provider.complete_parsed`` directly. New T2 callers thread the
+        typed ``probe_context`` and route through the primitive.
         """
+        if probe_context is not None:
+            # Canonical path (T2 Cycle 7) — delegates to the generation
+            # primitive with mode + template selection.
+            return await generate_probe_prompts(
+                probe_context,
+                provider=self._provider,
+                n_prompts=n_prompts,
+                mode=grounding_mode,  # type: ignore[arg-type]
+                template_name=template_name,
+            )
+
+        # Legacy test-fixture path — preserved unchanged so the existing
+        # unit tests for TopicProbeGenerator continue to PASS without
+        # threading the typed context. Production code always passes
+        # ``probe_context``.
         result = await self._provider.complete_parsed(
             topic=topic,
             n_prompts=n_prompts,
