@@ -11,13 +11,33 @@ from pydantic import BaseModel, Field
 
 
 class ProbeContext(BaseModel):
-    """Phase 1 grounding output, fed into Phase 2 generator."""
+    """Phase 1 grounding output, fed into Phase 2 generator.
+
+    T2 Cycle 7 schema relaxation (spec §2 + §5 topic-only branch):
+      - ``repo_full_name`` relaxed from required ``str`` to ``str | None`` so
+        the topic-only path can build a valid context without a linked repo
+        (Phase 1 grounding is skipped entirely under ``grounding_mode='topic_only'``).
+      - NEW ``commit_sha: str | None = None`` — provenance field for future
+        replay-against-snapshot semantics. Populated by the codebase-mode
+        grounding phase when a repo is linked; ``None`` for topic-only.
+      - NEW ``topic_only: bool = False`` — explicit branch marker for
+        downstream consumers (Phase 2 generation + reporting). The branch
+        is otherwise discoverable from ``repo_full_name is None`` plus an
+        empty ``relevant_files`` list, but an explicit flag keeps the
+        contract grep-able and prevents accidental codebase-path execution
+        on a degenerate codebase context.
+
+    ``model_config = {"extra": "forbid"}`` is preserved so any typo at the
+    call site still fails Pydantic validation immediately.
+    """
     model_config = {"extra": "forbid"}
 
     topic: str
     scope: str = "**/*"
     intent_hint: Literal["audit", "refactor", "explore", "regression-test"] = "explore"
-    repo_full_name: str
+    repo_full_name: str | None = None
+    commit_sha: str | None = None
+    topic_only: bool = False
     project_id: str | None = None
     project_name: str | None = None
     dominant_stack: list[str] = Field(default_factory=list)
@@ -44,13 +64,21 @@ class ProbeError(Exception):
 
 
 class ProbeRunRequest(BaseModel):
-    """REST/MCP input — what the user provides."""
+    """REST/MCP input — what the user provides.
+
+    T2 Cycle 7 (spec §5): ``grounding_mode`` selects between codebase-grounded
+    generation (the v0.4.12 contract) and topic-only generation (new). The
+    default ``"codebase"`` is critical — the router calls ``body.model_dump()``
+    to forward the RESOLVED default into ``RunRequest.payload`` so downstream
+    consumers see the canonical value (not ``None``).
+    """
     model_config = {"extra": "forbid"}
     topic: str = Field(min_length=3, max_length=500)
     scope: str | None = None
     intent_hint: Literal["audit", "refactor", "explore", "regression-test"] | None = None
     n_prompts: int | None = Field(default=None, ge=5, le=25)
     repo_full_name: str | None = None  # if None, server may resolve from session
+    grounding_mode: Literal["codebase", "topic_only"] = "codebase"
 
 
 class ProbePromptResult(BaseModel):

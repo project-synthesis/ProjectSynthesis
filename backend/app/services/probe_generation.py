@@ -11,12 +11,24 @@ Honors:
   *code identifier* (regex aligned with F1 specificity heuristic in
   heuristic_scorer.py: `[a-zA-Z_][a-zA-Z0-9_./:-]*` — excludes spaces so
   `arbitrary phrase` does not earn structural credit). >50% drop raises.
+
+T2 Cycle 7 (spec §2 + §5 topic-only branch):
+- NEW kwarg ``mode: Literal['codebase', 'topic_only'] = 'codebase'`` —
+  ``topic_only`` inverts the per-prompt predicate so prompts WITH
+  backtick identifiers are dropped (the inverse of codebase mode, which
+  drops prompts WITHOUT).
+- NEW kwarg ``template_name: str = 'probe-agent.md'`` — selects the
+  template hot-reloaded by ``PromptLoader``. Topic-only callers pass
+  ``'probe-agent-topic-only.md'``.
+- The batch-level ``_DROP_THRESHOLD=0.5`` (>50% dropped → error) is
+  preserved across BOTH modes — only the per-prompt predicate flips
+  direction.
 """
 from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
@@ -56,7 +68,21 @@ def _clamp_n(n: int) -> int:
 
 
 def _has_backtick(prompt: str) -> bool:
+    """Codebase-mode predicate — prompt PASSES if it contains a backtick
+    identifier (i.e. the prompt is code-grounded).
+    """
     return bool(_BACKTICK_RX.search(prompt))
+
+
+def _lacks_backtick(prompt: str) -> bool:
+    """Topic-only-mode predicate — prompt PASSES if it contains NO backticks
+    at all (the topic-only template instructs the LLM to omit code refs).
+
+    Uses the simpler ``"`" not in prompt`` check rather than the strict
+    F1 regex: topic-only callers should never produce backticks; any
+    backtick at all is signal that the LLM ignored the instruction.
+    """
+    return "`" not in prompt
 
 
 async def generate_probe_prompts(
@@ -64,10 +90,23 @@ async def generate_probe_prompts(
     *,
     provider: "LLMProvider",
     n_prompts: int = 12,
+    mode: Literal["codebase", "topic_only"] = "codebase",
+    template_name: str = "probe-agent.md",
 ) -> list[str]:
-    """Single Sonnet call to probe-agent.md -> list of code-grounded prompts.
+    """Single Sonnet call to a probe-agent template -> list of prompts.
 
-    See spec §4.4 for full contract.
+    T2 Cycle 7 (spec §2 + §5):
+      - ``mode='codebase'`` (default) preserves the v0.4.12 contract — drops
+        prompts WITHOUT backtick identifiers (the F1 specificity filter).
+      - ``mode='topic_only'`` inverts the per-prompt predicate — drops
+        prompts WITH backticks (the topic-only template instructs the LLM
+        to produce prose-only prompts).
+      - ``template_name`` selects the template hot-reloaded by
+        ``PromptLoader``; topic-only callers pass ``probe-agent-topic-only.md``.
+
+    The batch-level ``_DROP_THRESHOLD=0.5`` (>50% dropped → error) and the
+    error envelope (``ProbeGenerationError("...backtick...")``) are
+    identical across both modes. See spec §4.4 for full contract.
     """
     n_prompts = _clamp_n(n_prompts)
 
@@ -91,7 +130,7 @@ async def generate_probe_prompts(
             f"{c['label']}" for c in probe_ctx.existing_clusters_brief
         ) or "(none yet)",
     }
-    user_message = loader.render("probe-agent.md", variables)
+    user_message = loader.render(template_name, variables)
 
     result: PromptList = await call_provider_with_retry(
         provider,
@@ -102,24 +141,40 @@ async def generate_probe_prompts(
         max_retries=3,
     )
 
-    # Backtick-density filter - drops prompts without >=1 backtick identifier.
+    # Per-prompt predicate — flips direction by ``mode`` (T2 Cycle 7).
+    # Both predicates return True iff the prompt PASSES the filter (kept).
+    predicate = _has_backtick if mode == "codebase" else _lacks_backtick
+
     total = len(result.prompts)
-    valid = [p for p in result.prompts if _has_backtick(p)]
+    valid = [p for p in result.prompts if predicate(p)]
     dropped = total - len(valid)
     if total and dropped / total > _DROP_THRESHOLD:
+        # Mode-specific error message — both reference "backtick" so the
+        # test's ``pytest.raises(..., match=r"backtick")`` matches under
+        # either direction (codebase: prompts WITHOUT backticks dropped;
+        # topic_only: prompts WITH backticks dropped).
+        if mode == "topic_only":
+            detail = (
+                f"Generator produced too many prompts containing backtick "
+                f"identifiers under topic_only mode: "
+                f"{dropped}/{total} dropped (>{_DROP_THRESHOLD*100:.0f}% threshold)"
+            )
+        else:
+            detail = (
+                f"Generator produced too many prompts without backtick "
+                f"identifiers: "
+                f"{dropped}/{total} dropped (>{_DROP_THRESHOLD*100:.0f}% threshold)"
+            )
         logger.warning(
-            "probe_generation: drop-threshold exceeded for topic=%r "
+            "probe_generation: drop-threshold exceeded for topic=%r mode=%r "
             "(%d/%d dropped, >%.0f%% threshold) — raising ProbeGenerationError",
-            probe_ctx.topic, dropped, total, _DROP_THRESHOLD * 100,
+            probe_ctx.topic, mode, dropped, total, _DROP_THRESHOLD * 100,
         )
-        raise ProbeGenerationError(
-            f"Generator produced too many prompts without backtick identifiers: "
-            f"{dropped}/{total} dropped (>{_DROP_THRESHOLD*100:.0f}% threshold)"
-        )
+        raise ProbeGenerationError(detail)
     if dropped:
         logger.info(
-            "probe_generation: filtered %d/%d prompts without backtick "
-            "identifiers for topic=%r", dropped, total, probe_ctx.topic,
+            "probe_generation: filtered %d/%d prompts under mode=%r for topic=%r",
+            dropped, total, mode, probe_ctx.topic,
         )
 
     # Clamp to requested n_prompts (after filter - generator may overproduce).

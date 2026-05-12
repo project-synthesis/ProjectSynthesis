@@ -160,7 +160,9 @@ async def post_probe(request: Request):
          on client disconnect
 
     Pre-stream gates (preserve pre-Foundation reason codes):
-      - Missing ``repo_full_name`` → 400 ``link_repo_first``
+      - Missing ``repo_full_name`` AND ``grounding_mode='codebase'`` →
+        400 ``link_repo_first`` (T2 Cycle 7: gate is mode-aware so
+        ``grounding_mode='topic_only'`` requests bypass it)
       - Pydantic validation failure → 400 ``invalid_request``
       - Malformed JSON → 400 ``invalid_json``
     """
@@ -169,7 +171,16 @@ async def post_probe(request: Request):
     except Exception as exc:  # noqa: BLE001 — translate to 400 with reason
         raise HTTPException(status_code=400, detail="invalid_json") from exc
 
-    if not isinstance(raw, dict) or not raw.get("repo_full_name"):
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="invalid_request")
+
+    # T2 Cycle 7 (spec §5 + §4 error envelope): the ``link_repo_first`` gate
+    # only fires under codebase mode. Topic-only requests do not require a
+    # linked repo — that's the whole point of the mode. The raw-dict lookup
+    # uses the same default ``"codebase"`` as ``ProbeRunRequest.grounding_mode``
+    # so omitting the field preserves the v0.4.12 contract.
+    raw_grounding_mode = raw.get("grounding_mode", "codebase")
+    if raw_grounding_mode == "codebase" and not raw.get("repo_full_name"):
         raise HTTPException(status_code=400, detail="link_repo_first")
 
     try:
