@@ -473,13 +473,31 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         # WriteQueue. Generators are stateless singletons; the
         # TopicProbeGenerator's RepoIndexQuery dependency is None at the
         # singleton level (request-bound construction is a follow-up).
+        #
+        # T2 Cycle 10 fix: also register the ``replay_run`` generator so
+        # ``synthesis_replay_suite`` MCP calls can dispatch through the
+        # process-local orchestrator. Pre-fix the MCP-process orchestrator
+        # only carried ``topic_probe`` + ``seed_agent`` and real
+        # replay-suite invocations died at
+        # ``dispatch_async(mode="replay_run", ...)`` with
+        # ``ValueError("unknown mode: replay_run")``. Mirrors
+        # main.py:1206-1224 verbatim — same collaborator union
+        # (provider/prompt_loader/embedding_service/session_factory/
+        # taxonomy_engine/domain_resolver/context_service/write_queue) —
+        # so the replay path runs the canonical
+        # ``batch_pipeline.run_single_prompt`` contract regardless of
+        # which process the MCP tool call lands in.
         try:
+            from app.services.generators.replay_run_generator import (
+                ReplayRunGenerator,
+            )
             from app.services.generators.seed_agent_generator import (
                 SeedAgentGenerator,
             )
             from app.services.generators.topic_probe_generator import (
                 TopicProbeGenerator,
             )
+            from app.services.prompt_loader import PromptLoader
             from app.services.run_orchestrator import RunOrchestrator
             from app.services.seed_orchestrator import SeedOrchestrator
             from app.tools._shared import set_run_orchestrator as _set_ro
@@ -502,12 +520,42 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                 write_queue=_mcp_wq,
             )
 
+            # ReplayRunGenerator — receives the full collaborator union so
+            # every replay row threads through the same enrichment +
+            # scoring contract the regular pipeline + batch seeding use.
+            # ``domain_resolver`` + ``context_service`` are fetched via
+            # ``_shared`` getters because both singletons land in their
+            # respective service modules earlier in this lifespan
+            # (lines 380 / 399). Either may be None if their init blocks
+            # failed non-fatally — the generator tolerates None via its
+            # collaborator-passthrough to ``batch_pipeline.run_single_prompt``.
+            try:
+                _mcp_domain_resolver = _shared.get_domain_resolver()
+            except (ValueError, Exception):
+                _mcp_domain_resolver = None
+            try:
+                _mcp_context_service = _shared.get_context_service()
+            except (ValueError, Exception):
+                _mcp_context_service = None
+
+            _replay_run_gen = ReplayRunGenerator(
+                provider=_mcp_provider,
+                prompt_loader=PromptLoader(PROMPTS_DIR),
+                embedding_service=_mcp_embedding_service,
+                session_factory=_shared.async_session_factory,
+                taxonomy_engine=_mcp_taxonomy,
+                domain_resolver=_mcp_domain_resolver,
+                context_service=_mcp_context_service,
+                write_queue=_mcp_wq,
+            )
+
             if _mcp_wq is not None:
                 _mcp_run_orchestrator = RunOrchestrator(
                     write_queue=_mcp_wq,
                     generators={
                         "topic_probe": _topic_probe_gen,
                         "seed_agent": _seed_agent_gen,
+                        "replay_run": _replay_run_gen,
                     },
                 )
                 _set_ro(_mcp_run_orchestrator)
