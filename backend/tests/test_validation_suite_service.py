@@ -1,6 +1,6 @@
-"""Cycle 2 + Cycle 3 RED tests for ``ValidationSuiteService`` — 11 + 9 = 20 tests.
+"""Cycle 2 + 3 + 4 RED tests for ``ValidationSuiteService`` — 11 + 9 + 7 = 27 tests.
 
-Plan: ``docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md`` Cycle 2 + 3
+Plan: ``docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md`` Cycle 2-4
 Spec: ``docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md`` §4 + §5 + §9
 
 The Cycle 2 tests (1-11) cover ``ValidationSuiteService.create_from_run``;
@@ -9,12 +9,14 @@ Cycle 2 GREEN has landed so they pass.
 The Cycle 3 tests (12-20) cover ``retire``, ``get``, ``list``,
 ``list_replays`` plus the ``SuiteRetireInputs`` frozen dataclass and the
 ``validation_suite_retire`` write-queue operation label. Cycle 3 GREEN has
-NOT yet landed: these 9 tests fail with ``AttributeError`` (no ``.retire`` /
-``.get`` / ``.list`` / ``.list_replays`` method on the service) or
-``ImportError`` (no ``SuiteRetireInputs`` symbol in the service module).
-``SuiteRetireInputs`` is imported lazily inside the Cycle 3 tests that need
-it so the module-top import doesn't break collection of the 11 Cycle 2
-tests, which must continue to PASS.
+landed so they pass.
+
+The Cycle 4 tests (21-27) cover ``compute_regression_alarm`` + the 30s TTL
+cache + the ``regression_alarm_transition`` event. Cycle 4 GREEN has NOT
+yet landed: these 7 tests fail with ``AttributeError`` (no
+``.compute_regression_alarm`` method on the service) or
+``AttributeError: '_invalidate_alarm_cache'`` (the test-seam helper that
+forces TTL invalidation between calls — see Cycle 4 contract block below).
 
 Per spec §5 the service is detached-ORM-safe (Foundation P4 contract): reads
 happen inside a short DB session; the snapshot dataclass crosses the
@@ -1489,4 +1491,616 @@ async def test_list_replays_returns_only_replay_run_mode_rows_for_suite(
         f"list_replays MUST return rows ordered by started_at DESC (newest "
         f"first) per spec §3 ix_run_row_suite_id index ordering; got "
         f"{returned_started_ats!r}"
+    )
+
+
+# ###########################################################################
+# Cycle 4 — compute_regression_alarm + 30s TTL cache + transition event — 7 tests
+# ###########################################################################
+#
+# Plan: docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md Cycle 4 Task 4.1
+# Spec: docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md
+#       §4 (RegressionAlarmEntry / RegressionAlarmBlock Pydantic models)
+#     + §5 (compute_regression_alarm body: alarm SQL + Python filter)
+#     + §9 (regression_alarm_transition event — fires ONLY on state change)
+#
+# Pre-condition before Cycle 4 GREEN lands:
+#   - ``ValidationSuiteService`` has no ``.compute_regression_alarm`` method →
+#     ``AttributeError`` at attribute access on the service instance
+#
+# ---------------------------------------------------------------------------
+# CONTRACT PINNED FOR GREEN
+# ---------------------------------------------------------------------------
+# The 30s TTL cache + state-transition map must satisfy these test seams:
+#
+#   1. ``compute_regression_alarm(*, db)`` returns ``RegressionAlarmBlock``.
+#   2. The TTL cache is INSTANCE-SCOPED (not module-level). Two service
+#      instances do NOT share cached state — every test that instantiates
+#      ``ValidationSuiteService()`` starts with empty cache + empty
+#      ``_prior_alarm_states`` map. Matches the spec §5 instance-local
+#      ``self._prior_alarm_states`` pin (line 603).
+#   3. ``self._invalidate_alarm_cache()`` is a public test-seam method that
+#      clears BOTH the cached block AND any cached-at timestamp so the next
+#      call re-executes the alarm SQL. Tests 6 + 7 call this between
+#      consecutive ``compute_regression_alarm`` invocations to bypass the
+#      30s TTL without sleeping. The implementation may name the cache
+#      attributes anything — the only contract is that
+#      ``_invalidate_alarm_cache()`` forces the next call to re-query.
+#   4. The state-transition map keys are suite ids. Values are one of
+#      ``'none' | 'nominal' | 'firing'`` per spec §9 (line 1341). The
+#      ``regression_alarm_transition`` event fires ONLY when a suite's
+#      new state differs from its prior state in the map.
+# ---------------------------------------------------------------------------
+
+
+def _firing_replay_aggregate(*, mean_overall: float) -> dict:
+    """Minimal replay aggregate carrying just ``mean_overall``.
+
+    The spec §5 Python-side filter reads
+    ``replay_aggregate['mean_overall']`` and compares against
+    ``baseline_scores['mean_overall'] - tolerance_abs``. Other aggregate
+    keys do not influence the alarm computation.
+    """
+    return {"mean_overall": mean_overall}
+
+
+async def _insert_replay_run(
+    db: AsyncSession,
+    *,
+    suite_id: str,
+    mean_overall: float,
+    started_at: datetime | None = None,
+) -> RunRow:
+    """Insert a ``replay_run`` RunRow scoped to ``suite_id``.
+
+    Shared by every Cycle 4 test that needs the alarm SQL JOIN to find
+    completed replay rows. Default ``started_at`` is ``datetime.now(UTC)``.
+    """
+    started = started_at or datetime.now(UTC)
+    row = RunRow(
+        id=uuid.uuid4().hex,
+        mode="replay_run",
+        status="completed",
+        started_at=started,
+        completed_at=started,
+        prompts_generated=3,
+        prompt_results=None,
+        aggregate=_firing_replay_aggregate(mean_overall=mean_overall),
+        suite_id=suite_id,
+    )
+    db.add(row)
+    await db.commit()
+    return row
+
+
+# ===========================================================================
+# Test 21 (Cycle 4 #1) — empty block when there are no replays
+# ===========================================================================
+
+
+async def test_compute_regression_alarm_returns_empty_block_with_no_replays(
+    db: AsyncSession, write_queue,
+):
+    """Spec §5 alarm SQL — ``suites_total`` counts ACTIVE suites; suites
+    without any completed replays are excluded by the JOIN, so
+    ``latest_alarms`` is empty and ``suites_in_alarm == 0``.
+
+    The spec §4 ``RegressionAlarmBlock`` shape requires ``suites_total``,
+    ``suites_in_alarm``, ``latest_alarms`` — this test pins all three on the
+    zero-replay path.
+    """
+    from app.schemas.validation_suite import RegressionAlarmBlock
+
+    # Seed 3 active suites — no replays inserted.
+    for i in range(3):
+        await _seed_suite(db, write_queue, label=f"empty-replay-{i}")
+
+    service = ValidationSuiteService()
+    block = await service.compute_regression_alarm(db=db)
+
+    assert isinstance(block, RegressionAlarmBlock), (
+        f"compute_regression_alarm must return a RegressionAlarmBlock; got "
+        f"{type(block)!r}"
+    )
+    assert block.suites_total == 3, (
+        f"suites_total counts ACTIVE suites (3 seeded, 0 retired); got "
+        f"{block.suites_total}"
+    )
+    assert block.suites_in_alarm == 0, (
+        f"suites_in_alarm must be 0 when no replays exist for any suite "
+        f"(spec §5 alarm JOIN excludes suites without completed replays); "
+        f"got {block.suites_in_alarm}"
+    )
+    assert block.latest_alarms == [], (
+        f"latest_alarms must be empty when no replays exist; got "
+        f"{block.latest_alarms!r}"
+    )
+
+
+# ===========================================================================
+# Test 22 (Cycle 4 #2) — retired suites excluded from the alarm SQL JOIN
+# ===========================================================================
+
+
+async def test_compute_regression_alarm_excludes_retired_suites(
+    db: AsyncSession, write_queue,
+):
+    """Spec §5 alarm SQL — ``WHERE s.retired_at IS NULL`` excludes retired
+    suites entirely. ``suites_total`` reflects ACTIVE suites only, and any
+    replay attached to a retired suite must not surface as an alarm.
+
+    Setup: 5 suites with firing replays each → retire 2 → expect 3 in total
+    and 3 in alarm.
+    """
+    # 5 suites with baseline mean=7.85, tolerance_abs=0.5. Each gets a
+    # firing replay so the alarm SQL would flag every one if not for the
+    # retired_at filter.
+    suites: list[ValidationSuiteOut] = []
+    for i in range(5):
+        suite = await _seed_suite(
+            db, write_queue, label=f"retire-fixture-{i}", tolerance_abs=0.5,
+        )
+        suites.append(suite)
+        # Firing replay: mean=7.20, delta=-0.65 (> 0.5 tolerance → fires)
+        await _insert_replay_run(
+            db, suite_id=suite.id, mean_overall=7.20,
+        )
+
+    service = ValidationSuiteService()
+    # Retire the first 2 suites — those replays MUST NOT appear in alarms.
+    for suite in suites[:2]:
+        await service.retire(
+            suite_id=suite.id,
+            reason="retired before alarm check",
+            db=db,
+            write_queue=write_queue,
+        )
+
+    await db.commit()  # ensure retire writes visible to the alarm SQL
+
+    block = await service.compute_regression_alarm(db=db)
+
+    assert block.suites_total == 3, (
+        f"suites_total must exclude retired suites (5 seeded, 2 retired = "
+        f"3 active); got {block.suites_total}"
+    )
+    assert block.suites_in_alarm == 3, (
+        f"all 3 active suites have firing replays — alarm SQL must report "
+        f"3 in alarm (retired suites with firing replays excluded); got "
+        f"{block.suites_in_alarm}"
+    )
+    assert len(block.latest_alarms) == 3, (
+        f"latest_alarms must contain 3 entries (1 per active firing "
+        f"suite); got {len(block.latest_alarms)}"
+    )
+
+    # Retired suite ids must NOT appear in any alarm entry.
+    retired_ids = {s.id for s in suites[:2]}
+    alarm_ids = {entry.suite_id for entry in block.latest_alarms}
+    assert alarm_ids.isdisjoint(retired_ids), (
+        f"retired suites leaked into alarm output — overlap: "
+        f"{alarm_ids & retired_ids!r}"
+    )
+
+
+# ===========================================================================
+# Test 23 (Cycle 4 #3) — MAX(started_at) selects the latest replay per suite
+# ===========================================================================
+
+
+async def test_compute_regression_alarm_uses_latest_replay_per_suite(
+    db: AsyncSession, write_queue,
+):
+    """Spec §5 alarm SQL ``MAX(started_at) AS max_started`` per-suite — when
+    multiple replays exist, the alarm reads the LATEST one regardless of
+    whether older replays would fire. Pins the per-suite MAX() semantics.
+
+    Setup: 1 suite (baseline 7.85, tolerance 0.5) + 3 replays at distinct
+    timestamps:
+      * oldest mean=7.50 → delta=-0.35 → within tolerance (would NOT fire)
+      * middle mean=7.21 → delta=-0.64 → would fire
+      * newest mean=7.10 → delta=-0.75 → would fire — this is the one
+        MAX(started_at) selects
+
+    The latest_alarms entry MUST carry the NEWEST replay's mean + delta.
+    """
+    suite_out = await _seed_suite(
+        db, write_queue, label="max-started", tolerance_abs=0.5,
+    )
+
+    base = datetime.now(UTC)
+    # Insert in NON-chronological order to defend against accidental
+    # insertion-order dependence in the GREEN implementation.
+    await _insert_replay_run(  # middle (would fire, but NOT the latest)
+        db, suite_id=suite_out.id, mean_overall=7.21,
+        started_at=base.replace(microsecond=20_000),
+    )
+    await _insert_replay_run(  # newest — this is the MAX(started_at) row
+        db, suite_id=suite_out.id, mean_overall=7.10,
+        started_at=base.replace(microsecond=30_000),
+    )
+    await _insert_replay_run(  # oldest (within tolerance — wouldn't fire)
+        db, suite_id=suite_out.id, mean_overall=7.50,
+        started_at=base.replace(microsecond=10_000),
+    )
+
+    service = ValidationSuiteService()
+    block = await service.compute_regression_alarm(db=db)
+
+    assert len(block.latest_alarms) == 1, (
+        f"exactly 1 alarm entry expected (1 suite, latest replay fires); "
+        f"got {len(block.latest_alarms)} entries"
+    )
+    entry = block.latest_alarms[0]
+    assert entry.latest_mean == 7.10, (
+        f"latest_mean MUST equal the MAX(started_at) replay's "
+        f"mean_overall (newest=7.10), NOT the middle replay's 7.21 nor "
+        f"the oldest 7.50; got latest_mean={entry.latest_mean!r}"
+    )
+    # delta = latest_mean - baseline_mean = 7.10 - 7.85 = -0.75
+    assert abs(entry.delta_abs - (-0.75)) < 1e-9, (
+        f"delta_abs MUST equal (newest replay mean - baseline mean) = "
+        f"-0.75 within float epsilon; got delta_abs={entry.delta_abs!r}"
+    )
+
+
+# ===========================================================================
+# Test 24 (Cycle 4 #4) — alarm fires when delta exceeds tolerance
+# ===========================================================================
+
+
+async def test_compute_regression_alarm_fires_when_delta_exceeds_tolerance(
+    db: AsyncSession, write_queue,
+):
+    """Spec §5 Python-side filter — fires when
+    ``replay_aggregate['mean_overall'] <
+    baseline_scores['mean_overall'] - tolerance_abs``.
+
+    Setup: baseline=7.85, tolerance=0.5, latest replay mean=7.21
+        → 7.21 < 7.85 - 0.5 = 7.35
+        → fires with delta_abs = 7.21 - 7.85 = -0.64
+
+    Every populated ``RegressionAlarmEntry`` field is asserted column-by-
+    column per spec §10 Cycle 4 INTEGRATE A1 (alarm-query result columns
+    ALL consumed — none silently dropped).
+    """
+    suite_out = await _seed_suite(
+        db, write_queue, label="fires-fixture", tolerance_abs=0.5,
+    )
+
+    replay_started = datetime.now(UTC).replace(microsecond=42_000)
+    replay = await _insert_replay_run(
+        db, suite_id=suite_out.id, mean_overall=7.21,
+        started_at=replay_started,
+    )
+
+    service = ValidationSuiteService()
+    block = await service.compute_regression_alarm(db=db)
+
+    assert block.suites_total == 1
+    assert block.suites_in_alarm == 1
+    assert len(block.latest_alarms) == 1
+
+    entry = block.latest_alarms[0]
+    assert entry.suite_id == suite_out.id, (
+        f"alarm entry suite_id must match seeded suite; expected="
+        f"{suite_out.id!r}, got={entry.suite_id!r}"
+    )
+    assert entry.label == "fires-fixture", (
+        f"alarm entry must carry the suite's label; expected="
+        f"'fires-fixture', got={entry.label!r}"
+    )
+    assert entry.baseline_mean == 7.85, (
+        f"baseline_mean must equal the suite's baseline_scores.mean_overall "
+        f"(7.85 per _canonical_aggregate default); got "
+        f"{entry.baseline_mean!r}"
+    )
+    assert entry.latest_mean == 7.21, (
+        f"latest_mean must equal replay aggregate.mean_overall (7.21); "
+        f"got {entry.latest_mean!r}"
+    )
+    assert abs(entry.delta_abs - (-0.64)) < 1e-9, (
+        f"delta_abs must equal (replay_mean - baseline_mean) = -0.64 "
+        f"within float epsilon; got {entry.delta_abs!r}"
+    )
+    assert entry.tolerance_abs == 0.5, (
+        f"tolerance_abs must round-trip from suite column; got "
+        f"{entry.tolerance_abs!r}"
+    )
+    assert entry.latest_replay_id == replay.id, (
+        f"latest_replay_id must equal RunRow.id of the MAX(started_at) "
+        f"replay; expected={replay.id!r}, got={entry.latest_replay_id!r}"
+    )
+    # latest_replay_at is timezone-aware UTC from the seeded RunRow.
+    assert entry.latest_replay_at == replay_started, (
+        f"latest_replay_at must equal the replay RunRow's started_at; "
+        f"expected={replay_started!r}, got={entry.latest_replay_at!r}"
+    )
+
+
+# ===========================================================================
+# Test 25 (Cycle 4 #5) — does NOT fire within tolerance
+# ===========================================================================
+
+
+async def test_compute_regression_alarm_does_not_fire_within_tolerance(
+    db: AsyncSession, write_queue,
+):
+    """Spec §5 Python-side filter — when ``|delta| <= tolerance_abs`` the
+    suite is NOMINAL, not firing. The suite still counts in ``suites_total``
+    (active suite) but ``suites_in_alarm == 0`` and ``latest_alarms`` is
+    empty.
+
+    Setup: baseline=7.85, tolerance=0.5, latest replay mean=7.50
+        → 7.50 < 7.85 - 0.5 = 7.35 is FALSE
+        → does NOT fire
+    """
+    suite_out = await _seed_suite(
+        db, write_queue, label="within-tolerance", tolerance_abs=0.5,
+    )
+    await _insert_replay_run(
+        db, suite_id=suite_out.id, mean_overall=7.50,
+    )
+
+    service = ValidationSuiteService()
+    block = await service.compute_regression_alarm(db=db)
+
+    assert block.suites_total == 1, (
+        f"active suite must still appear in suites_total even when not "
+        f"firing; got {block.suites_total}"
+    )
+    assert block.suites_in_alarm == 0, (
+        f"replay within tolerance (delta=-0.35, tolerance=0.5) must NOT "
+        f"fire; got suites_in_alarm={block.suites_in_alarm}"
+    )
+    assert block.latest_alarms == [], (
+        f"latest_alarms must be empty when no replay exceeds tolerance; "
+        f"got {block.latest_alarms!r}"
+    )
+
+
+# ===========================================================================
+# Test 26 (Cycle 4 #6) — 30s TTL cache hits on the second call
+# ===========================================================================
+
+
+async def test_compute_regression_alarm_30s_ttl_cache_hits_on_second_call(
+    db: AsyncSession, write_queue,
+):
+    """Spec §4 alarm health block — 30s ``TTLCache`` (matches
+    ``taxonomy/sub_domain_readiness.py`` pattern). Two consecutive calls
+    within the TTL window MUST execute the alarm SQL once, not twice.
+
+    Cache-bypass mechanism pinned for GREEN
+    --------------------------------------
+    The TTL cache lives on the SERVICE INSTANCE (not module-level). The
+    service must expose ``self._invalidate_alarm_cache()`` as a public
+    test seam — calling it forces the next ``compute_regression_alarm``
+    invocation to re-query the DB. Test 7 below uses this seam to
+    advance state without sleeping past TTL.
+
+    Measurement: intercept ``AsyncSession.execute`` on the read session
+    and count alarm-SQL invocations. The alarm SQL contains the literal
+    string ``validation_suite`` AND ``run_row`` in its ``FROM`` clause —
+    we use that compound signature to disambiguate from any other
+    incidental query the service may run.
+    """
+    suite_out = await _seed_suite(
+        db, write_queue, label="cache-fixture", tolerance_abs=0.5,
+    )
+    await _insert_replay_run(
+        db, suite_id=suite_out.id, mean_overall=7.20,
+    )
+
+    service = ValidationSuiteService()
+
+    # Count alarm-SQL executions by intercepting the read session's
+    # async_session_factory. The factory builds a fresh AsyncSession on
+    # each ``compute_regression_alarm`` call (matches the existing service
+    # pattern); we wrap each session's ``.execute`` so cache hits (which
+    # do NOT open a session) record zero executions.
+    import app.database as database_mod
+    real_factory = database_mod.async_session_factory
+    sql_execute_count = {"alarm_sql": 0}
+
+    def _wrap_factory(*args, **kwargs):
+        ctx = real_factory(*args, **kwargs)
+        real_aenter = ctx.__aenter__
+
+        async def _aenter_wrapper(*a, **k):
+            session = await real_aenter(*a, **k)
+            real_execute = session.execute
+
+            async def _counting_execute(stmt, *e_args, **e_kwargs):
+                try:
+                    rendered = str(stmt)
+                except (TypeError, ValueError):
+                    rendered = ""
+                # The alarm SQL joins validation_suite with run_row —
+                # count any statement referencing BOTH tables as an
+                # alarm-SQL execution. Cycle 2-3 reads touch only one
+                # table at a time so they will not be miscounted.
+                if "validation_suite" in rendered and "run_row" in rendered:
+                    sql_execute_count["alarm_sql"] += 1
+                return await real_execute(stmt, *e_args, **e_kwargs)
+
+            session.execute = _counting_execute  # type: ignore[method-assign]
+            return session
+
+        ctx.__aenter__ = _aenter_wrapper
+        return ctx
+
+    monkeypatch_target = _wrap_factory
+
+    import contextlib
+    @contextlib.contextmanager
+    def _patched():
+        original = database_mod.async_session_factory
+        database_mod.async_session_factory = monkeypatch_target  # type: ignore[assignment]
+        try:
+            yield
+        finally:
+            database_mod.async_session_factory = original
+
+    with _patched():
+        # First call — cache miss, MUST hit the DB exactly once.
+        block_1 = await service.compute_regression_alarm(db=db)
+        first_call_count = sql_execute_count["alarm_sql"]
+        assert first_call_count >= 1, (
+            f"first compute_regression_alarm call MUST execute the alarm "
+            f"SQL at least once (cache miss); got "
+            f"alarm_sql_executions={first_call_count}"
+        )
+
+        # Second call within TTL — cache HIT, MUST NOT re-execute SQL.
+        block_2 = await service.compute_regression_alarm(db=db)
+        second_call_count = sql_execute_count["alarm_sql"]
+        assert second_call_count == first_call_count, (
+            f"30s TTL cache violated — second call within window re-"
+            f"executed the alarm SQL. Expected total executions to stay "
+            f"at {first_call_count}; got {second_call_count}. The cache "
+            f"must short-circuit the second call before opening a read "
+            f"session. (Cache-bypass seam test: see "
+            f"``self._invalidate_alarm_cache()`` contract.)"
+        )
+
+    # Block returned from the cache must be equivalent to the original.
+    assert block_2.suites_total == block_1.suites_total
+    assert block_2.suites_in_alarm == block_1.suites_in_alarm
+    assert len(block_2.latest_alarms) == len(block_1.latest_alarms)
+
+
+# ===========================================================================
+# Test 27 (Cycle 4 #7) — regression_alarm_transition event on state change only
+# ===========================================================================
+
+
+async def test_regression_alarm_transition_event_fires_on_state_change_only(
+    db: AsyncSession, write_queue, monkeypatch,
+):
+    """Spec §9 — ``regression_alarm_transition`` event fires AFTER each
+    alarm-query run, ONLY when a suite's state CHANGES
+    (``none → firing``, ``firing → nominal``, etc.). Steady-state calls
+    (no transition) emit ZERO events.
+
+    Prior-state map lives in-memory on the service instance per spec §9
+    (``self._prior_alarm_states: dict[str, Literal['nominal','firing','none']]``).
+    Single instance is used across all four calls below so the map
+    survives between invocations.
+
+    Cache-bypass between calls uses the contract pinned in Test 6 —
+    ``service._invalidate_alarm_cache()`` forces the next call to re-
+    query without sleeping past the 30s TTL.
+
+    Four-phase contract:
+      Phase A — no replays, fresh service → seeds prior states as 'none'
+                (or 'nominal' if implementation treats no-replay as
+                nominal — accept either initial state).
+      Phase B — insert firing replay, invalidate cache, recompute →
+                state transitions to 'firing' → ONE event emitted.
+      Phase C — recompute without state change → ZERO new events.
+      Phase D — insert a within-tolerance replay (newer started_at than
+                the firing one), invalidate cache, recompute → state
+                transitions 'firing' → 'nominal' → ONE event emitted.
+    """
+    suite_out = await _seed_suite(
+        db, write_queue, label="transition-fixture", tolerance_abs=0.5,
+    )
+
+    # Capture event_bus.publish calls — filter to
+    # ``regression_alarm_transition`` event type.
+    from app.services.event_bus import event_bus
+    captured: list[tuple[str, dict]] = []
+    real_publish = event_bus.publish
+
+    def _capturing_publish(event_type, data):
+        captured.append(
+            (event_type, dict(data) if isinstance(data, dict) else {}),
+        )
+        return real_publish(event_type, data)
+
+    monkeypatch.setattr(event_bus, "publish", _capturing_publish)
+
+    def _transitions_since_reset() -> list[dict]:
+        return [
+            payload for (etype, payload) in captured
+            if etype == "regression_alarm_transition"
+        ]
+
+    service = ValidationSuiteService()
+
+    # ---- Phase A: no replays → seeds prior_alarm_states ----
+    await service.compute_regression_alarm(db=db)
+    # No transition event expected — there's no PRIOR state to transition
+    # FROM on a fresh instance with no prior calls. Some implementations
+    # may emit a 'none → nominal' synthetic event here; we don't assert
+    # zero on Phase A to leave room for that variation. The CORE contract
+    # is asserted in Phases B-D below.
+
+    captured.clear()
+
+    # ---- Phase B: insert firing replay → state transitions to 'firing' ----
+    await _insert_replay_run(
+        db, suite_id=suite_out.id, mean_overall=7.10,
+        started_at=datetime.now(UTC).replace(microsecond=10_000),
+    )
+    service._invalidate_alarm_cache()  # bypass 30s TTL test seam
+    await service.compute_regression_alarm(db=db)
+
+    phase_b_transitions = _transitions_since_reset()
+    assert len(phase_b_transitions) == 1, (
+        f"Phase B — first firing replay must emit exactly 1 "
+        f"regression_alarm_transition event; got "
+        f"{len(phase_b_transitions)}. all captured types: "
+        f"{[e for (e, _) in captured]!r}"
+    )
+    payload_b = phase_b_transitions[0]
+    assert payload_b.get("suite_id") == suite_out.id
+    assert payload_b.get("previous_state") in ("none", "nominal"), (
+        f"Phase B — previous_state must be 'none' or 'nominal' before the "
+        f"first firing replay; got {payload_b.get('previous_state')!r}"
+    )
+    assert payload_b.get("new_state") == "firing", (
+        f"Phase B — new_state must be 'firing' after the firing replay "
+        f"is detected; got {payload_b.get('new_state')!r}"
+    )
+
+    captured.clear()
+
+    # ---- Phase C: recompute with same firing state → ZERO events ----
+    service._invalidate_alarm_cache()  # bypass 30s TTL test seam
+    await service.compute_regression_alarm(db=db)
+    phase_c_transitions = _transitions_since_reset()
+    assert len(phase_c_transitions) == 0, (
+        f"Phase C — re-computing with no state change must emit ZERO "
+        f"regression_alarm_transition events (state-change-only "
+        f"semantics per spec §9 line 1341); got "
+        f"{len(phase_c_transitions)} events: {phase_c_transitions!r}"
+    )
+
+    # ---- Phase D: insert within-tolerance replay → transitions to nominal ----
+    # Newer started_at than the firing replay so MAX(started_at) picks it up.
+    await _insert_replay_run(
+        db, suite_id=suite_out.id, mean_overall=7.60,
+        started_at=datetime.now(UTC).replace(microsecond=80_000),
+    )
+    service._invalidate_alarm_cache()  # bypass 30s TTL test seam
+    await service.compute_regression_alarm(db=db)
+
+    phase_d_transitions = _transitions_since_reset()
+    assert len(phase_d_transitions) == 1, (
+        f"Phase D — recovery (firing → nominal) must emit exactly 1 "
+        f"regression_alarm_transition event; got "
+        f"{len(phase_d_transitions)}: {phase_d_transitions!r}"
+    )
+    payload_d = phase_d_transitions[0]
+    assert payload_d.get("suite_id") == suite_out.id
+    assert payload_d.get("previous_state") == "firing", (
+        f"Phase D — previous_state must be 'firing' (preserved from "
+        f"Phase B's transition); got {payload_d.get('previous_state')!r}"
+    )
+    assert payload_d.get("new_state") == "nominal", (
+        f"Phase D — new_state must be 'nominal' after the within-"
+        f"tolerance replay overrides the prior firing one; got "
+        f"{payload_d.get('new_state')!r}"
     )
