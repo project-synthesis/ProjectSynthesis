@@ -216,11 +216,11 @@ transition: 250ms cubic-bezier(0.16, 1, 0.3, 1)
 | `dropdown-exit` | 150ms | `cubic-bezier(0.4, 0, 1, 1)` | Scale(0.96) + Y(4px) + fade out | Dropdown close (downward) |
 | `dropdown-exit-up` | 150ms | `cubic-bezier(0.4, 0, 1, 1)` | Scale(0.96) + Y(-4px) + fade out | Dropdown close (upward) |
 | `section-expand` | 300ms | `cubic-bezier(0.16, 1, 0.3, 1)` | Max-height 0→500px + fade | Collapsible section |
-| `copy-flash` | 600ms | `ease-out` | Green flash (`#22ff88`) | Copy-to-clipboard feedback |
+| `copy-flash` | 1500ms | `ease-out` | Green flash (`#22ff88`) | Copy-to-clipboard feedback |
 | `shimmer` | 1500ms | `ease-in-out` (infinite) | Horizontal gradient sweep | Skeleton loading |
 | `gradient-flow` | varies | linear (infinite) | Background position cycle | Animated gradient backgrounds |
 | `status-pulse` | 3s | `ease-in-out` (3 iterations) | Green background pulse | Status dot indicators |
-| `forge-spark` | varies | ease (infinite) | Yellow flash + scale(1.2) + rotation | Forge action sparks |
+| `forge-spark` | 250ms | `ease-out` (one-shot) | Yellow flash + scale(1.2) + rotation | Forge action sparks |
 
 ---
 

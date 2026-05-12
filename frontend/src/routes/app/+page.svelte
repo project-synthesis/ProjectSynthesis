@@ -15,6 +15,7 @@
   import { triggerTierGuide } from '$lib/stores/tier-onboarding.svelte';
   import { routing, type EffectiveTier } from '$lib/stores/routing.svelte';
   import { updateStore } from '$lib/stores/update.svelte';
+  import { suitesStore } from '$lib/stores/suites.svelte';
   import { refinementStore } from '$lib/stores/refinement.svelte';
   import { sseHealthStore } from '$lib/stores/sse-health.svelte';
   import { githubStore } from '$lib/stores/github.svelte';
@@ -179,6 +180,11 @@
           // after the row was archived + GC'd from the DB).
           void observatoryStore.refreshPatternDensity();
           void observatoryStore.loadTimelineEvents();
+          // Re-dispatch as a kebab-case DOM CustomEvent so Navigator +
+          // suitesStore (v0.4.22 T2) consumers can refresh without taking
+          // a direct dependency on the SSE pipeline. This is the canonical
+          // bridge per Navigator.svelte:54 + suites.svelte.ts:167.
+          window.dispatchEvent(new CustomEvent('taxonomy-changed', { detail: data }));
           addToast('created', 'Taxonomy updated');
         }
         if (type === 'optimization_deleted') {
@@ -420,8 +426,15 @@
     healthPoll();
     domainStore.load();
     updateStore.load();
+    // v0.4.22 T2: start the suites-store 30s alarm-block poll so the
+    // RegressionBadge in StatusBar surfaces live regression state without
+    // a navigator entry visit. Idempotent — handles HMR/re-mount cleanly.
+    suitesStore.startPolling();
     const timer = setInterval(healthPoll, POLL_INTERVAL);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      suitesStore.stopPolling();
+    };
   });
 
   // Cold-boot toggle reconciliation. Auto-enables ``force_sampling`` on

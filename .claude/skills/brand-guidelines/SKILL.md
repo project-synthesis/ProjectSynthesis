@@ -76,7 +76,7 @@ Interactions feel like precision hardware — immediate, tactile, and determinis
 | `radial-gradient` | Fading to transparent around elements | Data visualizations only |
 | `@keyframes` | Pulse, breathe, radiate outward | Scale, translate, opacity-in/out, rotation |
 
-**Vocabulary (2D UI only):** the words **"glow"**, **"halo"**, **"bloom"**, **"radiance"** are banned from 2D-UI code (CSS, Svelte components in `frontend/src/lib/components/{layout,editor,refinement,shared,landing}/`, etc.). Replacements: **contour** (sharp 1px border), **tint** (color fill), **flash** (brief feedback), **emission** (visual presence of lit element).
+**Vocabulary (2D UI only):** the words **"glow"**, **"halo"**, **"bloom"**, **"radiance"** are banned from 2D-UI code (CSS, Svelte components in `frontend/src/lib/components/{layout,editor,refinement,shared,landing,suites,probes}/`, etc.). Replacements: **contour** (sharp 1px border), **tint** (color fill), **flash** (brief feedback), **emission** (visual presence of lit element).
 
 **The 3D Pattern Graph (`frontend/src/lib/components/taxonomy/`) uses a different vocabulary** — `glow`, `halo`, `bloom`, `radiance`, `breathing`, `dust`, `pulse`, `flash` are all canonical names for specific data-bearing features. See [references/3d-visualization.md](references/3d-visualization.md) "Canon Vocabulary" for the per-feature mapping. The 2D-UI banlist does not apply to that directory.
 
@@ -137,7 +137,7 @@ Denser than VS Code — near-zero padding, Excel-like data hierarchy. Maximize i
 | Data rows | 20px | `px-1` | `text-[10px]` | `flex items-center`, labels in dim |
 | Buttons (inline/action) | 20px | `px-2` | `text-[10px]` | `line-height: 18px`. Never taller than data rows. |
 | Select/input fields | 20px | `px-1` | `text-[11px]` | Same height as buttons — flush alignment |
-| Status bar | 22px | `px-1.5` | `text-[10px] font-mono` | Thinnest fixed element |
+| Status bar | 20px | `px-1.5` | `text-[10px] font-mono` | Thinnest fixed element |
 | Activity bar icons | 32px × 32px | — | — | Icon: 16px. Centered. |
 
 **Banned values inside sidebars and toolbars:**
@@ -211,7 +211,7 @@ Before adding/removing/modifying anything in `frontend/src/lib/components/taxono
 
 3D Pattern Graph identifiers, shader uniforms, and code comments use the **Canon Vocabulary** documented at `references/3d-visualization.md` "Canon Vocabulary" table. The words `glow`, `halo`, `bloom`, `radiance`, `breathing`, `dust`, `pulse`, `flash` are canonical names of specific data-bearing features distributed across F1–F19 (e.g., `bloom` is F13's `UnrealBloomPass`; `flash` is the F19 emissive burst at beam impact). Identifiers like `_haloPool` / `_templateRingPool`, `glowingColor` (HDR boost into the bloom pass per F5/F7), `_breathingAnim`, `_removeDustAnim`, `flashEmissive` are all canonical and intentional.
 
-The 2D-UI Canon Terminology table below (`Use: contour/flash/tint/emission` / `Avoid: glow/radiance/bloom/halo`) governs **2D HTML/CSS code + user-facing copy + prose comments in the 2D workbench codebase** (`frontend/src/lib/components/{layout,editor,refinement,shared,landing}/`). It does **not** govern `frontend/src/lib/components/taxonomy/` — that directory is 3D scope and uses the canon vocabulary in `references/3d-visualization.md`.
+The 2D-UI Canon Terminology table below (`Use: contour/flash/tint/emission` / `Avoid: glow/radiance/bloom/halo`) governs **2D HTML/CSS code + user-facing copy + prose comments in the 2D workbench codebase** (`frontend/src/lib/components/{layout,editor,refinement,shared,landing,suites,probes}/`). It does **not** govern `frontend/src/lib/components/taxonomy/` — that directory is 3D scope and uses the canon vocabulary in `references/3d-visualization.md`.
 
 For detailed material recipes, lighting setups, post-processing decision trees, perf invariants, disposal contracts, and shader patterns, see [`references/3d-visualization.md`](references/3d-visualization.md).
 
@@ -372,7 +372,7 @@ Technical over emotional, precise over vague. Like a confident instrument panel.
 
 ### Canon Terminology
 
-**Scope:** 2D-UI code + user-facing copy + prose comments in `frontend/src/lib/components/{layout,editor,refinement,shared,landing}/`. The 3D Pattern Graph (`frontend/src/lib/components/taxonomy/`) uses a different canon — see [`references/3d-visualization.md`](references/3d-visualization.md) "Canon Vocabulary" — where `glow`, `halo`, `bloom`, `radiance` are CANONICAL feature names.
+**Scope:** 2D-UI code + user-facing copy + prose comments in `frontend/src/lib/components/{layout,editor,refinement,shared,landing,suites,probes}/`. The 3D Pattern Graph (`frontend/src/lib/components/taxonomy/`) uses a different canon — see [`references/3d-visualization.md`](references/3d-visualization.md) "Canon Vocabulary" — where `glow`, `halo`, `bloom`, `radiance` are CANONICAL feature names.
 
 | Use | Avoid |
 |-----|-------|
