@@ -231,9 +231,9 @@
     box-sizing: border-box;
   }
 
-  .probe-textarea:focus {
-    outline: none;
+  .probe-textarea:focus-visible {
     border-color: var(--color-neon-cyan);
+    /* Inherit canonical 1px cyan outline from global :focus-visible */
   }
 
   .probe-hint {
@@ -294,9 +294,9 @@
                 color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .probe-select:focus {
-    outline: none;
+  .probe-select:focus-visible {
     border-color: var(--color-neon-cyan);
+    /* Inherit canonical 1px cyan outline from global :focus-visible */
   }
 
   .probe-segments {
