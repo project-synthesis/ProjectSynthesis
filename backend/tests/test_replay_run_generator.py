@@ -54,14 +54,13 @@ Surface contract pinned by these tests (spec §5):
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -71,11 +70,10 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.models import Base, RunRow, ValidationSuite
+from app.models import Base, ValidationSuite
 from app.schemas.runs import RunRequest
 from app.services.batch_pipeline import PendingOptimization
 from app.services.generators.base import GeneratorResult, RunGenerator
-from app.services.run_orchestrator import RunOrchestrator
 
 # The not-yet-existing module — every import below raises
 # ``ModuleNotFoundError`` until Cycle 6 GREEN lands. Captured here at module top
@@ -83,6 +81,7 @@ from app.services.run_orchestrator import RunOrchestrator
 from app.services.generators.replay_run_generator import (  # noqa: F401 — Cycle 6 RED signal
     ReplayRunGenerator,
 )
+from app.services.run_orchestrator import RunOrchestrator
 
 pytestmark = pytest.mark.asyncio
 
@@ -756,8 +755,8 @@ async def test_replay_run_generator_uses_trace_id_not_id(
     # Defensive: the dict must NOT carry pending.id under the trace_id key
     # (the canonical bug mode this test exists to detect).
     assert row.get("trace_id") != "opt-id-1", (
-        f"prompt_results[0] leaked pending.id under trace_id key — "
-        f"violates §5 trace_id rationale"
+        "prompt_results[0] leaked pending.id under trace_id key — "
+        "violates §5 trace_id rationale"
     )
 
 
@@ -814,8 +813,8 @@ async def test_replay_run_generator_uses_overall_score_key(
     # exist standalone (so a GREEN-step bug writing both keys is caught
     # by the strict-key test rather than silently masking the contract).
     assert "overall" not in row, (
-        f"prompt_results[0] leaked the wrong 'overall' key — must be "
-        f"'overall_score' (compute_run_aggregate contract)"
+        "prompt_results[0] leaked the wrong 'overall' key — must be "
+        "'overall_score' (compute_run_aggregate contract)"
     )
 
 
