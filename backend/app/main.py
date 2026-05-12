@@ -1244,6 +1244,30 @@ async def lifespan(app: FastAPI):
         )
         app.state.run_orchestrator = None
 
+    # ------------------------------------------------------------------
+    # v0.4.22 T2 Cycle 9: ValidationSuiteService singleton.
+    #
+    # The service holds a 30s TTL cache + per-suite prior-state map for
+    # the regression-alarm path (spec §5 + §9). Sharing a single instance
+    # across requests preserves the cache contract Cycle 4 Test 26 pins —
+    # two consecutive ``GET /api/health`` calls within the TTL must run
+    # the alarm JOIN exactly once. Instantiating per-request would defeat
+    # the instance-scoped cache and re-issue the SQL on every health poll.
+    # ------------------------------------------------------------------
+    try:
+        from app.services.validation_suite_service import ValidationSuiteService
+
+        app.state.validation_suite_service = ValidationSuiteService()
+        app.state.lifespan_order.append("validation_suite_service_registered")
+        logger.info("ValidationSuiteService singleton registered")
+    except Exception as _vss_exc:
+        logger.error(
+            "Failed to register ValidationSuiteService: %s",
+            _vss_exc,
+            exc_info=True,
+        )
+        app.state.validation_suite_service = None
+
     # Initialize unified context enrichment service
     try:
         from app.services.context_enrichment import ContextEnrichmentService
