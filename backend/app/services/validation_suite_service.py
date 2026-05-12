@@ -33,6 +33,8 @@ from app import database as _database_mod
 from app.models import RunRow, ValidationSuite
 from app.schemas.runs import RunListResponse, RunSummary
 from app.schemas.validation_suite import (
+    RegressionAlarmBlock,
+    RegressionAlarmEntry,
     ValidationSuiteListItem,
     ValidationSuiteListResponse,
     ValidationSuiteOut,
@@ -63,6 +65,14 @@ _BASELINE_SCORES_KEYS: tuple[str, ...] = (
     "per_prompt",
     "task_type_distribution",
 )
+
+
+# Regression-alarm TTL cache window in seconds — matches the
+# ``taxonomy/sub_domain_readiness.py`` 30s cadence pattern (see
+# ``_CACHE_TTL_SECONDS`` there). Two consecutive
+# ``compute_regression_alarm()`` calls inside this window short-circuit on
+# the cached :class:`RegressionAlarmBlock` and emit ZERO transition events.
+_ALARM_CACHE_TTL_SECONDS: float = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -365,12 +375,52 @@ def _emit_suite_create_trace(snapshot: SuiteSnapshotInputs, duration_ms: int) ->
 
 
 class ValidationSuiteService:
-    """Stateless service for ValidationSuite create / retire / get / list.
+    """Service for ValidationSuite create / retire / get / list / regression-alarm.
 
     Per Foundation P4 contract: NEVER holds a DB session across an LLM call
     or a WriteQueue.submit. Reads happen in short ``async with
     async_session_factory()`` blocks; writes route through ``write_queue``.
+
+    Create / retire / get / list / list_replays are stateless on the service
+    instance — they pass through to the DB on every call. The regression-
+    alarm path keeps two pieces of in-memory state on the instance, both
+    initialized empty in :meth:`__init__`:
+
+    * ``_alarm_cache`` — 30s TTL cache holding the last computed
+      :class:`RegressionAlarmBlock`. Test-seam :meth:`_invalidate_alarm_cache`
+      drops it so the next call re-queries.
+    * ``_prior_alarm_states`` — per-suite state map driving the
+      ``regression_alarm_transition`` event. Values are
+      ``'none' | 'nominal' | 'firing'`` per spec §9. Resets on process
+      restart (acceptable for status-display observability).
+
+    Two service instances NEVER share cached state. Each
+    ``ValidationSuiteService()`` constructor invocation starts with both
+    pieces of state empty — pinned by spec §9 + Cycle 4 Test 26 cache-seam
+    contract.
     """
+
+    def __init__(self) -> None:
+        # 30s TTL cache for the regression-alarm block. ``None`` means "no
+        # cached value yet — next call MUST query the DB". When populated,
+        # the tuple is ``(monotonic_stored_at, cached_block)``.
+        self._alarm_cache: tuple[float, RegressionAlarmBlock] | None = None
+        # Per-suite alarm-state map driving spec §9
+        # ``regression_alarm_transition`` event firing. Suites not present
+        # in the map default to ``'none'`` on next lookup.
+        self._prior_alarm_states: dict[str, str] = {}
+
+    def _invalidate_alarm_cache(self) -> None:
+        """Test-seam: drop the 30s TTL cache.
+
+        Pinned by Cycle 4 Tests 26 + 27 — the next
+        :meth:`compute_regression_alarm` invocation MUST re-query the
+        DB after this is called, regardless of how recently the previous
+        call ran. Production code paths do not call this; only tests
+        advancing through state transitions without sleeping past the TTL
+        rely on the seam.
+        """
+        self._alarm_cache = None
 
     async def create_from_run(
         self,
@@ -803,6 +853,255 @@ class ValidationSuiteService:
             has_more=has_more,
             next_offset=next_offset,
         )
+
+    async def compute_regression_alarm(
+        self,
+        *,
+        db: AsyncSession | None = None,  # noqa: ARG002 — signature parity per spec §5
+    ) -> RegressionAlarmBlock:
+        """Run the regression-alarm query + transition events for all active suites.
+
+        Spec §5 alarm body + spec §9 ``regression_alarm_transition`` event.
+
+        Behaviour
+        ---------
+        1. **30s TTL cache check** (instance-scoped). When the previous
+           successful result is younger than :data:`_ALARM_CACHE_TTL_SECONDS`,
+           the cached :class:`RegressionAlarmBlock` is returned immediately —
+           NO DB query, NO transition events. Cycle 4 Test 26 pins this.
+        2. **Cache miss path** — opens a short read session via
+           ``async_session_factory`` (Foundation P4 contract), executes the
+           canonical alarm JOIN (``validation_suite`` × MAX(started_at)
+           ``run_row(mode='replay_run', status='completed')`` per suite),
+           applies the Python-side filter ``|delta| > tolerance_abs``, and
+           builds the :class:`RegressionAlarmBlock` response.
+        3. **State-transition events** fire AFTER the SQL runs, ONLY for
+           suites whose current state (``'firing'``/``'nominal'``) differs
+           from ``self._prior_alarm_states.get(suite_id, 'none')`` per spec
+           §9. Steady-state (no transition) calls emit ZERO events. Suites
+           without any completed replays are NOT recorded in the prior-
+           state map — they default to ``'none'`` on the next lookup.
+        4. **Cache write** — the freshly-built block is cached together
+           with ``time.monotonic()`` so subsequent calls within the TTL
+           window short-circuit at step 1.
+
+        Parameters
+        ----------
+        db : AsyncSession | None
+            Signature-only — the service always opens its own short read
+            session via ``async_session_factory`` (Foundation P4 contract).
+            Reserved for future test-injection patterns.
+
+        Returns
+        -------
+        RegressionAlarmBlock
+            Canonical alarm payload — ``suites_total`` counts ACTIVE
+            (``retired_at IS NULL``) suites, ``suites_in_alarm`` counts
+            firing entries in ``latest_alarms``. Empty ``latest_alarms``
+            with non-zero ``suites_total`` is the steady-nominal state.
+        """
+        # ============ STEP 1: TTL cache check ============
+        # Instance-scoped so two service instances never share state. The
+        # cache tuple stores ``time.monotonic()`` so wall-clock jumps don't
+        # invalidate live cache entries.
+        now = time.monotonic()
+        if (
+            self._alarm_cache is not None
+            and (now - self._alarm_cache[0]) < _ALARM_CACHE_TTL_SECONDS
+        ):
+            return self._alarm_cache[1]
+
+        # ============ STEP 2: read session — alarm SQL + counts ============
+        # Short session per Foundation P4 contract. Two queries fire here:
+        # the active-suites count (drives ``suites_total``) and the alarm
+        # JOIN itself (drives ``latest_alarms`` + ``suites_in_alarm``).
+        # The JOIN's rendered SQL contains BOTH ``validation_suite`` and
+        # ``run_row`` literal table names — used by Cycle 4 Test 26 to
+        # detect a true cache miss vs cache hit (cache hits do not open
+        # this session at all and never render the JOIN).
+        session_ctx = _database_mod.async_session_factory()
+        read_db = await session_ctx.__aenter__()
+        try:
+            # ---- 2a: suites_total — active (non-retired) suite count ----
+            suites_total_q = select(func.count()).select_from(
+                ValidationSuite.__table__,
+            ).where(ValidationSuite.retired_at.is_(None))
+            suites_total = int(
+                (await read_db.execute(suites_total_q)).scalar_one(),
+            )
+
+            # ---- 2b: alarm JOIN — latest completed replay per active suite ----
+            # Correlated MAX subquery yields one row per (suite_id) with the
+            # newest replay_run started_at. JOIN to ValidationSuite filters
+            # retired suites and pulls the columns the alarm response needs.
+            # Joining run_row a SECOND time on (suite_id, max_started) hydrates
+            # the replay's id + aggregate. Equivalent to the spec §5 canonical
+            # SQL; SQLAlchemy ORM emits a single statement whose rendered
+            # string contains both ``validation_suite`` AND ``run_row``.
+            latest_replay_subq = (
+                select(
+                    RunRow.suite_id.label("suite_id"),
+                    func.max(RunRow.started_at).label("max_started"),
+                )
+                .where(RunRow.mode == "replay_run")
+                .where(RunRow.status == "completed")
+                .where(RunRow.suite_id.is_not(None))
+                .group_by(RunRow.suite_id)
+                .subquery("latest_replay")
+            )
+            alarm_q = (
+                select(
+                    ValidationSuite.id.label("suite_id"),
+                    ValidationSuite.label.label("label"),
+                    ValidationSuite.tolerance_abs.label("tolerance_abs"),
+                    ValidationSuite.baseline_scores.label("baseline_scores"),
+                    RunRow.id.label("replay_id"),
+                    RunRow.aggregate.label("replay_aggregate"),
+                    RunRow.started_at.label("replay_started_at"),
+                )
+                .select_from(ValidationSuite)
+                .join(
+                    latest_replay_subq,
+                    latest_replay_subq.c.suite_id == ValidationSuite.id,
+                )
+                .join(
+                    RunRow,
+                    (RunRow.suite_id == ValidationSuite.id)
+                    & (RunRow.started_at == latest_replay_subq.c.max_started)
+                    & (RunRow.mode == "replay_run")
+                    & (RunRow.status == "completed"),
+                )
+                .where(ValidationSuite.retired_at.is_(None))
+            )
+            alarm_rows = (await read_db.execute(alarm_q)).all()
+        finally:
+            await session_ctx.__aexit__(None, None, None)
+
+        # ============ STEP 3: Python filter + entry build + state map ============
+        # Per spec §5: an alarm fires when
+        #   ``|replay_mean - baseline_mean| > tolerance_abs``.
+        # The test fixture cases also pin the half-open band at the boundary
+        # (a delta exactly equal to tolerance does NOT fire — test 25 sets
+        # delta=-0.35 against tolerance=0.5 and expects nominal). We compute
+        # the signed delta first so :class:`RegressionAlarmEntry.delta_abs`
+        # carries the sign (negative = regression, positive = improvement)
+        # per spec §4 line 446. Naming follows spec §4 — ``delta_abs`` is the
+        # absolute DELTA value, NOT ``abs(delta)``.
+        latest_alarms: list[RegressionAlarmEntry] = []
+        new_states: dict[str, str] = {}
+        for row in alarm_rows:
+            suite_id = row.suite_id
+            baseline_scores = row.baseline_scores or {}
+            baseline_mean = float(baseline_scores.get("mean_overall") or 0.0)
+            replay_aggregate = row.replay_aggregate or {}
+            latest_mean = float(replay_aggregate.get("mean_overall") or 0.0)
+            delta = latest_mean - baseline_mean
+            tolerance_abs = float(row.tolerance_abs)
+
+            is_firing = abs(delta) > tolerance_abs
+            new_states[suite_id] = "firing" if is_firing else "nominal"
+
+            if is_firing:
+                # SQLite stores DateTime as ISO strings — the round-trip
+                # drops ``tzinfo``. Reattach UTC here so the alarm entry's
+                # ``latest_replay_at`` round-trips byte-equal to the
+                # source RunRow's ``started_at``. Matches the pattern in
+                # ``app/services/gc.py:381`` + ``taxonomy/snapshot.py:206``.
+                replay_started_at = row.replay_started_at
+                if replay_started_at is not None and replay_started_at.tzinfo is None:
+                    replay_started_at = replay_started_at.replace(tzinfo=UTC)
+                latest_alarms.append(
+                    RegressionAlarmEntry(
+                        suite_id=suite_id,
+                        label=row.label,
+                        baseline_mean=baseline_mean,
+                        latest_mean=latest_mean,
+                        delta_abs=delta,
+                        tolerance_abs=tolerance_abs,
+                        latest_replay_id=row.replay_id,
+                        latest_replay_at=replay_started_at,
+                    ),
+                )
+
+        block = RegressionAlarmBlock(
+            suites_total=suites_total,
+            suites_in_alarm=len(latest_alarms),
+            latest_alarms=latest_alarms,
+        )
+
+        # ============ STEP 4: state-transition events (spec §9) ============
+        # Compare each suite's NEW state against the prior-state map. Emit
+        # ``regression_alarm_transition`` ONLY when the state actually
+        # changed (spec §9 line 1341: "only when ≥1 suite's alarm state
+        # transitioned"). Build a per-entry index of the firing rows so we
+        # can populate the event payload's ``baseline_mean`` / ``latest_mean``
+        # / ``delta_abs`` fields directly (spec §9 payload columns).
+        firing_index: dict[str, RegressionAlarmEntry] = {
+            entry.suite_id: entry for entry in latest_alarms
+        }
+        for suite_id, new_state in new_states.items():
+            prior_state = self._prior_alarm_states.get(suite_id, "none")
+            if new_state == prior_state:
+                continue
+
+            # Resolve mean / delta columns for the event payload. Firing
+            # entries carry the full row; nominal suites are not in
+            # ``firing_index`` so we look up the original alarm row for
+            # the baseline + latest columns.
+            entry = firing_index.get(suite_id)
+            if entry is not None:
+                payload_baseline = entry.baseline_mean
+                payload_latest = entry.latest_mean
+                payload_delta = entry.delta_abs
+                payload_label = entry.label
+            else:
+                # Suite is nominal — pull payload columns from the alarm
+                # row's source data.
+                source_row = next(
+                    (r for r in alarm_rows if r.suite_id == suite_id),
+                    None,
+                )
+                if source_row is None:
+                    # Defensive — should not happen because new_states is
+                    # populated from alarm_rows. Skip silently rather than
+                    # crash on a malformed transition.
+                    continue
+                baseline_scores = source_row.baseline_scores or {}
+                replay_aggregate = source_row.replay_aggregate or {}
+                payload_baseline = float(
+                    baseline_scores.get("mean_overall") or 0.0,
+                )
+                payload_latest = float(
+                    replay_aggregate.get("mean_overall") or 0.0,
+                )
+                payload_delta = payload_latest - payload_baseline
+                payload_label = source_row.label
+
+            event_bus.publish(
+                "regression_alarm_transition",
+                {
+                    "suite_id": suite_id,
+                    "label": payload_label,
+                    "previous_state": prior_state,
+                    "new_state": new_state,
+                    "baseline_mean": payload_baseline,
+                    "latest_mean": payload_latest,
+                    "delta_abs": payload_delta,
+                },
+            )
+
+        # Replace the prior-state map with the freshly computed set.
+        # Suites that no longer have a completed replay (e.g., retired
+        # between calls, or all replays deleted) drop out — their next
+        # firing will see ``prior_state == 'none'`` and emit the canonical
+        # ``none → firing`` / ``none → nominal`` transition.
+        self._prior_alarm_states = new_states
+
+        # ============ STEP 5: write the TTL cache + return ============
+        # Cache stored AFTER successful build + event emission so partial
+        # failures (DB error, event-bus error) do not poison the cache.
+        self._alarm_cache = (now, block)
+        return block
 
 
 def _suite_list_item_from_orm(row: ValidationSuite) -> ValidationSuiteListItem:
