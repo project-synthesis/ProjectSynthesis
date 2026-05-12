@@ -19,6 +19,7 @@
    */
   import type { RunListResponse, RunSummary } from '$lib/api/runs';
   import type { ValidationSuiteOut } from '$lib/api/suites';
+  import { formatSignedDelta } from '$lib/utils/formatting';
 
   /** Minimal shape of a completed replay run carrying per-prompt results.
    *  Pulled out of a `RunRow` row's `aggregate.prompt_results` payload. */
@@ -49,14 +50,6 @@
     } catch {
       return ts;
     }
-  }
-
-  function formatDelta(d: number | null): string {
-    if (d == null) return '—';
-    const abs = Math.abs(d).toFixed(2);
-    if (d > 0.005) return `+${abs}`;
-    if (d < -0.005) return `−${abs}`;
-    return '0.00';
   }
 
   // Pair baseline + latest per-prompt scores. Index-aligned join — both
@@ -137,7 +130,7 @@
         <span role="cell" class="col-idx">{row.idx}</span>
         <span role="cell" class="col-baseline">{row.baseline.toFixed(1)}</span>
         <span role="cell" class="col-latest">{row.latest != null ? row.latest.toFixed(1) : '—'}</span>
-        <span role="cell" class="col-delta">{formatDelta(row.delta)}</span>
+        <span role="cell" class="col-delta">{formatSignedDelta(row.delta)}</span>
       </div>
     {/each}
   </div>

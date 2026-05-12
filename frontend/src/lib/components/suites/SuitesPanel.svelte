@@ -65,25 +65,25 @@
 </script>
 
 {#if active}
-  <section
-    class="suites-panel"
+  <div
+    class="panel"
     data-test="suites-panel"
     aria-label="Suites"
   >
     <header class="panel-header">
       <span class="section-heading">Suites</span>
       {#if suitesStore.suites.length > 0}
-        <span class="panel-count">{suitesStore.suites.length}</span>
+        <span class="panel-count font-mono">{suitesStore.suites.length}</span>
       {/if}
     </header>
 
     <div class="panel-body">
       {#if !loaded || suitesStore.loading}
-        <p class="panel-note">Loading…</p>
+        <p class="empty-note">Loading…</p>
       {:else if suitesStore.error}
-        <p class="panel-error">{suitesStore.error}</p>
+        <p class="empty-note panel-error">{suitesStore.error}</p>
       {:else if suitesStore.suites.length === 0}
-        <p class="panel-empty">No suites. Save a probe to create one.</p>
+        <p class="empty-note">No suites. Save a probe to create one.</p>
       {:else}
         <div class="suite-list" role="list">
           {#each suitesStore.suites as suite (suite.id)}
@@ -108,63 +108,42 @@
         </div>
       {/if}
     </div>
-  </section>
+  </div>
 {/if}
 
 <style>
-  .suites-panel {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    height: 100%;
-    overflow: hidden;
-  }
-
-  .panel-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 20px;
-    padding: 0 8px;
-    flex-shrink: 0;
-    background: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border-subtle);
-  }
-
-  .section-heading {
-    font-family: var(--font-mono);
-    font-size: 8px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--color-text-dim);
-  }
+  /* `.panel` + `.panel-header` + `.section-heading` are intentionally
+     inherited from `app.css` — the canonical IDE-density chrome must
+     visually unify across StrategiesPanel/HistoryPanel/GitHubPanel/
+     SettingsPanel and this surface. The block below ONLY pins the
+     overrides specific to the suites surface (count badge typography,
+     body padding density, detail-wrapper rule). No local `.suites-panel`
+     rule — the canon `.panel` shape suffices. */
 
   .panel-count {
-    font-family: var(--font-mono);
-    font-size: 9px;
+    /* Canonical IDE count chip — mono numerics matching the
+       SeedModal "Recent runs" chip + StatusBar metric pattern. */
+    font-size: 10px;
     color: var(--color-text-dim);
+    margin-left: auto;
   }
 
   .panel-body {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
+    /* Spec § 6 line 1107: `SuitesPanel container | p-1.5 | space-y-1.5`.
+       6px horizontal padding + 6px gap between body sections. Vertical
+       padding inherits from the canonical `.panel-body` rule in app.css
+       (`padding: 6px 0`) so the bottom of the list isn't flush with the
+       panel edge when SuiteDetailView is hidden. */
+    padding: 6px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-  }
-
-  .panel-note,
-  .panel-error,
-  .panel-empty {
-    padding: 8px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--color-text-dim);
+    gap: 6px;
   }
 
   .panel-error {
+    /* `.empty-note` chromatic baseline is `text-dim`; firing-state errors
+       inherit the same row layout but paint with neon-red so failed loads
+       surface visually. */
     color: var(--color-neon-red, #ff3366);
   }
 
@@ -176,5 +155,6 @@
 
   .detail-wrapper {
     border-top: 1px solid var(--color-border-subtle);
+    padding-top: 6px;
   }
 </style>
