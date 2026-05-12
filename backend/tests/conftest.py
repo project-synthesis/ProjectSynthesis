@@ -173,10 +173,24 @@ async def app_client(mock_provider, db_session, tmp_path):
     # ``app.database.async_session_factory()`` (e.g. ``ValidationSuiteService``
     # per the Foundation P4 detached-ORM-safe contract) need a context that
     # yields ``db_session`` so router-level tests see the seeded test data.
-    # The override is restored after the fixture yields. Mirrors the inline
-    # monkey-patch pattern used by ``tests/test_routers_suites.py``'s
-    # ``_seed_suite_via_service`` helper (and ``test_validation_suite_service.py``)
-    # so the canonical session-injection seam is uniform across the test surface.
+    #
+    # Rationale for placing the patch on the fixture rather than inline in
+    # ``test_routers_suites.py``: ``app_client`` is the canonical test-time
+    # ASGI seam (everything that touches the FastAPI app goes through it).
+    # Any router that delegates to a service which in turn opens short read
+    # sessions via ``async_session_factory()`` — and that's the entire
+    # Foundation P4 contract — needs identical wiring. Lifting the patch
+    # here means a router test file never has to re-derive the seam; future
+    # router tests get it for free. The pattern mirrors the inline
+    # monkey-patch used by ``tests/test_routers_suites.py``'s
+    # ``_seed_suite_via_service`` helper (and the canonical inline form in
+    # ``tests/test_validation_suite_service.py``); both retain their inline
+    # patches because they predate this fixture-level lift and the helper-
+    # local scope is narrow enough not to need the fixture wiring.
+    #
+    # The prior factory is snapshotted and restored on teardown so non-
+    # ``app_client`` tests (and any unrelated test ordering) cannot see a
+    # patched factory across fixture boundaries.
     import app.database as _database_mod
 
     class _DbSessionContext:

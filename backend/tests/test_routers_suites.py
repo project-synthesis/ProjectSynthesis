@@ -135,13 +135,28 @@ def _prompt_results(n: int = 3) -> list[dict]:
     ]
 
 
+# Sentinel for "caller did not supply an aggregate override". The helper must
+# distinguish three intents on the ``aggregate`` kwarg:
+#
+#   (1) caller omits the kwarg entirely → seed with ``_canonical_aggregate()``
+#       (the happy-path shape used by 13 of 15 tests).
+#   (2) caller explicitly passes ``aggregate=None`` → seed with NULL in the
+#       column so the ``run_missing_aggregate`` precondition branch trips
+#       (Test 5 ``missing_aggregate`` parametrize id).
+#   (3) caller passes a dict → use it verbatim.
+#
+# A plain ``aggregate: dict | None = None`` default coalesces (1) and (2)
+# together, making (2) unreachable. The sentinel separates them.
+_UNSET: Any = object()
+
+
 async def _seed_completed_probe_run(
     db: AsyncSession,
     *,
     run_id: str | None = None,
     mode: str = "topic_probe",
     status: str = "completed",
-    aggregate: dict | None = None,
+    aggregate: Any = _UNSET,
 ) -> str:
     """Insert a ``RunRow`` and return its id.
 
@@ -149,9 +164,16 @@ async def _seed_completed_probe_run(
     happy-path shape that ``ValidationSuiteService.create_from_run`` accepts
     without raising. Callers override ``mode`` / ``status`` / ``aggregate``
     to exercise the various 4xx/409 branches.
+
+    ``aggregate`` semantics:
+      * omitted (``_UNSET``) → ``_canonical_aggregate()`` (happy path).
+      * explicit ``None`` → NULL column value (exercises
+        ``run_missing_aggregate`` 409 path).
+      * dict → used verbatim.
     """
     pid = run_id or uuid.uuid4().hex
     now = datetime.now(UTC).replace(tzinfo=None)
+    resolved_aggregate = _canonical_aggregate() if aggregate is _UNSET else aggregate
     row = RunRow(
         id=pid,
         mode=mode,
@@ -160,7 +182,7 @@ async def _seed_completed_probe_run(
         completed_at=now if status != "running" else None,
         prompts_generated=3,
         prompt_results=_prompt_results(3),
-        aggregate=aggregate if aggregate is not None else _canonical_aggregate(),
+        aggregate=resolved_aggregate,
         repo_full_name="acme/widget",
     )
     db.add(row)
