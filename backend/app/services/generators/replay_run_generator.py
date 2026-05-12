@@ -157,8 +157,9 @@ class ReplayRunGenerator:
               correspondence with the snapshot (spec §3 invariant 2).
             * ``aggregate`` — canonical 8-key block from
               :func:`compute_run_aggregate` augmented with the additive
-              ``replay_suite_id`` / ``replay_n_completed`` /
-              ``replay_n_failed`` / ``replay_repo_drift`` keys.
+              ``replay_warnings`` / ``replay_suite_id`` /
+              ``replay_n_completed`` / ``replay_n_failed`` keys
+              (spec §2 line 70 + §5 lines 813-816).
             * ``taxonomy_delta`` — empty dict (replay produces no new
               taxonomy state per spec §5; the canonical pipeline already
               owns clustering).
@@ -188,12 +189,22 @@ class ReplayRunGenerator:
         repo_full_name = payload.get("repo_full_name")
         project_id = payload.get("project_id")
 
-        # ---- Step 1+2: short read session — load snapshot, then EXIT ----
+        # ---- Step 1+2: short read session — load snapshot + historical_stats,
+        # then EXIT.
+        #
         # Foundation P4 contract: the session MUST close before the
         # per-prompt loop iterates so detached-ORM lazy-loads can't fire
         # across LLM work. The snapshot is a frozen JSON payload so post-
         # session reads (``prompts_snapshot`` / ``baseline_scores``) hit
         # plain dicts; no ORM lazy attributes get re-touched.
+        #
+        # ``historical_stats`` is pre-fetched ONCE here and threaded to every
+        # ``run_single_prompt`` call below — mirrors the canonical
+        # ``batch_orchestrator.run_batch:113-126`` pattern that avoids the
+        # N+1 ``get_score_distribution`` query per prompt. Replay's worst-
+        # case workload is a 25-prompt suite; without this prefetch the
+        # batch issues 25 redundant aggregate queries against the same
+        # read engine and serializes them through the read pool.
         session_ctx = self._session_factory()
         read_db = await session_ctx.__aenter__()
         try:
@@ -215,6 +226,36 @@ class ReplayRunGenerator:
             prompts_snapshot: list[dict[str, Any]] = list(
                 suite.prompts_snapshot or [],
             )
+            # Position-correspondence per-prompt baseline lookup — spec §5
+            # lines 749-781. ``baseline_scores.per_prompt[i]["overall"]`` is
+            # paired with ``prompts_snapshot[i]`` by index; we snapshot the
+            # list so post-session code accesses plain dicts.
+            baseline_scores_dict: dict[str, Any] = dict(
+                suite.baseline_scores or {},
+            )
+            per_prompt_baselines: list[dict[str, Any]] = list(
+                baseline_scores_dict.get("per_prompt") or [],
+            )
+
+            # Pre-fetch historical_stats once — mirrors
+            # ``batch_orchestrator.run_batch:117-126``. Defensive try/except
+            # because the same canonical caller treats this as best-effort
+            # (a failure here just falls back to per-prompt fetch downstream;
+            # no replay should fail because the score-distribution table
+            # couldn't be aggregated).
+            historical_stats = None
+            try:
+                from app.services.optimization_service import OptimizationService
+                svc = OptimizationService(read_db)
+                historical_stats = await svc.get_score_distribution(
+                    exclude_scoring_modes=["heuristic"],
+                )
+            except Exception as _hs_exc:
+                logger.debug(
+                    "replay_run %s: historical_stats prefetch failed (%s) — "
+                    "per-prompt fetch will fall back",
+                    payload.get("suite_id"), _hs_exc,
+                )
         finally:
             await session_ctx.__aexit__(None, None, None)
 
@@ -229,12 +270,14 @@ class ReplayRunGenerator:
         # suites created before ``repo_full_name`` was persisted carry
         # ``None``, and operators replaying without a current repo
         # pinned should not see a spurious warning.
+        warnings: list[str] = []
         repo_drift = bool(
             suite_repo_full_name
             and repo_full_name
             and suite_repo_full_name != repo_full_name
         )
         if repo_drift:
+            warnings.append("repo_drift")
             event_bus.publish("probe_warning", {
                 "run_id": run_id,
                 "code": "repo_drift",
@@ -283,6 +326,19 @@ class ReplayRunGenerator:
         prompt_results: list[dict[str, Any]] = []
         for idx, prompt_row in enumerate(prompts_snapshot):
             raw_prompt = str(prompt_row.get("raw_prompt", ""))
+            # Position-correspondence baseline lookup (spec §3 invariant 2
+            # + §5 lines 749-751): ``baseline_scores.per_prompt[idx]`` is
+            # paired with ``prompts_snapshot[idx]``. Missing entries fall
+            # back to ``None`` so the ``delta`` computation degrades to
+            # ``None`` rather than crashing on legacy or partial baselines.
+            baseline_overall: float | None = None
+            if idx < len(per_prompt_baselines):
+                _bo_raw = per_prompt_baselines[idx].get("overall")
+                if _bo_raw is not None:
+                    try:
+                        baseline_overall = float(_bo_raw)
+                    except (TypeError, ValueError):
+                        baseline_overall = None
             try:
                 pending = await batch_mod.run_single_prompt(
                     raw_prompt,
@@ -298,10 +354,15 @@ class ReplayRunGenerator:
                     domain_resolver=self._domain_resolver,
                     tier="internal",
                     context_service=self._context_service,
+                    historical_stats=historical_stats,
                     project_id=project_id,
                 )
                 result_row = _project_pending_to_result(
-                    idx=idx, raw_prompt=raw_prompt, pending=pending,
+                    idx=idx,
+                    raw_prompt=raw_prompt,
+                    pending=pending,
+                    baseline_overall=baseline_overall,
+                    intent_label_fallback=prompt_row.get("intent_label"),
                 )
             except Exception as exc:  # noqa: BLE001 - deliberately broad; see below
                 # Sibling-isolation: one prompt's failure does NOT abort
@@ -323,9 +384,12 @@ class ReplayRunGenerator:
                     "raw_prompt": raw_prompt[:1000],
                     "trace_id": None,
                     "overall_score": None,
+                    "dimensions": None,
                     "task_type": None,
-                    "intent_label": None,
+                    "intent_label": prompt_row.get("intent_label"),
                     "divergence_flags": None,
+                    "baseline_overall": baseline_overall,
+                    "delta": None,
                     "status": "failed",
                     "error": str(exc)[:500],
                 }
@@ -334,15 +398,24 @@ class ReplayRunGenerator:
             # Reuse the existing ``probe_prompt_completed`` event so SSE
             # subscribers (HistoryPanel, SuiteDetailView, RunDetailView)
             # don't need a new event type — the run_id correlates the row
-            # back to the replay invocation.
+            # back to the replay invocation. Spec §5 lines 783-787 emit
+            # ``{run_id, idx, total, overall_score, delta}``; topic-probe
+            # ships ``{run_id, probe_id, current, total, optimization_id,
+            # intent_label, overall_score, status}``. We emit the UNION
+            # so existing topic-probe consumers (frontend HistoryPanel
+            # which keys off ``current``/``total``/``optimization_id``)
+            # stay compatible AND the spec's additive ``idx`` + ``delta``
+            # land for the SuiteDetailView regression-diff renderer.
             event_bus.publish("probe_prompt_completed", {
                 "run_id": run_id,
                 "probe_id": run_id,
+                "idx": idx,
                 "current": idx + 1,
                 "total": len(prompts_snapshot),
                 "optimization_id": "",  # replay does not persist
                 "intent_label": result_row.get("intent_label"),
                 "overall_score": result_row.get("overall_score"),
+                "delta": result_row.get("delta"),
                 "status": result_row.get("status"),
             })
 
@@ -351,13 +424,22 @@ class ReplayRunGenerator:
         # Replay-side metadata (additive — not in the canonical 8-key
         # block so seed/topic_probe consumers are unaffected). Useful for
         # the SuiteDetailView baseline diff which is keyed off suite_id.
+        #
+        # Spec §2 line 70 + §4 line 348 + §5 lines 813-816: the canonical
+        # additive keys are ``replay_warnings`` (list[str]), ``replay_suite_id``
+        # (str), ``replay_n_completed`` (int), ``replay_n_failed`` (int).
+        # ``replay_warnings`` is what the Cycle 12 SuiteDetailView /
+        # RegressionBadge polls out of ``RunRow.aggregate`` to surface the
+        # ``suite_repo_drift`` informational marker — its shape matters and
+        # downstream readers expect a list (so multiple warning codes can
+        # accumulate as future warning types land, e.g., ``baseline_stale``).
         completed_count = aggregate.get("completed_count", 0)
         failed_count = aggregate.get("failed_count", 0)
         aggregate.update({
+            "replay_warnings": warnings,
             "replay_suite_id": suite_id,
             "replay_n_completed": completed_count,
             "replay_n_failed": failed_count,
-            "replay_repo_drift": repo_drift,
         })
 
         # ---- Step 5: JSONL trace (spec §9 trace tagging) ----
@@ -402,11 +484,16 @@ class ReplayRunGenerator:
 
 
 def _project_pending_to_result(
-    *, idx: int, raw_prompt: str, pending: Any,
+    *,
+    idx: int,
+    raw_prompt: str,
+    pending: Any,
+    baseline_overall: float | None,
+    intent_label_fallback: str | None = None,
 ) -> dict[str, Any]:
     """Project a :class:`PendingOptimization` into the per-prompt dict shape.
 
-    Canonical contract per spec §5 + test contracts at
+    Canonical contract per spec §5 lines 752-781 + test contracts at
     ``tests/test_replay_run_generator.py``:
 
     * ``raw_prompt_idx`` = loop index (position correspondence).
@@ -414,17 +501,64 @@ def _project_pending_to_result(
       does not bulk_persist so ``pending.id`` would be an orphan uuid).
     * ``overall_score`` (NOT ``"overall"`` and NOT ``"score"``) is the
       canonical input contract of :func:`compute_run_aggregate`.
+    * ``dimensions`` = 5-dimension dict (clarity / specificity / structure /
+      faithfulness / conciseness) projected from
+      ``pending.score_*`` fields — spec §5 lines 770-776 enumerates each.
+      Without this projection the SuiteDetailView per-prompt regression
+      table renders five empty cells (A1 violation — silent field drop).
+    * ``baseline_overall`` = ``suite.baseline_scores.per_prompt[idx].overall``
+      pulled from the frozen snapshot. Position-correspondence per spec §3
+      invariant 2 + §5 line 749.
+    * ``delta`` = ``overall_score - baseline_overall`` when both are present;
+      ``None`` when either side is missing (replay can run against a partial
+      legacy baseline). Drives the Cycle 7 regression-alarm WARN/ALERT
+      transition and the Cycle 12 RegressionBadge color encoding — the
+      sign of delta is the regression-direction signal.
     * Status mirrors ``pending.status`` so the aggregate's
       completed/failed counts honour rate-limit fallback rows.
+
+    Parameters
+    ----------
+    intent_label_fallback : str | None
+        ``prompts_snapshot[idx]["intent_label"]`` from the frozen suite.
+        Used when ``pending.intent_label`` is ``None`` so the per-prompt
+        row still carries the saved label — replay should never silently
+        lose the intent metadata that the suite snapshot pinned at
+        save-as-suite time.
     """
+    overall_raw = getattr(pending, "overall_score", None)
+    overall_score: float | None = None
+    if overall_raw is not None:
+        try:
+            overall_score = float(overall_raw)
+        except (TypeError, ValueError):
+            overall_score = None
+
+    delta: float | None = None
+    if overall_score is not None and baseline_overall is not None:
+        delta = overall_score - baseline_overall
+
+    dimensions: dict[str, float | None] = {
+        "clarity": getattr(pending, "score_clarity", None),
+        "specificity": getattr(pending, "score_specificity", None),
+        "structure": getattr(pending, "score_structure", None),
+        "faithfulness": getattr(pending, "score_faithfulness", None),
+        "conciseness": getattr(pending, "score_conciseness", None),
+    }
+
     return {
         "raw_prompt_idx": idx,
         "raw_prompt": raw_prompt[:1000],
         "trace_id": getattr(pending, "trace_id", None),
-        "overall_score": getattr(pending, "overall_score", None),
+        "overall_score": overall_score,
+        "dimensions": dimensions,
         "task_type": getattr(pending, "task_type", None),
-        "intent_label": getattr(pending, "intent_label", None),
+        "intent_label": (
+            getattr(pending, "intent_label", None) or intent_label_fallback
+        ),
         "divergence_flags": getattr(pending, "heuristic_flags", None),
+        "baseline_overall": baseline_overall,
+        "delta": delta,
         "status": getattr(pending, "status", "completed"),
         "error": getattr(pending, "error", None),
     }
