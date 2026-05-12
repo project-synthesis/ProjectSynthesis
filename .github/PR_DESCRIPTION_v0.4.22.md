@@ -32,7 +32,15 @@ Ships save-as-suite + replay + regression alarm + 202+polling + topic-only mode 
 
 ## Soak gate
 
-This PR is gated on the 7-day post-v0.4.21 soak window closing at **≥2026-05-18** before merge + release. The audit-hook WARN→RAISE flip (Cycle 15) requires production soak confirmation that all P4 long-handler restructures route writes through `WriteQueue.submit()` cleanly.
+This PR is gated on the 7-day post-v0.4.21 soak window closing at **≥2026-05-18** before merge + release — see **[SG-2026-05-11 in `docs/SOAK_GATES.md`](docs/SOAK_GATES.md#sg-2026-05-11--audit-hook-warnrise-flip)** for the actionable tracker (daily check-in log, decision matrix, kill-switch, escalation path). The audit-hook WARN→RAISE flip (Cycle 15) requires production soak confirmation that all P4 long-handler restructures route writes through `WriteQueue.submit()` cleanly.
+
+**Pre-merge checklist** (release operator fills before rebase-merge):
+
+- [ ] SG-2026-05-11 status: 🟢 PASSED (see `docs/SOAK_GATES.md` daily check-in table)
+- [ ] Cumulative `audit_drift|read-engine audit:` WARN count over 7 days: 0 (or all explained sources only)
+- [ ] `./init.sh restart` produces clean post-restart log
+- [ ] `docs/SOAK_GATES.md` daily check-in rows filled through gate-close date
+- [ ] Kill-switch documented + verified: `WRITE_QUEUE_AUDIT_HOOK_RAISE=false` env var path
 
 ## References
 
