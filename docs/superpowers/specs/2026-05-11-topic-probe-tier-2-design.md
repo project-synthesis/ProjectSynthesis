@@ -1414,7 +1414,7 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 | 15 | Audit-hook RAISE flip + new regression test + extended integration test | 3 | A2 (no behavioral logic change — only the default in `app/config.py` flips `False → True`) | **All O1-O8** — the extended integration test `test_audit_hook_emits_zero_warn_under_full_t2_pipeline` exercises every T2 write path under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True` (save-as-suite, replay, topic-only probe, retire, regression-alarm computation) and must emit zero `read-engine audit:` lines. Existing P4 test `test_audit_hook_emits_zero_warn_under_full_pipeline` must continue PASSing. |
 | 16 | E2E validation workflow + soak grep verification — **GATE CYCLE, not a 7-dispatch protocol cycle.** No new RED tests; runs Validator 1 (round-trip success) + Validator 2 (soak-log grep) only. | n/a | n/a | n/a |
 
-**~132 new RED tests** (sum: 7+11+9+7+15+11+9+7+5+9+18+14+7+3 = 132) + extended integration + E2E smoke. Backend ≥90% coverage, frontend ≥80%.
+**~132 new RED tests** (sum: 7+11+9+7+15+11+9+7+5+9+18+14+7+3 = 132) + extended integration + E2E smoke. Backend ≥90% coverage, frontend ≥78% (matches shipped vite.config.ts post-v0.4.19 baseline).
 
 **Pydantic schemas + operation-label cycle assignment** (per "Scaffolding ≠ TDD" hard invariant):
 
@@ -1541,7 +1541,7 @@ T2 ships when ALL true:
 
 1. **Schema** — `validation_suite` table + 3 indexes (`ix_validation_suite_project_id`, `ix_validation_suite_source_run_id`, `ix_validation_suite_active` partial-on `retired_at IS NULL DESC on created_at`) + `ix_run_row_suite_id` on `(suite_id, started_at DESC)` + `fk_run_row_suite_id` FK all exist on a freshly migrated DB; ORM `__table_args__` declarations match the migration (zero `alembic check` drift); `alembic upgrade head` + `downgrade -1` round-trip cleanly on fresh test DB
 2. **Cycle completion** — All **14 protocol cycles** (1-13, 15) complete the full 7-dispatch pipeline (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → Validator 1 spec-compliance → Validator 2 code-quality) with **APPROVED-ZERO-INCONSISTENCIES** on both validators. **Cycles 14 (brand/a11y audit) and 16 (E2E smoke + soak grep) are gate-only checkpoints** — Validator 1 + Validator 2 only, no RED→GREEN code change. **No protocol phase is skipped** per `feedback_tdd_protocol.md` hard invariants. ~132 new RED tests all GREEN.
-3. **Coverage** — Backend ≥90%, frontend ≥80%
+3. **Coverage** — Backend ≥90%, frontend ≥78% (matches shipped `frontend/vite.config.ts:47` post-v0.4.19 stability-slot baseline; raises to ≥85% once SemanticTopology + ForgeArtifact + Inspector gain dedicated render tests per the inline baseline note)
 4. **E2E round-trip** — Manual: probe → save-as-suite → manually degrade scoring weights → replay → alarm fires red on `/api/health` → revert weights → replay → alarm clears green
 5. **Audit-hook flip** — `WRITE_QUEUE_AUDIT_HOOK_RAISE` defaults `True`; **both** `test_audit_hook_emits_zero_warn_under_full_pipeline` (P4 test) AND `test_audit_hook_emits_zero_warn_under_full_t2_pipeline` (T2 test) PASS; 7-day soak grep clean
 6. **Backward compat** — `POST /api/probes` without `Prefer:` header returns SSE response identical to v0.4.21; T1 probes work end-to-end with zero behavior change; existing seed agent flows unchanged; `GET /api/runs?mode=...` accepts the new `replay_run` Literal value (Pydantic schemas extended without breaking existing `topic_probe`/`seed_agent` callers)

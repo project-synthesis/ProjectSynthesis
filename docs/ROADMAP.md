@@ -388,7 +388,7 @@ The Topic Probe is the meta-prompting front door. **Validation/regression detect
 
 5. **UI integration** — new SeedModal tab "Topic Probe" alongside existing seed agents. Topic input + scope selector (file picker on linked repo) + N slider + intent hint dropdown + Run button. During run: per-prompt progress strip + live taxonomy mini-view showing domain/sub-domain emergence. After run: final report card with copy-as-markdown + "Save as Validation Suite" + "Replay later" actions.
 
-6. **Observability** — every probe emits these taxonomy events with `probe_id` correlation: `probe_started`, `probe_grounding`, `probe_generating` (with the agentic LLM prompt + N), `probe_prompt_completed` (per prompt), `probe_taxonomy_change`, `probe_completed`, `probe_failed`. All flow through the existing `taxonomy_activity` SSE so the Observatory's Activity panel becomes the audit trail.
+6. **Observability** — every probe emits 6 taxonomy events with `run_id` correlation: `probe_started`, `probe_grounding`, `probe_generating` (with the agentic LLM prompt + N), `probe_prompt_completed` (per prompt), `probe_completed`, `probe_failed`. (`probe_taxonomy_change` was never emitted — taxonomy mutations during a probe ride the existing `taxonomy_changed` event via the `current_run_id` ContextVar bridge.) All flow through the existing `taxonomy_activity` SSE so the Observatory's Activity panel becomes the audit trail.
 
 **Architecture (concrete):**
 
