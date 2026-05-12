@@ -1826,10 +1826,11 @@ async def test_compute_regression_alarm_fires_when_delta_exceeds_tolerance(
 async def test_compute_regression_alarm_does_not_fire_within_tolerance(
     db: AsyncSession, write_queue,
 ):
-    """Spec §5 Python-side filter — when ``|delta| <= tolerance_abs`` the
-    suite is NOMINAL, not firing. The suite still counts in ``suites_total``
-    (active suite) but ``suites_in_alarm == 0`` and ``latest_alarms`` is
-    empty.
+    """Spec §5 Python-side filter — when ``latest_mean >= baseline_mean -
+    tolerance_abs`` (i.e., the strict-< regression-direction predicate is
+    NOT satisfied) the suite is NOMINAL, not firing. The suite still counts
+    in ``suites_total`` (active suite) but ``suites_in_alarm == 0`` and
+    ``latest_alarms`` is empty.
 
     Setup: baseline=7.85, tolerance=0.5, latest replay mean=7.50
         → 7.50 < 7.85 - 0.5 = 7.35 is FALSE

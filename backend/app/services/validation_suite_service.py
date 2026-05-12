@@ -980,9 +980,10 @@ class ValidationSuiteService:
         2. **Cache miss path** — opens a short read session via
            ``async_session_factory`` (Foundation P4 contract), counts active
            suites, executes :func:`_build_alarm_query` (canonical JOIN
-           extracted as a pure helper), applies the Python-side filter
-           ``|delta| > tolerance_abs``, and builds the
-           :class:`RegressionAlarmBlock` response.
+           extracted as a pure helper), applies the spec §5 Python-side
+           filter ``latest_mean < baseline_mean - tolerance_abs`` (strict-<
+           regression-direction only — improvements above tolerance never
+           fire), and builds the :class:`RegressionAlarmBlock` response.
         3. **State-transition events** fire AFTER the SQL runs, ONLY for
            suites whose current state (``'firing'``/``'nominal'``) differs
            from ``self._prior_alarm_states.get(suite_id, 'none')`` per spec
