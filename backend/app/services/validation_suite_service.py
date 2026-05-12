@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Select, func, select, update
 
 from app import config as _config_mod
 from app import database as _database_mod
@@ -252,6 +252,114 @@ def _build_snapshot_inputs(
         prompts_snapshot=prompts_snapshot,
         baseline_scores=baseline_scores,
         created_at=datetime.now(UTC),
+    )
+
+
+def _build_alarm_query() -> Select[Any]:
+    """Build the canonical regression-alarm SELECT statement (spec §5).
+
+    Returns a SQLAlchemy :class:`Select` that joins ``validation_suite`` with
+    its latest ``replay_run`` per suite. The statement is pure-compute — no
+    DB I/O, no parameter binding to runtime values — so it is safely reusable
+    across call sites and trivially unit-testable in isolation. The caller
+    executes the returned select inside its own short read session.
+
+    Spec §5 canonical SQL::
+
+        SELECT s.id, s.label, s.tolerance_abs, s.baseline_scores,
+               r.id AS replay_id, r.aggregate AS replay_aggregate, r.started_at
+        FROM validation_suite s
+        JOIN (
+            SELECT suite_id, MAX(started_at) AS max_started
+            FROM run_row
+            WHERE mode = 'replay_run'
+              AND status = 'completed'
+              AND suite_id IS NOT NULL
+            GROUP BY suite_id
+        ) lr ON lr.suite_id = s.id
+        JOIN run_row r ON r.suite_id = s.id
+                       AND r.started_at = lr.max_started
+                       AND r.mode = 'replay_run'
+                       AND r.status = 'completed'
+        WHERE s.retired_at IS NULL;
+
+    Mechanics
+    ---------
+    The correlated ``MAX(started_at)`` subquery yields one row per
+    ``suite_id`` carrying the newest ``replay_run.started_at``. The first
+    JOIN filters retired suites by ``ValidationSuite.retired_at IS NULL``.
+    The second JOIN re-hydrates the replay's ``id`` + ``aggregate`` columns
+    (the subquery only carries the timestamp). Both ``mode`` and ``status``
+    predicates are reasserted on the second JOIN — defensive narrowing so
+    even if a future migration removes the subquery's predicate the second
+    JOIN still excludes non-completed / non-replay rows.
+
+    Result columns (consumed by :meth:`ValidationSuiteService.compute_regression_alarm`):
+
+    * ``suite_id`` (str) — :class:`ValidationSuite.id`
+    * ``label`` (str) — :class:`ValidationSuite.label`
+    * ``tolerance_abs`` (float) — :class:`ValidationSuite.tolerance_abs`
+    * ``baseline_scores`` (dict) — :class:`ValidationSuite.baseline_scores` JSON
+    * ``replay_id`` (str) — :class:`RunRow.id` of the latest replay
+    * ``replay_aggregate`` (dict) — :class:`RunRow.aggregate` JSON of the latest replay
+    * ``replay_started_at`` (datetime) — :class:`RunRow.started_at` of the latest replay
+
+    The rendered string contains BOTH ``validation_suite`` AND ``run_row``
+    literal table names — used by Cycle 4 Test 26 to detect a true cache
+    miss vs a cache hit (cache hits do not open a read session at all and
+    never render this JOIN).
+
+    Returns
+    -------
+    Select[Any]
+        SQLAlchemy 2.x typed select statement. The ``Any`` row type
+        reflects the heterogeneous column tuple — the caller addresses
+        result rows by ``.suite_id`` / ``.label`` / etc. attribute access
+        on the SQLAlchemy row proxy, not by tuple positional indexing.
+    """
+    # Inner subquery — one row per suite_id with the newest replay started_at.
+    # Three predicates exclude non-completed replays + orphaned rows up-front
+    # so the GROUP BY only aggregates valid candidates.
+    latest_replay_subq = (
+        select(
+            RunRow.suite_id.label("suite_id"),
+            func.max(RunRow.started_at).label("max_started"),
+        )
+        .where(RunRow.mode == "replay_run")
+        .where(RunRow.status == "completed")
+        .where(RunRow.suite_id.is_not(None))
+        .group_by(RunRow.suite_id)
+        .subquery("latest_replay")
+    )
+
+    # Outer SELECT — join the subquery back to ValidationSuite, then a
+    # second join to run_row to hydrate the replay's id + aggregate columns
+    # (subquery only carries the timestamp). Mode + status predicates on the
+    # second join are defensive — they guard against any future migration
+    # that loosens the subquery's filter.
+    return (
+        select(
+            ValidationSuite.id.label("suite_id"),
+            ValidationSuite.label.label("label"),
+            ValidationSuite.tolerance_abs.label("tolerance_abs"),
+            ValidationSuite.baseline_scores.label("baseline_scores"),
+            RunRow.id.label("replay_id"),
+            RunRow.aggregate.label("replay_aggregate"),
+            RunRow.started_at.label("replay_started_at"),
+        )
+        .select_from(ValidationSuite)
+        .join(
+            latest_replay_subq,
+            latest_replay_subq.c.suite_id == ValidationSuite.id,
+        )
+        .join(
+            RunRow,
+            (RunRow.suite_id == ValidationSuite.id)
+            & (RunRow.started_at == latest_replay_subq.c.max_started)
+            & (RunRow.mode == "replay_run")
+            & (RunRow.status == "completed"),
+        )
+        .where(ValidationSuite.retired_at.is_(None))
     )
 
 
@@ -870,11 +978,11 @@ class ValidationSuiteService:
            the cached :class:`RegressionAlarmBlock` is returned immediately —
            NO DB query, NO transition events. Cycle 4 Test 26 pins this.
         2. **Cache miss path** — opens a short read session via
-           ``async_session_factory`` (Foundation P4 contract), executes the
-           canonical alarm JOIN (``validation_suite`` × MAX(started_at)
-           ``run_row(mode='replay_run', status='completed')`` per suite),
-           applies the Python-side filter ``|delta| > tolerance_abs``, and
-           builds the :class:`RegressionAlarmBlock` response.
+           ``async_session_factory`` (Foundation P4 contract), counts active
+           suites, executes :func:`_build_alarm_query` (canonical JOIN
+           extracted as a pure helper), applies the Python-side filter
+           ``|delta| > tolerance_abs``, and builds the
+           :class:`RegressionAlarmBlock` response.
         3. **State-transition events** fire AFTER the SQL runs, ONLY for
            suites whose current state (``'firing'``/``'nominal'``) differs
            from ``self._prior_alarm_states.get(suite_id, 'none')`` per spec
@@ -884,6 +992,45 @@ class ValidationSuiteService:
         4. **Cache write** — the freshly-built block is cached together
            with ``time.monotonic()`` so subsequent calls within the TTL
            window short-circuit at step 1.
+
+        State machine
+        -------------
+        Each suite tracks one of three states in
+        :attr:`_prior_alarm_states`: ``'none'`` (default for unknown suites,
+        not stored explicitly), ``'nominal'`` (suite has a latest completed
+        replay within tolerance), ``'firing'`` (latest replay exceeds
+        tolerance). The legal transitions are::
+
+            none    ──insert replay──▶    nominal
+            none    ──insert replay──▶    firing
+            nominal ──newer replay──▶    firing
+            firing  ──newer replay──▶    nominal
+            *       ──retire suite──▶    (drops out of map)
+
+        The prior-state map is REPLACED (not merged) at end-of-call with the
+        freshly computed ``new_states`` dict. Consequence: when a suite is
+        retired between calls, OR its last completed replay is deleted, OR
+        its replay rows fall back to ``status != 'completed'``, the suite
+        silently drops out of the map. The next time that suite re-enters
+        the JOIN result set (e.g., a new replay is inserted, or the suite
+        is un-retired by a future operator action), the previous-state
+        lookup yields ``'none'`` and the canonical ``none → firing`` /
+        ``none → nominal`` transition fires. This is deliberate — retiring
+        and resurrecting a suite is a semantic reset, not a continuation.
+
+        Concurrency
+        -----------
+        Two concurrent ``compute_regression_alarm`` calls on the SAME
+        service instance are NOT serialized — each may read the cache,
+        race to open a read session, and race to overwrite
+        :attr:`_alarm_cache` + :attr:`_prior_alarm_states`. The spec
+        §5 alarm path is a per-process status-display computation that
+        runs every 30s on the health endpoint; a transient duplicate
+        event emission under contention is acceptable. The cache-tuple
+        write is a single atomic assignment in CPython so the cache
+        never tears (no half-populated state observable). Distinct
+        :class:`ValidationSuiteService` instances NEVER share state by
+        construction.
 
         Parameters
         ----------
@@ -931,49 +1078,10 @@ class ValidationSuiteService:
             )
 
             # ---- 2b: alarm JOIN — latest completed replay per active suite ----
-            # Correlated MAX subquery yields one row per (suite_id) with the
-            # newest replay_run started_at. JOIN to ValidationSuite filters
-            # retired suites and pulls the columns the alarm response needs.
-            # Joining run_row a SECOND time on (suite_id, max_started) hydrates
-            # the replay's id + aggregate. Equivalent to the spec §5 canonical
-            # SQL; SQLAlchemy ORM emits a single statement whose rendered
-            # string contains both ``validation_suite`` AND ``run_row``.
-            latest_replay_subq = (
-                select(
-                    RunRow.suite_id.label("suite_id"),
-                    func.max(RunRow.started_at).label("max_started"),
-                )
-                .where(RunRow.mode == "replay_run")
-                .where(RunRow.status == "completed")
-                .where(RunRow.suite_id.is_not(None))
-                .group_by(RunRow.suite_id)
-                .subquery("latest_replay")
-            )
-            alarm_q = (
-                select(
-                    ValidationSuite.id.label("suite_id"),
-                    ValidationSuite.label.label("label"),
-                    ValidationSuite.tolerance_abs.label("tolerance_abs"),
-                    ValidationSuite.baseline_scores.label("baseline_scores"),
-                    RunRow.id.label("replay_id"),
-                    RunRow.aggregate.label("replay_aggregate"),
-                    RunRow.started_at.label("replay_started_at"),
-                )
-                .select_from(ValidationSuite)
-                .join(
-                    latest_replay_subq,
-                    latest_replay_subq.c.suite_id == ValidationSuite.id,
-                )
-                .join(
-                    RunRow,
-                    (RunRow.suite_id == ValidationSuite.id)
-                    & (RunRow.started_at == latest_replay_subq.c.max_started)
-                    & (RunRow.mode == "replay_run")
-                    & (RunRow.status == "completed"),
-                )
-                .where(ValidationSuite.retired_at.is_(None))
-            )
-            alarm_rows = (await read_db.execute(alarm_q)).all()
+            # Statement construction extracted to :func:`_build_alarm_query`
+            # (pure compute, no I/O). The service is responsible only for
+            # executing the returned select and shaping rows into entries.
+            alarm_rows = (await read_db.execute(_build_alarm_query())).all()
         finally:
             await session_ctx.__aexit__(None, None, None)
 
