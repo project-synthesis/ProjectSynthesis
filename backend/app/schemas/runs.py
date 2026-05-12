@@ -10,7 +10,7 @@ from pydantic import BaseModel
 class RunRequest(BaseModel):
     """Mode-agnostic input to RunOrchestrator.run()."""
 
-    mode: Literal["topic_probe", "seed_agent"]
+    mode: Literal["topic_probe", "seed_agent", "replay_run"]
     payload: dict
 
 
@@ -18,7 +18,7 @@ class RunSummary(BaseModel):
     """Compact view for list endpoints."""
 
     id: str
-    mode: Literal["topic_probe", "seed_agent"]
+    mode: Literal["topic_probe", "seed_agent", "replay_run"]
     status: Literal["running", "completed", "failed", "partial"]
     started_at: datetime
     completed_at: datetime | None
@@ -33,7 +33,7 @@ class RunResult(BaseModel):
     """Full RunRow detail view returned by /api/runs/{run_id} and equivalents."""
 
     id: str
-    mode: Literal["topic_probe", "seed_agent"]
+    mode: Literal["topic_probe", "seed_agent", "replay_run"]
     status: Literal["running", "completed", "failed", "partial"]
     started_at: datetime
     completed_at: datetime | None
