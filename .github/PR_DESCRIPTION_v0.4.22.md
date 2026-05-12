@@ -36,11 +36,12 @@ This PR is gated on the 7-day post-v0.4.21 soak window closing at **≥2026-05-1
 
 **Pre-merge checklist** (release operator fills before rebase-merge):
 
-- [ ] SG-2026-05-11 status: 🟢 PASSED (see `docs/SOAK_GATES.md` daily check-in table)
+- [ ] SG-2026-05-11 status: 🟢 PASSED (see [`docs/SOAK_GATES.md`](docs/SOAK_GATES.md) daily check-in table)
 - [ ] Cumulative `audit_drift|read-engine audit:` WARN count over 7 days: 0 (or all explained sources only)
 - [ ] `./init.sh restart` produces clean post-restart log
 - [ ] `docs/SOAK_GATES.md` daily check-in rows filled through gate-close date
 - [ ] Kill-switch documented + verified: `WRITE_QUEUE_AUDIT_HOOK_RAISE=false` env var path
+- [ ] **E2E pre-ship verification per [`docs/E2E_TEST_MATRIX.md`](docs/E2E_TEST_MATRIX.md)** — all 8 stages clean (action × error matrix + full-stack walkthrough)
 
 ## References
 

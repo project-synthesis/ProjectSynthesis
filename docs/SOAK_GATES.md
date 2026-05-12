@@ -4,6 +4,8 @@ Project Synthesis uses **soak gates** to validate production stability of risky 
 
 This document is the **actionable tracker** for soak gates. Operators consult it daily during active windows. Every gate decision (PASS / EXTEND / ABORT) is recorded here with the evidence trail.
 
+**Related**: see [`docs/E2E_TEST_MATRIX.md`](E2E_TEST_MATRIX.md) for the **pre-ship verification checklist** (action × error matrix + 8-stage E2E walkthrough). Soak gates handle post-ship observation; the E2E matrix handles pre-ship verification. They complement each other across the release-gate boundary.
+
 ## Status legend
 
 | Symbol | Status | Meaning |
