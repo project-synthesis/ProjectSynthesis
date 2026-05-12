@@ -353,9 +353,17 @@ Listings deliberately REST-only (matches `synthesis_history` precedent — no `s
 # --- Nested payload types (consumed by ValidationSuiteOut) ---
 
 class PromptSnapshotItem(BaseModel):
-    """One entry of validation_suite.prompts_snapshot — frozen prompt input."""
+    """One entry of validation_suite.prompts_snapshot — frozen prompt input.
+
+    ``intent_label`` is ``str | None`` (NOT plain ``str``): the topic_probe
+    generator's per-row builder writes ``intent_label: None`` at
+    ``services/generators/topic_probe_generator.py:397`` because T1 does not
+    classify per-prompt intent yet. A non-nullable ``str`` would crash
+    ``ValidationSuiteOut.model_validate()`` on every real probe-derived
+    suite. Decision recorded during Cycle 2 INTEGRATE (2026-05-11).
+    """
     raw_prompt: str
-    intent_label: str
+    intent_label: str | None = None
     original_optimization_id: str | None = None
 
 class PerPromptScore(BaseModel):

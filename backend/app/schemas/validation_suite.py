@@ -27,12 +27,18 @@ class PromptSnapshotItem(BaseModel):
     Position-correspondence invariant (§3 key invariant 2): ``prompts_snapshot[i]``
     aligns with ``baseline_scores.per_prompt[i]`` and the source
     ``RunRow.prompt_results[i]``. Frozen at save time — never mutated.
+
+    ``intent_label`` is ``str | None`` (NOT plain ``str`` as spec §4 line 358
+    originally specified — spec updated 2026-05-11 to match this shape).
+    The topic_probe generator's per-row builder writes ``intent_label: None``
+    (`services/generators/topic_probe_generator.py:397`) since T1 does not
+    classify intent yet — a non-nullable ``str`` would crash
+    ``model_validate()`` on every real probe run.
     """
 
     raw_prompt: str
     intent_label: str | None = None
     original_optimization_id: str | None = None
-    category: str | None = None
 
 
 class PerPromptScore(BaseModel):
