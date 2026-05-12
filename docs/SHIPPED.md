@@ -6,7 +6,7 @@ For active work, see [`ROADMAP.md`](ROADMAP.md). For per-change detail with file
 
 ---
 
-### v0.4.22 — Topic Probe Tier 2: save-as-suite + replay + regression alarm + 202+polling + audit-hook flip (ships ≥2026-05-18 post-soak)
+### v0.4.22 — Topic Probe Tier 2: save-as-suite + replay + regression alarm + 202+polling + audit-hook flip (ships ≥2026-05-18 post-soak — gated by [SG-2026-05-11](SOAK_GATES.md#sg-2026-05-11--audit-hook-warnrise-flip))
 
 The first user-driven validation-loop feature on top of the Foundation P3 `RunRow` substrate. Frozen `ValidationSuite` snapshots fork from completed `topic_probe` runs and replay deterministically on the same prompt fixture, comparing dimension-scored outputs against baseline + signalling regression at `/api/health.regression_alarm`. Implementation followed strict 7-dispatch TDD per cycle (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → V1 spec compliance → V2 code quality) across 14 protocol cycles + 2 gate cycles, with zero-inconsistency gating on both validators. The audit-hook WARN→RAISE flip from Foundation P4 ships in the same release window. T2 builds natively on Foundation P3's `RunRow` substrate — replays persist as `RunRow(mode='replay_run', suite_id=...)` rows, list-via-`GET /api/runs?mode=replay_run`, dispatch through the same `RunOrchestrator.dispatch_async()` codepath as topic_probe and seed_agent.
 
