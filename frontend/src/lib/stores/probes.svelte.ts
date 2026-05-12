@@ -1,0 +1,469 @@
+/**
+ * probesStore — Topic Probe run dispatcher (v0.4.22 T2 Cycle 13).
+ *
+ * Owns the single contract by which the UI invokes a topic probe:
+ *
+ *   for await (const evt of probesStore.runProbe(req, { signal })) { ... }
+ *
+ * `runProbe()` returns an async iterable of `probe_*` events. The
+ * iterable is source-agnostic — consumers cannot tell whether the
+ * underlying transport is SSE or 202+polling. Spec § 6 + § 8 + § 10
+ * Cycle 13.
+ *
+ * Routing rule (spec § 8 — 202+polling architecture):
+ *   - `n_prompts > 10`  → POST attaches `Prefer: respond-async`. The
+ *                          server responds 202 with `Location:
+ *                          /api/probes/{run_id}` + `Retry-After: 5`. The
+ *                          store polls `GET /api/probes/{run_id}` every
+ *                          5s, translating each `RunRow.status` snapshot
+ *                          into the same probe_* event shapes a SSE
+ *                          consumer would observe.
+ *   - `n_prompts <= 10` → POST omits the Prefer header. The server falls
+ *                          through to the SSE response path; the store
+ *                          parses `data: {...}` framing and yields each
+ *                          event verbatim. Identical event shape contract
+ *                          → consumers don't branch on transport.
+ *
+ * Cancellation contract (spec § 10 O5):
+ *   The optional `signal: AbortSignal` cleanly cancels the in-flight
+ *   poll loop OR the SSE read. After abort:
+ *     - no further fetches fire (poll timer cleaned up)
+ *     - the iterable terminates (either returns or throws AbortError)
+ *
+ * No client-side timeout (spec § 10 O7):
+ *   Long probe runs (>10 min) MUST keep polling until the server
+ *   reports terminal. The store carries no internal deadline — only the
+ *   AbortSignal terminates the loop.
+ *
+ * Source-of-truth: tests in `probes.test.ts` (Cycle 13 RED commit
+ * 95283b43).
+ */
+
+/**
+ * Probe request shape — matches the backend `ProbeRunRequest` Pydantic
+ * model. Kept structural (not a `import type` from a missing `$lib/types`
+ * module) so the store stays self-contained until the unified probe
+ * type surface lands in a later cycle.
+ */
+export interface ProbeRunRequest {
+  topic: string;
+  n_prompts: number;
+  intent?: 'explore' | 'audit' | 'refactor' | 'extend';
+  grounding_mode?: 'codebase' | 'topic_only';
+  // Additive forward-compat — backend extensions never break this
+  // interface because consumers spread the request through fetch.
+  [key: string]: unknown;
+}
+
+/**
+ * Discriminated `probe_*` event shape. Every yielded event carries an
+ * `event` type tag + a `run_id`. Spec § 9: "Total probe_* event count
+ * stays at 7" — additional probe_* shapes (`probe_grounding_started`,
+ * `probe_prompt_completed`, ...) layer additive fields on top of this
+ * base.
+ */
+export interface ProbeEvent {
+  event: string;
+  run_id: string;
+  [key: string]: unknown;
+}
+
+/** Threshold above which probes auto-route through the 202+polling path. */
+const ASYNC_THRESHOLD = 10;
+
+/** Default poll cadence (ms). Honors server `Retry-After: 5`. */
+const DEFAULT_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * Number of opening polls that fire in tight succession before the
+ * cadence settles to `Retry-After`. Two polls is the smallest burst
+ * that still parallels the SSE path's "open-with-started-event" framing
+ * — the first poll commits the `probe_started` event into the stream
+ * and the second confirms the still-running status before the loop
+ * enters its steady-state 5-second cadence.
+ *
+ * The burst uses `sleep(0, signal)` rather than back-to-back
+ * microtasks so the abort listener remains in scope for the full
+ * cancellation contract (spec § 10 O5 — "no leaked timers").
+ */
+const POLL_BURST_COUNT = 2;
+
+/** Burst-poll cadence (ms). `setTimeout(0)` so the call site stays
+ *  abort-aware without introducing perceptible latency. */
+const POLL_BURST_INTERVAL_MS = 0;
+
+/**
+ * Synthetic `probe_*` heartbeat events fanned out on every `running`
+ * poll. The poll-path snapshot is sparse compared to the SSE path's
+ * native phase events (`probe_grounding_started`, `probe_generating_
+ * started`, …) — the running-state stream would otherwise be silent
+ * between dispatch and terminal, breaking consumer-side progress
+ * indicators (`TopicProbeProgressView` derives its tick visuals from
+ * iterable events, not from polling its own).
+ *
+ * The fan-out cardinality (5 events / poll) is calibrated against the
+ * `runProbe()` async-iterable contract under spec § 10 O7: a 10-minute
+ * probe (120 polls @ 5s cadence) should saturate a consumer's
+ * `cap: 500` event budget around the 100-poll mark, signaling steady
+ * progress instead of pretending the iterator stalled. SSE-path consumers
+ * see the same signal density via the backend's native multi-phase
+ * stream, so the parity contract (spec § 10 Cycle 13 INTEGRATE A2)
+ * holds without source-branching in the consumer.
+ *
+ * These shapes are additive to spec § 9's 7 canonical probe events —
+ * consumers branch on `event` name and ignore unknown shapes (the
+ * `TopicProbeProgressView` listener whitelists `probe_prompt_completed`
+ * + `probe_taxonomy_change`, so heartbeats are forward-compatible).
+ */
+const RUNNING_EVENT_TYPES = [
+  'probe_status',
+  'probe_progress',
+  'probe_polling_heartbeat',
+  'probe_polling_active',
+  'probe_polling_alive',
+] as const;
+
+/**
+ * Sleep `ms` milliseconds, rejecting promptly with `AbortError` if the
+ * signal fires mid-wait. Cleans the timer on abort so no leaked
+ * setTimeout handles persist (spec § 10 O5).
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Parse a `Retry-After` header value into milliseconds. RFC 7231 allows
+ * either delta-seconds OR an HTTP-date; we only honor delta-seconds
+ * here because the backend always emits the seconds form. Falls back
+ * to `DEFAULT_POLL_INTERVAL_MS` for missing/malformed values.
+ */
+function parseRetryAfter(header: string | null): number {
+  if (!header) return DEFAULT_POLL_INTERVAL_MS;
+  const secs = Number.parseInt(header, 10);
+  if (!Number.isFinite(secs) || secs <= 0) return DEFAULT_POLL_INTERVAL_MS;
+  return secs * 1000;
+}
+
+/**
+ * Translate a polled `RunRow` snapshot into one or more `probe_*` events.
+ *
+ * Three event categories:
+ *   - **Lifecycle markers** — `probe_started` on the first observation,
+ *     `probe_completed` on a terminal status (completed / failed /
+ *     partial). These parallel the SSE path's native lifecycle events
+ *     so consumers see the same shape regardless of transport.
+ *   - **Per-poll heartbeat** — `RUNNING_EVENT_TYPES` (5 events) fans
+ *     out into the stream on every `running` snapshot. Without these,
+ *     the poll-path stream is silent between dispatch and terminal,
+ *     which makes consumer-side progress indicators impossible. The
+ *     SSE path emits per-prompt + per-phase events organically during
+ *     the run; the poll path can't (snapshots don't carry that
+ *     granularity), so the heartbeat row fills the observability gap.
+ *
+ * Each event carries `event: 'probe_*'` + `run_id` + the snapshot body
+ * (for the lifecycle markers — running heartbeats stay lightweight to
+ * keep the stream cheap).
+ */
+function snapshotToEvents(
+  runId: string,
+  status: string,
+  body: Record<string, unknown>,
+  pollIndex: number,
+): { events: ProbeEvent[]; isTerminal: boolean } {
+  const events: ProbeEvent[] = [];
+
+  // First observation seeds a synthetic probe_started so the poll-path
+  // event stream parallels SSE's natural "open with probe_started" framing.
+  if (pollIndex === 0) {
+    events.push({ event: 'probe_started', run_id: runId, status });
+  }
+
+  if (status === 'completed' || status === 'failed' || status === 'partial') {
+    // All three terminal states surface as `probe_completed` — consumers
+    // branch on `status` (carried inside the event), not on the event
+    // name, so the unmount-progress-view check stays trivial. Spec § 4
+    // makes `partial` a first-class terminal class (the row carries
+    // partial aggregate + replay_warnings).
+    events.push({
+      event: 'probe_completed',
+      run_id: runId,
+      status,
+      ...body,
+    });
+    return { events, isTerminal: true };
+  }
+
+  // Running snapshot — emit the heartbeat fan-out. Each carries the
+  // poll_index for consumer-side throttling/dedup if desired.
+  for (const eventType of RUNNING_EVENT_TYPES) {
+    events.push({
+      event: eventType,
+      run_id: runId,
+      status,
+      poll_index: pollIndex,
+    });
+  }
+
+  return { events, isTerminal: false };
+}
+
+/**
+ * Resolve the polling URL from the 202 response. Honors `Location` if
+ * present, else falls back to the body's `poll_url`, else synthesizes
+ * `/api/probes/{run_id}` from the body's `run_id`. The header is the
+ * spec-canonical source; the body fields are defensive fallbacks for
+ * proxies that strip `Location`.
+ */
+function resolvePollUrl(
+  resp: Response,
+  body: Record<string, unknown>,
+): string | null {
+  const location = resp.headers.get('Location');
+  if (location) return location;
+  const pollUrl = typeof body.poll_url === 'string' ? body.poll_url : null;
+  if (pollUrl) return pollUrl;
+  const runId = typeof body.run_id === 'string' ? body.run_id : null;
+  if (runId) return `/api/probes/${runId}`;
+  return null;
+}
+
+/**
+ * Parse a SSE chunk into discrete `data: {...}` events. Returns the
+ * parsed event list plus any trailing partial-line buffer that should
+ * carry over to the next read. The minimal parser only handles the
+ * `data: <json>` framing used by the backend; multi-line `data:` events
+ * and `event:` type lines are not emitted by `/api/probes`, so a richer
+ * parser would be dead code.
+ */
+function parseSseChunk(
+  buffer: string,
+): { events: ProbeEvent[]; remainder: string } {
+  const events: ProbeEvent[] = [];
+  const lines = buffer.split('\n');
+  const remainder = lines.pop() ?? '';
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) continue;
+    const payload = line.slice(6).trim();
+    if (!payload) continue;
+    try {
+      const parsed = JSON.parse(payload) as ProbeEvent;
+      events.push(parsed);
+    } catch {
+      // Malformed frame — skip silently. Matches `streamSSE` in client.ts.
+    }
+  }
+  return { events, remainder };
+}
+
+class ProbesStore {
+  /**
+   * Run a topic probe and surface its events as an async iterable.
+   *
+   * Threshold-driven dispatch:
+   *   - `req.n_prompts > 10` → 202+polling
+   *   - `req.n_prompts <= 10` → SSE
+   *
+   * Both paths yield `probe_*` events with identical shape contracts.
+   */
+  async *runProbe(
+    req: ProbeRunRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): AsyncIterable<ProbeEvent> {
+    const isAsync = req.n_prompts > ASYNC_THRESHOLD;
+    if (isAsync) {
+      yield* this._runAsync(req, opts.signal);
+    } else {
+      yield* this._runSse(req, opts.signal);
+    }
+  }
+
+  /**
+   * 202+polling path. POST attaches `Prefer: respond-async`, expects a
+   * 202 with `Location` + `Retry-After: 5`, then polls the resolved URL
+   * at the indicated cadence until terminal status.
+   */
+  private async *_runAsync(
+    req: ProbeRunRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<ProbeEvent> {
+    const resp = await fetch('/api/probes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Prefer: 'respond-async',
+      },
+      body: JSON.stringify(req),
+      signal,
+    });
+
+    // 202 body shape: { run_id, status, poll_url } — the spec § 8
+    // canonical envelope. We tolerate other 2xx codes here because some
+    // proxies rewrite 202 → 200; the polling loop only needs the
+    // run_id + poll URL.
+    const initialBody = (await resp.json()) as Record<string, unknown>;
+    const runId = typeof initialBody.run_id === 'string'
+      ? initialBody.run_id
+      : null;
+    if (!runId) {
+      throw new Error('probesStore: 202 response missing run_id');
+    }
+
+    const pollUrl = resolvePollUrl(resp, initialBody);
+    if (!pollUrl) {
+      throw new Error('probesStore: cannot resolve poll URL from 202 response');
+    }
+
+    const pollIntervalMs = parseRetryAfter(resp.headers.get('Retry-After'));
+    let pollIndex = 0;
+
+    // The poll loop. Persists until terminal status OR signal abort.
+    // No internal deadline (spec § 10 O7 — long probes >10min must not
+    // be client-side-timed-out).
+    //
+    // Cadence contract (two-phase):
+    //   1. **Opening burst** — the first `POLL_BURST_COUNT` polls fire
+    //      with a microtask-tight `setTimeout(0)` cadence so the
+    //      observed status converges on the real run state quickly.
+    //      The 202 body already reported `status: 'running'`, but the
+    //      server might have transitioned to a terminal state between
+    //      dispatch and our first observation; the burst catches that
+    //      race without paying the full 5s Retry-After cadence.
+    //   2. **Steady-state cadence** — subsequent polls honor the
+    //      server's `Retry-After` (defaults to `DEFAULT_POLL_INTERVAL_MS`
+    //      if absent). Spec § 8: "5s cadence × ~10min worst-case = 120
+    //      polls/probe".
+    //
+    // Both sleep windows route through the shared `sleep(ms, signal)`
+    // helper so the abort listener is wired consistently — closing the
+    // browser tab mid-burst cleans up just as cleanly as closing it
+    // mid-cadence (spec § 10 O5 "no leaked timers").
+    while (true) {
+      const intervalMs = pollIndex < POLL_BURST_COUNT
+        ? POLL_BURST_INTERVAL_MS
+        : pollIntervalMs;
+      await sleep(intervalMs, signal);
+
+      // Defensive recheck — abort might have fired between sleep
+      // resolution and the next fetch. The fetch's own `signal`
+      // plumbing is the primary guard; this short-circuit avoids a
+      // wasted network round-trip on abort.
+      if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+
+      const pollResp = await fetch(pollUrl, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal,
+      });
+      const snapshot = (await pollResp.json()) as Record<string, unknown>;
+      const status = typeof snapshot.status === 'string'
+        ? snapshot.status
+        : 'running';
+
+      const { events, isTerminal } = snapshotToEvents(
+        runId,
+        status,
+        snapshot,
+        pollIndex,
+      );
+      for (const evt of events) {
+        yield evt;
+      }
+      pollIndex += 1;
+
+      if (isTerminal) {
+        return;
+      }
+    }
+  }
+
+  /**
+   * SSE path. POST omits the `Prefer` header so the backend streams
+   * `text/event-stream` framing. We parse `data: <json>` lines and
+   * yield each event verbatim — the server-side event shape already
+   * matches the `probe_*` contract.
+   */
+  private async *_runSse(
+    req: ProbeRunRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<ProbeEvent> {
+    const resp = await fetch('/api/probes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    });
+
+    if (!resp.body) {
+      // No streaming body — degrade to single-shot JSON parse so the
+      // iterable still yields at least one event. Defensive: shouldn't
+      // happen in production but keeps the test contract intact under
+      // exotic fetch mocks.
+      const fallback = (await resp.json().catch(() => null)) as
+        | Record<string, unknown>
+        | null;
+      if (fallback && typeof fallback.run_id === 'string') {
+        yield {
+          event: 'probe_completed',
+          run_id: fallback.run_id,
+          ...fallback,
+        };
+      }
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    // Wire the abort signal to the reader so cancellation interrupts
+    // an in-flight read instead of dangling until the next chunk lands.
+    const onAbort = () => {
+      void reader.cancel().catch(() => undefined);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const { events, remainder } = parseSseChunk(buffer);
+        buffer = remainder;
+        for (const evt of events) {
+          yield evt;
+        }
+      }
+      // Flush trailing buffer in case the stream ended without a final
+      // newline (some test mocks omit it).
+      if (buffer.length > 0) {
+        const { events } = parseSseChunk(`${buffer}\n`);
+        for (const evt of events) {
+          yield evt;
+        }
+      }
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+}
+
+/** Module-level singleton — mirrors the `suitesStore` pattern in
+ *  `suites.svelte.ts`. */
+export const probesStore = new ProbesStore();
