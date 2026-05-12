@@ -639,8 +639,19 @@ class RunRow(Base):
     taxonomy_delta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     final_report: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Suite linkage (T2 readiness)
-    suite_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Suite linkage (T2): FK + named constraint added by migration
+    # 5576c539720f via batch_alter_table(recreate="always") since SQLite
+    # cannot ALTER a constraint in place. ondelete=SET NULL preserves the
+    # RunRow when its source suite is later retired/deleted.
+    suite_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey(
+            "validation_suite.id",
+            ondelete="SET NULL",
+            name="fk_run_row_suite_id",
+        ),
+        nullable=True,
+    )
 
     # Mode-specific JSON metadata
     topic_probe_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -657,4 +668,65 @@ class RunRow(Base):
         Index("ix_run_row_status_started", "status", "started_at"),
         Index("ix_run_row_project_id", "project_id"),
         Index("ix_run_row_topic", "topic"),
+        # T2: (suite_id, started_at DESC) — backs the regression-alarm
+        # "latest replay per suite_id" query pattern. DESC matches the
+        # migration's sa.text("started_at DESC") in 5576c539720f.
+        Index("ix_run_row_suite_id", "suite_id", started_at.desc()),
+    )
+
+
+class ValidationSuite(Base):
+    """Frozen prompt fixture forked from a completed topic_probe run.
+
+    Immutable after creation — replays write new ``RunRow(mode='replay_run',
+    suite_id=...)`` rows; the regression alarm joins on ``suite_id`` to compare
+    each replay's aggregate against ``baseline_scores``.
+
+    Tier 2 (v0.4.22) — see
+    ``docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md`` § 3.
+    """
+
+    __tablename__ = "validation_suite"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid_hex)
+    source_run_id: Mapped[str | None] = mapped_column(
+        # SET NULL semantics require nullable=True; the suite stays intact when
+        # its source run row is later deleted. NOT NULL would conflict with
+        # ondelete=SET NULL at delete time — pick nullable to honor the cascade
+        # contract.
+        String,
+        ForeignKey("run_row.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    prompts_snapshot: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
+    baseline_scores: Mapped[dict] = mapped_column(JSON, nullable=False)
+    tolerance_abs: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.5, server_default="0.5",
+    )
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    project_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("prompt_cluster.id", ondelete="SET NULL"), nullable=True,
+    )
+    repo_full_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    __table_args__ = (
+        Index("ix_validation_suite_project_id", "project_id"),
+        Index("ix_validation_suite_source_run_id", "source_run_id"),
+        # Partial index on (created_at DESC) WHERE retired_at IS NULL —
+        # matches default reverse-chrono list ordering on the active set.
+        # Suites are immutable, so the predicate value is stable per row.
+        # ``created_at.desc()`` is the canonical models.py DESC-Index form
+        # (precedent: ix_optimizations_project_created:125,
+        # ix_prompt_cluster_created_at:250, ix_taxonomy_snapshot_created_at:350).
+        Index(
+            "ix_validation_suite_active",
+            created_at.desc(),
+            sqlite_where=text("retired_at IS NULL"),
+            postgresql_where=text("retired_at IS NULL"),
+        ),
     )
