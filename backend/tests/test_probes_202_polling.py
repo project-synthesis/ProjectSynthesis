@@ -55,22 +55,27 @@ GREEN lands all four pieces together; the test file is RED-only.
 from __future__ import annotations
 
 import asyncio
-import json
-import uuid
 from typing import Any
 
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
-from app.models import RunRow
+import app.database as database_mod
+from app.models import Base, RunRow
 from app.schemas.pipeline_contracts import SCORING_FORMULA_VERSION
 from app.schemas.runs import RunRequest
 from app.services.event_bus import event_bus
 from app.services.generators.base import GeneratorResult
 from app.services.probe_common import current_run_id
 from app.services.run_orchestrator import RunOrchestrator
+from app.services.write_queue import WriteQueue
 
 pytestmark = pytest.mark.asyncio
 
@@ -528,12 +533,6 @@ async def test_run_method_blocks_until_terminal_via_done_event(
         "has not landed the public spawn-and-return entry point yet "
         "(spec §5 'NEW dispatch_async() for 202+polling callers')."
     )
-
-    import app.database as database_mod
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession, create_async_engine
-
-    from app.models import Base
-    from app.services.write_queue import WriteQueue
 
     shared_uri = (
         "sqlite+aiosqlite:///"
