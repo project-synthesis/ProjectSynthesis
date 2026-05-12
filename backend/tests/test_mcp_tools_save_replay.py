@@ -357,9 +357,8 @@ async def test_synthesis_save_suite_structured_output_shape(
       * ``ModuleNotFoundError`` until ``app.tools.save_suite`` exists.
       * Any future drift to ``*Result`` would still fail isinstance.
     """
-    from app.tools.save_suite import handle_save_suite
-
     from app.schemas.mcp_models import SaveSuiteOutput  # noqa: F401 — RED signal
+    from app.tools.save_suite import handle_save_suite
 
     aggregate = _canonical_aggregate(mean=7.85)
     run = await _seed_run(
@@ -509,12 +508,11 @@ async def test_synthesis_save_suite_persists_via_validation_suite_service(
       * pass ``label`` keyword,
       * pass ``tolerance_abs`` keyword.
     """
-    from app.tools.save_suite import handle_save_suite
-
     from app.schemas.validation_suite import (
         BaselineScoresPayload,
         ValidationSuiteOut,
     )
+    from app.tools.save_suite import handle_save_suite
 
     # Build a real-shape ValidationSuiteOut so the handler's downstream
     # serialization to SaveSuiteOutput sees the expected fields. The mock
@@ -605,9 +603,8 @@ async def test_synthesis_replay_suite_returns_replay_initiated_output_with_202_s
     surfaces immediately with the placeholder ``run_id`` minted by the
     orchestrator's initial INSERT path.
     """
-    from app.tools.replay_suite import handle_replay_suite
-
     from app.schemas.mcp_models import ReplayInitiatedOutput
+    from app.tools.replay_suite import handle_replay_suite
 
     suite = await _seed_active_suite(db)
 
@@ -745,9 +742,8 @@ async def test_synthesis_replay_suite_dispatches_through_run_orchestrator(
     real orchestrator installed by the ``stub_orchestrator`` fixture, which
     covers both surfaces.
     """
-    from app.tools.replay_suite import handle_replay_suite
-
     from app.services.run_orchestrator import RunOrchestrator
+    from app.tools.replay_suite import handle_replay_suite
 
     orchestrator, _replay_gen = stub_orchestrator
     suite = await _seed_active_suite(db)
