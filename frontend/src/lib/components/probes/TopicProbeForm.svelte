@@ -273,17 +273,25 @@
     margin-top: 2px;
   }
 
+  /* Form input fields — h-5 (20px) per canon "Select/input fields | 20px"
+     (SKILL.md line 139, spec §6 line 1102). text-[11px], line-height 18px
+     to match the canonical button row. */
   .probe-select {
     width: 100%;
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-primary);
     font-family: var(--font-mono);
-    font-size: 12px;
-    padding: 6px 8px;
-    height: 28px;
+    font-size: 11px;
+    padding: 0 4px;
+    height: 20px;
+    line-height: 18px;
     box-sizing: border-box;
     cursor: pointer;
+    /* Atomic multi-property transition per axiom 5 + spec §6 line 1133-1140. */
+    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .probe-select:focus {
@@ -296,18 +304,24 @@
     gap: 0;
   }
 
+  /* Segmented control — h-5 (20px) per spec §6 line 1104.
+     text-[10px] line-height 18px matches canonical button row. */
   .probe-segment {
     flex: 1;
     background: transparent;
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-secondary);
     font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 6px 12px;
+    font-size: 10px;
+    padding: 0 8px;
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    height: 28px;
+    height: 20px;
+    line-height: 18px;
+    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .probe-segment + .probe-segment {
@@ -334,21 +348,40 @@
     justify-content: flex-end;
   }
 
+  /* Run probe — Hero tier (cyan) per spec §6 line 1129.
+     Resting `1px solid neon-cyan + 8% fill`; Hover `14% fill + translateY(-1px)`;
+     Active `translateY(0)`. h-5 (20px) per spec §6 line 1104. */
   .probe-submit {
-    background: transparent;
+    background: color-mix(in srgb, var(--color-neon-cyan) 8%, transparent);
     border: 1px solid var(--color-neon-cyan);
     color: var(--color-neon-cyan);
     font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 6px 16px;
+    font-size: 10px;
+    padding: 0 8px;
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    height: 28px;
+    height: 20px;
+    line-height: 18px;
+    box-sizing: border-box;
+    /* Atomic multi-property hover transition — spec §6 line 1133-1140. */
+    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .probe-submit:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-neon-cyan) 10%, transparent);
+    background: color-mix(in srgb, var(--color-neon-cyan) 14%, transparent);
+    transform: translateY(-1px);
+  }
+
+  .probe-submit:active:not(:disabled) {
+    transform: translateY(0);
+    transition: background 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                color 150ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .probe-submit:disabled {

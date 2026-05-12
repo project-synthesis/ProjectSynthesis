@@ -133,12 +133,15 @@
     letter-spacing: 0.02em;
   }
 
+  /* NEW chip — neon-teal contour per spec §6 line 1113. Teal is Topic Probe
+     identity color (anchor: secondary success, extraction). Yellow is
+     reserved for the transient `forge-spark` flash only. */
   .mini-chip {
     font-size: 8px;
     font-weight: 700;
     letter-spacing: 0.08em;
-    color: var(--color-neon-yellow);
-    border: 1px solid var(--color-neon-yellow);
+    color: var(--color-neon-teal);
+    border: 1px solid var(--color-neon-teal);
     padding: 0 4px;
     height: 12px;
     line-height: 12px;
