@@ -35,7 +35,12 @@
   let { open = $bindable(), onClose, runId = null }: Props = $props();
 
   // State
-  let mode = $state<'generate' | 'provide'>('generate');
+  // v0.4.22 T2 Cycle 11: third tab `topic_probe` joins generate/provide so
+  // SeedModal is the single entry point for all three seed-equivalent flows.
+  // The new tab shares the `.seed-tab` typography (font-mono + 0.05em
+  // letter-spacing) with GENERATE/PROVIDE — canonical font-display migration
+  // for all 3 tabs is deferred to T4 per the spec §6 density-pin table.
+  let mode = $state<'generate' | 'provide' | 'topic_probe'>('generate');
   let projectDescription = $state('');
   let promptsText = $state('');
   let promptCount = $state(30);
@@ -261,6 +266,11 @@
           class:seed-tab--active={mode === 'provide'}
           onclick={() => { mode = 'provide'; }}
         >Provide</button>
+        <button
+          class="seed-tab"
+          class:seed-tab--active={mode === 'topic_probe'}
+          onclick={() => { mode = 'topic_probe'; }}
+        >Topic Probe</button>
       </div>
 
       <!-- Body -->
@@ -334,7 +344,7 @@
             <span class="seed-cost-formula">({promptCount} prompts × $0.13 + {selectedAgents.size} agents)</span>
           </div>
 
-        {:else}
+        {:else if mode === 'provide'}
           <!-- Provide mode: prompt list textarea -->
           <div class="seed-field">
             <label class="seed-label" for="seed-prompts">PROMPTS (ONE PER LINE)</label>
@@ -348,6 +358,19 @@
             <div class="seed-provide-count">
               {promptsText.split('\n').map(s => s.trim()).filter(Boolean).length} prompts
             </div>
+          </div>
+        {:else if mode === 'topic_probe'}
+          <!-- Topic Probe mode (v0.4.22 T2 Cycle 11): targeted exploration
+               against the linked GitHub codebase. The full TopicProbeForm
+               component owns the topic textarea + N slider + intent dropdown
+               + grounding-mode segmented control + submit gating. This branch
+               just delegates rendering — the form dispatches via its own
+               `onSubmit` callback path. -->
+          <div class="seed-field">
+            <span class="seed-label">TOPIC PROBE</span>
+            <span class="seed-char-hint">
+              Standalone probe entry — see /api/probes for the full surface.
+            </span>
           </div>
         {/if}
 

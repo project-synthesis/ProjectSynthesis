@@ -13,6 +13,16 @@ export default defineConfig({
 		environment: 'jsdom',
 		setupFiles: ['./src/lib/test-setup.ts'],
 		include: ['src/**/*.test.ts'],
+		// CSS-raw audit-style tests (app.css.test.ts) read CSS file contents
+		// via `import x from 'foo.css?raw'`. Vitest's default `vitest:css-
+		// empty-post` plugin returns `export default ""` for any CSS request
+		// when `test.css` is false/undefined; setting an include list scoped
+		// to `?raw` short-circuits the stripper for that exact query without
+		// processing CSS for any other test (which would have other side-
+		// effects).
+		css: {
+			include: [/\.css\?raw/],
+		},
 		coverage: {
 			provider: 'v8',
 			include: ['src/lib/**/*.ts', 'src/lib/**/*.svelte'],
