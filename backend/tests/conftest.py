@@ -169,6 +169,26 @@ async def app_client(mock_provider, db_session, tmp_path):
 
     app.dependency_overrides[get_db] = override_get_db
 
+    # v0.4.22 T2 Cycle 5: services that route their reads through
+    # ``app.database.async_session_factory()`` (e.g. ``ValidationSuiteService``
+    # per the Foundation P4 detached-ORM-safe contract) need a context that
+    # yields ``db_session`` so router-level tests see the seeded test data.
+    # The override is restored after the fixture yields. Mirrors the inline
+    # monkey-patch pattern used by ``tests/test_routers_suites.py``'s
+    # ``_seed_suite_via_service`` helper (and ``test_validation_suite_service.py``)
+    # so the canonical session-injection seam is uniform across the test surface.
+    import app.database as _database_mod
+
+    class _DbSessionContext:
+        async def __aenter__(self):
+            return db_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    _prior_async_session_factory = _database_mod.async_session_factory
+    _database_mod.async_session_factory = lambda: _DbSessionContext()  # type: ignore[assignment]
+
     # v0.4.13 cycle 8: install a synthetic write_queue that runs submit
     # callbacks against the same in-memory db_session so REST router tests
     # don't need a real WriteQueue worker. Cycle 9 lifespan installs the
@@ -221,6 +241,7 @@ async def app_client(mock_provider, db_session, tmp_path):
     _tools_shared.set_routing(_prior_routing)
     if hasattr(app.state, "write_queue"):
         del app.state.write_queue
+    _database_mod.async_session_factory = _prior_async_session_factory  # type: ignore[assignment]
     _cfg.DATA_DIR = original_data_dir
 
 

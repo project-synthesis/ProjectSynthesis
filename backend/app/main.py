@@ -2055,4 +2055,10 @@ try:
 except ImportError:
     pass
 
+try:
+    from app.routers.suites import router as suites_router
+    app.include_router(suites_router)
+except ImportError:
+    pass
+
 asgi_app = app
