@@ -21,6 +21,7 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.models import PromptCluster
+from app.schemas.validation_suite import RegressionAlarmBlock
 from app.services.optimization_service import OptimizationService
 from app.services.pipeline_constants import DOMAIN_COUNT_CEILING
 
@@ -170,6 +171,22 @@ class HealthResponse(BaseModel):
             "surfaced through /api/clusters/activity since last process restart. "
             "Non-zero values indicate residual legacy events in the ring buffer "
             "or JSONL history."
+        ),
+    )
+    regression_alarm: RegressionAlarmBlock = Field(
+        default_factory=lambda: RegressionAlarmBlock(
+            suites_total=0,
+            suites_in_alarm=0,
+            latest_alarms=[],
+        ),
+        description=(
+            "v0.4.22 T2 Cycle 9 (spec § 3 + § 5): regression-alarm block "
+            "computed by ``ValidationSuiteService.compute_regression_alarm`` "
+            "for active validation suites. Always present — empty-fleet "
+            "shape is ``{suites_total: 0, suites_in_alarm: 0, "
+            "latest_alarms: []}``. Backed by a 30s TTL cache on the "
+            "lifespan-registered service singleton so two consecutive "
+            "``/api/health`` calls execute the alarm JOIN at most once."
         ),
     )
     # Cross-service probe results (only populated when probes=True)
@@ -702,6 +719,27 @@ async def health_check(
     except Exception:
         logger.debug("Health check repo_index metrics failed", exc_info=True)
 
+    # v0.4.22 T2 Cycle 9 (spec § 3 + § 5): regression-alarm block from the
+    # lifespan-registered ``ValidationSuiteService`` singleton. The service's
+    # 30s TTL cache + per-suite prior-state map persist across requests, so
+    # the route MUST resolve the same instance every call — instantiating
+    # per-request would defeat the cache and re-issue the alarm JOIN on every
+    # health poll (pinned by Cycle 9 Test 4 + Cycle 4 Test 26). Empty-fleet
+    # safe-default keeps the block present on every response so frontend
+    # consumers can render without null-handling, even before lifespan
+    # registers the singleton (degraded boot path).
+    regression_alarm_block = RegressionAlarmBlock(
+        suites_total=0,
+        suites_in_alarm=0,
+        latest_alarms=[],
+    )
+    try:
+        suite_service = getattr(request.app.state, "validation_suite_service", None)
+        if suite_service is not None:
+            regression_alarm_block = await suite_service.compute_regression_alarm()
+    except Exception:
+        logger.warning("regression_alarm computation failed", exc_info=True)
+
     return HealthResponse(
         status=overall_status,
         version=__version__,
@@ -735,6 +773,7 @@ async def health_check(
         cold_path=cold_path_metrics,
         repo_index=repo_index_metrics,
         legacy_state_observed=legacy_state_observed,
+        regression_alarm=regression_alarm_block,
         services=services_result,
         cross_service=cross_service_result,
         rate_limit=rate_limit_state,

@@ -245,6 +245,14 @@ async def app_client(mock_provider, db_session, tmp_path):
     app.state.write_queue = test_write_queue
     app.dependency_overrides[get_write_queue] = lambda: test_write_queue
 
+    # v0.4.22 T2 Cycle 9: install a ValidationSuiteService singleton on the
+    # test app.state so ``/api/health`` resolves the regression-alarm block
+    # against a service whose 30s TTL cache + prior-state map persist
+    # across requests within a single test. Production lifespan registers
+    # the same singleton; this mirrors that contract for the ASGI seam.
+    from app.services.validation_suite_service import ValidationSuiteService
+    app.state.validation_suite_service = ValidationSuiteService()
+
     # v0.4.14 cycle 3e follow-up: cycle-3 router migrations import
     # ``get_write_queue`` from ``app.tools._shared`` (canonical for MCP-process
     # tools). Backend tests exercise those router code paths via the same
@@ -305,6 +313,8 @@ async def app_client(mock_provider, db_session, tmp_path):
     _tools_shared.set_routing(_prior_routing)
     if hasattr(app.state, "write_queue"):
         del app.state.write_queue
+    if hasattr(app.state, "validation_suite_service"):
+        del app.state.validation_suite_service
     _database_mod.async_session_factory = _prior_async_session_factory  # type: ignore[assignment]
     _cfg.DATA_DIR = original_data_dir
 
