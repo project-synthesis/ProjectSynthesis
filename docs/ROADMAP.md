@@ -330,7 +330,7 @@ The v0.5.0 major would either (a) ship one or two of these as the headline featu
 
 **Tier 2 (v0.4.22) — Planned. PREREQUISITES (all SHIPPED): SQLite writer-slot contention fix (v0.4.13) ✓ + finalization (v0.4.14) ✓ + Foundation P1 (cold-path chunking + bg_index batching, v0.4.16) ✓ + Foundation P2 Path A (probe internals split, v0.4.17) ✓ + Foundation P3 (unified `RunRow` substrate, v0.4.18) ✓. Plus pre-T2 sequencing: v0.4.19 stability slot ✓ + v0.4.20 Pattern Graph canon + auth hotfix slot ✓ + Foundation P4 (v0.4.21) long-handler restructures. Tier 2's save-as-suite + replay regression detection now key off `RunRow.id` directly, so saved suites travel cleanly into T3/T4.**
 - `POST /api/probes/{id}/save-as-suite` — fork a probe run into a `ValidationSuite` (frozen prompt fixture + assertions captured from the run's actual scores)
-- `POST /api/probes/{id}/replay` — re-run a saved suite against current code state (regression detection)
+- `POST /api/suites/{suite_id}/replay` — re-run a saved suite against current code state (regression detection). Replay rows live in the unified `RunRow` substrate with `mode='replay_run'`
 - UI Navigator panel: "Topic Probe" tab in SeedModal + live taxonomy mini-view + final report card with copy-as-markdown
 - `/api/health` regression alarm + StatusBar badge for suite-level mean drops ≥0.5 from baseline
 - Topic-only mode (no codebase grounding) for non-developer verticals — drops Phase 1, generates from topic alone (ADR-006 follow-up)
