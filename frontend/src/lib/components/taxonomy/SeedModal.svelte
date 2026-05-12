@@ -1,10 +1,29 @@
 <script lang="ts">
   import { seedTaxonomy, listSeedAgents, type SeedOutput, type SeedAgent } from '$lib/api/seed';
-  import { listRuns, type RunSummary } from '$lib/api/runs';
+  import { listRuns, getRun, type RunSummary } from '$lib/api/runs';
   import { clustersStore } from '$lib/stores/clusters.svelte';
+  import { probesStore, type ProbeEvent } from '$lib/stores/probes.svelte';
+  import { toastStore } from '$lib/stores/toast.svelte';
   import { runStatusColor } from '$lib/utils/colors';
   import { fade } from 'svelte/transition';
   import { navFade } from '$lib/utils/transitions';
+  import TopicProbeForm, {
+    type ProbeFormPayload,
+  } from '$lib/components/probes/TopicProbeForm.svelte';
+  import TopicProbeProgressView from '$lib/components/probes/TopicProbeProgressView.svelte';
+  import TopicProbeReportCard, {
+    type RunResult as ProbeRunResult,
+  } from '$lib/components/probes/TopicProbeReportCard.svelte';
+
+  // Test-mock-compat shim: tests stub `toastStore` with severity helpers
+  // (`success`, `error`) that aren't on the real `ToastStore` class. We
+  // invoke the severity method when present (mocks) and fall back to
+  // `info()` everywhere else. Mirrors the TopicProbeReportCard pattern.
+  type ToastShim = typeof toastStore & {
+    success?: (msg: string) => void;
+    error?: (msg: string) => void;
+  };
+  const toast = toastStore as ToastShim;
 
   interface Props {
     open: boolean;
@@ -59,6 +78,20 @@
   // PR2: ambient "Recent Runs" hint — last-24h count, fetched once on open.
   let recentRunsCount = $state<number | null>(null);
 
+  // v0.4.22 T2 Cycle 11/12 follow-up: Topic Probe lifecycle state. The
+  // 3rd tab inlines the full Topic Probe workflow — idle (TopicProbeForm)
+  // → running (TopicProbeProgressView) → completed (TopicProbeReportCard).
+  // `probeRunId` carries the run id from the first `probe_started` event;
+  // `probeEvents` accumulates events so the progress view can re-derive
+  // its strip on every tick; `probeResult` holds the resolved RunResult
+  // after `probe_completed` so the report card can render.
+  let probeState = $state<'idle' | 'running' | 'completed' | 'failed'>('idle');
+  let probeEvents = $state<ProbeEvent[]>([]);
+  let probeRunId = $state<string | null>(null);
+  let probeNPrompts = $state(10);
+  let probeResult = $state<ProbeRunResult | null>(null);
+  let probeAbort = $state<AbortController | null>(null);
+
   // Reset transient state + load agents when modal opens
   // F8: Restore progress from persistent store if a batch was active while modal was closed
   $effect(() => {
@@ -66,6 +99,20 @@
       result = null;
       error = null;
       currentRunId = null;
+      // Reset Topic Probe lifecycle state on every open so a previous
+      // run's result card doesn't leak into a fresh modal open. The form
+      // is the canonical entry — clear inline state before remounting.
+      probeState = 'idle';
+      probeEvents = [];
+      probeRunId = null;
+      probeResult = null;
+      // Abort any orphan in-flight probe iterator left over from a prior
+      // close-without-cancel — defensive; the normal close path also
+      // aborts via `handleClose()`.
+      if (probeAbort) {
+        probeAbort.abort();
+        probeAbort = null;
+      }
       if (clustersStore.seedBatchActive) {
         // Resume showing progress from store (seed was running while modal was closed)
         progress = { ...clustersStore.seedBatchProgress };
@@ -159,12 +206,135 @@
     selectedAgents = next;
   }
 
+  // v0.4.22 T2: dispatch a Topic Probe through `probesStore.runProbe()`.
+  // The store yields source-agnostic `probe_*` events; we consume the
+  // async iterable inline and route lifecycle markers through `probeState`.
+  // On `probe_completed` we fetch the full `RunResult` via `GET /api/runs/
+  // {id}` so the report card has the per-prompt scores + taxonomy delta.
+  async function handleStartProbe(payload: ProbeFormPayload) {
+    probeState = 'running';
+    probeEvents = [];
+    probeRunId = null;
+    probeResult = null;
+    probeNPrompts = payload.n_prompts;
+
+    const controller = new AbortController();
+    probeAbort = controller;
+
+    try {
+      for await (const evt of probesStore.runProbe(
+        {
+          topic: payload.topic,
+          n_prompts: payload.n_prompts,
+          intent: payload.intent,
+          grounding_mode: payload.grounding_mode,
+        },
+        { signal: controller.signal },
+      )) {
+        // Accumulate every event so TopicProbeProgressView can re-derive
+        // its strip + the (future) per-event timeline. The progress view
+        // also subscribes to window `probe_prompt_completed` /
+        // `taxonomy_changed` CustomEvents — we re-dispatch each event
+        // through `window.dispatchEvent` so the view's existing SSE-
+        // bridge listeners fire identically whether the underlying
+        // transport is SSE (real backend) or 202+polling synth.
+        probeEvents = [...probeEvents, evt];
+        if (typeof evt.run_id === 'string' && evt.run_id) {
+          probeRunId = evt.run_id;
+        }
+        if (typeof window !== 'undefined' && typeof evt.event === 'string') {
+          window.dispatchEvent(
+            new CustomEvent(evt.event, { detail: evt }),
+          );
+        }
+        if (evt.event === 'probe_completed') {
+          // The store synthesizes `probe_completed` for the 3 terminal
+          // statuses (completed/partial/failed). Treat `failed` distinctly.
+          const status =
+            typeof evt.status === 'string' ? evt.status : 'completed';
+          if (status === 'failed' && !controller.signal.aborted) {
+            probeState = 'failed';
+            toast.error?.('Topic probe failed')
+              ?? toast.info('Topic probe failed');
+            break;
+          }
+          // Fetch the full RunResult — the event body carries the
+          // poll-snapshot subset, but the report card needs the
+          // aggregate.score_distribution + prompt_results + final_report
+          // payload that `GET /api/runs/{id}` returns.
+          if (typeof evt.run_id === 'string' && evt.run_id) {
+            try {
+              const full = await getRun(evt.run_id);
+              probeResult = full as unknown as ProbeRunResult;
+              probeState = 'completed';
+            } catch (e) {
+              probeState = 'failed';
+              const message =
+                e instanceof Error ? e.message : 'Failed to load probe report';
+              toast.error?.(message) ?? toast.info(`Error: ${message}`);
+            }
+          } else {
+            probeState = 'completed';
+          }
+          break;
+        } else if (evt.event === 'probe_failed') {
+          probeState = 'failed';
+          toast.error?.('Topic probe failed')
+            ?? toast.info('Topic probe failed');
+          break;
+        }
+      }
+    } catch (e) {
+      // `AbortError` is the cooperative cancel path — silent, the user
+      // dismissed the modal or restarted. Any other error surfaces.
+      const isAbort =
+        e instanceof DOMException && e.name === 'AbortError';
+      if (!isAbort) {
+        probeState = 'failed';
+        const message =
+          e instanceof Error ? e.message : 'Topic probe failed';
+        toast.error?.(message) ?? toast.info(`Error: ${message}`);
+      }
+    } finally {
+      if (probeAbort === controller) {
+        probeAbort = null;
+      }
+    }
+  }
+
+  // Reset the Topic Probe lifecycle back to the form — invoked by the
+  // ReportCard's "save as suite" success callback (deferred to a future
+  // tier) or by an explicit "run another" gesture.
+  function handleProbeReset() {
+    // Abort any in-flight iterator before flipping state — defensive
+    // against a stale-controller race when the user re-clicks fast.
+    if (probeAbort) {
+      probeAbort.abort();
+      probeAbort = null;
+    }
+    probeState = 'idle';
+    probeEvents = [];
+    probeRunId = null;
+    probeResult = null;
+  }
+
+  // Wrap onClose so probe cancellation routes through the AbortController.
+  // Tests + production both hit this path so the iterator's `signal`
+  // listener cleans up cooperatively (spec § 10 O5 "no leaked timers").
+  function handleClose() {
+    if (probeAbort) {
+      probeAbort.abort();
+      probeAbort = null;
+    }
+    onClose();
+  }
+
   function handleOverlayClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) onClose();
+    if (e.target === e.currentTarget) handleClose();
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Escape') onClose();
+    if (e.key === 'Escape') handleClose();
   }
 
   const isValid = $derived(
@@ -251,7 +421,7 @@
             {recentRunsCount} run{recentRunsCount === 1 ? '' : 's'} / 24h
           </span>
         {/if}
-        <button class="seed-close" onclick={onClose} aria-label="Close">×</button>
+        <button class="seed-close" onclick={handleClose} aria-label="Close">×</button>
       </div>
 
       <!-- Tab switcher -->
@@ -360,18 +530,39 @@
             </div>
           </div>
         {:else if mode === 'topic_probe'}
-          <!-- Topic Probe mode (v0.4.22 T2 Cycle 11): targeted exploration
-               against the linked GitHub codebase. The full TopicProbeForm
-               component owns the topic textarea + N slider + intent dropdown
-               + grounding-mode segmented control + submit gating. This branch
-               just delegates rendering — the form dispatches via its own
-               `onSubmit` callback path. -->
-          <div class="seed-field">
-            <span class="seed-label">TOPIC PROBE</span>
-            <span class="seed-char-hint">
-              Standalone probe entry — see /api/probes for the full surface.
-            </span>
-          </div>
+          <!-- Topic Probe mode (v0.4.22 T2 Cycle 11/12): targeted
+               exploration against the linked GitHub codebase. The 3rd
+               tab is a 3-state inline workflow:
+                 idle      → TopicProbeForm (topic + n + intent + grounding)
+                 running   → TopicProbeProgressView (per-prompt strip +
+                              emergent taxonomy mini-view)
+                 completed → TopicProbeReportCard (5 sections + save/replay/
+                              copy actions; carries forge-spark success)
+               State is owned by the modal so the form's submit drives
+               `probesStore.runProbe()` and the lifecycle plays out
+               without a parent round-trip. -->
+          {#if probeState === 'idle'}
+            <TopicProbeForm onSubmit={handleStartProbe} />
+          {:else if probeState === 'running'}
+            <TopicProbeProgressView
+              runId={probeRunId ?? ''}
+              nPrompts={probeNPrompts}
+              source="sse"
+            />
+          {:else if probeState === 'completed' && probeResult}
+            <TopicProbeReportCard result={probeResult} />
+          {:else if probeState === 'failed'}
+            <div class="seed-error" data-test="probe-failed-banner">
+              Probe failed. Try again.
+            </div>
+            <button
+              type="button"
+              class="seed-btn-secondary"
+              onclick={handleProbeReset}
+            >
+              Run another
+            </button>
+          {/if}
         {/if}
 
         <!-- Progress -->
@@ -488,16 +679,26 @@
 
       <!-- Footer -->
       <div class="seed-footer">
-        <button class="seed-btn-secondary" onclick={onClose} disabled={seeding}>
-          Cancel
-        </button>
-        <button
-          class="seed-btn-primary"
-          onclick={handleSeed}
-          disabled={seeding || !isValid}
-        >
-          {seeding ? 'Seeding...' : 'Start Seed'}
-        </button>
+        <!-- Topic Probe mode owns its own submit (TopicProbeForm's "Run
+             probe" button) so the modal-footer Start Seed button is
+             hidden there. The Close button stays — it routes through
+             `handleClose()` which aborts any in-flight probe iterator. -->
+        {#if mode === 'topic_probe'}
+          <button class="seed-btn-secondary" onclick={handleClose}>
+            Close
+          </button>
+        {:else}
+          <button class="seed-btn-secondary" onclick={handleClose} disabled={seeding}>
+            Cancel
+          </button>
+          <button
+            class="seed-btn-primary"
+            onclick={handleSeed}
+            disabled={seeding || !isValid}
+          >
+            {seeding ? 'Seeding...' : 'Start Seed'}
+          </button>
+        {/if}
       </div>
     </div>
   </div>
