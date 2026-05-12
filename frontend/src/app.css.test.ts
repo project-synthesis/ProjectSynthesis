@@ -73,7 +73,9 @@ describe('forge-spark keyframe + consumer wiring', () => {
       'probes',
       'TopicProbeReportCard.svelte?raw',
     ].join('/');
-    // @ts-expect-error — `?raw` typing isn't surfaced in the lib types
+    // `?raw` typing is surfaced via vite/client.d.ts so no ts-expect-error
+    // suppression is needed; the runtime-computed path keeps Vite's static
+    // analyzer from resolving the file at suite-collection time.
     const mod = await import(/* @vite-ignore */ path);
     const topicProbeReportCardSource: string = mod.default;
 

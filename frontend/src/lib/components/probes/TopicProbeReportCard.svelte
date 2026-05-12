@@ -571,6 +571,13 @@
     letter-spacing: 0.05em;
     height: 20px;
     box-sizing: border-box;
+    /* Atomic-event multi-property hover transition — spec §6 line 1133-1140,
+       axiom 5 (multi-property transitions fire simultaneously as one
+       atomic event). */
+    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .report-btn:hover:not(:disabled) {
@@ -584,8 +591,26 @@
   }
 
   .report-btn--save {
-    color: var(--color-neon-yellow);
-    border-color: var(--color-neon-yellow);
+    color: var(--color-neon-purple);
+    border-color: var(--color-neon-purple);
+    background: color-mix(in srgb, var(--color-neon-purple) 8%, transparent);
+  }
+
+  /* Hero-tier hover lift + 14% fill — spec §6 line 1126.
+     Active resets translateY(0) per Hero contour-intensity recipe. */
+  .report-btn--save:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-neon-purple) 14%, transparent);
+    color: var(--color-neon-purple);
+    border-color: var(--color-neon-purple);
+    transform: translateY(-1px);
+  }
+
+  .report-btn--save:active:not(:disabled) {
+    transform: translateY(0);
+    transition: background 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                color 150ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   /* `forge-spark` one-shot fires when --flash class is added by the
@@ -594,9 +619,21 @@
     animation: forge-spark 250ms ease-out;
   }
 
+  /* Replay — Medium tier (spec §6 line 1127). Resting `1px solid border-subtle`,
+     Hover `1px solid neon-blue + 12% fill`. No translateY lift — Medium tier;
+     lift is Hero-only per `component-patterns.md` Recipe E. */
   .report-btn--replay {
-    color: var(--color-neon-cyan);
-    border-color: var(--color-neon-cyan);
+    color: var(--color-neon-blue);
+  }
+
+  .report-btn--replay:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-neon-blue) 12%, transparent);
+    color: var(--color-neon-blue);
+    border-color: var(--color-neon-blue);
+  }
+
+  .report-btn--replay:active:not(:disabled) {
+    box-shadow: inset 0 0 0 1px rgba(77, 142, 255, 0.4);
   }
 
   /* Copy-md flash — uses the shared --duration-copy-flash window (1500ms)
