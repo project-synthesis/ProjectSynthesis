@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy import select
 
@@ -55,24 +55,24 @@ from app.services.event_bus import event_bus
 from app.services.generators._aggregate import compute_run_aggregate
 from app.services.generators.base import GeneratorResult
 
-if TYPE_CHECKING:
-    pass
-
 logger = logging.getLogger(__name__)
 
 
 class ReplayRunGenerator:
-    """Replay a :class:`ValidationSuite` snapshot end-to-end.
+    """Replay a :class:`ValidationSuite` snapshot end-to-end (spec §5).
 
-    Conforms to the :class:`RunGenerator` Protocol — the orchestrator
-    invokes ``run(request, *, run_id)`` and persists the returned
+    Topic Probe Tier 2 (T2) Cycle 6 generator. Conforms to the
+    :class:`RunGenerator` Protocol — the orchestrator invokes
+    ``run(request, *, run_id)`` and persists the returned
     :class:`GeneratorResult` through the WriteQueue.
 
     Owns no DB session across LLM work — the suite-snapshot read happens
     in a SHORT session that closes before the per-prompt loop iterates
     (Foundation P4 contract). Each ``batch_pipeline.run_single_prompt``
     call opens its own short sessions via the injected ``session_factory``
-    as needed for enrichment lookups.
+    as needed for enrichment lookups. This keeps the audit-hook
+    invariant (zero read-engine writes outside ``cold_path_mode`` /
+    ``migration_mode``) holding under the spec §10 audit-hook flip.
     """
 
     def __init__(
@@ -99,7 +99,7 @@ class ReplayRunGenerator:
     async def run(
         self, request: RunRequest, *, run_id: str,
     ) -> GeneratorResult:
-        """Execute one replay run.
+        """Execute one replay run (spec §5).
 
         Steps:
 
@@ -121,6 +121,66 @@ class ReplayRunGenerator:
         5. Emit a single ``replay_run`` JSONL trace entry (spec §9).
         6. Return :class:`GeneratorResult` with classified
            ``terminal_status`` and a non-None stub ``final_report``.
+
+        Parameters
+        ----------
+        request : RunRequest
+            Canonical orchestrator request. Required payload keys:
+
+            * ``suite_id`` (str) — :class:`ValidationSuite.id` to replay.
+
+            Optional payload keys:
+
+            * ``repo_full_name`` (str | None) — current repo; drives the
+              ``repo_drift`` warning when it disagrees with the saved
+              snapshot's ``repo_full_name``.
+            * ``project_id`` (str | None) — threaded through to
+              ``batch_pipeline.run_single_prompt`` so the resulting
+              enrichment + persistence sees the right project scope.
+        run_id : str
+            Caller-minted run identifier. Used to correlate emitted
+            events (``probe_warning``, ``probe_prompt_completed``) and
+            the JSONL trace entry back to the orchestrator's
+            :class:`RunRow`.
+
+        Returns
+        -------
+        GeneratorResult
+            Frozen result envelope consumed by
+            :class:`RunOrchestrator._persist_final`:
+
+            * ``terminal_status`` ∈ ``{'completed', 'partial', 'failed'}``
+              — ``completed`` iff every prompt scored; ``failed`` iff
+              every prompt raised; otherwise ``partial``.
+            * ``prompts_generated`` — equal to ``len(prompts_snapshot)``.
+            * ``prompt_results`` — per-prompt dicts in position
+              correspondence with the snapshot (spec §3 invariant 2).
+            * ``aggregate`` — canonical 8-key block from
+              :func:`compute_run_aggregate` augmented with the additive
+              ``replay_suite_id`` / ``replay_n_completed`` /
+              ``replay_n_failed`` / ``replay_repo_drift`` keys.
+            * ``taxonomy_delta`` — empty dict (replay produces no new
+              taxonomy state per spec §5; the canonical pipeline already
+              owns clustering).
+            * ``final_report`` — non-None markdown stub referencing
+              ``SuiteDetailView`` + ``suite_id=`` so operator log
+              readers can discriminate replay terminals from seed_agent
+              ones via ``grep``.
+
+        Raises
+        ------
+        ValueError
+            ``"suite_not_found"`` if no row matches ``suite_id``. Router
+            ``routers/suites.py`` maps this to a 404.
+
+            ``"suite_retired"`` if ``suite.retired_at`` is set. Retired
+            suites are immutable history records, not replayable
+            inputs. Router maps this to a 409.
+
+            Both errors are raised inside the read session and surface
+            via the orchestrator's top-level dispatch — the
+            :class:`RunRow` lands as ``status='failed'`` under
+            ``_mark_failed``'s shielded write.
         """
         start_ts = time.monotonic()
         payload = request.payload
@@ -163,11 +223,18 @@ class ReplayRunGenerator:
         # replay continues with the saved snapshot so the operator can
         # see how the same baseline behaves on a different repo (e.g., a
         # fork or rename).
-        if (
+        #
+        # ``repo_drift`` is detected only when BOTH sides are present.
+        # ``None`` on either side is missing data, not drift — legacy
+        # suites created before ``repo_full_name`` was persisted carry
+        # ``None``, and operators replaying without a current repo
+        # pinned should not see a spurious warning.
+        repo_drift = bool(
             suite_repo_full_name
             and repo_full_name
             and suite_repo_full_name != repo_full_name
-        ):
+        )
+        if repo_drift:
             event_bus.publish("probe_warning", {
                 "run_id": run_id,
                 "code": "repo_drift",
@@ -176,17 +243,41 @@ class ReplayRunGenerator:
             })
 
         # ---- Step 3: sequential per-prompt loop ----
-        # Per spec §5: NOT ``asyncio.TaskGroup`` — a single child's
-        # non-rate-limit exception propagates ``BaseExceptionGroup`` which
-        # aborts siblings, leaving partial state. ``for idx, item in
-        # enumerate(...)`` + per-iteration ``try/except Exception`` keeps
-        # one failure isolated to that row's ``status='failed'``.
         #
-        # Function-level import keeps the cyclic boundary (the batch
-        # pipeline imports a handful of services that themselves import
-        # event_bus / config) easy to monkeypatch in tests — the helper
-        # ``_patch_run_single_prompt`` in the RED tests substitutes a fake
-        # at this exact attribute path.
+        # Why sequential (not ``asyncio.TaskGroup`` / ``asyncio.gather``):
+        #
+        # 1. Deterministic regression detection. Replay is the
+        #    baseline-vs-latest comparison that backs the regression-alarm
+        #    block in ``/api/health``. Parallel execution would expose race
+        #    conditions on the shared taxonomy engine + embedding index and
+        #    leak rate-limit-induced score variance into the latest_mean —
+        #    a flaky alarm is worse than a slow one.
+        # 2. ``TaskGroup`` semantics are wrong for this workload. A single
+        #    child's non-rate-limit exception propagates a
+        #    ``BaseExceptionGroup`` that aborts every sibling, leaving
+        #    inconsistent state with partial assignments. Terminal-status
+        #    classification cannot distinguish "partial=N completed=M"
+        #    from "TaskGroup-aborted at M". Sequential preserves the
+        #    per-prompt outcome envelope.
+        # 3. Failure isolation: the per-iteration ``try/except Exception``
+        #    below catches Exception (NOT bare ``except:``) deliberately
+        #    — provider failures, taxonomy lookups, scoring divergences
+        #    are all in scope; ``KeyboardInterrupt`` / ``SystemExit`` /
+        #    ``asyncio.CancelledError`` derive from ``BaseException`` and
+        #    propagate up to the orchestrator's ``shield()``ed cleanup.
+        #
+        # Trade-off accepted (spec §10 Cycle 6 O7): a 25-prompt suite at
+        # the worst-case provider latency runs ~30 min. That worst case
+        # is bounded by ``SESSION_TIMEOUT_BY_TYPE`` on the orchestrator
+        # side and is the documented upper limit for the replay surface.
+        # Per-prompt parallelism is deferred to T3, gated by the
+        # ``PROBE_PROMPT_CONCURRENCY`` constant introduced alongside its
+        # first consumer (per ``feedback_tdd_protocol.md`` "Scaffolding
+        # ≠ TDD" canon).
+        #
+        # Function-level import: keeps the cyclic-import boundary easy to
+        # monkeypatch in tests — ``_patch_run_single_prompt`` substitutes
+        # a fake at this exact attribute path.
         from app.services import batch_pipeline as batch_mod
 
         prompt_results: list[dict[str, Any]] = []
@@ -212,10 +303,17 @@ class ReplayRunGenerator:
                 result_row = _project_pending_to_result(
                     idx=idx, raw_prompt=raw_prompt, pending=pending,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - deliberately broad; see below
                 # Sibling-isolation: one prompt's failure does NOT abort
-                # the rest of the loop. Status='failed' + error message
-                # (truncated to keep the row bounded).
+                # the rest of the loop. Catches ``Exception`` (NOT bare
+                # ``except:`` and NOT a narrower union) deliberately —
+                # ``batch_pipeline.run_single_prompt`` can fail in many
+                # ways (provider 5xx, taxonomy lookup, scoring blender,
+                # embedding service, etc.) and every one of those should
+                # land as ``status='failed'`` on this row, not abort the
+                # whole replay. ``KeyboardInterrupt`` / ``SystemExit`` /
+                # ``asyncio.CancelledError`` derive from ``BaseException``
+                # and propagate up to the orchestrator's shielded cleanup.
                 logger.warning(
                     "replay_run %s prompt %d raised (%s) — marking failed",
                     run_id, idx, exc,
@@ -259,11 +357,7 @@ class ReplayRunGenerator:
             "replay_suite_id": suite_id,
             "replay_n_completed": completed_count,
             "replay_n_failed": failed_count,
-            "replay_repo_drift": (
-                bool(suite_repo_full_name)
-                and bool(repo_full_name)
-                and suite_repo_full_name != repo_full_name
-            ),
+            "replay_repo_drift": repo_drift,
         })
 
         # ---- Step 5: JSONL trace (spec §9 trace tagging) ----
