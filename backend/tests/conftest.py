@@ -308,6 +308,40 @@ async def app_client(mock_provider, db_session, tmp_path):
         # ``CancelledError`` is collected rather than propagated.
         await asyncio.gather(*pending_spawns, return_exceptions=True)
 
+    # Drain ``github_repos._background_tasks`` (the ``_bg_index()`` registry).
+    # ``POST /api/github/repos/link`` spawns ``_bg_index()`` via
+    # ``_spawn_bg_task`` which registers in a module-level set
+    # (``app/routers/github_repos.py:35``). In tests we monkey-patch
+    # ``async_session_factory()`` to return ``db_session`` (line 215 above), so
+    # the bg task and the test share a single session. If the bg task is
+    # mid-``_prepare_impl()`` when ``db_session`` closes during teardown,
+    # SQLAlchemy raises ``IllegalStateChangeError`` (close() can't run while
+    # prepare is in progress) and the next test inherits a corrupted session
+    # (cascade ``ResourceClosedError`` on the first ``db.add()``).
+    #
+    # Fix: AWAIT each pending bg task to natural completion before the
+    # write_queue/router scaffolding is unwound. Awaiting (not cancelling)
+    # lets the task commit its open transaction cleanly inside its own
+    # try/except. ``return_exceptions=True`` swallows the inevitable
+    # mock-related failures (the test patches ``GitHubClient`` with a
+    # ``MagicMock`` that doesn't implement the full GitHub API the bg task
+    # eventually calls), so the task errors out in a quiesced state rather
+    # than tripping the close()/prepare race.
+    #
+    # This must run BEFORE ``async_session_factory`` is restored below — the
+    # bg task's session lookup happens via ``async_session_factory()`` at
+    # call time, and the bg task must keep seeing ``db_session`` until it
+    # finishes. Otherwise it switches to the prod session factory mid-flight
+    # and hits a separate connection-not-bound error.
+    try:
+        from app.routers import github_repos as _gr_mod
+    except ImportError:
+        _gr_pending: list[asyncio.Task[Any]] = []
+    else:
+        _gr_pending = [t for t in _gr_mod._background_tasks if not t.done()]
+    if _gr_pending:
+        await asyncio.gather(*_gr_pending, return_exceptions=True)
+
     app.dependency_overrides.clear()
     _tools_shared.set_write_queue(_prior_write_queue)
     _tools_shared.set_routing(_prior_routing)
