@@ -38,7 +38,9 @@ from app.schemas.mcp_models import (
     OptimizeOutput,
     PrepareOutput,
     RefineOutput,
+    ReplayInitiatedOutput,
     SaveResultOutput,
+    SaveSuiteOutput,
     StrategiesOutput,
 )
 from app.schemas.probes import ProbeRunResult
@@ -1484,6 +1486,87 @@ async def synthesis_probe(
         repo_full_name=repo_full_name,
         ctx=ctx,
     )
+
+
+# ---------------------------------------------------------------------------
+# T2 Cycle 10 — Validation suite MCP tools (15 → 17)
+#
+# Spec: docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md
+#       §4 (MCP tool table lines 326-327) + §10 Cycle 10.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(structured_output=True)
+async def synthesis_save_suite(
+    run_id: Annotated[str, Field(
+        description="Source RunRow.id from a completed synthesis_probe run.",
+    )],
+    label: Annotated[str, Field(
+        description="Human-readable suite label (1-120 chars).",
+        min_length=1,
+        max_length=120,
+    )],
+    tolerance_abs: Annotated[float, Field(
+        default=0.5,
+        description=(
+            "Absolute score tolerance for regression detection (0.1-5.0). "
+            "Replays whose mean overall falls below the baseline by more "
+            "than this fire the regression alarm."
+        ),
+        ge=0.1,
+        le=5.0,
+    )] = 0.5,
+) -> SaveSuiteOutput:
+    """Fork a completed topic_probe run into an immutable ValidationSuite.
+
+    Pins the run's prompts + per-prompt scores + baseline aggregate so a
+    later synthesis_replay_suite can detect regressions. The source run
+    must be ``mode='topic_probe'``, ``status='completed'``, and carry an
+    ``aggregate`` with ``mean_overall`` (legacy / corrupted rows surface
+    as ``run_missing_aggregate``).
+
+    Error codes (spec §4 lines 337-342):
+
+    * ``run_not_found`` — no row matches run_id.
+    * ``run_not_completed`` — source still running / failed.
+    * ``not_a_probe_run`` — source mode != 'topic_probe'.
+    * ``run_missing_aggregate`` — aggregate NULL or missing mean_overall.
+    """
+    from app.tools._shared import get_write_queue
+    from app.tools.save_suite import handle_save_suite
+
+    write_queue = get_write_queue()
+    return await handle_save_suite(
+        run_id=run_id,
+        label=label,
+        tolerance_abs=tolerance_abs,
+        write_queue=write_queue,
+    )
+
+
+@mcp.tool(structured_output=True)
+async def synthesis_replay_suite(
+    suite_id: Annotated[str, Field(
+        description="Target ValidationSuite.id to replay.",
+    )],
+) -> ReplayInitiatedOutput:
+    """Kick off a replay run against an existing ValidationSuite.
+
+    Dispatches through RunOrchestrator with ``mode='replay_run'``. The
+    initial RunRow INSERT commits BEFORE this returns (202-style
+    semantics) — callers poll the returned ``poll_url`` for terminal
+    status. Per-prompt re-scoring runs in the background; results land
+    in ``RunRow.aggregate`` once the generator completes.
+
+    Error codes (spec §4 lines 343-344):
+
+    * ``suite_not_found`` — suite_id does not resolve.
+    * ``suite_retired`` — suite exists but ``retired_at`` is set. Retired
+      suites cannot be replayed (un-retire is not supported in T2).
+    """
+    from app.tools.replay_suite import handle_replay_suite
+
+    return await handle_replay_suite(suite_id=suite_id)
 
 
 # ---------------------------------------------------------------------------
