@@ -1,25 +1,49 @@
 /**
- * SuitesStore — owns the ValidationSuite surface state.
+ * SuitesStore — owns the ValidationSuite surface state for the Topic
+ * Probe Tier 2 (v0.4.22) SUITES navigator entry + StatusBar regression
+ * badge.
  *
- * Cycle 12 ships the read paths for Topic Probe Tier 2:
- *   - `suites`              — paginated list (single-page in T2)
- *   - `selectedSuiteId` +   — backs SuiteDetailView mount
- *     `detail`
- *   - `regressionAlarmBlock` — cached from `GET /api/health`'s `regression_
- *     alarm` block, polled every 30s. Polling is decoupled from the StatusBar's
- *     fixed 60s health poll because the alarm UX needs <=30s freshness while
- *     the rest of the bar tolerates the canonical cadence.
- *   - SSE-driven invalidation: on `taxonomy-changed` the store refetches
- *     BOTH the suites list and the alarm block (suite create + replay-
- *     completion update orthogonal slices of state).
+ * Cycle 12 ships the read paths:
+ *   - `suites`                — paginated list (single-page in T2; T3+
+ *                               extends pagination + filters)
+ *   - `selectedSuiteId` +     — drives SuiteDetailView mount; `select()`
+ *     `detail` + `replays`      fans out the per-suite + replay fetches
+ *   - `regressionAlarmBlock`  — cached from `GET /api/health`'s
+ *                               `regression_alarm` block, polled every
+ *                               30s. Polling is intentionally decoupled
+ *                               from the StatusBar's canonical 60s health
+ *                               poll: the alarm UX requires ≤30s freshness
+ *                               while the rest of the bar tolerates the
+ *                               slower cadence (spec § 11).
+ *   - SSE-driven invalidation: on the `taxonomy-changed` DOM CustomEvent
+ *                               (re-dispatched by `+page.svelte` from the
+ *                               canonical `taxonomy_changed` SSE event)
+ *                               the store refetches BOTH the suites list
+ *                               and the alarm block — suite create and
+ *                               replay completion update orthogonal slices
+ *                               of state, so a single event-handler must
+ *                               touch both endpoints.
  *
- * Polling lifecycle:
- *   - `startPolling()` is idempotent — second call is a no-op.
- *   - First poll fires synchronously on `startPolling()` so the 30s tick
- *     never blocks the initial render. The SSE handler registers on the
- *     same call.
+ * Lifecycle contract:
+ *   - `startPolling()` is idempotent — a second call returns immediately
+ *     and the existing interval keeps ticking. Safe under HMR + SSR-mount
+ *     scenarios.
+ *   - The first poll fires synchronously on `startPolling()` so the
+ *     initial render of `RegressionBadge` doesn't block on the 30s tick.
+ *     The SSE listener is registered on the same call.
  *   - `stopPolling()` clears the interval and unregisters the listener;
- *     used by tests + hot-reload teardown.
+ *     consumed by tests + the root `+page.svelte` `$effect` teardown.
+ *
+ * State invariants:
+ *   - `loading` is true ONLY while `load()` is in flight; not raised
+ *     during health-poll ticks (`refreshHealth()` failures are silent —
+ *     the StatusBar owns global outage messaging).
+ *   - `error` is the load() error message; cleared on the next successful
+ *     `load()`.
+ *   - Health-poll failures preserve the last-good `regressionAlarmBlock`;
+ *     the badge stays pinned to its last known state until the next
+ *     successful poll. Replacing the block on every poll guarantees
+ *     stale-cache surfaces resolve within 30s of recovery.
  */
 
 import {

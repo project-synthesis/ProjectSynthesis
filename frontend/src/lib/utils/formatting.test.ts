@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { formatScore, formatDelta, truncateText, copyToClipboard, isPassthroughResult } from './formatting';
+import {
+  formatScore,
+  formatDelta,
+  formatSignedDelta,
+  truncateText,
+  copyToClipboard,
+  isPassthroughResult,
+} from './formatting';
 
 describe('formatScore', () => {
   it('formats a number with 1 decimal by default', () => {
@@ -34,6 +41,40 @@ describe('formatDelta', () => {
   });
   it('respects custom decimals', () => {
     expect(formatDelta(2.567, 2)).toContain('2.57');
+  });
+});
+
+describe('formatSignedDelta', () => {
+  it('returns em-dash placeholder for null', () => {
+    expect(formatSignedDelta(null)).toBe('—');
+  });
+  it('returns em-dash placeholder for undefined', () => {
+    expect(formatSignedDelta(undefined)).toBe('—');
+  });
+  it('returns em-dash placeholder for non-finite (NaN)', () => {
+    expect(formatSignedDelta(NaN)).toBe('—');
+  });
+  it('formats positive with + prefix and 2-decimal default', () => {
+    expect(formatSignedDelta(0.64)).toBe('+0.64');
+  });
+  it('formats negative with Unicode U+2212 minus and 2-decimal default', () => {
+    expect(formatSignedDelta(-0.64)).toBe('−0.64');
+    // Sanity — must be the canonical chromatic minus, not ASCII `-`.
+    expect(formatSignedDelta(-0.64).charCodeAt(0)).toBe(0x2212);
+  });
+  it('respects custom decimals', () => {
+    expect(formatSignedDelta(0.5, 1)).toBe('+0.5');
+    expect(formatSignedDelta(-0.5, 1)).toBe('−0.5');
+  });
+  it('zero renders as unsigned 0.00 inside the epsilon zone', () => {
+    expect(formatSignedDelta(0)).toBe('0.00');
+    expect(formatSignedDelta(0.001)).toBe('0.00');
+    expect(formatSignedDelta(-0.001)).toBe('0.00');
+  });
+  it('epsilon boundary respects the override', () => {
+    // 0.05 epsilon — values inside the band collapse to unsigned.
+    expect(formatSignedDelta(0.04, 2, 0.05)).toBe('0.00');
+    expect(formatSignedDelta(0.06, 2, 0.05)).toBe('+0.06');
   });
 });
 

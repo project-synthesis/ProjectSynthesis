@@ -24,6 +24,7 @@
    * `tabindex/role/onkeydown` boilerplate.
    */
   import type { ValidationSuiteListItem } from '$lib/api/suites';
+  import { formatSignedDelta } from '$lib/utils/formatting';
 
   export type SuiteRowStatus = 'nominal' | 'firing' | 'none';
 
@@ -36,17 +37,6 @@
   }
 
   let { suite, delta, status, onClick }: Props = $props();
-
-  // Format signed delta with Unicode U+2212 minus (per SKILL.md numeric
-  // voice). Two decimals match the scoring convention shown in the spec
-  // ("−0.64 vs baseline").
-  function formatDelta(d: number | null): string {
-    if (d == null) return '—';
-    const abs = Math.abs(d).toFixed(2);
-    if (d > 0) return `+${abs}`;
-    if (d < 0) return `−${abs}`;
-    return '0.00';
-  }
 
   const statusLabel = $derived(
     status === 'firing' ? 'firing' : status === 'nominal' ? 'nominal' : 'no replay',
@@ -70,7 +60,7 @@
   ></span>
   <span class="suite-label">{suite.label}</span>
   <span class="suite-prompts">{suite.prompts_count}p</span>
-  <span class="suite-delta" data-test="suite-row-delta">{formatDelta(delta)}</span>
+  <span class="suite-delta" data-test="suite-row-delta">{formatSignedDelta(delta)}</span>
 </button>
 
 <style>
@@ -106,8 +96,13 @@
     background: color-mix(in srgb, var(--color-bg-hover) 40%, transparent);
   }
 
+  /* Focus state — canonical 5-state machine. The global app.css
+     `:focus-visible` rule already paints the 1px cyan outline (RGBA
+     `0,229,255,0.3` + offset 2px); we additionally brighten the row
+     border so the focused state reads cleanly without competing
+     contour weight. Outline override is intentional only to align the
+     outline-offset against the row's 1px border. */
   .suite-row:focus-visible {
-    outline: none;
     border-color: var(--color-border-accent);
   }
 

@@ -13,6 +13,30 @@ export function formatDelta(delta: number, decimals = 1): string {
   return (delta > 0 ? '+' : '') + delta.toFixed(decimals);
 }
 
+/**
+ * Format a signed delta with Unicode U+2212 minus (canonical "chromatic
+ * minus" per SKILL.md numeric voice). Null-safe — returns the placeholder
+ * `—` (U+2014 em-dash) for null/undefined. Below the epsilon zone (default
+ * `0.005`) the delta is rendered as `0.NN` without a sign, so display
+ * doesn't show `+0.00` / `−0.00` for jitter-class values.
+ *
+ * Used by the Topic Probe Tier 2 suite surfaces (SuiteRow + SuiteDetailView)
+ * where signed deltas vs baseline are surfaced inline; the scoring
+ * convention shows two decimals (`−0.64 vs baseline` per spec § 6 voice
+ * table).
+ */
+export function formatSignedDelta(
+  delta: number | null | undefined,
+  decimals = 2,
+  epsilon = 0.005,
+): string {
+  if (delta == null || !isFinite(delta)) return '—';
+  const abs = Math.abs(delta).toFixed(decimals);
+  if (delta > epsilon) return `+${abs}`;
+  if (delta < -epsilon) return `−${abs}`;
+  return (0).toFixed(decimals);
+}
+
 /** Truncate text to maxLen characters, appending '...' if truncated. Returns '' for null/undefined. */
 export function truncateText(text: string | null | undefined, maxLen = 80): string {
   if (!text) return '';
