@@ -440,7 +440,7 @@ Update `GET /api/suites` (§4 REST table) returns `ValidationSuiteListResponse` 
 ### Write-queue operation labels (new)
 
 - `validation_suite_create` — `ValidationSuiteService.create_from_run()` terminal write
-- `validation_suite_retire` — `ValidationSuiteService.retire()` terminal write. Labelled ONLY on first-retire (state-transition) submissions; idempotent re-retires short-circuit before `WriteQueue.submit()` per §5 service body (line 526-528), so no operation_label is recorded on no-op re-retries. This matches the §9 `validation_suite_retired` event-emission contract ("ONLY when state actually transitioned").
+- `validation_suite_retire` — `ValidationSuiteService.retire()` terminal write. Labelled ONLY on first-retire (state-transition) submissions; idempotent re-retires short-circuit before `WriteQueue.submit()` per §5 `retire()` body's early-return clause (the `if suite.retired_at is not None: return ValidationSuiteOut.model_validate(suite)` guard that precedes any write_queue.submit call), so no operation_label is recorded on no-op re-retries. This matches the §9 `validation_suite_retired` event-emission contract ("ONLY when state actually transitioned").
 - `replay_run_persist` — `RunOrchestrator._persist_final()` terminal write **when `mode='replay_run'`**. The orchestrator's persist path is otherwise unchanged from Foundation P3 — it is the same `_persist_final()` body, but the operation_label is mode-keyed: `run_orchestrator.persist_final` for `topic_probe`/`seed_agent` (existing), `replay_run_persist` for `replay_run` (new). The mode-keying is the ONLY behavioral diff in the orchestrator, surfaced for JSONL trace filterability.
 
 ## 5 Services + generators + topic-only mode
