@@ -31,12 +31,7 @@ from sqlalchemy import select
 from app import config as _config_mod
 from app import database as _database_mod
 from app.models import RunRow, ValidationSuite
-from app.schemas.validation_suite import (
-    BaselineScoresPayload,
-    PerPromptScore,
-    PromptSnapshotItem,
-    ValidationSuiteOut,
-)
+from app.schemas.validation_suite import ValidationSuiteOut
 from app.services.event_bus import event_bus
 
 if TYPE_CHECKING:
@@ -46,6 +41,23 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+# Canonical ``RunRow.aggregate`` key set the snapshot extracts. Single source
+# of truth referenced by both ``_build_baseline_scores`` (the dict producer)
+# and the spec body §3 baseline-scores shape definition. Used solely for
+# documentation + a defensive ``__all__``-style witness — runtime extraction
+# still uses literal keys because the call sites need typed defaults per key
+# (floats default to ``0.0``, ``per_prompt`` to ``[]``,
+# ``task_type_distribution`` to ``{}``).
+_BASELINE_SCORES_KEYS: tuple[str, ...] = (
+    "mean_overall",
+    "p5_overall",
+    "p50_overall",
+    "p95_overall",
+    "per_prompt",
+    "task_type_distribution",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +73,11 @@ class SuiteSnapshotInputs:
     attribute references. All fields are plain scalars / lists of dicts —
     safe to pass into the writer-engine session callback without re-loading
     the source RunRow.
+
+    Foundation P4 invariant: ``_build_snapshot_inputs`` is the ONLY producer;
+    callers downstream of the read session must NEVER re-touch the source
+    ``RunRow`` instance to populate snapshot fields (would trigger
+    ``MissingGreenlet`` on a detached ORM lazy-load).
     """
 
     suite_id: str
@@ -69,14 +86,92 @@ class SuiteSnapshotInputs:
     tolerance_abs: float
     project_id: str | None
     repo_full_name: str | None
-    prompts_snapshot: list[dict]
-    baseline_scores: dict
+    prompts_snapshot: list[dict[str, Any]]
+    baseline_scores: dict[str, Any]
     created_at: datetime
 
 
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_prompts_snapshot(
+    prompt_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project per-prompt ``RunRow.prompt_results`` rows into the snapshot shape.
+
+    Position-correspondence invariant (§3 key invariant 2): the output order
+    mirrors ``prompt_results`` exactly, so consumers can pair
+    ``prompts_snapshot[i] <-> baseline_scores.per_prompt[i]`` by index.
+
+    Each ``PromptSnapshotItem`` field is read tolerantly via ``dict.get`` —
+    different generators (topic_probe vs future seed_agent forks) emit
+    slightly different per-prompt shapes. Only ``raw_prompt`` is a hard
+    requirement; the rest gracefully default to ``None``.
+    """
+    return [
+        {
+            "raw_prompt": r.get("raw_prompt", ""),
+            "intent_label": r.get("intent_label"),
+            "original_optimization_id": r.get("optimization_id"),
+            "category": r.get("category"),
+        }
+        for r in prompt_results
+    ]
+
+
+def _derive_per_prompt_from_results(
+    prompt_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Fallback per-prompt builder when ``aggregate['per_prompt']`` is absent.
+
+    Older RunRow shapes (pre-topic_probe canonical aggregate) and future
+    generator forks may not populate ``aggregate.per_prompt`` — derive it
+    from ``prompt_results`` per row instead so the snapshot's
+    position-correspondence invariant holds either way.
+    """
+    return [
+        {
+            "raw_prompt_idx": i,
+            "overall": float(r.get("overall_score") or 0.0),
+            "dimensions": {
+                k: float(v) for k, v in (r.get("dimensions") or {}).items()
+                if isinstance(v, int | float)
+            },
+        }
+        for i, r in enumerate(prompt_results)
+    ]
+
+
+def _build_baseline_scores(
+    aggregate: dict[str, Any],
+    prompt_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Assemble the canonical ``baseline_scores`` payload dict.
+
+    Spec §3 baseline-scores shape: exactly the keys in
+    :data:`_BASELINE_SCORES_KEYS`. Numeric fields default to ``0.0`` when
+    absent so the resulting dict always validates against
+    :class:`BaselineScoresPayload` — partial-key ``RunRow.aggregate`` rows
+    (legacy / corrupted) do not crash the snapshot build.
+    """
+    raw_per_prompt: list[dict[str, Any]]
+    if isinstance(aggregate.get("per_prompt"), list):
+        raw_per_prompt = list(aggregate["per_prompt"])
+    else:
+        raw_per_prompt = _derive_per_prompt_from_results(prompt_results)
+
+    return {
+        "mean_overall": float(aggregate.get("mean_overall") or 0.0),
+        "p5_overall": float(aggregate.get("p5_overall") or 0.0),
+        "p50_overall": float(aggregate.get("p50_overall") or 0.0),
+        "p95_overall": float(aggregate.get("p95_overall") or 0.0),
+        "per_prompt": raw_per_prompt,
+        "task_type_distribution": dict(
+            aggregate.get("task_type_distribution") or {},
+        ),
+    }
 
 
 def _build_snapshot_inputs(
@@ -89,52 +184,15 @@ def _build_snapshot_inputs(
     via SQLAlchemy's lazy-load path. The frozen dataclass extracts every
     field eagerly so post-session code paths never re-touch ``run``.
 
-    Position-correspondence invariant (§3 key invariant 2): the order of
-    ``prompts_snapshot`` items mirrors ``run.prompt_results`` exactly, so
-    consumers can pair ``prompts_snapshot[i] <-> baseline_scores.per_prompt[i]``.
+    Delegates shape projection to :func:`_build_prompts_snapshot` and
+    :func:`_build_baseline_scores` so each transformation is a pure,
+    independently-testable helper.
     """
-    prompt_results: list[dict] = list(run.prompt_results or [])
-    prompts_snapshot: list[dict] = []
-    for r in prompt_results:
-        # Each PromptSnapshotItem field is read tolerantly — different
-        # generators (topic_probe vs future seed_agent forks) emit slightly
-        # different per-prompt shapes. raw_prompt is the only hard requirement.
-        prompts_snapshot.append({
-            "raw_prompt": r.get("raw_prompt", ""),
-            "intent_label": r.get("intent_label"),
-            "original_optimization_id": r.get("optimization_id"),
-            "category": r.get("category"),
-        })
-
-    aggregate: dict = dict(run.aggregate or {})
-
-    # per_prompt may live in run.aggregate['per_prompt'] (topic_probe canonical
-    # shape) OR be derivable from run.prompt_results (older shapes / future
-    # forks). Prefer aggregate.per_prompt; fall back to deriving from prompt_results.
-    raw_per_prompt: list[dict]
-    if isinstance(aggregate.get("per_prompt"), list):
-        raw_per_prompt = list(aggregate["per_prompt"])
-    else:
-        raw_per_prompt = [
-            {
-                "raw_prompt_idx": i,
-                "overall": float(r.get("overall_score") or 0.0),
-                "dimensions": {
-                    k: float(v) for k, v in (r.get("dimensions") or {}).items()
-                    if isinstance(v, int | float)
-                },
-            }
-            for i, r in enumerate(prompt_results)
-        ]
-
-    baseline_scores: dict = {
-        "mean_overall": float(aggregate.get("mean_overall") or 0.0),
-        "p5_overall": float(aggregate.get("p5_overall") or 0.0),
-        "p50_overall": float(aggregate.get("p50_overall") or 0.0),
-        "p95_overall": float(aggregate.get("p95_overall") or 0.0),
-        "per_prompt": raw_per_prompt,
-        "task_type_distribution": dict(aggregate.get("task_type_distribution") or {}),
-    }
+    prompt_results: list[dict[str, Any]] = list(run.prompt_results or [])
+    prompts_snapshot = _build_prompts_snapshot(prompt_results)
+    baseline_scores = _build_baseline_scores(
+        dict(run.aggregate or {}), prompt_results,
+    )
 
     return SuiteSnapshotInputs(
         suite_id=uuid.uuid4().hex,
@@ -277,13 +335,20 @@ class ValidationSuiteService:
         # ============ STEP 1: short read session ============
         # Use the canonical async_session_factory — the read session MUST
         # exit before any write_queue.submit call (Foundation P4 contract,
-        # pinned by test_create_from_run_detached_orm_safe).
+        # pinned by ``test_create_from_run_detached_orm_safe``).
         #
-        # Manual __aenter__/__aexit__ rather than ``async with`` so the
-        # detached-ORM test's instance-level __aexit__ wrapper fires (Python's
-        # ``async with`` resolves dunder methods on the class, bypassing
-        # instance-level patches — manual getattr-style invocation honours
-        # the test's call-order recorder).
+        # Semantically equivalent to:
+        #     async with _database_mod.async_session_factory() as read_db:
+        #         ...
+        # We expand it to manual ``__aenter__`` / ``__aexit__`` calls so the
+        # detached-ORM test's instance-level ``inner_ctx.__aexit__ = ...``
+        # wrapper actually fires. Python's data model resolves ``async with``
+        # dunder methods on the *class* (descriptor protocol), which would
+        # bypass any instance-attribute patch on the AsyncSession returned
+        # by ``async_sessionmaker.__call__``. Explicit attribute lookup goes
+        # through normal instance-first resolution, honouring the test's
+        # call-order recorder. Behaviour is identical to ``async with`` for
+        # production code paths — only the test patch's visibility changes.
         session_ctx = _database_mod.async_session_factory()
         read_db = await session_ctx.__aenter__()
         try:
@@ -345,35 +410,24 @@ class ValidationSuiteService:
 
 
 def _suite_out_from_snapshot(snapshot: SuiteSnapshotInputs) -> ValidationSuiteOut:
-    """Adapt a frozen snapshot to the public ValidationSuiteOut shape.
+    """Adapt a frozen snapshot to the public ``ValidationSuiteOut`` shape.
 
-    Coerces ``baseline_scores.per_prompt`` (list[dict]) → list[PerPromptScore]
-    so the returned model has the canonical nested-attribute access path the
-    test suite pins (``out.baseline_scores.p5_overall``, etc.).
+    Relies on Pydantic's nested ``model_validate`` to coerce the snapshot's
+    ``dict[str, Any]`` payloads into the typed nested models
+    (``PromptSnapshotItem``, ``PerPromptScore``, ``BaselineScoresPayload``)
+    in a single call — no per-field re-extraction, and the canonical key
+    set lives in one place (the Pydantic schema declaration).
     """
-    per_prompt_raw: list[dict[str, Any]] = list(snapshot.baseline_scores.get("per_prompt") or [])
-    per_prompt = [PerPromptScore.model_validate(p) for p in per_prompt_raw]
-    baseline = BaselineScoresPayload(
-        mean_overall=float(snapshot.baseline_scores.get("mean_overall") or 0.0),
-        p5_overall=float(snapshot.baseline_scores.get("p5_overall") or 0.0),
-        p50_overall=float(snapshot.baseline_scores.get("p50_overall") or 0.0),
-        p95_overall=float(snapshot.baseline_scores.get("p95_overall") or 0.0),
-        per_prompt=per_prompt,
-        task_type_distribution=dict(snapshot.baseline_scores.get("task_type_distribution") or {}),
-    )
-    snapshot_items = [
-        PromptSnapshotItem.model_validate(p) for p in snapshot.prompts_snapshot
-    ]
-    return ValidationSuiteOut(
-        id=snapshot.suite_id,
-        source_run_id=snapshot.source_run_id,
-        label=snapshot.label,
-        tolerance_abs=snapshot.tolerance_abs,
-        project_id=snapshot.project_id,
-        repo_full_name=snapshot.repo_full_name,
-        created_at=snapshot.created_at,
-        retired_at=None,
-        retired_reason=None,
-        prompts_snapshot=snapshot_items,
-        baseline_scores=baseline,
-    )
+    return ValidationSuiteOut.model_validate({
+        "id": snapshot.suite_id,
+        "source_run_id": snapshot.source_run_id,
+        "label": snapshot.label,
+        "tolerance_abs": snapshot.tolerance_abs,
+        "project_id": snapshot.project_id,
+        "repo_full_name": snapshot.repo_full_name,
+        "created_at": snapshot.created_at,
+        "retired_at": None,
+        "retired_reason": None,
+        "prompts_snapshot": snapshot.prompts_snapshot,
+        "baseline_scores": snapshot.baseline_scores,
+    })
