@@ -488,7 +488,16 @@ async def health_check(
     _rate: None = Depends(RateLimit(lambda: settings.DEFAULT_RATE_LIMIT)),
     probes: bool = Query(True, description="Run cross-service probes (set false for self-check)."),
 ) -> HealthResponse:
-    """Liveness check with provider, version, pipeline health, and cross-service probes."""
+    """Liveness check with provider, version, pipeline health, and cross-service probes.
+
+    v0.4.22 T2 Cycle 9 (spec § 3 + § 5): the response also carries a
+    ``regression_alarm`` block sourced from the lifespan-registered
+    :class:`ValidationSuiteService` singleton (``app.state.validation_suite_service``).
+    The block is ALWAYS present — empty-fleet, service-unavailable, and
+    service-error paths all fall back to the canonical
+    ``{suites_total: 0, suites_in_alarm: 0, latest_alarms: []}`` shape so
+    frontend consumers can render the panel without null-handling.
+    """
     # Provider and routing state (live in-memory)
     routing = getattr(request.app.state, "routing", None)
     if routing:
@@ -724,20 +733,38 @@ async def health_check(
     # 30s TTL cache + per-suite prior-state map persist across requests, so
     # the route MUST resolve the same instance every call — instantiating
     # per-request would defeat the cache and re-issue the alarm JOIN on every
-    # health poll (pinned by Cycle 9 Test 4 + Cycle 4 Test 26). Empty-fleet
-    # safe-default keeps the block present on every response so frontend
-    # consumers can render without null-handling, even before lifespan
-    # registers the singleton (degraded boot path).
+    # health poll (pinned by Cycle 9 Test 4 + Cycle 4 Test 26).
+    #
+    # Three safe-default paths converge on the canonical empty-fleet shape
+    # ``{suites_total: 0, suites_in_alarm: 0, latest_alarms: []}``:
+    #   1. ``validation_suite_service`` attribute missing entirely
+    #      (``getattr(...)`` returns ``None``).
+    #   2. Lifespan registration failed and stored ``None`` explicitly
+    #      (see main.py lifespan ``except`` branch).
+    #   3. ``compute_regression_alarm()`` raises — fallback preserved
+    #      from the pre-call initialization below; the warning log gives
+    #      operators a forensic crumb without surfacing a 5xx to the
+    #      health caller.
+    # All three keep the block present on every response so frontend
+    # consumers can render without null-handling, even on a degraded boot.
     regression_alarm_block = RegressionAlarmBlock(
         suites_total=0,
         suites_in_alarm=0,
         latest_alarms=[],
     )
     try:
+        # ``getattr(default=None)`` handles the missing-attribute case;
+        # the explicit ``is not None`` check handles the case where lifespan
+        # registration failed and stored ``None`` on app.state.
         suite_service = getattr(request.app.state, "validation_suite_service", None)
         if suite_service is not None:
             regression_alarm_block = await suite_service.compute_regression_alarm()
     except Exception:
+        # Any service-layer error (DB outage, alarm query crash) degrades
+        # to the canonical empty-fleet shape rather than failing the whole
+        # health check. The block is purely informational — a 5xx here
+        # would cascade into noisy monitoring alerts for an issue that the
+        # other health fields would already surface.
         logger.warning("regression_alarm computation failed", exc_info=True)
 
     return HealthResponse(
