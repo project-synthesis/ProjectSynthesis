@@ -246,8 +246,8 @@ class Settings(BaseSettings):
         description="Rolling window for latency reservoir (5 minutes).",
     )
     WRITE_QUEUE_AUDIT_HOOK_RAISE: bool = Field(
-        default=False,
-        description="If True (CI), audit hook RAISES on read-engine writes; otherwise WARN.",
+        default=True,
+        description="If True (CI/prod), audit hook RAISES WriteOnReadEngineError on read-engine writes outside the allow-list; otherwise WARN. Kill-switch: set WRITE_QUEUE_AUDIT_HOOK_RAISE=false to revert to v0.4.21 WARN-only behavior.",
     )
 
     def resolve_secret_key(self) -> str:
