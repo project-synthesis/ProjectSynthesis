@@ -34,8 +34,22 @@
    */
   import type { RunListResponse, RunResult, RunSummary } from '$lib/api/runs';
   import type { ValidationSuiteOut } from '$lib/api/suites';
+  import { replaySuite, retireSuite } from '$lib/api/suites';
+  import { suitesStore } from '$lib/stores/suites.svelte';
+  import { toastStore } from '$lib/stores/toast.svelte';
   import { formatSignedDelta } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
+  import DestructiveConfirmModal from '$lib/components/shared/DestructiveConfirmModal.svelte';
+
+  // Test-mock-compat shim: tests stub `toastStore` with severity helpers
+  // (`success`, `error`) that aren't on the real `ToastStore` class. We
+  // invoke the severity method when present (mocks) and fall back to
+  // `info()` everywhere else. Mirrors the TopicProbeReportCard pattern.
+  type ToastShim = typeof toastStore & {
+    success?: (msg: string) => void;
+    error?: (msg: string) => void;
+  };
+  const toast = toastStore as ToastShim;
 
   /**
    * Minimal shape of a completed replay run carrying per-prompt results.
@@ -134,6 +148,82 @@
     }
     return parts.join(' · ');
   });
+
+  // ── Lifecycle actions (v0.4.22 T2 Cycle 11/12 follow-up) ─────────────
+  //
+  // Operators need to drive both lifecycle endpoints from the UI:
+  //   - Replay: POST /api/suites/{id}/replay → dispatches a new
+  //     ReplayRunGenerator against the frozen baseline; toast + detail
+  //     refresh so the new replay row surfaces in the history table.
+  //   - Retire: POST /api/suites/{id}/retire → flags the suite (no
+  //     destructive delete; replay against retired returns 410 Gone).
+  //     Gated by a DestructiveConfirmModal (RETIRE literal + reason
+  //     textbox) so a misclick can't freeze a healthy suite.
+  let replaying = $state(false);
+  let retireModalOpen = $state(false);
+  let retireReason = $state('');
+  // `retired` is read from the suite prop; computing it as a $derived
+  // lets the Retire button hide immediately after a successful retire
+  // (the parent loadDetail() refresh re-flows `retired_at`).
+  const isRetired = $derived(suite.retired_at != null);
+
+  async function handleReplay(): Promise<void> {
+    if (replaying || isRetired) return;
+    replaying = true;
+    try {
+      const replay = await replaySuite(suite.id);
+      toast.success?.(`Replay started (${replay.run_id.slice(0, 8)})`)
+        ?? toast.info(`Replay started (${replay.run_id.slice(0, 8)})`);
+      // Refresh suite detail so the new replay row surfaces in the
+      // history table. Best-effort — failures are non-fatal; the toast
+      // already confirmed the dispatch.
+      try {
+        await suitesStore.loadDetail(suite.id);
+      } catch {
+        /* swallow */
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Replay failed';
+      toast.error?.(message) ?? toast.info(`Error: ${message}`);
+    } finally {
+      replaying = false;
+    }
+  }
+
+  function openRetireModal(): void {
+    if (isRetired) return;
+    retireReason = '';
+    retireModalOpen = true;
+  }
+
+  async function confirmRetire(): Promise<void> {
+    const reason = retireReason.trim();
+    // The DestructiveConfirmModal already gates on the RETIRE literal —
+    // we additionally require a non-empty reason so `retired_reason`
+    // carries operator context for audit. Empty reason throws so the
+    // modal surfaces the error inline (its catch + errorMessage path).
+    if (!reason) {
+      throw new Error('Reason required to retire suite');
+    }
+    try {
+      await retireSuite(suite.id, reason);
+      toast.success?.('Suite retired') ?? toast.info('Suite retired');
+      retireModalOpen = false;
+      retireReason = '';
+      // Refresh detail so the retired banner + meta-chip appear and the
+      // Retire button hides. Best-effort.
+      try {
+        await suitesStore.loadDetail(suite.id);
+      } catch {
+        /* swallow */
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Retire failed';
+      toast.error?.(message) ?? toast.info(`Error: ${message}`);
+      // Re-throw so the modal surfaces the error inline.
+      throw e instanceof Error ? e : new Error(message);
+    }
+  }
 </script>
 
 <section
@@ -149,6 +239,39 @@
       · tolerance ±{suite.tolerance_abs.toFixed(2)}
     </span>
   </header>
+
+  <!-- ── Lifecycle actions row ─────────────────────────────────────
+       Replay + Retire. Both are h-5 (20px) per spec § 6 density-pin.
+       - Replay: Medium tier (`1px solid neon-blue`, 12% bg-hover tint).
+       - Retire: Destructive (`1px solid neon-red`); hidden when already
+         retired (idempotent — retiring a retired suite is a noop, but
+         hiding the button keeps the affordance honest). Both buttons
+         are disabled while a replay is in flight + when retired (so a
+         retired suite is read-only end-to-end). -->
+  <div class="detail-actions" data-test="suite-detail-actions">
+    <button
+      type="button"
+      class="detail-btn detail-btn--replay"
+      onclick={handleReplay}
+      disabled={replaying || isRetired}
+      aria-label="Replay suite"
+      data-test="suite-replay-btn"
+    >
+      {replaying ? 'Replaying…' : 'Replay'}
+    </button>
+    {#if !isRetired}
+      <button
+        type="button"
+        class="detail-btn detail-btn--retire"
+        onclick={openRetireModal}
+        disabled={replaying}
+        aria-label="Retire suite"
+        data-test="suite-retire-btn"
+      >
+        Retire
+      </button>
+    {/if}
+  </div>
 
   <!-- ── Suite meta row — full ValidationSuiteOut field surfacing ─── -->
   <div class="detail-meta-row" data-test="suite-meta">
@@ -249,6 +372,43 @@
     {/each}
   </div>
 </section>
+
+<!-- ── Retire confirm modal ─────────────────────────────────────────
+     Gated by the canonical DestructiveConfirmModal — operator types
+     RETIRE to commit + a non-empty reason captured into `retired_reason`
+     for audit. The reason textbox sits inside the snippet body so it
+     can bind into the same `retireReason` $state the handler reads. -->
+{#snippet retireBody()}
+  <div class="retire-body">
+    <p class="retire-prose">
+      Retire <span class="retire-label">{suite.label}</span>? Replay
+      against retired suites returns 410 Gone. The action is reversible
+      only via direct DB edit.
+    </p>
+    <label class="retire-reason-label" for="suite-retire-reason">
+      Reason
+    </label>
+    <input
+      id="suite-retire-reason"
+      type="text"
+      class="retire-reason-input"
+      placeholder="e.g. replaced by suite-v2"
+      bind:value={retireReason}
+      data-test="suite-retire-reason"
+    />
+  </div>
+{/snippet}
+
+<DestructiveConfirmModal
+  open={retireModalOpen}
+  title="RETIRE SUITE?"
+  body={retireBody}
+  sideEffectHint="The suite stays in the database but cannot be replayed."
+  confirmLiteral="RETIRE"
+  confirmLabel="Retire"
+  onConfirm={confirmRetire}
+  onCancel={() => { retireModalOpen = false; }}
+/>
 
 <style>
   .suite-detail-view {
@@ -437,5 +597,121 @@
     padding: 8px;
     color: var(--color-text-dim);
     font-style: italic;
+  }
+
+  /* ── Lifecycle actions row ──────────────────────────────────────
+     h-5 (20px) buttons per spec § 6 density-pin canon. Replay is the
+     Medium-tier action (1px solid neon-blue, no translateY lift —
+     Recipe E lift is reserved for Hero buttons). Retire is destructive
+     (1px solid neon-red); confirm gate lives in DestructiveConfirmModal. */
+  .detail-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 4px;
+  }
+
+  .detail-btn {
+    height: 20px;
+    padding: 0 8px;
+    line-height: 18px;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    box-sizing: border-box;
+    /* Atomic-event multi-property hover transition — spec § 6 axiom 5. */
+    transition:
+      background 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .detail-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Medium tier — Recipe A (border + bg tint, NO translateY lift). */
+  .detail-btn--replay {
+    color: var(--color-neon-blue, #4d8eff);
+  }
+
+  .detail-btn--replay:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-neon-blue, #4d8eff) 12%, transparent);
+    color: var(--color-neon-blue, #4d8eff);
+    border-color: var(--color-neon-blue, #4d8eff);
+  }
+
+  .detail-btn--replay:active:not(:disabled) {
+    /* Contraction — inset contour with muted accent. */
+    box-shadow: inset 0 0 0 1px rgba(77, 142, 255, 0.4);
+  }
+
+  /* Destructive — Recipe A with neon-red chromatic encoding. */
+  .detail-btn--retire {
+    color: var(--color-neon-red, #ff3366);
+    border-color: color-mix(in srgb, var(--color-neon-red, #ff3366) 25%, transparent);
+  }
+
+  .detail-btn--retire:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-neon-red, #ff3366) 12%, transparent);
+    border-color: var(--color-neon-red, #ff3366);
+  }
+
+  .detail-btn--retire:active:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-neon-red, #ff3366) 40%, transparent);
+  }
+
+  /* ── Retire modal body ─────────────────────────────────────────── */
+  .retire-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-family: var(--font-sans);
+  }
+
+  .retire-prose {
+    margin: 0;
+    font-size: 11px;
+    color: var(--color-text-primary);
+    line-height: 1.4;
+  }
+
+  .retire-label {
+    font-family: var(--font-mono);
+    color: var(--color-neon-cyan);
+    font-weight: 600;
+  }
+
+  .retire-reason-label {
+    font-family: var(--font-display);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+  }
+
+  .retire-reason-input {
+    width: 100%;
+    height: 20px;
+    padding: 0 4px;
+    background: var(--color-bg-input);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0;
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .retire-reason-input:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
   }
 </style>
