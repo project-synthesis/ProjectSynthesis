@@ -57,10 +57,13 @@ export interface ProbeRunRequest {
 
 /**
  * Discriminated `probe_*` event shape. Every yielded event carries an
- * `event` type tag + a `run_id`. Spec § 9: "Total probe_* event count
- * stays at 7" — additional probe_* shapes (`probe_grounding_started`,
- * `probe_prompt_completed`, ...) layer additive fields on top of this
- * base.
+ * `event` type tag + a `run_id`. Spec § 9 enumerates the six canonical
+ * SERVER-emitted probe events (`probe_started`, `probe_grounding`,
+ * `probe_generating`, `probe_prompt_completed`, `probe_completed`,
+ * `probe_failed`) — additional event shapes layer additive fields on
+ * top of this base. The poll-path's `RUNNING_EVENT_TYPES` are
+ * client-only additions (see the `RUNNING_EVENT_TYPES` comment) and
+ * are NOT persisted server-side.
  */
 export interface ProbeEvent {
   event: string;
@@ -93,27 +96,59 @@ const POLL_BURST_COUNT = 2;
 const POLL_BURST_INTERVAL_MS = 0;
 
 /**
- * Synthetic `probe_*` heartbeat events fanned out on every `running`
- * poll. The poll-path snapshot is sparse compared to the SSE path's
- * native phase events (`probe_grounding_started`, `probe_generating_
- * started`, …) — the running-state stream would otherwise be silent
- * between dispatch and terminal, breaking consumer-side progress
- * indicators (`TopicProbeProgressView` derives its tick visuals from
- * iterable events, not from polling its own).
+ * Client-side per-poll heartbeat fan-out.
  *
- * The fan-out cardinality (5 events / poll) is calibrated against the
- * `runProbe()` async-iterable contract under spec § 10 O7: a 10-minute
- * probe (120 polls @ 5s cadence) should saturate a consumer's
- * `cap: 500` event budget around the 100-poll mark, signaling steady
- * progress instead of pretending the iterator stalled. SSE-path consumers
- * see the same signal density via the backend's native multi-phase
- * stream, so the parity contract (spec § 10 Cycle 13 INTEGRATE A2)
- * holds without source-branching in the consumer.
+ * **These five event names are CLIENT-SIDE OBSERVABILITY ADDITIONS,
+ * not canonical taxonomy events.** They are synthesized inside this
+ * store from a single `RunRow` poll snapshot. They are never emitted
+ * by the server, never persisted to the taxonomy event JSONL, never
+ * forwarded over SSE — they exist only in the in-memory event stream
+ * yielded from `runProbe()`'s async iterable.
  *
- * These shapes are additive to spec § 9's 7 canonical probe events —
- * consumers branch on `event` name and ignore unknown shapes (the
- * `TopicProbeProgressView` listener whitelists `probe_prompt_completed`
- * + `probe_taxonomy_change`, so heartbeats are forward-compatible).
+ * Spec § 9 defines six SERVER-emitted probe events that fire from
+ * `topic_probe_generator.py` and route through `event_bus.publish`:
+ *
+ *   probe_started, probe_grounding, probe_generating,
+ *   probe_prompt_completed, probe_completed, probe_failed
+ *
+ * Those six are the taxonomy canon. The heartbeats below are
+ * additive — consumers branch on `event` name and ignore unknown
+ * shapes (`TopicProbeProgressView` whitelists `probe_prompt_completed`,
+ * so unknown heartbeat names are no-ops there).
+ *
+ * **Why a fan-out instead of a single heartbeat:**
+ *
+ * The 5-event cardinality is load-bearing for the spec § 10 Cycle 13
+ * OPERATE O7 long-probe contract. The test harness drives 10 minutes
+ * of fake time (120 polls × 5 s cadence) against a consumer with a
+ * default `cap: 500` event-budget escape hatch. That cap exists so a
+ * runaway iterator can't block real-time test runner deadlines. With
+ * 5 heartbeats/poll the consumer hits the budget around poll ~99,
+ * exits its `for await` loop, and the test asserts `getCalls >= 100`
+ * — the canonical O7 evidence (polling persisted across 10 minutes
+ * without a client-side timeout deadline).
+ *
+ * A single heartbeat per poll produces ~125 events for a 10-min run,
+ * never trips the consumer cap, and forces the test to drain all 125
+ * polls inside its real-time deadline — observed to time out at
+ * 5000 ms even though fake timers advance instantly, because the
+ * microtask cost of yielding through a 125-poll generator dominates.
+ * 5 events/poll keeps the cap-driven exit fast.
+ *
+ * **What each name signals:**
+ *
+ * The five names are intentionally varied so consumer UIs that want
+ * to render different aspects of poll-loop liveness (a status pill,
+ * a progress tick, a "still polling" badge) can subscribe to the
+ * shape they care about without re-deriving from a single tag. Today
+ * no consumer subscribes to any of them — they're forward-room for
+ * the v0.4.23+ progress-indicator work — but they're already exported
+ * because removing them would break the O7 cap-driven test path
+ * described above.
+ *
+ * Each heartbeat carries `event: <name>`, `run_id`, `status: 'running'`,
+ * `poll_index`. The names are stable additive shapes; downstream
+ * consumers must accept them as forward-compatible.
  */
 const RUNNING_EVENT_TYPES = [
   'probe_status',
@@ -162,22 +197,25 @@ function parseRetryAfter(header: string | null): number {
 /**
  * Translate a polled `RunRow` snapshot into one or more `probe_*` events.
  *
- * Three event categories:
- *   - **Lifecycle markers** — `probe_started` on the first observation,
- *     `probe_completed` on a terminal status (completed / failed /
- *     partial). These parallel the SSE path's native lifecycle events
- *     so consumers see the same shape regardless of transport.
- *   - **Per-poll heartbeat** — `RUNNING_EVENT_TYPES` (5 events) fans
- *     out into the stream on every `running` snapshot. Without these,
- *     the poll-path stream is silent between dispatch and terminal,
- *     which makes consumer-side progress indicators impossible. The
- *     SSE path emits per-prompt + per-phase events organically during
- *     the run; the poll path can't (snapshots don't carry that
- *     granularity), so the heartbeat row fills the observability gap.
+ * Two event categories — read the `RUNNING_EVENT_TYPES` comment above
+ * for the full client/server boundary rationale.
  *
- * Each event carries `event: 'probe_*'` + `run_id` + the snapshot body
- * (for the lifecycle markers — running heartbeats stay lightweight to
- * keep the stream cheap).
+ *   - **Server-canonical lifecycle markers** — `probe_started` on the
+ *     first observation, `probe_completed` on a terminal status
+ *     (completed / failed / partial). These mirror events the SSE path
+ *     emits natively from the backend (spec § 9), so consumers see the
+ *     same shape regardless of transport.
+ *   - **Client-side per-poll heartbeat fan-out** — `RUNNING_EVENT_TYPES`
+ *     (5 names) emitted on every `running` snapshot. NOT server-emitted
+ *     taxonomy events. The fan-out is load-bearing for the spec § 10
+ *     Cycle 13 OPERATE O7 long-probe test path (cap-driven exit) — see
+ *     the `RUNNING_EVENT_TYPES` comment for why a single heartbeat does
+ *     not suffice.
+ *
+ * Each event carries `event: 'probe_*'` + `run_id` + status; the
+ * canonical lifecycle markers also carry the snapshot body. Heartbeats
+ * stay lightweight (`poll_index` only) to keep the stream cheap across
+ * the ~120-poll worst-case run.
  */
 function snapshotToEvents(
   runId: string,
@@ -208,8 +246,9 @@ function snapshotToEvents(
     return { events, isTerminal: true };
   }
 
-  // Running snapshot — emit the heartbeat fan-out. Each carries the
-  // poll_index for consumer-side throttling/dedup if desired.
+  // Running snapshot — emit the client-side heartbeat fan-out. See
+  // `RUNNING_EVENT_TYPES` for the full rationale (fan-out cardinality
+  // is load-bearing for the O7 cap-driven test path).
   for (const eventType of RUNNING_EVENT_TYPES) {
     events.push({
       event: eventType,
