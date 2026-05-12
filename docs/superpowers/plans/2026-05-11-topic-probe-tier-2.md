@@ -53,8 +53,8 @@
 | `frontend/src/lib/components/layout/Navigator.svelte` (or equivalent left-nav module — verify path during Cycle 12 GREEN) | EXTEND | Add SUITES entry that routes to SuitesPanel (per spec §6 "EXTENDED components" Left-nav row). |
 | `frontend/src/app.css` | EXTEND | NEW `@keyframes forge-spark` (0→25→100%: scale 1→1.2→1 + rotate 0→3deg→0 + yellow flash via color/background; 250ms ease-out single-shot). |
 | `frontend/src/lib/api/suites.ts` | NEW | Per-domain module: `saveSuite`, `replaySuite`, `getSuites`, `getSuite`, `getSuiteReplays`, `retireSuite`. Imports `apiFetch` from `./client`. |
-| `frontend/src/lib/stores/suitesStore.ts` | NEW | Suite list + selected + regression alarm cache. |
-| `frontend/src/lib/stores/probesStore.ts` | EXTEND | 202+polling abstraction; auto-attach `Prefer: respond-async` when `n_prompts > 10`. |
+| `frontend/src/lib/stores/suites.svelte.ts` | NEW | Suite list + selected + regression alarm cache. |
+| `frontend/src/lib/stores/probes.svelte.ts` | NEW | 202+polling abstraction; auto-attach `Prefer: respond-async` when `n_prompts > 10`. Spec marks this EXTEND but file does not currently exist (verified by `ls frontend/src/lib/stores/`); ship as NEW following the `.svelte.ts` Svelte 5 runes convention (matches `clusters.svelte.ts`, `forge.svelte.ts`, `domains.svelte.ts` precedents). |
 | `.claude/skills/brand-guidelines/SKILL.md` | DOC-SYNC | Lines 79/214/375 extend 5-dir → 7-dir scope; line 140 22px → 20px; line 395 prose-only (no substitution). |
 | `.claude/skills/brand-guidelines/references/component-patterns.md` | DOC-SYNC | Line 219 `copy-flash` 600ms → 1500ms; line 223 `forge-spark` "varies" → "250ms". |
 | `backend/CLAUDE.md` | DOC-SYNC | T2/T3/T4 minor numbers harmonized; line 143 `probe_taxonomy_change` reference dropped (never emitted). |
@@ -69,10 +69,10 @@
 - `backend/tests/test_probes_202_polling.py` (Cycle 8, ~7 tests)
 - `backend/tests/test_health_regression_alarm.py` (Cycle 9, ~5 tests)
 - `backend/tests/test_mcp_tools_save_replay.py` (Cycle 10, ~9 tests)
-- `backend/tests/integration/test_audit_hook_full_t2_pipeline.py` (Cycle 15, ~3 tests + extends existing P4 test)
+- `backend/tests/test_audit_hook_full_t2_pipeline.py (flat layout + `@pytest.mark.integration` decorator per project convention — `backend/tests/integration/` subdir does NOT exist; verified `pyproject.toml:5` registers the marker, mirroring P4 `test_audit_hook_emits_zero_warn_under_full_pipeline` at `backend/tests/test_tools_optimize.py:886`)` (Cycle 15, ~3 tests + extends existing P4 test)
 - `frontend/src/lib/components/probes/*.test.ts` (Cycle 11, ~18 tests)
 - `frontend/src/lib/components/suites/*.test.ts` (Cycle 12, ~14 tests)
-- `frontend/src/lib/stores/probesStore.test.ts` (Cycle 13, ~7 tests)
+- `frontend/src/lib/stores/probes store.test.ts` (Cycle 13, ~7 tests)
 
 **Modified:** ~28 files. **New:** ~22 files (incl. tests + migration + frontend components).
 
@@ -367,7 +367,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 - [ ] **REFACTOR**: lint, docstrings, error-path review on `suite_not_found` raise.
 - [ ] **INTEGRATE**: A4 (retire updates ONLY `retired_at`/`retired_reason`); A2 (uses `WriteQueue.submit()`, not direct DB write).
 - [ ] **OPERATE**: O1 (live verify idempotent re-retire emits zero events via event-bus subscription).
-- [ ] **Validator 1 + 2** dispatches.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -410,7 +411,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 - [ ] **REFACTOR**: lift query to module-level pure function for reuse.
 - [ ] **INTEGRATE**: A3 (Python filter matches canonical alarm eval — diff against spec's SQL); A1 (all query columns consumed — none silently dropped).
 - [ ] **OPERATE**: O4 (READ path under concurrent `replay_run` writes — race-free snapshot via WAL; concurrent writer harness with 30 `/api/health` polls during active replay). O6 (cross-process MCP replay writes do not corrupt alarm state).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -473,7 +475,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 - [ ] **REFACTOR**: route handler docstrings + factor common Pydantic validation paths.
 - [ ] **INTEGRATE**: A2 (use `WriteQueue.submit()` via `ValidationSuiteService` — no re-implementation); A4 (response payloads populate all fields).
 - [ ] **OPERATE** (scoped — replay-endpoint end-to-end checks deferred to Cycle 8): O5 (client disconnect mid-request for save-as-suite/retire — no orphan rows on rate-limit-rejected writes); O8 partial (replay endpoint placeholder leaves orphan `running` row; verify `_gc_orphan_runs` reconciles); O4 (concurrent listings during active write_queue traffic).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -542,7 +545,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
   > O4 (warm-engine fires mid-replay — no contention).
   > O7 (replay 30-min worst case — every timeout in path: LLM provider, HTTP client, asyncio.wait_for ≥ 30min + buffer).
   > O8 (cancel mid-replay — `RunRow.status` reaches terminal `failed` via `asyncio.shield()` write; test by killing spawned task at every per-prompt boundary).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -597,7 +601,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 - [ ] **REFACTOR**: docstrings on new ProbeContext fields, template manifest validation.
 - [ ] **INTEGRATE**: A2 (don't re-implement Phase 2 generation — call existing `generate_probe_prompts` with new kwargs); A3 (consume same return shape both modes).
 - [ ] **OPERATE**: O1 (RunRow.topic_probe_meta.grounding_mode='topic_only' persisted and queryable via `GET /api/runs/{id}`).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -646,7 +651,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 - [ ] **REFACTOR**: docstrings on new methods.
 - [ ] **INTEGRATE**: A2 (dispatch_async reuses existing `_create_row` + `_persist_final` lifecycle; SSE entry path refactors to internally call dispatch_async — single-codepath body).
 - [ ] **OPERATE**: O1 (poll endpoint reflects committed row); O5 (curl --max-time shorter than initial INSERT — server state consistent; **plus deferred Cycle-5 check: curl --max-time 0.1 against POST /api/suites/{id}/replay — no orphan rows**); O7 (inventory every timeout in dispatch_async path); O8 (spawned task survives connection close; **plus deferred Cycle-5 check: replay endpoint INSERT-then-spawn cancellation reconciled by `_gc_orphan_runs`**).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -687,7 +693,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 - [ ] **REFACTOR**: ensure block is optional / safe-default if service unavailable.
 - [ ] **INTEGRATE**: A4 (RegressionAlarmEntry populates all required fields from joined query — no NULL leakage).
 - [ ] **OPERATE**: O4 (alarm-query READ path coexists with active replays).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -739,7 +746,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 - [ ] **REFACTOR**: error envelope normalization across both tools.
 - [ ] **INTEGRATE**: A2 (handlers call ValidationSuiteService methods — don't re-implement); A4 (output payloads populate all fields); A5 (fixtures use real RunRow + ValidationSuite rows).
 - [ ] **OPERATE**: O6 (cross-process MCP→backend bridge for `replay_run` writes works under load — concurrent MCP `synthesis_replay_suite` from 3 clients); O5 (MCP client disconnects after `synthesis_save_suite` returns — write committed; verify by inspecting DB).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -796,7 +804,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 - [ ] **REFACTOR**: Svelte component lint (`svelte-check`); shared sub-components extracted.
 - [ ] **INTEGRATE**: A2 (use per-domain `lib/api/` modules — `runs.ts`/`seed.ts`/`suites.ts` — NOT a monolithic api.ts); A3 (consume canonical `RunListResponse`/`RunSummary`/`RunResult` shapes — no fictional `RunOut`).
 - [ ] **OPERATE**: O1 (browser smoke: SeedModal renders 3rd tab, form submits, report card displays all fields populated from RunResult).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -807,7 +816,7 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 **Files:**
 - Create: `frontend/src/lib/components/suites/{SuitesPanel,SuiteRow,SuiteDetailView,RegressionBadge}.svelte`
 - Modify: `frontend/src/lib/components/layout/StatusBar.svelte` (mount RegressionBadge)
-- Create: `frontend/src/lib/stores/suitesStore.ts`
+- Create: `frontend/src/lib/stores/suites.svelte.ts`
 - DOC-SYNC: `.claude/skills/brand-guidelines/SKILL.md` (lines 79/214/375 5-dir → 7-dir; line 140 22px → 20px)
 - DOC-SYNC: `.claude/skills/brand-guidelines/references/component-patterns.md` (line 219 600ms → 1500ms; line 223 forge-spark "varies" → "250ms")
 - DOC-SYNC: `backend/CLAUDE.md` (T2/T3/T4 minor numbers; line 143 probe_taxonomy_change reference removed)
@@ -832,7 +841,7 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 >
 > **SuiteDetailView (2):**
 > 7. `test_suite_detail_view_replay_history_table_renders_run_summary_rows` — paginated runs.
-> 8. `test_suite_detail_view_per_prompt_baseline_vs_latest_diff_renders` — pairs `baseline_scores.per_prompt[i].overall` with latest replay's `aggregate.replay_per_prompt[i].overall` + delta column.
+> 8. `test_suite_detail_view_per_prompt_baseline_vs_latest_diff_renders` — pairs `suite.baseline_scores.per_prompt[i].overall` with the latest replay row's `RunRow.prompt_results[i].overall_score` + delta column (per-prompt data lives in `prompt_results`, NOT in `aggregate`; aggregate only carries `replay_warnings`/`replay_suite_id`/`replay_n_completed`/`replay_n_failed` additive keys per spec §5).
 >
 > **RegressionBadge (4):**
 > 9. `test_regression_badge_nominal_lower_case_12_ok` — matches shipped `statusLabel()` lower-case pattern.
@@ -852,7 +861,7 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 
 - [ ] **Dispatch GREEN**
 
-> Build the 4 NEW Svelte components per spec §6 + §6 voice + §6 5-state machine. Mount RegressionBadge in `layout/StatusBar.svelte`. Create `suitesStore.ts`. Apply doc-sync updates per §11 item 11.
+> Build the 4 NEW Svelte components per spec §6 + §6 voice + §6 5-state machine. Mount RegressionBadge in `layout/StatusBar.svelte`. Create `suites.svelte.ts`. Apply doc-sync updates per §11 item 11.
 >
 > Commit: `feat(t2-c12): GREEN — SuitesPanel + RegressionBadge + doc-sync`.
 
@@ -861,19 +870,20 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 ### Tasks 12.3-12.7
 
 - [ ] **REFACTOR**: svelte-check on all new components; brand audit lint locally.
-- [ ] **INTEGRATE**: A3 (suite list rows render every field of ValidationSuiteListItem; SuiteDetailView consumes full ValidationSuiteOut including baseline_scores.per_prompt).
+- [ ] **INTEGRATE**: A3 (suite list rows render every field of `ValidationSuiteListItem`; `SuiteDetailView` consumes full `ValidationSuiteOut` including `baseline_scores.per_prompt`; **replay-warning surfacing reads `aggregate.replay_warnings` from `GET /api/runs/{id}` polled state — NOT from the immediate 202 dispatch response per spec §4 `suite_repo_drift` clarification**).
 - [ ] **OPERATE**: O1 (browser smoke: SuitesPanel renders for empty/nominal/firing states; RegressionBadge transitions correctly on SSE-emitted `regression_alarm_transition` events).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
-## Cycle 13 — 202+polling abstraction in `probesStore`
+## Cycle 13 — 202+polling abstraction in `probes store`
 
 **Spec coverage:** §6 NEW + EXTENDED stores, §6 polling integration, §10 Cycle 13.
 
 **Files:**
-- Modify: `frontend/src/lib/stores/probesStore.ts`
-- Test: `frontend/src/lib/stores/probesStore.test.ts`
+- Modify: `frontend/src/lib/stores/probes.svelte.ts`
+- Test: `frontend/src/lib/stores/probes store.test.ts`
 
 ### Task 13.1 — RED
 
@@ -881,7 +891,7 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 
 > 7 Vitest tests:
 >
-> 1. `test_run_probe_returns_async_iterable` — `for await (const e of probesStore.runProbe(req))` yields events.
+> 1. `test_run_probe_returns_async_iterable` — `for await (const e of probes store.runProbe(req))` yields events.
 > 2. `test_run_probe_n_prompts_gt_10_auto_attaches_prefer_respond_async_header` — verify fetch call options include `headers: { 'Prefer': 'respond-async' }`.
 > 3. `test_run_probe_n_prompts_le_10_falls_through_to_sse_path` — no Prefer header sent.
 > 4. `test_run_probe_202_path_polls_every_5s_via_retry_after` — mock 202 response; assert subsequent `GET /api/probes/{id}` fires every 5s (Retry-After).
@@ -889,7 +899,7 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 > 6. `test_run_probe_sse_and_poll_paths_emit_identical_event_shapes` — consumer reading async-iterable cannot distinguish source.
 > 7. `test_run_probe_never_times_out_client_side_during_long_probes` — 10-min mock probe; no client-side timeout.
 >
-> Commit: `test(t2-c13): RED — probesStore 202+polling 7 tests`.
+> Commit: `test(t2-c13): RED — probes store 202+polling 7 tests`.
 
 - [ ] Verify RED.
 
@@ -897,7 +907,7 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 
 - [ ] **Dispatch GREEN**
 
-> Implement `probesStore.runProbe()` async-iterable abstraction per spec §6. SSE + poll paths emit identical event shapes; consumers don't branch on source. Commit.
+> Implement `probes store.runProbe()` async-iterable abstraction per spec §6. SSE + poll paths emit identical event shapes; consumers don't branch on source. Commit.
 
 - [ ] Verify GREEN.
 
@@ -906,7 +916,8 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 - [ ] **REFACTOR**: store types + JSDoc.
 - [ ] **INTEGRATE**: A2 (single async-iterable contract — no two-codepath divergence in consumers).
 - [ ] **OPERATE**: O5 (browser tab closes mid-probe — store cleans up poll interval); O7 (long probe runs >10min — poll cadence persists).
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -964,13 +975,13 @@ When you see a `Tasks N.3-N.7` umbrella section in Cycles 2-13 + 15, each bullet
 
 **Files:**
 - Modify: `backend/app/config.py` (flip default)
-- Create: `backend/tests/integration/test_audit_hook_full_t2_pipeline.py` (3 new tests + existing P4 test extension)
+- Create: `backend/tests/test_audit_hook_full_t2_pipeline.py (flat layout + `@pytest.mark.integration` decorator per project convention — `backend/tests/integration/` subdir does NOT exist; verified `pyproject.toml:5` registers the marker, mirroring P4 `test_audit_hook_emits_zero_warn_under_full_pipeline` at `backend/tests/test_tools_optimize.py:886`)` (3 new tests + existing P4 test extension)
 
 ### Task 15.1 — RED
 
 - [ ] **Dispatch RED**
 
-> 3 NEW tests in `backend/tests/integration/test_audit_hook_full_t2_pipeline.py`:
+> 3 NEW tests in `backend/tests/test_audit_hook_full_t2_pipeline.py (flat layout + `@pytest.mark.integration` decorator per project convention — `backend/tests/integration/` subdir does NOT exist; verified `pyproject.toml:5` registers the marker, mirroring P4 `test_audit_hook_emits_zero_warn_under_full_pipeline` at `backend/tests/test_tools_optimize.py:886`)`:
 >
 > 1. `test_audit_hook_default_is_raise` — `Settings()` (no env overrides); assert `settings.WRITE_QUEUE_AUDIT_HOOK_RAISE is True` (locks the flipped default).
 > 2. `test_audit_hook_emits_zero_warn_under_full_t2_pipeline` (decorated `@pytest.mark.integration`) — exercise EVERY T2 write path under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True`: save-as-suite, replay, topic-only probe, retire, regression-alarm computation. Assert zero `read-engine audit:` WARN lines in `data/backend.log` for the run.
@@ -1016,7 +1027,8 @@ If any unexpected WARN source appears, BLOCK Cycle 15 and restructure the offend
 - [ ] **REFACTOR**: docstring on `Field(description=...)` covers kill-switch path.
 - [ ] **INTEGRATE**: A2 (no behavioral logic change — only the `default=False` → `default=True` flip; existing logic at `database.py:395-397` unchanged).
 - [ ] **OPERATE**: **All O1-O8** — the extended integration test exercises every T2 write path under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True` (save-as-suite, replay, topic-only probe, retire, regression-alarm computation) and asserts zero `read-engine audit:` lines. Existing P4 test must continue PASSing.
-- [ ] **Validators**.
+- [ ] **Validator 1 (spec-compliance)** dispatch per template.
+- [ ] **Validator 2 (code-quality)** dispatch per template.
 
 ---
 
@@ -1079,6 +1091,8 @@ If any unexpected WARN source appears, BLOCK Cycle 15 and restructure the offend
 
 ## Post-implementation: Release v0.4.22
 
+**Branch strategy:** single feature branch `feature/probe-tier-2`. **Rebase-merge** to `main` per `feedback_pr_merge_strategy.md` memory (NOT squash — preserves TDD bisect + per-commit provenance for the ~140-commit train; aligns with Foundation P3's 95-commit precedent + P4's ~50-commit baseline).
+
 After Cycle 16 ZERO across both validators:
 
 - [ ] **Move CHANGELOG**: edit `docs/CHANGELOG.md` — move all v0.4.22 unreleased items to `## v0.4.22 — YYYY-MM-DD` heading (use today's date).
@@ -1120,3 +1134,41 @@ If either Validator 1 or Validator 2 returns FINDINGS or APPROVED-WITH-MINOR:
 - **Total estimated commits** = 137-172
 
 Foundation P3 (95 commits, 5 spec review rounds) + P4 (~50 commits, 1 plan review round) bracket the expected range.
+
+---
+
+## Plan execution notes (round-2 validator coverage clarifications)
+
+Per the 2-round plan-validation pass, the following design decisions and coverage strategies are pinned:
+
+**Frontend test coverage strategy.** Spec §6 chromatic encoding (5 colors → 5 surfaces), contour-intensity tier mapping (Hero/Medium/Small/Micro/Recipe-A recipes per button), Forge motion personality (6 canonical animations), and voice copy table (9 specific copy strings) are NOT all enumerated as individual RED tests in Cycles 11-12. Instead, coverage is layered:
+
+1. **Cycle 11/12 RED tests** cover the **shape-level** correctness — components render, buttons exist, state transitions fire, store updates propagate. ~32 tests across 11+12.
+2. **Cycle 14 brand audit (gate cycle)** validates the **canon-compliance** layer via grep + axe-core sweeps:
+   - banned-vocab regex `(?<![-\w])(glow|halo|bloom|radiance|breathing|dust|pulse|flash)(?![-\w])` (zero hits in 7-dir 2D scope)
+   - banned-CSS regex `box-shadow.*[1-9]px [1-9]`, `text-shadow`, `filter: drop-shadow`, `radial-gradient.*transparent`
+   - color hex grep against spec-anchored neon palette
+   - density-pin spot-checks (h-5 buttons, p-1.5 sidebars, font-mono numerics, lower-case status badges)
+   - motion-canon name presence (`scale-in`, `forge-spark`, `dialog-in`, `slide-up-in`, `slide-in-right`, `copy-flash`)
+3. **Cycle 16 E2E validation** exercises the full UI under realistic conditions.
+
+The motion/color/voice surfaces are auditable via Cycle 14's grep tooling without requiring 30+ individual RED tests in Cycles 11-12.
+
+**`probe_prompt_completed` / `probe_completed` event emission in Cycle 6.** Coverage rides on the existing topic-probe event-emission tests (which are unchanged by T2; `TopicProbeGenerator` continues to fire both events). Cycle 6's `ReplayRunGenerator` reuses the existing `event_bus.publish("probe_prompt_completed", ...)` + `"probe_completed"` patterns verbatim from `TopicProbeGenerator` (per spec §5). Cycle 6 RED test 11 verifies the orchestrator-level event-emission contract (op label, lifespan registration, JSONL trace); the per-event-type emission is integration-tested via Cycle 16 E2E round-trip (probe → save-as-suite → replay → verify both event types fire).
+
+**Cycle 5 GC reconciliation.** The placeholder INSERT-then-no-spawn behavior writes a `RunRow(mode='replay_run', status='running', suite_id=...)` that the existing `_gc_orphan_runs` lifespan sweep reconciles within 1h TTL (verified by the existing `_gc_orphan_runs` tests). Cycle 5's OPERATE focus enumerates this as "O8 partial" verification; no new RED test needed (the GC sweep is pre-existing covered).
+
+**Retire 30/min rate limit.** Cycle 5 RED test 14 covers retire idempotency + 200 status; the 30/min limit is enforced by the same `slowapi` decorator pattern as the 20/min save-as-suite limit (test 6) — the implementation reuses identical infrastructure. Adding a parallel rate-limit-on-retire RED test would replicate test 6's pattern; deferred to Cycle 5's OPERATE phase if the brand-canon-style rate-limit-stress check uncovers any divergence.
+
+**Numbered GREEN steps.** Cycles 1, 2, 6, 7, 8, 10, 11, 15 use numbered implementation steps. Cycles 3, 4, 5, 9, 12, 13 use prose-list form because their GREEN scope is shorter (≤6 distinct actions) and a numbered list adds boilerplate without enhancing clarity. The Generic Dispatch Template (added in round 1) supplies the boilerplate; the cycle-specific GREEN paragraph fills in the scope.
+
+**Cycle 11 RED test naming.** Cycle 11 RED groups 18 tests into 6 component groupings (Form 5, ProgressView 3, ReportCard 4, MiniView 2, SeedModal 2, Forge-spark 2) with assertion targets. Implementers convert each grouping into the `test_*` form during RED dispatch — matches the convention used by `frontend/src/lib/components/taxonomy/SeedModal.svelte.test.ts` and other existing Vitest suites. Cycle 12 uses the fully-enumerated `test_*` form (14 tests) as the canonical example.
+
+---
+
+## Plan validation summary
+
+- **Spec validation**: 14 rounds (38 → 22 → 22 → 5 → 5 → 5 → 7 → 4 → 1 → 3 → 3 → 2 → 6 → 6 findings, all applied). Final commit `9b843791`.
+- **Plan validation**: 2 rounds (18 → 17 findings, critical blockers applied + structural completeness via Generic Dispatch Templates + remaining minor coverage gaps documented in this section). Final commit (forthcoming).
+
+Plan is production-ready for execution via `superpowers:subagent-driven-development` sub-skill. Each cycle is independently dispatchable; Cycle 1 demonstrates the canonical 7-task fully-expanded form; Cycles 2-13 + 15 use the collapsed bullet form backed by the Generic Dispatch Prompt Templates.
