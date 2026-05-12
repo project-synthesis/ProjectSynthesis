@@ -47,23 +47,18 @@ the canonical opt-in seam (mirrors ``test_tools_optimize.py:884``).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
+from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
-    async_sessionmaker,
     create_async_engine,
 )
-
 
 # ===========================================================================
 # Test 1 — ``Settings()`` default is RAISE (flipped at Cycle 15 GREEN)
@@ -212,7 +207,7 @@ async def test_audit_hook_emits_zero_warn_under_full_t2_pipeline(
     _settings.WRITE_QUEUE_AUDIT_HOOK_RAISE = True
 
     try:
-        from app.models import RunRow, ValidationSuite
+        from app.models import RunRow
 
         # -----------------------------------------------------------------
         # Stage 1 — seed a completed topic_probe RunRow as the suite source.
