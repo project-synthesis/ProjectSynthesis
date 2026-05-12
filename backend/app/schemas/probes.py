@@ -35,9 +35,42 @@ class ProbeContext(BaseModel):
     topic: str
     scope: str = "**/*"
     intent_hint: Literal["audit", "refactor", "explore", "regression-test"] = "explore"
-    repo_full_name: str | None = None
-    commit_sha: str | None = None
-    topic_only: bool = False
+    repo_full_name: str | None = Field(
+        default=None,
+        description=(
+            "Linked GitHub repo (``owner/name``). Required-in-practice for "
+            "``grounding_mode='codebase'`` (the router's ``link_repo_first`` "
+            "gate enforces it before the generator runs). ``None`` ONLY under "
+            "``grounding_mode='topic_only'``, where the generator hard-codes "
+            "this field to ``None`` regardless of what the caller passed — "
+            "the topic-only path has no codebase to ground against, so a "
+            "stale repo reference is silently dropped."
+        ),
+    )
+    commit_sha: str | None = Field(
+        default=None,
+        description=(
+            "Git commit SHA of the codebase snapshot captured by Phase 1 "
+            "grounding. Populated by the codebase-mode path when the linked "
+            "repo's HEAD SHA is resolvable; ``None`` under topic-only (no "
+            "codebase to snapshot) or when the SHA lookup failed silently. "
+            "Provenance field for future replay-against-snapshot semantics "
+            "(T3+); T2 stores it on ``RunRow.topic_probe_meta.commit_sha`` "
+            "but does not yet consume it on replay."
+        ),
+    )
+    topic_only: bool = Field(
+        default=False,
+        description=(
+            "Explicit branch marker — ``True`` iff "
+            "``grounding_mode='topic_only'`` was selected on the request. "
+            "Mirror of ``repo_full_name is None and not relevant_files`` but "
+            "the explicit flag keeps the contract grep-able and prevents "
+            "accidental codebase-path execution on a degenerate codebase "
+            "context where retrieval returned zero files. Phase 2 reads "
+            "this to select the topic-only template + inverted F1 filter."
+        ),
+    )
     project_id: str | None = None
     project_name: str | None = None
     dominant_stack: list[str] = Field(default_factory=list)

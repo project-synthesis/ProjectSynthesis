@@ -19,7 +19,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from app.schemas.probes import ProbeContext
 from app.schemas.runs import RunRequest
@@ -45,6 +45,27 @@ from app.services.probe_phases import (
 from app.services.taxonomy.event_logger import get_event_logger
 
 logger = logging.getLogger(__name__)
+
+# Spec §5: ``intent_hint`` is a 4-value ``Literal``; the topic-only branch
+# coerces None / anything-else to the canonical default ``"explore"`` so
+# ``ProbeContext(intent_hint=...)`` passes Pydantic validation. Centralized
+# here so a future Literal extension stays in sync with the coercion.
+_VALID_INTENT_HINTS: tuple[str, ...] = (
+    "audit", "refactor", "explore", "regression-test",
+)
+_DEFAULT_INTENT_HINT = "explore"
+
+
+def _coerce_intent_hint(raw: Any) -> Literal["audit", "refactor", "explore", "regression-test"]:
+    """Coerce a free-form ``intent_hint`` payload value to a valid Literal.
+
+    Returns the canonical default ``"explore"`` for any value not in the
+    Literal set (including ``None``). Centralizes the spec §5 lines 884-895
+    coercion so future callers can rely on a single source of truth.
+    """
+    if raw in _VALID_INTENT_HINTS:
+        return raw
+    return _DEFAULT_INTENT_HINT  # type: ignore[return-value]
 
 
 def _is_rate_limit_error(exc: BaseException) -> bool:
@@ -127,7 +148,16 @@ class TopicProbeGenerator:
         intent_hint = str(intent_hint_raw or "explore")
         repo_full_name = str(payload.get("repo_full_name") or "")
         n_prompts = int(payload.get("n_prompts") or 12)
-        grounding_mode: str = payload.get("grounding_mode", "codebase") or "codebase"
+        # ``grounding_mode`` is forced into the Literal at the read-site
+        # so the downstream ``_phase_generating(grounding_mode=...)`` arg
+        # type-checks under mypy. Any unknown string (defensive — the
+        # router-side Pydantic schema already pins this to Literal) is
+        # collapsed to the canonical default ``"codebase"``.
+        grounding_mode: Literal["codebase", "topic_only"] = (
+            "topic_only"
+            if payload.get("grounding_mode") == "topic_only"
+            else "codebase"
+        )
         started_at = datetime.now(timezone.utc)
 
         # --- Phase 1: Started + Grounding ---
@@ -143,23 +173,25 @@ class TopicProbeGenerator:
         probe_context: ProbeContext
         ctx_dict: dict
         if grounding_mode == "topic_only":
-            # intent_hint is Literal["audit","refactor","explore",
-            # "regression-test"] with default "explore" — None or any
-            # other value would fail Pydantic validation. Coerce via
-            # fallback to the default so the topic-only branch is
-            # robust to callers that omit the field entirely.
-            valid_intents = (
-                "audit", "refactor", "explore", "regression-test",
-            )
-            safe_intent_hint: str = (
-                intent_hint_raw
-                if intent_hint_raw in valid_intents
-                else "explore"
-            )
+            # Topic-only branch (spec §5 lines 883-903) — no codebase to
+            # ground against, so Phase 1 is skipped entirely:
+            #   - No ``RepoIndexQuery.query_curated_context`` call.
+            #   - No ``probe_grounding`` SSE event emitted (downstream
+            #     consumers detect the skip from the missing event).
+            #   - ``repo_full_name`` hard-coded to ``None`` even if the
+            #     caller passed a stale value in the payload — the spec
+            #     §2 schema relaxation makes this a valid degenerate
+            #     ``ProbeContext`` state.
+            #
+            # ``intent_hint`` is a Literal with default ``"explore"``;
+            # callers commonly omit it (request schema defaults to
+            # ``None``), so coerce here to keep ``ProbeContext(...)``
+            # validation green. See ``_coerce_intent_hint`` above.
+            safe_intent_hint = _coerce_intent_hint(intent_hint_raw)
             probe_context = ProbeContext(
                 topic=topic,
                 scope=scope or "**/*",
-                intent_hint=safe_intent_hint,  # type: ignore[arg-type]
+                intent_hint=safe_intent_hint,
                 relevant_files=[],
                 explore_synthesis_excerpt=None,
                 known_domains=[],
@@ -169,6 +201,10 @@ class TopicProbeGenerator:
             )
             ctx_dict = {
                 "topic": topic,
+                # ``scope`` is informational under topic-only (spec §5
+                # line 889-891): the topic-only template references it
+                # but the F1 filter has no codebase to match against,
+                # so it's effectively a tag rather than a gate.
                 "scope": scope or "**/*",
                 "intent_hint": safe_intent_hint,
                 "repo_full_name": None,
@@ -177,7 +213,7 @@ class TopicProbeGenerator:
                 "dominant_stack": [],
                 "topic_only": True,
             }
-            # Explicitly DO NOT publish probe_grounding — Phase 1 skipped.
+            # Explicit no-op marker — Phase 1 is intentionally skipped.
         else:
             if not repo_full_name:
                 # No repo linked under codebase mode → cannot ground.
@@ -207,10 +243,15 @@ class TopicProbeGenerator:
                 )
 
             # Build a typed ProbeContext for Phase 2 (codebase branch).
+            # ``_coerce_intent_hint`` covers BOTH branches uniformly: the
+            # str-cast on ``intent_hint`` upstream produces ``"None"`` /
+            # other invalid strings when the payload value is missing, so
+            # routing through the coercion keeps the Literal contract
+            # honest under all caller shapes.
             probe_context = ProbeContext(
                 topic=topic,
                 scope=scope or "**/*",
-                intent_hint=intent_hint,  # type: ignore[arg-type]
+                intent_hint=_coerce_intent_hint(intent_hint),
                 repo_full_name=repo_full_name,
                 relevant_files=list(ctx_dict.get("relevant_files") or []),
                 explore_synthesis_excerpt=ctx_dict.get(
@@ -222,11 +263,23 @@ class TopicProbeGenerator:
 
         # --- Phase 2: Generating ---
         # Template + mode selected by grounding_mode (spec §5 lines 906-909).
-        # T2 Cycle 7: topic_only routes through ``generate_probe_prompts``
-        # primitive; codebase preserves the v0.4.12 legacy provider path
-        # (`_phase_generating(ctx_dict, ...)`) — the canonical full migration
-        # to the primitive for codebase mode is deferred to a future cycle so
-        # the existing TopicProbeGenerator regression fixtures stay green.
+        #
+        # T2 Cycle 7 — split-routing rationale:
+        #   - ``topic_only`` ROUTES through ``generate_probe_prompts`` (the
+        #     canonical primitive) with ``mode + template_name`` kwargs so
+        #     the inverted F1 filter + topic-only template are applied
+        #     by a single source of truth.
+        #   - ``codebase`` PRESERVES the v0.4.12 legacy provider path via
+        #     ``_phase_generating(ctx_dict, topic, n_prompts)`` — the older
+        #     ``provider.complete_parsed(...)`` invocation. This is a
+        #     deliberate REFACTOR-scope deferral: 4 Cycle 6 fixtures
+        #     mock ``provider.complete_parsed`` to return
+        #     ``AsyncMock(result_text=..., model=...)`` rather than the
+        #     ``PromptList`` model ``generate_probe_prompts`` expects.
+        #     Migrating codebase-mode to the primitive requires updating
+        #     those fixtures in lock-step — broader than the topic-only
+        #     RED/GREEN/REFACTOR scope of Cycle 7. Tracked in spec §11
+        #     "Cycle 8+ wiring tail".
         template_name = (
             "probe-agent.md" if grounding_mode == "codebase"
             else "probe-agent-topic-only.md"
@@ -436,21 +489,53 @@ class TopicProbeGenerator:
         n_prompts: int,
         *,
         probe_context: ProbeContext | None = None,
-        grounding_mode: str = "codebase",
+        grounding_mode: Literal["codebase", "topic_only"] = "codebase",
         template_name: str = "probe-agent.md",
     ) -> list[str]:
-        """Phase 2: topic → N prompts via the canonical generation primitive.
+        """Phase 2: topic → N prompts.
 
-        T2 Cycle 7 (spec §5 + A2 = "don't re-implement Phase 2"):
-        delegates to ``probe_generation.generate_probe_prompts`` so the
-        single-source-of-truth predicate filter (codebase vs topic_only)
-        + template selection live in one place.
+        Two dispatch paths (T2 Cycle 7 / spec §5 + A2 "don't re-implement
+        Phase 2"):
 
-        Backward-compat: legacy callers (older tests, ProbeService
-        regression fixtures) that don't thread ``probe_context`` still
-        hit the test-fixture inline path which calls
-        ``provider.complete_parsed`` directly. New T2 callers thread the
-        typed ``probe_context`` and route through the primitive.
+        1.  **Canonical path** (``probe_context is not None``) — delegates
+            to ``probe_generation.generate_probe_prompts(ctx, mode=...,
+            template_name=...)`` so a single source of truth applies:
+
+            -   ``mode='codebase'`` keeps the F1 backtick predicate
+                (drop prompts WITHOUT backticks).
+            -   ``mode='topic_only'`` inverts to drop prompts WITH
+                backticks.
+
+            Both modes share the same ``_DROP_THRESHOLD=0.5`` batch-level
+            envelope and emit ``ProbeGenerationError`` matching the
+            ``r"backtick"`` test regex.
+
+        2.  **Legacy test-fixture path** (``probe_context is None``) —
+            falls through to ``self._provider.complete_parsed(topic=...,
+            n_prompts=..., context=ctx)``. Production code in this branch
+            always threads ``probe_context``; the fallback exists to keep
+            4 Cycle 6 unit-test fixtures green that pre-date the
+            primitive-routing migration (see the split-routing comment
+            above the Phase 2 dispatch in ``run()``).
+
+        Args:
+            ctx: Legacy dict context shape consumed by the fallback path
+                + downstream phases (3 / reporting). Kept lock-step with
+                ``probe_context`` by the caller.
+            topic: User-supplied topic string. Forwarded to the fallback
+                provider call as a keyword; the canonical path reads
+                ``probe_context.topic`` instead.
+            n_prompts: Target prompt count, clamped to [5, 25] inside
+                ``generate_probe_prompts``.
+            probe_context: Typed ``ProbeContext`` for the canonical path.
+                ``None`` selects the legacy fallback.
+            grounding_mode: Forwarded as ``mode`` to the primitive. The
+                topic-only branch picks ``'topic_only'``; codebase keeps
+                the v0.4.12 contract.
+            template_name: Forwarded to ``generate_probe_prompts`` —
+                contract: the template must declare the same variables
+                as ``probe-agent.md`` (manifest.json reflects which are
+                ``required`` vs ``optional`` per template).
         """
         if probe_context is not None:
             # Canonical path (T2 Cycle 7) — delegates to the generation
@@ -459,7 +544,7 @@ class TopicProbeGenerator:
                 probe_context,
                 provider=self._provider,
                 n_prompts=n_prompts,
-                mode=grounding_mode,  # type: ignore[arg-type]
+                mode=grounding_mode,
                 template_name=template_name,
             )
 
