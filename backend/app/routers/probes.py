@@ -29,8 +29,8 @@ import asyncio
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -147,10 +147,31 @@ def _serialize_full(row: RunRow) -> ProbeRunResult:
     "/probes",
     dependencies=[Depends(_PROBE_RATE_LIMIT)],
 )
-async def post_probe(request: Request):
-    """Kick off a topic probe; stream phase events as SSE.
+async def post_probe(
+    request: Request,
+    prefer: str | None = Header(None, alias="Prefer"),
+):
+    """Kick off a topic probe.
 
-    Race-free pattern (spec § 6.2):
+    Two dispatch modes share the same body validation + rate-limit gate:
+
+      * **Default (no ``Prefer`` header)** — race-free SSE stream. The
+        router mints a ``run_id``, registers an
+        ``event_bus.subscribe_for_run`` subscription BEFORE dispatching
+        the run, then iterates the subscription to stream events to the
+        client. Terminates on ``probe_completed`` / ``probe_failed``.
+        Spec § 6.2 contract; unchanged from v0.4.18.
+
+      * **``Prefer: respond-async`` (T2 Cycle 8, v0.4.22)** — returns
+        ``202 Accepted`` immediately after the initial ``RunRow`` INSERT
+        commits, with ``Location`` + ``Retry-After`` headers and a
+        JSON body ``{run_id, status, poll_url}``. The spawned
+        background task drives the run to terminal state without
+        holding the HTTP connection. Callers poll
+        ``GET /api/probes/{run_id}`` until ``status`` reaches a
+        terminal value. RFC 7240 / spec § 8 + § 10 Cycle 8.
+
+    Race-free SSE pattern (default path):
       1. Caller mints ``run_id = str(uuid.uuid4())``
       2. Construct ``event_bus.subscribe_for_run(run_id)`` BEFORE dispatch
       3. ``asyncio.create_task(orchestrator.run("topic_probe", ..., run_id=run_id))``
@@ -159,7 +180,16 @@ async def post_probe(request: Request):
       5. ``finally: await subscription.aclose()`` — no leaked subscribers
          on client disconnect
 
-    Pre-stream gates (preserve pre-Foundation reason codes):
+    202+polling pattern (Cycle 8):
+      1. Caller mints ``run_id = uuid.uuid4().hex``
+      2. ``orchestrator.dispatch_async(...)`` awaits the initial INSERT
+         then spawns ``_run_to_completion`` — race-safe immediate poll
+      3. Router returns 202 with ``Location: /api/probes/{run_id}`` +
+         ``Retry-After: 5`` + JSON body
+      4. Caller polls ``GET /api/probes/{run_id}`` until terminal
+
+    Pre-stream gates (preserve pre-Foundation reason codes, shared by
+    both dispatch modes):
       - Missing ``repo_full_name`` AND ``grounding_mode='codebase'`` →
         400 ``link_repo_first`` (T2 Cycle 7: gate is mode-aware so
         ``grounding_mode='topic_only'`` requests bypass it)
@@ -204,8 +234,50 @@ async def post_probe(request: Request):
             status_code=503, detail="run_orchestrator_unavailable",
         )
 
-    run_id = str(uuid.uuid4())
     run_request = RunRequest(mode="topic_probe", payload=body.model_dump())
+
+    # T2 Cycle 8: branch on ``Prefer: respond-async``. RFC 7240 says the
+    # header value is a comma-separated list of preference tokens; case-
+    # insensitive substring match keeps us tolerant of variants like
+    # ``respond-async, wait=10`` without forcing a strict-equality
+    # comparison. The header is absent on the legacy SSE path.
+    is_async = prefer is not None and "respond-async" in prefer.lower()
+
+    if is_async:
+        # 202+polling path — spec § 8 line 289-293 response shape.
+        # ``uuid.uuid4().hex`` matches the canonical 202 router pattern
+        # in routers/suites.py::replay_suite for cross-router consistency.
+        run_id = uuid.uuid4().hex
+
+        # dispatch_async awaits the initial RunRow INSERT before
+        # returning, so the caller's immediate
+        # ``GET /api/probes/{run_id}`` is race-safe — the row is
+        # already committed when we hand back the 202.
+        await orchestrator.dispatch_async(
+            mode="topic_probe",
+            request=run_request,
+            run_id=run_id,
+        )
+
+        poll_url = f"/api/probes/{run_id}"
+        # ``Location`` mirrors ``poll_url`` (RFC 7240); ``Retry-After``
+        # is a polling-cadence hint — integer seconds, default 5 per
+        # spec § 8 line 291. Body shape per spec § 8 line 292.
+        return JSONResponse(
+            status_code=202,
+            content={
+                "run_id": run_id,
+                "status": "running",
+                "poll_url": poll_url,
+            },
+            headers={
+                "Location": poll_url,
+                "Retry-After": "5",
+            },
+        )
+
+    # Default SSE path — unchanged from v0.4.18.
+    run_id = str(uuid.uuid4())
 
     # Subscribe FIRST so the buffer captures any events the orchestrator
     # publishes during _create_row + generator start. The 500ms ring-buffer

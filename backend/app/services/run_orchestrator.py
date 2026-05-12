@@ -1,16 +1,36 @@
-"""RunOrchestrator — central dispatch for unified run substrate (Foundation P3).
+"""RunOrchestrator — central dispatch for unified run substrate.
+
+Foundation P3 (v0.4.18) introduced the unified run substrate.
+T2 Cycle 8 (v0.4.22) added the 202+polling dispatch architecture: an
+async :meth:`RunOrchestrator.dispatch_async` entry point that returns
+immediately after the initial INSERT commits, with a thin
+:meth:`RunOrchestrator.run` synchronous-style wrapper for SSE callers +
+sync tests.
 
 Responsibilities:
     - Allocate run_id (or accept caller-supplied)
-    - Create RunRow row via WriteQueue at start (status='running')
-    - Dispatch to mode-specific RunGenerator
-    - Persist final state (status from GeneratorResult.terminal_status)
-    - Catch exceptions + cancellation; mark row failed under asyncio.shield()
-    - Set/reset current_run_id ContextVar around generator invocation
+    - Create RunRow row via WriteQueue at start (status='running'),
+      AWAIT the INSERT before returning from ``dispatch_async`` so
+      caller's first poll always finds the row
+    - Spawn a background ``_run_to_completion`` task to drive the
+      generator + persist terminal state
+    - Catch exceptions + cancellation in the spawned task; mark row
+      failed under :func:`asyncio.shield` (terminal write survives
+      caller HTTP disconnect)
+    - Set/reset ``current_run_id`` ContextVar INSIDE the spawned task
+      body (parent task's context is NOT inherited correctly for
+      taxonomy event correlation)
+    - Optional ``done_event`` parameter so :meth:`run` can block until
+      terminal state — single dispatch_async codepath, no
+      two-implementation drift
 
 Generators NEVER touch RunRow — RunOrchestrator is the only legitimate writer.
 
-Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md § 5.2
+Specs:
+    - Foundation P3 § 5.2 — initial substrate design
+    - T2 Cycle 8 § 5 — ``dispatch_async`` + ``_run_to_completion``
+      + ``run()`` refactor
+    - T2 Cycle 8 § 8 — 202 Accepted + polling response contract
 """
 from __future__ import annotations
 
@@ -60,12 +80,28 @@ class RunOrchestrator:
         *,
         run_id: str | None = None,
     ) -> RunRow:
-        """Top-level dispatch. Creates row → runs generator → persists result.
+        """Top-level dispatch — thin wrapper over :meth:`dispatch_async`.
 
-        ``run_id`` is optional caller-supplied id. Race-sensitive callers (e.g.,
-        the probes router constructing an SSE response) pre-mint the id and
-        supply it so they can register event subscriptions BEFORE the
-        orchestrator starts. When ``None``, an id is minted internally.
+        Spec § 5 (Cycle 8): ``run()`` becomes a thin wrapper that calls
+        :meth:`dispatch_async` then ``await``s an ``asyncio.Event`` set by
+        the spawned task at terminal status. This preserves the legacy
+        "blocks until terminal" contract for SSE callers + sync tests
+        while sharing the dispatch_async body — single codepath, no
+        two-implementation divergence.
+
+        Exception propagation: in addition to ``done_event``, the wrapper
+        supplies a private ``_done_future`` to :meth:`dispatch_async` so
+        that any exception raised inside the spawned task
+        (generator-raised ``Exception``, ``asyncio.CancelledError`` from
+        the caller's task being cancelled) is captured onto the Future
+        and re-raised here. Preserves the legacy synchronous-``run()``
+        contract that the pre-Cycle-8 implementation provided.
+
+        ``run_id`` is optional caller-supplied id. Race-sensitive callers
+        (e.g., the probes router constructing an SSE response) pre-mint
+        the id and supply it so they can register event subscriptions
+        BEFORE the orchestrator starts. When ``None``, an id is minted
+        internally.
         """
         if mode not in self._generators:
             # Cannot mark failed — row not yet created.
@@ -74,36 +110,260 @@ class RunOrchestrator:
         if run_id is None:
             run_id = str(uuid.uuid4())
 
-        await self._create_row(mode, request, run_id=run_id)
-        generator = self._generators[mode]
+        # ``done_event`` keeps the public ``dispatch_async`` signature
+        # consistent for 202+polling callers (they want a "spawn and
+        # forget" no-return entry point). ``_done_future`` is the
+        # private exception-propagation channel used exclusively by this
+        # synchronous wrapper. The spawned task resolves it with ``None``
+        # on success and with ``set_exception(exc)`` on failure or
+        # cancellation; ``await done_future`` blocks the wrapper AND
+        # re-raises any captured exception.
+        loop = asyncio.get_event_loop()
+        done_event = asyncio.Event()
+        done_future: asyncio.Future[None] = loop.create_future()
+        # ``_spawned_task_holder`` is a single-element list (a Python
+        # closure of a mutable cell) populated by ``dispatch_async``
+        # immediately after the spawn. We use a list so the spawn-side
+        # write is observable from this method's scope without the
+        # ceremony of an asyncio.Future for the task reference itself.
+        spawned_task_holder: list[asyncio.Task[None]] = []
+        await self.dispatch_async(
+            mode=mode,
+            request=request,
+            run_id=run_id,
+            done_event=done_event,
+            _done_future=done_future,
+            _spawned_task_holder=spawned_task_holder,
+        )
+        try:
+            # Block until the spawned task signals terminal state. If
+            # the generator raised, ``done_future.set_exception(exc)``
+            # has been called and ``await`` re-raises it; otherwise the
+            # future resolves with ``None`` and we proceed to ``_reload``.
+            await done_future
+        except asyncio.CancelledError:
+            # Legacy ``run()`` contract: when the caller cancels the
+            # task that is awaiting ``run()``, the underlying generator
+            # MUST be cancelled too. The 202 dispatch path explicitly
+            # shields the spawned task from caller cancellation by
+            # constructing the spawn outside any task's structured
+            # ownership; but here, the spawned task IS the caller's
+            # logical work, so we forward the cancellation.
+            #
+            # ``_run_to_completion``'s CancelledError handler then runs
+            # the shielded ``_mark_failed`` write, sets the future, and
+            # the original ``CancelledError`` re-raises here for the
+            # caller to observe. The await below also propagates any
+            # exception captured during the cleanup write.
+            if spawned_task_holder and not spawned_task_holder[0].done():
+                spawned_task_holder[0].cancel()
+                with contextlib.suppress(BaseException):
+                    await spawned_task_holder[0]
+            raise
+        finally:
+            # Defense-in-depth: ensure the event is set even if the
+            # spawned task failed before reaching the ``finally`` block
+            # that normally sets it. ``done_event.is_set()`` is the
+            # signal external observers (e.g., a future SSE-cleanup
+            # variant) might wait on.
+            if not done_event.is_set():
+                done_event.set()
+            # Drain the spawned task so asyncio doesn't log a noisy
+            # "Task exception was never retrieved" warning. The exception
+            # was already re-raised through ``done_future`` so the caller
+            # observed it; this awaits the task to its terminal state
+            # and accesses ``.exception()`` to mark the exception
+            # retrieved. Suppress everything from the await — the
+            # original exception already surfaced to the caller above.
+            if spawned_task_holder:
+                with contextlib.suppress(BaseException):
+                    await spawned_task_holder[0]
+        return await self._reload(run_id)
 
-        # Set the ContextVar so taxonomy events fired during the run get
-        # correlated with this run_id.
+    async def dispatch_async(
+        self,
+        *,
+        mode: str,
+        request: RunRequest,
+        run_id: str,
+        done_event: asyncio.Event | None = None,
+        _done_future: asyncio.Future[None] | None = None,
+        _spawned_task_holder: list[asyncio.Task[None]] | None = None,
+    ) -> None:
+        """Spawn a run-to-completion background task after the initial INSERT.
+
+        Race-free: the initial ``RunRow`` ``INSERT`` is awaited BEFORE this
+        method returns. A caller that immediately
+        ``GET /api/probes/{run_id}`` after dispatch is guaranteed to find
+        the row (spec § 8 "Race-safety"; spec § 10 Cycle 8 OPERATE O1).
+
+        Cancellation: the spawned ``_run_to_completion`` task wraps its
+        terminal-status writes under :func:`asyncio.shield` so the
+        ``RunRow`` reaches a terminal state (``failed`` or ``partial``)
+        even if the caller's HTTP connection closes mid-iteration.
+
+        Parameters
+        ----------
+        mode:
+            Generator key (``topic_probe`` / ``seed_agent`` / ``replay_run``).
+        request:
+            ``RunRequest`` for the generator.
+        run_id:
+            Caller-supplied run id. Spec § 5 makes this required on the
+            async entry point — the caller mints the id BEFORE dispatch
+            so it can wire up event subscriptions race-free.
+        done_event:
+            Optional ``asyncio.Event`` set by the spawned task at
+            terminal status. Used by the thin :meth:`run` wrapper to
+            block until the run finishes.
+        _done_future:
+            **Private** ``asyncio.Future`` used by :meth:`run` exclusively
+            to propagate generator-raised exceptions back to the
+            synchronous caller. 202+polling callers MUST NOT supply this
+            argument — they observe the run's terminal state by polling
+            ``GET /api/probes/{run_id}`` instead. The leading underscore
+            documents the private contract; the signature stays keyword-
+            only so accidental positional use is impossible.
+        _spawned_task_holder:
+            **Private** single-element list populated with the spawned
+            ``asyncio.Task`` so :meth:`run` can forward caller-task
+            cancellation. 202+polling callers leave this ``None`` —
+            their spawned task is intentionally un-referenced so a
+            closed HTTP connection cannot cancel it. This is what
+            satisfies the dual contract: ``dispatch_async()`` callers
+            get shielded spawning while ``run()`` callers get
+            cancellation propagation.
+        """
+        if mode not in self._generators:
+            # Cannot mark failed — row not yet created. Surfaces to the
+            # caller immediately (router translates to 4xx).
+            raise ValueError(f"unknown mode: {mode}")
+
+        # Await the initial INSERT BEFORE spawning the run-to-completion
+        # task. This is the race-safety guarantee — the caller's first
+        # GET on /api/probes/{run_id} always finds the row.
+        await self._create_row(mode, request, run_id=run_id)
+
+        # Spawn the rest as a background task. The task name is
+        # observability-friendly under ``asyncio.all_tasks()`` so failed
+        # runs are easy to spot in a debugger or in the GC sweep.
+        spawned = asyncio.create_task(
+            self._run_to_completion(
+                mode=mode,
+                request=request,
+                run_id=run_id,
+                done_event=done_event,
+                done_future=_done_future,
+            ),
+            name=f"run-to-completion-{run_id}",
+        )
+        # Expose the spawned task to the private ``run()`` wrapper so it
+        # can forward caller cancellation. 202+polling callers don't
+        # pass a holder — they intentionally leave the spawned task
+        # un-referenced so a closed HTTP connection cannot cancel it.
+        if _spawned_task_holder is not None:
+            _spawned_task_holder.append(spawned)
+
+    async def _run_to_completion(
+        self,
+        *,
+        mode: str,
+        request: RunRequest,
+        run_id: str,
+        done_event: asyncio.Event | None = None,
+        done_future: asyncio.Future[None] | None = None,
+    ) -> None:
+        """Drive generator + persist final, with cancellation cleanup.
+
+        Sets ``current_run_id`` ContextVar INSIDE the spawned task body
+        — Python's ``contextvars.copy_context()`` inheritance copies the
+        parent's context at task-spawn time, but the parent then
+        resets/changes its own context before the child reads. Explicit
+        ``set/reset`` keeps replay/topic-probe taxonomy events correctly
+        stamped with ``run_id`` (spec § 5 ContextVar lifecycle).
+
+        Cancellation handler: under ``asyncio.shield`` so the terminal
+        write reaches the row even when the caller's task is cancelled
+        mid-iteration (spec § 5 cancellation contract diff; § 10 Cycle 8
+        OPERATE O8). Exceptions from the cleanup path are suppressed so
+        the original ``CancelledError`` surfaces faithfully through both
+        the spawned task itself AND the optional ``done_future``.
+
+        Parameters
+        ----------
+        done_event:
+            Optional event; if provided, set at the end of the ``finally``
+            so the synchronous :meth:`run` wrapper can wake up regardless
+            of whether the run completed, raised, or was cancelled.
+        done_future:
+            Optional Future supplied by :meth:`run` (private). Resolved
+            with ``None`` on success and with ``set_exception(exc)`` on
+            generator-raised exceptions or ``CancelledError``. The
+            wrapper then re-awaits it to surface the exception to the
+            original caller. 202+polling dispatches don't supply this —
+            they observe terminal state via the polling endpoint.
+        """
+        captured_exc: BaseException | None = None
         token = current_run_id.set(run_id)
         try:
             try:
-                result = await generator.run(request, run_id=run_id)
-                await self._persist_final(run_id, result, mode=mode)
-            except asyncio.CancelledError:
-                # Mark failed under shield so the cancellation cannot
-                # interrupt the cleanup write itself. Suppress any error
-                # from the cleanup path so the original CancelledError
-                # surfaces faithfully to the caller.
+                await self._run_generator_and_persist(mode, request, run_id)
+            except asyncio.CancelledError as exc:
+                # Shielded cleanup write — terminal status reaches DB
+                # even if the dispatching caller's task is cancelled.
+                # Exceptions from the cleanup path itself are suppressed
+                # so the CancelledError surfaces unmodified to the caller.
                 with contextlib.suppress(Exception):
                     await asyncio.shield(
                         self._mark_failed(run_id, error="cancelled")
                     )
+                captured_exc = exc
                 raise
             except Exception as exc:
                 with contextlib.suppress(Exception):
-                    await self._mark_failed(
-                        run_id, error=f"{type(exc).__name__}: {exc}"
+                    await asyncio.shield(
+                        self._mark_failed(
+                            run_id, error=f"{type(exc).__name__}: {exc}",
+                        )
                     )
+                captured_exc = exc
                 raise
         finally:
             current_run_id.reset(token)
+            # Resolve the private future BEFORE setting the event so the
+            # ``await done_future`` side in :meth:`run` raises before
+            # ``done_event.wait()`` would have re-entered the wrapper.
+            if done_future is not None and not done_future.done():
+                if captured_exc is not None:
+                    done_future.set_exception(captured_exc)
+                else:
+                    done_future.set_result(None)
+            if done_event is not None:
+                # Set last so :meth:`run` only unblocks after the
+                # terminal write has committed. Order is critical:
+                # _persist_final + _mark_failed are awaited above before
+                # we reach this point, so the ``done_event.wait()`` side
+                # observes a committed row.
+                done_event.set()
 
-        return await self._reload(run_id)
+    async def _run_generator_and_persist(
+        self,
+        mode: str,
+        request: RunRequest,
+        run_id: str,
+    ) -> GeneratorResult:
+        """Run the generator + persist its terminal-status result.
+
+        Helper extracted from the legacy :meth:`run` body so
+        :meth:`_run_to_completion` can keep its
+        cancellation/exception handlers concise. Caller MUST be inside
+        the ``current_run_id.set(run_id)`` window (the ContextVar is
+        consumed by every event published from the generator).
+        """
+        generator = self._generators[mode]
+        result = await generator.run(request, run_id=run_id)
+        await self._persist_final(run_id, result, mode=mode)
+        return result
 
     # ----------------------- internal helpers -----------------------
 

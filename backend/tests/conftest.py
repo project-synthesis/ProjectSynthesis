@@ -23,6 +23,17 @@ from app.providers.base import LLMProvider
 # instantiation (Pydantic snapshots env at construction).
 os.environ.setdefault("WRITE_QUEUE_AUDIT_HOOK_RAISE", "true")
 
+# v0.4.22 T2 Cycle 8: relax the ``POST /api/probes`` per-IP rate limit
+# for the test session so the race-stress test in
+# ``test_probes_202_polling.py`` (50 dispatches per test) doesn't hit
+# the production 5/minute budget mid-iteration. The router's
+# ``reset_rate_limit_storage()`` autouse fixture handles inter-test
+# isolation; this env var addresses intra-test budget exhaustion. No
+# probe-specific rate-limit assertion tests exist in the suite, so the
+# bump is observable only as a positive change in the 202+polling
+# stress test. Must be set before ``app.config.settings`` instantiates.
+os.environ.setdefault("PROBE_RATE_LIMIT", "10000/minute")
+
 # No custom event_loop fixture needed — pytest-asyncio manages it
 # automatically with asyncio_mode = "auto" in pyproject.toml.
 
@@ -208,14 +219,27 @@ async def app_client(mock_provider, db_session, tmp_path):
     # don't need a real WriteQueue worker. Cycle 9 lifespan installs the
     # real queue on app.state in production; tests use this stand-in to
     # exercise the same code path without spinning up a worker thread.
+    #
+    # v0.4.22 T2 Cycle 8: serialize concurrent submit() calls under a
+    # single ``asyncio.Lock`` so the 202+polling race-stress (Test 3 of
+    # ``test_probes_202_polling.py``) doesn't crash on
+    # ``IllegalStateChangeError`` when two background tasks try to
+    # ``commit()`` the shared ``db_session`` concurrently. Production
+    # ``WriteQueue`` already serializes through its single-writer task +
+    # ``pool_size=1`` writer engine; this lock mirrors that semantics in
+    # the test stand-in. Same-task reentrancy still works (asyncio.Lock
+    # is not reentrant, but no work_fn re-enters submit recursively in
+    # the routes under test).
     class _TestWriteQueue:
+        def __init__(self) -> None:
+            self._lock = asyncio.Lock()
+
         async def submit(self, work, *, timeout=None, operation_label=None):
-            # Run the callback against db_session directly. The db_session
-            # is the same session the routes read from, so commits are
-            # immediately visible. Mirrors the production semantics where
-            # the queue worker uses the writer engine but tests collapse
-            # the read+write to one in-memory DB.
-            return await work(db_session)
+            # Serialize against the shared session so concurrent dispatchers
+            # (e.g., the spawned ``_run_to_completion`` tasks from
+            # ``RunOrchestrator.dispatch_async``) cannot interleave commits.
+            async with self._lock:
+                return await work(db_session)
 
     test_write_queue = _TestWriteQueue()
     app.state.write_queue = test_write_queue
@@ -249,6 +273,32 @@ async def app_client(mock_provider, db_session, tmp_path):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+    # v0.4.22 T2 Cycle 8: drain any in-flight ``run-to-completion-*``
+    # background tasks before tearing down the shared ``db_session``.
+    # The 202+polling dispatch path (``RunOrchestrator.dispatch_async``)
+    # spawns a task that outlives the HTTP response, so under the
+    # synthetic test ``WriteQueue`` (which writes to ``db_session``)
+    # that task's ``_persist_final`` can land AFTER the test ends —
+    # which then races the session-close path and surfaces as a
+    # teardown ``ResourceClosedError``. Cancelling pending spawn tasks
+    # is the canonical cleanup: ``_run_to_completion``'s
+    # ``CancelledError`` branch flips the row to ``status='failed'``
+    # under ``asyncio.shield``, so the row state remains coherent for
+    # any test that polls it post-teardown.
+    pending_spawns = [
+        t for t in asyncio.all_tasks()
+        if (t.get_name() or "").startswith("run-to-completion-")
+        and not t.done()
+    ]
+    for t in pending_spawns:
+        t.cancel()
+    if pending_spawns:
+        # Wait briefly for cancellation to propagate; the shielded
+        # ``_mark_failed`` write must reach the writer before the
+        # session closes. ``return_exceptions=True`` so any
+        # ``CancelledError`` is collected rather than propagated.
+        await asyncio.gather(*pending_spawns, return_exceptions=True)
 
     app.dependency_overrides.clear()
     _tools_shared.set_write_queue(_prior_write_queue)
