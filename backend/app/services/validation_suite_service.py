@@ -1086,15 +1086,25 @@ class ValidationSuiteService:
             await session_ctx.__aexit__(None, None, None)
 
         # ============ STEP 3: Python filter + entry build + state map ============
-        # Per spec §5: an alarm fires when
-        #   ``|replay_mean - baseline_mean| > tolerance_abs``.
-        # The test fixture cases also pin the half-open band at the boundary
-        # (a delta exactly equal to tolerance does NOT fire — test 25 sets
-        # delta=-0.35 against tolerance=0.5 and expects nominal). We compute
-        # the signed delta first so :class:`RegressionAlarmEntry.delta_abs`
-        # carries the sign (negative = regression, positive = improvement)
-        # per spec §4 line 446. Naming follows spec §4 — ``delta_abs`` is the
-        # absolute DELTA value, NOT ``abs(delta)``.
+        # Per spec §5 verbatim:
+        #   Python-side: filter where
+        #     replay_aggregate['mean_overall']
+        #       < baseline_scores['mean_overall'] - tolerance_abs
+        # i.e. a REGRESSION-direction filter — only *drops* below baseline
+        # by more than ``tolerance_abs`` fire. Improvements above baseline
+        # (even those exceeding tolerance) do NOT fire — they are still
+        # ``nominal``. Equivalently: ``delta < -tolerance_abs`` where
+        # ``delta = latest_mean - baseline_mean``.
+        #
+        # Boundary semantics: strict ``<``, not ``<=``. A replay that
+        # exactly matches ``baseline - tolerance_abs`` is nominal (matches
+        # spec §5 line 631 verbatim and Test 25's tolerance-boundary
+        # fixture).
+        #
+        # The signed delta is preserved on
+        # :class:`RegressionAlarmEntry.delta_abs` (negative = regression,
+        # always negative for firing entries under this filter). The
+        # ``delta_abs`` field name matches spec §4 line 446 verbatim.
         latest_alarms: list[RegressionAlarmEntry] = []
         new_states: dict[str, str] = {}
         for row in alarm_rows:
@@ -1106,7 +1116,9 @@ class ValidationSuiteService:
             delta = latest_mean - baseline_mean
             tolerance_abs = float(row.tolerance_abs)
 
-            is_firing = abs(delta) > tolerance_abs
+            # Spec §5 regression-direction filter:
+            #   latest_mean < baseline_mean - tolerance_abs
+            is_firing = latest_mean < baseline_mean - tolerance_abs
             new_states[suite_id] = "firing" if is_firing else "nominal"
 
             if is_firing:
