@@ -55,7 +55,7 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 
 | Component | Change |
 |---|---|
-| `models.py` | NEW `ValidationSuite` ORM (11 cols + 3 indexes); `RunRow.mode` gains string-convention value `'replay_run'`; `RunRow.__table_args__` gains `Index("ix_run_row_suite_id", "suite_id", started_at.desc())` to keep `alembic check` clean per `bdd8e96cf489` precedent |
+| `models.py` | NEW `ValidationSuite` ORM (11 cols + 3 indexes); `RunRow.mode` gains string-convention value `'replay_run'`; `RunRow.__table_args__` gains `Index("ix_run_row_suite_id", "suite_id", started_at.desc())` to keep `alembic check` clean per `bdd8e96cf489` precedent; **`RunRow.suite_id` column declaration extended** from `mapped_column(String, nullable=True)` (current at `models.py:643`) to `mapped_column(String, ForeignKey("validation_suite.id", ondelete="SET NULL"), nullable=True)` so the ORM-side FK declaration matches the migration's `fk_run_row_suite_id` constraint — without this, `alembic check` flags FK drift (same CI gate as the Index drift). Mirrors the FK declaration pattern at `a2f6d8e31b09` precedent (lines 136, 290, 493, 507 of models.py for cascade-FK columns) |
 | `schemas/runs.py` | EXTEND — extend `Literal["topic_probe", "seed_agent"]` to `Literal["topic_probe", "seed_agent", "replay_run"]` on `RunRequest.mode`, `RunSummary.mode`, `RunResult.mode` (3 sites in schema file + `routers/runs.py::list_runs::mode` Query param = **4 sites total**) |
 | `schemas/probes.py` | EXTEND — relax `ProbeContext.repo_full_name: str` → `str \| None = None`; add `commit_sha: str \| None = None`; add `topic_only: bool = False`. NOTE: existing fields `intent_hint: Literal["audit", "refactor", "explore", "regression-test"] = "explore"` (line 19) and `scope: str = "**/*"` (line 18) are NOT relaxed — defaults handle the topic-only path (the `model_config={"extra": "forbid"}` is preserved). |
 | `schemas/validation_suite.py` | NEW — Pydantic models (request/response + nested payload types `PromptSnapshotItem`, `PerPromptScore`, `BaselineScoresPayload`) |
@@ -67,7 +67,7 @@ Per ROADMAP lines 332-337 + 302 (audit-hook flip ride-along):
 | `services/generators/_constants.py` | NEW — module-level constants for the generators subpackage: `PROBE_PROMPT_CONCURRENCY: int = 5` (forward-declared value chosen to align with the batch-seeding `API=5` budget noted in root `CLAUDE.md` line 70 — different surface, but same single-user dev-tool latency profile). **NOT consumed in T2.** Reserved for T3+ parallelization with proper exception handling (see §5 concurrency note). |
 | `services/generators/_aggregate.py` | NEW — shared aggregate-builder helper `compute_run_aggregate(prompt_results: list[dict]) -> dict` (extracted from the existing `TopicProbeGenerator._build_aggregate` instance method at `topic_probe_generator.py:406-444`). **Output keys mirror the canonical aggregate verbatim** to preserve any downstream consumers of `RunRow.aggregate`: `mean_overall`, `p5_overall`, `p50_overall`, `p95_overall`, `completed_count`, `failed_count`, `f5_flag_fires`, `scoring_formula_version`. **NEW additive keys** introduced by T2 — split by who sets them:
 - Emitted **by the helper itself** (added to every call's output): `task_type_distribution: dict[str, int]` (new contract extension; T1 `_build_aggregate` did not compute this).
-- Added **post-call by `ReplayRunGenerator.run()` only**, after invoking the helper: `replay_warnings: list[str]`, `replay_n_completed: int`, `replay_n_failed: int`, `replay_suite_id: str`. The helper itself NEVER emits these — they're appended to the helper's returned dict in the generator body (per §5 lines 768-776: `aggregate = compute_run_aggregate(prompt_results)` then `aggregate["replay_*"] = ...`). Non-replay callers (`TopicProbeGenerator`) get a clean canonical aggregate.
+- Added **post-call by `ReplayRunGenerator.run()` only**, after invoking the helper: `replay_warnings: list[str]`, `replay_n_completed: int`, `replay_n_failed: int`, `replay_suite_id: str`. The helper itself NEVER emits these — they're appended to the helper's returned dict in the generator body (per §5 — the `aggregate = compute_run_aggregate(prompt_results)` call followed by `aggregate["replay_warnings"] = warnings` / `aggregate["replay_suite_id"] = suite_id` / `aggregate["replay_n_completed"] = n_completed` / `aggregate["replay_n_failed"] = n_failed` assignments). Non-replay callers (`TopicProbeGenerator`) get a clean canonical aggregate.
 
 The `BaselineScoresPayload` Pydantic model in §4 uses the same `p5_overall`/`p95_overall` key naming to match the helper output. Both `TopicProbeGenerator` and `ReplayRunGenerator` import + call this helper; `_build_aggregate` instance method is refactored to a thin delegate that calls `compute_run_aggregate` (no caller-visible change since output keys are preserved). |
 | `services/probe_generation.py` | EXTEND — add `mode: Literal['codebase', 'topic_only'] = 'codebase'` + `template_name: str = 'probe-agent.md'` kwargs to `generate_probe_prompts()`. `mode='topic_only'` selects the **inverted per-prompt predicate** (`_lacks_backtick` defined as `<5%` backtick density per prompt, i.e. drop prompts WITH backticks); the **batch drop threshold stays at `>50%`** (`_DROP_THRESHOLD=0.5`) per the existing F1 contract — the two thresholds operate at different levels and remain distinct. Defaults preserve backward-compat with all current callers. |
@@ -251,6 +251,16 @@ Index("ix_run_row_suite_id", "suite_id", started_at.desc()),
 ```
 
 The migration's `op.create_index("ix_run_row_suite_id", "run_row", ["suite_id", sa.text("started_at DESC")])` is functionally equivalent in the produced SQL — they generate the same `CREATE INDEX ... (suite_id, started_at DESC)` — so the ORM declaration and the migration agree on what the DB ends up looking like. Without this matching ORM declaration, `alembic check` fails CI per the post-`bdd8e96cf489` schema-drift invariants.
+
+**Parallel — `RunRow.suite_id` column declaration update.** The current declaration at `models.py:643` is `suite_id: Mapped[str | None] = mapped_column(String, nullable=True)` (P3 prework left the column without a `ForeignKey()` declaration in anticipation of T2). T2 must extend the declaration to:
+
+```python
+suite_id: Mapped[str | None] = mapped_column(
+    String, ForeignKey("validation_suite.id", ondelete="SET NULL"), nullable=True,
+)
+```
+
+so the ORM-side declaration matches the migration's `fk_run_row_suite_id` constraint. The `a2f6d8e31b09` precedent (the only FK-modifying migration in tree) updated both migration AND ORM declarations together — `models.py:136, 290, 493, 507` show the cascade-FK pattern. Without this ORM update, the named FK constraint exists in the DB but not in the ORM, which `alembic check` flags as drift (same CI gate as the Index discussion above).
 
 ## 4 REST + MCP surface
 
@@ -1185,13 +1195,15 @@ If any new WARN source appears, flip blocks and the unexpected write path gets r
 
 **Kill switch:** operators can set `WRITE_QUEUE_AUDIT_HOOK_RAISE=false` env var. Documented in `backend/CLAUDE.md` write-queue contract section.
 
-**New regression test** `test_audit_hook_default_is_raise` locks the flipped default.
+**3 new RED tests in Cycle 15:**
 
-**Two integration tests required at v0.4.22 ship time** — both must PASS for flip to land:
-- **Existing P4 test** `test_audit_hook_emits_zero_warn_under_full_pipeline` — STAYS unchanged. Covers analyze / optimize / score / refine / save_result handlers (the P4 surface that gated the audit-hook flip precondition). Still PASSing at v0.4.21 ship per `backend/CLAUDE.md` Foundation P4 entry.
-- **NEW T2 test** `test_audit_hook_emits_zero_warn_under_full_t2_pipeline` — covers the T2 surface (save-as-suite, replay, topic-only probe, retire, regression-alarm computation). The test exercises every T2 write path under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True` and asserts zero `read-engine audit:` WARN lines.
+1. **`test_audit_hook_default_is_raise`** — locks the flipped default (`WRITE_QUEUE_AUDIT_HOOK_RAISE` defaults `True` at process start).
+2. **`test_audit_hook_emits_zero_warn_under_full_t2_pipeline`** — extended integration test (decorated `@pytest.mark.integration`). Exercises every T2 write path under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True` (save-as-suite, replay, topic-only probe, retire, regression-alarm computation) and asserts zero `read-engine audit:` WARN lines.
+3. **`test_audit_hook_kill_switch_env_var_reverts_to_warn`** — exercises the kill-switch contract documented in §7: setting `WRITE_QUEUE_AUDIT_HOOK_RAISE=false` via env var override reverts the audit hook to WARN-only behavior (matching pre-v0.4.22 v0.4.21 semantics). Required because the kill-switch is a documented operator escape hatch — without an explicit test, a future refactor could silently break it.
 
-Both tests run in CI under `pytest -m integration`. The T2 test is the cycle 15 RED→GREEN deliverable; the P4 test is a regression guard that must continue passing.
+**Existing P4 test stays unchanged** (regression-guard only, not a new RED test for T2): `test_audit_hook_emits_zero_warn_under_full_pipeline` covers analyze / optimize / score / refine / save_result handlers (the P4 surface that gated the audit-hook flip precondition). Must continue PASSing at v0.4.22 ship per `backend/CLAUDE.md` Foundation P4 entry — verified as a side-effect of the same `WRITE_QUEUE_AUDIT_HOOK_RAISE=True` flip, no test code change required.
+
+All three new RED tests run under `pytest -m integration`. The 3-count is consistent with the §10 cycle-15 row "3" entry.
 
 ## 8 202 Accepted + polling architecture
 
