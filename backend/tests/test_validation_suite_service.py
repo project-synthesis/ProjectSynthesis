@@ -1,32 +1,52 @@
-"""Cycle 2 RED tests for ``ValidationSuiteService.create_from_run`` — 11 tests.
+"""Cycle 2 + Cycle 3 RED tests for ``ValidationSuiteService`` — 11 + 9 = 20 tests.
 
-Plan: ``docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md`` Cycle 2 Task 2.1
-Spec: ``docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md`` §4 + §5
+Plan: ``docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md`` Cycle 2 + 3
+Spec: ``docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md`` §4 + §5 + §9
 
-These tests are deliberately authored BEFORE the implementation exists. They
-import from ``app.services.validation_suite_service`` and
-``app.schemas.validation_suite`` — neither module exists yet, so every test
-fails at import time with ``ModuleNotFoundError``. That is correct RED
-behaviour for the strict TDD protocol (`feedback_tdd_protocol.md`).
+The Cycle 2 tests (1-11) cover ``ValidationSuiteService.create_from_run``;
+Cycle 2 GREEN has landed so they pass.
+
+The Cycle 3 tests (12-20) cover ``retire``, ``get``, ``list``,
+``list_replays`` plus the ``SuiteRetireInputs`` frozen dataclass and the
+``validation_suite_retire`` write-queue operation label. Cycle 3 GREEN has
+NOT yet landed: these 9 tests fail with ``AttributeError`` (no ``.retire`` /
+``.get`` / ``.list`` / ``.list_replays`` method on the service) or
+``ImportError`` (no ``SuiteRetireInputs`` symbol in the service module).
+``SuiteRetireInputs`` is imported lazily inside the Cycle 3 tests that need
+it so the module-top import doesn't break collection of the 11 Cycle 2
+tests, which must continue to PASS.
 
 Per spec §5 the service is detached-ORM-safe (Foundation P4 contract): reads
 happen inside a short DB session; the snapshot dataclass crosses the
 ``WriteQueue.submit()`` boundary; no DB session is held during persistence.
-Per spec §9 trace tagging suite creates emit JSONL with
-``phase="validation_suite"``.
+Per spec §9 trace tagging suite creates AND retires emit JSONL with
+``phase="validation_suite"``. The ``validation_suite_retired`` event fires
+ONLY on first retire — idempotent re-retire of an already-retired suite is
+a no-op success and emits ZERO events / ZERO JSONL trace entries.
 
 Cycle 1 already landed:
   * `ValidationSuite` ORM declaration (`app/models.py:675`)
   * Alembic migration `5576c539720f` creating the table + FK + indexes
   * `RunRow.suite_id` FK + `ix_run_row_suite_id` index
 
-Cycle 2 must add:
-  * NEW `app/schemas/validation_suite.py` (Pydantic schemas per spec §4)
-  * NEW `app/services/validation_suite_service.py` (`ValidationSuiteService` +
+Cycle 2 landed:
+  * `app/schemas/validation_suite.py` (Pydantic schemas per spec §4)
+  * `app/services/validation_suite_service.py` (`ValidationSuiteService` +
     `SuiteSnapshotInputs` per spec §5)
   * Write queue operation label ``"validation_suite_create"``
   * Event ``validation_suite_created`` emitted post-submit success
   * JSONL trace entry with ``phase="validation_suite"``
+
+Cycle 3 must add:
+  * ``ValidationSuiteService.retire(suite_id, *, reason, db, write_queue)``
+  * ``ValidationSuiteService.get(suite_id, *, db)``
+  * ``ValidationSuiteService.list(*, db, project_id=None,
+    repo_full_name=None, include_retired=False, limit=20, offset=0)``
+  * ``ValidationSuiteService.list_replays(suite_id, *, db, limit=20,
+    offset=0)``
+  * ``SuiteRetireInputs`` frozen dataclass (spec §5)
+  * Write-queue operation label ``"validation_suite_retire"`` — only on
+    first retire; idempotent re-retire short-circuits before submit
 """
 from __future__ import annotations
 
@@ -49,16 +69,27 @@ from app.models import Base, RunRow, ValidationSuite
 # The two not-yet-existing modules — every import below raises
 # ``ModuleNotFoundError`` until Cycle 2 GREEN lands. Captured here at module
 # top so all 11 tests fail at COLLECTION time with the same import error.
-from app.schemas.validation_suite import (  # noqa: F401 — import failure is the RED signal
+from app.schemas.validation_suite import (  # noqa: F401 — Cycle 2/3 RED signal
     BaselineScoresPayload,
     PerPromptScore,
     PromptSnapshotItem,
+    RetireSuiteRequest,
+    ValidationSuiteListItem,
+    ValidationSuiteListResponse,
     ValidationSuiteOut,
 )
-from app.services.validation_suite_service import (  # noqa: F401 — import failure is the RED signal
+from app.services.validation_suite_service import (  # noqa: F401 — Cycle 2/3 RED signal
     SuiteSnapshotInputs,
     ValidationSuiteService,
 )
+
+# ``SuiteRetireInputs`` is deliberately NOT imported at module top. Adding it
+# here before Cycle 3 GREEN lands would break collection of the 11 Cycle 2
+# tests with ``ImportError``. The Cycle 3 retire-path tests instead fail at
+# AttributeError on the missing ``.retire`` / ``.get`` / ``.list`` /
+# ``.list_replays`` method — which is the canonical RED signal the GREEN
+# step has not yet implemented those methods + the ``SuiteRetireInputs``
+# dataclass + ``_persist_suite_retire`` callback per spec §5.
 
 pytestmark = pytest.mark.asyncio
 
@@ -714,4 +745,748 @@ async def test_create_from_run_baseline_scores_uses_p5_overall_not_p5(
         "BaselineScoresPayload must NOT expose a 'p5' attribute — spec §3 "
         "pins the canonical key to 'p5_overall' to preserve downstream "
         "consumer compatibility with RunRow.aggregate readers."
+    )
+
+
+# ###########################################################################
+# Cycle 3 — retire / get / list / list_replays — 9 tests
+# ###########################################################################
+#
+# Plan: docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md Cycle 3 Task 3.1
+# Spec: docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md §4 + §5
+#       + §9 (validation_suite_retired event)
+#
+# Pre-condition before Cycle 3 GREEN lands:
+#   - ``ValidationSuiteService`` has no ``.retire`` / ``.get`` / ``.list`` /
+#     ``.list_replays`` methods → AttributeError at attribute access
+#   - ``SuiteRetireInputs`` does not exist in service module → ImportError at
+#     lazy import inside the test that needs it
+#
+# Each Cycle 3 test seeds a Cycle 2 suite via ``create_from_run`` so the
+# state machine progresses through canonical create → retire / get / list
+# paths. Helpers reused: ``_seed_run``, ``_canonical_aggregate``,
+# ``_prompt_results``, ``db`` fixture, ``write_queue`` fixture.
+# ###########################################################################
+
+
+async def _seed_suite(
+    db: AsyncSession,
+    write_queue,
+    *,
+    label: str = "cycle-3-fixture",
+    tolerance_abs: float = 0.5,
+    repo_full_name: str | None = None,
+) -> ValidationSuiteOut:
+    """Helper — seed a canonical RunRow + create a suite from it.
+
+    Returns the ValidationSuiteOut returned by ``create_from_run`` so callers
+    can pluck out the persisted ``id``. Shared by every Cycle 3 test that
+    needs at least one suite in the DB.
+    """
+    aggregate = _canonical_aggregate()
+    prompt_results = _prompt_results(3)
+    run = await _seed_run(
+        db,
+        aggregate=aggregate,
+        prompt_results=prompt_results,
+        repo_full_name=repo_full_name,
+    )
+    service = ValidationSuiteService()
+    return await service.create_from_run(
+        run_id=run.id,
+        label=label,
+        tolerance_abs=tolerance_abs,
+        db=db,
+        write_queue=write_queue,
+    )
+
+
+# ===========================================================================
+# Test 12 (Cycle 3 #1) — retire writes retired_at + retired_reason
+# ===========================================================================
+
+
+async def test_retire_sets_retired_at_and_reason_writeonly(
+    db: AsyncSession, write_queue,
+):
+    """Spec §5 retire body — first retire MUST persist both ``retired_at``
+    (datetime, NOT None) and ``retired_reason`` (the caller-supplied string).
+
+    DB query is the canonical evidence — never trust the service's return
+    value as proof of persistence (Foundation P4 OPERATE/O1).
+    """
+    suite_out = await _seed_suite(db, write_queue)
+
+    service = ValidationSuiteService()
+    await service.retire(
+        suite_id=suite_out.id,
+        reason="superseded by new baseline",
+        db=db,
+        write_queue=write_queue,
+    )
+
+    await db.commit()  # Flush read-session so writer commits are visible.
+    row = (
+        await db.execute(
+            select(ValidationSuite).where(ValidationSuite.id == suite_out.id),
+        )
+    ).scalar_one()
+    assert isinstance(row.retired_at, datetime), (
+        f"expected retired_at to be a datetime after first retire; got "
+        f"{row.retired_at!r}"
+    )
+    assert row.retired_reason == "superseded by new baseline", (
+        f"expected retired_reason to be the caller-supplied string; got "
+        f"{row.retired_reason!r}"
+    )
+
+
+# ===========================================================================
+# Test 13 (Cycle 3 #2) — retire MUST NOT mutate other columns
+# ===========================================================================
+
+
+async def test_retire_does_not_mutate_other_columns(
+    db: AsyncSession, write_queue,
+):
+    """Spec §10 Cycle 3 INTEGRATE A4 — retire updates ONLY ``retired_at`` and
+    ``retired_reason``; column-by-column post-update diff confirms every
+    other column is byte-identical to its pre-retire value.
+
+    The columns scanned cover every attribute on the ``ValidationSuite`` ORM
+    model (``app/models.py:675``): id, source_run_id, prompts_snapshot,
+    baseline_scores, tolerance_abs, label, project_id, repo_full_name,
+    created_at.
+    """
+    suite_out = await _seed_suite(
+        db, write_queue, label="diff-fixture", tolerance_abs=0.7,
+        repo_full_name="acme/widget",
+    )
+
+    # Snapshot the row BEFORE retire — read every persisted column.
+    await db.commit()
+    before = (
+        await db.execute(
+            select(ValidationSuite).where(ValidationSuite.id == suite_out.id),
+        )
+    ).scalar_one()
+    saved = {
+        "id": before.id,
+        "source_run_id": before.source_run_id,
+        "prompts_snapshot": before.prompts_snapshot,
+        "baseline_scores": before.baseline_scores,
+        "tolerance_abs": before.tolerance_abs,
+        "label": before.label,
+        "project_id": before.project_id,
+        "repo_full_name": before.repo_full_name,
+        "created_at": before.created_at,
+    }
+    # Expire the in-session view so the post-retire SELECT goes to the DB.
+    db.expire(before)
+
+    service = ValidationSuiteService()
+    await service.retire(
+        suite_id=suite_out.id,
+        reason="diff-test reason",
+        db=db,
+        write_queue=write_queue,
+    )
+
+    await db.commit()
+    after = (
+        await db.execute(
+            select(ValidationSuite).where(ValidationSuite.id == suite_out.id),
+        )
+    ).scalar_one()
+
+    # Column-by-column diff — every non-retire column must match the saved
+    # snapshot exactly. Catches the A4 anti-pattern (retire accidentally
+    # rewriting label, tolerance_abs, or snapshot JSON columns).
+    assert after.id == saved["id"], "id mutated"
+    assert after.source_run_id == saved["source_run_id"], "source_run_id mutated"
+    assert after.prompts_snapshot == saved["prompts_snapshot"], (
+        "prompts_snapshot mutated"
+    )
+    assert after.baseline_scores == saved["baseline_scores"], (
+        "baseline_scores mutated"
+    )
+    assert after.tolerance_abs == saved["tolerance_abs"], "tolerance_abs mutated"
+    assert after.label == saved["label"], "label mutated"
+    assert after.project_id == saved["project_id"], "project_id mutated"
+    assert after.repo_full_name == saved["repo_full_name"], (
+        "repo_full_name mutated"
+    )
+    assert after.created_at == saved["created_at"], "created_at mutated"
+
+    # And the retire columns DID transition.
+    assert after.retired_at is not None, (
+        "retired_at must be populated after first retire"
+    )
+    assert after.retired_reason == "diff-test reason", (
+        f"retired_reason should be the caller-supplied string; got "
+        f"{after.retired_reason!r}"
+    )
+
+
+# ===========================================================================
+# Test 14 (Cycle 3 #3) — retire is idempotent on already-retired suites
+# ===========================================================================
+
+
+async def test_retire_is_idempotent_on_already_retired(
+    db: AsyncSession, write_queue,
+):
+    """Spec §5 retire body — re-retire of an already-retired suite is a no-op
+    success. The persisted ``retired_at`` MUST remain the first-retire
+    timestamp; the persisted ``retired_reason`` MUST remain the first reason.
+
+    Brief async sleep between retire calls guarantees that a buggy
+    overwriting implementation would produce a DETECTABLY different
+    ``retired_at`` (datetime.utcnow precision is microsecond — 10ms gap is
+    plenty to fail a passing-on-luck implementation).
+    """
+    import asyncio
+    suite_out = await _seed_suite(db, write_queue)
+
+    service = ValidationSuiteService()
+
+    # First retire — captures the canonical timestamp + reason.
+    await service.retire(
+        suite_id=suite_out.id,
+        reason="initial retire reason",
+        db=db,
+        write_queue=write_queue,
+    )
+
+    await db.commit()
+    row_1 = (
+        await db.execute(
+            select(ValidationSuite).where(ValidationSuite.id == suite_out.id),
+        )
+    ).scalar_one()
+    retired_at_1 = row_1.retired_at
+    retired_reason_1 = row_1.retired_reason
+    assert retired_at_1 is not None
+    assert retired_reason_1 == "initial retire reason"
+    db.expire(row_1)
+
+    # Detectable delay — guarantees subsequent retire would produce a
+    # different timestamp if the implementation mistakenly overwrites.
+    await asyncio.sleep(0.01)
+
+    # Second retire — different reason, must NOT overwrite.
+    await service.retire(
+        suite_id=suite_out.id,
+        reason="second retire reason (must be ignored)",
+        db=db,
+        write_queue=write_queue,
+    )
+
+    await db.commit()
+    row_2 = (
+        await db.execute(
+            select(ValidationSuite).where(ValidationSuite.id == suite_out.id),
+        )
+    ).scalar_one()
+    assert row_2.retired_at == retired_at_1, (
+        f"retired_at changed between calls — idempotency broken. "
+        f"first={retired_at_1!r}, second={row_2.retired_at!r}"
+    )
+    assert row_2.retired_reason == retired_reason_1, (
+        f"retired_reason changed between calls — idempotency broken. "
+        f"first={retired_reason_1!r}, second={row_2.retired_reason!r}"
+    )
+
+
+# ===========================================================================
+# Test 15 (Cycle 3 #4) — re-retire emits ZERO events + ZERO JSONL traces
+# ===========================================================================
+
+
+async def test_retire_idempotent_no_event_emitted_on_re_retire(
+    db: AsyncSession, write_queue, monkeypatch, tmp_path,
+):
+    """Spec §9 observability — ``validation_suite_retired`` event fires ONLY
+    when state actually transitions. The first retire emits exactly ONE
+    event AND ONE JSONL trace entry with ``phase="validation_suite"``.
+    The second retire (already-retired suite) emits ZERO events AND ZERO
+    JSONL entries — the short-circuit return happens BEFORE
+    ``WriteQueue.submit()`` and BEFORE any event/trace emission.
+
+    Trace inspection follows the canonical Cycle 2 Test 10 pattern:
+    monkeypatch ``app.config.DATA_DIR`` to ``tmp_path``, run the operation,
+    glob ``traces_dir`` for JSONL files with ``phase="validation_suite"``.
+    """
+    # Isolate trace output directory — TraceLogger reads DATA_DIR at call
+    # time per validation_suite_service.py:245.
+    import app.config as cfg_mod
+    monkeypatch.setattr(cfg_mod, "DATA_DIR", tmp_path)
+
+    suite_out = await _seed_suite(db, write_queue)
+
+    # Subscribe to event bus before the FIRST retire so we capture the
+    # emit-on-transition event AND can reset for the no-op re-retire.
+    from app.services.event_bus import event_bus
+    captured: list[tuple[str, dict]] = []
+    real_publish = event_bus.publish
+
+    def _capturing_publish(event_type, data):
+        captured.append(
+            (event_type, dict(data) if isinstance(data, dict) else {}),
+        )
+        return real_publish(event_type, data)
+
+    monkeypatch.setattr(event_bus, "publish", _capturing_publish)
+
+    service = ValidationSuiteService()
+    # ---- FIRST retire: state transitions, MUST emit event + JSONL ----
+    await service.retire(
+        suite_id=suite_out.id,
+        reason="first retire — emits event",
+        db=db,
+        write_queue=write_queue,
+    )
+
+    suite_events_first = [
+        payload for (etype, payload) in captured
+        if etype == "validation_suite_retired"
+    ]
+    assert len(suite_events_first) == 1, (
+        f"first retire MUST emit exactly 1 validation_suite_retired event; "
+        f"got {len(suite_events_first)}. all captured types: "
+        f"{[e for (e, _) in captured]!r}"
+    )
+
+    # JSONL trace inspection — at least 1 retire-phase entry exists after
+    # the first retire. Use a fresh helper because the suite_create trace
+    # is ALSO emitted to the same directory by the create_from_run path.
+    import json
+
+    def _count_validation_suite_traces() -> list[dict]:
+        traces_dir = tmp_path / "traces"
+        entries: list[dict] = []
+        if not traces_dir.exists():
+            return entries
+        for jsonl_path in traces_dir.glob("*.jsonl"):
+            for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    e = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if e.get("phase") != "validation_suite":
+                    continue
+                # ``action`` lives inside the trace's result block per
+                # validation_suite_service.py:256 — TraceLogger.log_phase
+                # passes the result dict through unchanged. Both ``create``
+                # and ``retire`` actions emit phase=validation_suite; we
+                # filter to retire entries by inspecting result.action.
+                result = e.get("result", {}) or {}
+                if result.get("action") == "retire":
+                    entries.append(e)
+        return entries
+
+    retire_traces_first = _count_validation_suite_traces()
+    assert len(retire_traces_first) == 1, (
+        f"first retire MUST emit exactly 1 JSONL trace with phase="
+        f"'validation_suite' and result.action='retire'; got "
+        f"{len(retire_traces_first)}. traces dir contents: "
+        f"{list((tmp_path / 'traces').glob('*.jsonl')) if (tmp_path / 'traces').exists() else 'no dir'}"
+    )
+
+    # ---- RESET — clear event capture so the re-retire is isolated ----
+    captured.clear()
+
+    # ---- SECOND retire (already retired): MUST emit ZERO events ----
+    await service.retire(
+        suite_id=suite_out.id,
+        reason="second retire — must NOT emit event",
+        db=db,
+        write_queue=write_queue,
+    )
+
+    suite_events_second = [
+        payload for (etype, payload) in captured
+        if etype == "validation_suite_retired"
+    ]
+    assert len(suite_events_second) == 0, (
+        f"re-retire of already-retired suite MUST emit ZERO "
+        f"validation_suite_retired events (idempotent no-op per spec §9); "
+        f"got {len(suite_events_second)}. all captured: "
+        f"{[e for (e, _) in captured]!r}"
+    )
+
+    # JSONL invariant: no NEW retire-phase entries written by the no-op.
+    retire_traces_second = _count_validation_suite_traces()
+    assert len(retire_traces_second) == len(retire_traces_first), (
+        f"re-retire MUST NOT write a new JSONL trace entry; count went "
+        f"from {len(retire_traces_first)} → {len(retire_traces_second)}"
+    )
+
+
+# ===========================================================================
+# Test 16 (Cycle 3 #5) — operation_label='validation_suite_retire' on submit
+# ===========================================================================
+
+
+async def test_retire_uses_validation_suite_retire_op_label(
+    db: AsyncSession, write_queue, monkeypatch,
+):
+    """Spec §4 write-queue operation labels — first ``retire`` MUST call
+    ``WriteQueue.submit`` with ``operation_label='validation_suite_retire'``
+    for JSONL-trace filterability.
+
+    Per spec §4 the label appears ONLY on first-retire submissions; the
+    idempotent re-retire short-circuits before ``WriteQueue.submit`` is
+    invoked at all, so no operation_label is recorded on the no-op path.
+    This test asserts BOTH halves of that contract: the label appears once
+    on the first retire AND the second retire records zero new submit
+    calls (proving the short-circuit happens before any WriteQueue work).
+    """
+    suite_out = await _seed_suite(db, write_queue)
+
+    captured: list[dict] = []
+    real_submit = write_queue.submit
+
+    async def _capturing_submit(work, *, timeout=None, operation_label=None):
+        captured.append(
+            {"operation_label": operation_label, "timeout": timeout},
+        )
+        return await real_submit(
+            work, timeout=timeout, operation_label=operation_label,
+        )
+
+    monkeypatch.setattr(write_queue, "submit", _capturing_submit)
+
+    service = ValidationSuiteService()
+    # First retire — expect the canonical op label on submit.
+    await service.retire(
+        suite_id=suite_out.id,
+        reason="op-label test",
+        db=db,
+        write_queue=write_queue,
+    )
+
+    labels_first = [c["operation_label"] for c in captured]
+    assert "validation_suite_retire" in labels_first, (
+        f"first retire MUST submit with operation_label="
+        f"'validation_suite_retire'; got labels={labels_first!r}"
+    )
+
+    # Reset and re-retire — short-circuit MUST happen before submit().
+    captured.clear()
+    await service.retire(
+        suite_id=suite_out.id,
+        reason="re-retire — must not submit",
+        db=db,
+        write_queue=write_queue,
+    )
+    labels_second = [c["operation_label"] for c in captured]
+    assert labels_second == [], (
+        f"re-retire of already-retired suite MUST short-circuit BEFORE "
+        f"WriteQueue.submit (per spec §4 op-label clause); got submit "
+        f"calls with labels={labels_second!r}"
+    )
+
+
+# ===========================================================================
+# Test 17 (Cycle 3 #6) — retire raises suite_not_found on missing id
+# ===========================================================================
+
+
+async def test_retire_raises_suite_not_found_on_missing(
+    db: AsyncSession, write_queue,
+):
+    """Spec §4 error envelope — retire on a non-existent ``suite_id`` raises
+    ``ValueError("suite_not_found")``. Router layer (Cycle 5) translates the
+    code to a 404 envelope.
+    """
+    service = ValidationSuiteService()
+    with pytest.raises(ValueError, match="suite_not_found"):
+        await service.retire(
+            suite_id="not-a-real-suite-id-" + uuid.uuid4().hex,
+            reason="missing suite",
+            db=db,
+            write_queue=write_queue,
+        )
+
+
+# ===========================================================================
+# Test 18 (Cycle 3 #7) — get returns full ValidationSuiteOut + 404 on missing
+# ===========================================================================
+
+
+async def test_get_returns_full_validation_suite_out_for_existing_id(
+    db: AsyncSession, write_queue,
+):
+    """Spec §5 get() body — ``get(suite_id)`` returns a fully-populated
+    ``ValidationSuiteOut`` matching the seeded values. Missing suite raises
+    ``ValueError("suite_not_found")`` (spec §4 error envelope — same code
+    surfaces 404 at the REST layer).
+    """
+    aggregate = _canonical_aggregate(mean=7.85)
+    prompt_results = _prompt_results(3)
+    run = await _seed_run(
+        db, aggregate=aggregate, prompt_results=prompt_results,
+        repo_full_name="acme/widget",
+    )
+
+    service = ValidationSuiteService()
+    created = await service.create_from_run(
+        run_id=run.id,
+        label="get-test",
+        tolerance_abs=0.5,
+        db=db,
+        write_queue=write_queue,
+    )
+
+    # Round-trip read of the persisted row via the service.
+    fetched = await service.get(suite_id=created.id, db=db)
+
+    assert isinstance(fetched, ValidationSuiteOut), (
+        f"get() must return a Pydantic ValidationSuiteOut; got "
+        f"{type(fetched)!r}"
+    )
+    assert fetched.id == created.id
+    assert fetched.label == "get-test"
+    assert fetched.tolerance_abs == 0.5
+    assert fetched.source_run_id == run.id
+    assert isinstance(fetched.prompts_snapshot, list)
+    assert len(fetched.prompts_snapshot) == len(prompt_results)
+    assert all(
+        isinstance(item, PromptSnapshotItem) for item in fetched.prompts_snapshot
+    ), "prompts_snapshot entries must round-trip as PromptSnapshotItem"
+    assert isinstance(fetched.baseline_scores, BaselineScoresPayload)
+    assert fetched.baseline_scores.mean_overall == 7.85
+    # Fresh suite — retire columns must be None.
+    assert fetched.retired_at is None
+    assert fetched.retired_reason is None
+
+    # Missing suite — same canonical error code as retire.
+    with pytest.raises(ValueError, match="suite_not_found"):
+        await service.get(
+            suite_id="missing-suite-" + uuid.uuid4().hex,
+            db=db,
+        )
+
+
+# ===========================================================================
+# Test 19 (Cycle 3 #8) — list filters retired by default + pagination shape
+# ===========================================================================
+
+
+async def test_list_filters_retired_by_default(
+    db: AsyncSession, write_queue,
+):
+    """Spec §4 ``GET /api/suites?include_retired=false`` — the service
+    ``list()`` method's ``include_retired`` kwarg defaults to ``False``;
+    retired suites are excluded by default and reappear when the caller
+    opts in via ``include_retired=True``.
+
+    Pagination envelope is the canonical ``ValidationSuiteListResponse``
+    (spec §4): ``total`` counts the FILTERED set (NOT the whole DB), ``count``
+    matches ``len(items)``, and ``items[i]`` are ``ValidationSuiteListItem``
+    instances. The same total propagates across pages — limit/offset slice
+    items without affecting total.
+    """
+    # Seed 5 suites, retire 2 of them.
+    suites: list[ValidationSuiteOut] = []
+    for i in range(5):
+        suite = await _seed_suite(db, write_queue, label=f"list-fixture-{i}")
+        suites.append(suite)
+
+    service = ValidationSuiteService()
+    # Retire the first two (deterministic — easier to reason about).
+    for suite in suites[:2]:
+        await service.retire(
+            suite_id=suite.id,
+            reason=f"retired in list fixture: {suite.label}",
+            db=db,
+            write_queue=write_queue,
+        )
+
+    # ---- Default: include_retired=False — expect 3 active suites ----
+    response_default = await service.list(db=db)
+    assert isinstance(response_default, ValidationSuiteListResponse), (
+        f"list() must return a Pydantic ValidationSuiteListResponse; got "
+        f"{type(response_default)!r}"
+    )
+    assert response_default.total == 3, (
+        f"default list MUST exclude retired suites — expected total=3 "
+        f"active out of 5 seeded; got total={response_default.total}"
+    )
+    assert response_default.count == 3, (
+        f"count must match len(items)=3; got count={response_default.count}"
+    )
+    assert len(response_default.items) == 3
+    assert all(
+        isinstance(item, ValidationSuiteListItem)
+        for item in response_default.items
+    ), "items entries must be ValidationSuiteListItem"
+    # No retired suites should sneak through.
+    active_ids = {item.id for item in response_default.items}
+    retired_ids = {suite.id for suite in suites[:2]}
+    assert active_ids.isdisjoint(retired_ids), (
+        f"retired suites leaked into default list — overlap: "
+        f"{active_ids & retired_ids!r}"
+    )
+
+    # ---- include_retired=True — expect all 5 ----
+    response_all = await service.list(db=db, include_retired=True)
+    assert response_all.total == 5
+    assert response_all.count == 5
+    assert len(response_all.items) == 5
+
+    # ---- Pagination — first slice ----
+    response_page_1 = await service.list(db=db, limit=2, offset=0)
+    # total counts the filtered set (3 active), NOT the page slice.
+    assert response_page_1.total == 3, (
+        f"limit/offset must NOT affect total; expected total=3, got "
+        f"{response_page_1.total}"
+    )
+    assert len(response_page_1.items) == 2, (
+        f"limit=2 page MUST contain 2 items when 3 active suites exist; "
+        f"got {len(response_page_1.items)}"
+    )
+
+    # ---- Pagination — second slice ----
+    response_page_2 = await service.list(db=db, limit=2, offset=2)
+    assert response_page_2.total == 3
+    assert len(response_page_2.items) == 1, (
+        f"limit=2 offset=2 MUST contain 1 item when 3 active suites "
+        f"exist; got {len(response_page_2.items)}"
+    )
+
+
+# ===========================================================================
+# Test 20 (Cycle 3 #9) — list_replays scopes to mode='replay_run' + suite_id
+# ===========================================================================
+
+
+async def test_list_replays_returns_only_replay_run_mode_rows_for_suite(
+    db: AsyncSession, write_queue,
+):
+    """Spec §5 list_replays + §4 ``GET /api/suites/{id}/replays`` — returns
+    rows scoped to BOTH ``mode='replay_run'`` AND ``suite_id={suite_id}``.
+
+    Cross-mode pollution test: ``mode='topic_probe'`` rows with the SAME
+    ``suite_id`` MUST NOT appear (e.g., the source-probe run wouldn't be
+    listed as a replay of the suite it spawned).
+
+    Cross-suite pollution test: ``mode='replay_run'`` rows with a DIFFERENT
+    ``suite_id`` MUST NOT appear (replays belong to their parent suite).
+
+    Ordering: ``started_at DESC`` (newest replay first) — backed by
+    ``ix_run_row_suite_id (suite_id, started_at DESC)`` per spec §3.
+    """
+    # Need TWO suites so the cross-suite isolation test is meaningful.
+    suite_a = await _seed_suite(db, write_queue, label="suite-A")
+    suite_b = await _seed_suite(db, write_queue, label="suite-B")
+
+    # 3 replay_run rows for suite_a at distinct timestamps.
+    now = datetime.now(UTC)
+    replay_timestamps = [
+        now.replace(microsecond=10_000),
+        now.replace(microsecond=20_000),
+        now.replace(microsecond=30_000),
+    ]
+    expected_replay_ids: list[str] = []
+    for ts in replay_timestamps:
+        row_id = uuid.uuid4().hex
+        row = RunRow(
+            id=row_id,
+            mode="replay_run",
+            status="completed",
+            started_at=ts,
+            completed_at=ts,
+            prompts_generated=3,
+            prompt_results=None,
+            aggregate={"mean_overall": 7.5},
+            suite_id=suite_a.id,
+        )
+        db.add(row)
+        expected_replay_ids.append(row_id)
+
+    # 2 topic_probe rows linked to suite_a (cross-mode pollution) — MUST be
+    # excluded by the mode filter.
+    for _ in range(2):
+        row = RunRow(
+            id=uuid.uuid4().hex,
+            mode="topic_probe",
+            status="completed",
+            started_at=now,
+            completed_at=now,
+            prompts_generated=3,
+            prompt_results=None,
+            aggregate={"mean_overall": 8.0},
+            suite_id=suite_a.id,
+        )
+        db.add(row)
+
+    # 1 replay_run row linked to suite_b (cross-suite pollution) — MUST be
+    # excluded by the suite_id filter.
+    cross_suite_row_id = uuid.uuid4().hex
+    db.add(
+        RunRow(
+            id=cross_suite_row_id,
+            mode="replay_run",
+            status="completed",
+            started_at=now,
+            completed_at=now,
+            prompts_generated=3,
+            prompt_results=None,
+            aggregate={"mean_overall": 7.0},
+            suite_id=suite_b.id,
+        ),
+    )
+
+    await db.commit()
+
+    service = ValidationSuiteService()
+    response = await service.list_replays(suite_id=suite_a.id, db=db)
+
+    # Extract the row IDs that came back. The exact return type is a
+    # paginated envelope (matches GET /api/suites/{id}/replays canonical
+    # contract returning ``RunListResponse`` per spec §4 line 275); attribute
+    # access on .items is the canonical pagination shape.
+    items = getattr(response, "items", None)
+    assert items is not None, (
+        f"list_replays() must return a paginated envelope with an ``items`` "
+        f"attribute; got {type(response)!r}"
+    )
+    returned_ids = [getattr(it, "id", it.get("id") if isinstance(it, dict) else None)
+                    for it in items]
+
+    assert len(items) == 3, (
+        f"list_replays MUST return exactly 3 replay_run rows scoped to "
+        f"suite_a (excluding 2 topic_probe rows on same suite + 1 "
+        f"replay_run on suite_b); got len={len(items)}, ids={returned_ids!r}"
+    )
+
+    # Set membership — every returned id is a known suite_a replay; the
+    # cross-suite suite_b replay MUST NOT appear.
+    returned_set = set(returned_ids)
+    assert returned_set == set(expected_replay_ids), (
+        f"returned ids must equal the 3 suite_a replay ids; expected="
+        f"{set(expected_replay_ids)!r}, got={returned_set!r}"
+    )
+    assert cross_suite_row_id not in returned_set, (
+        f"cross-suite replay leaked into list_replays(suite_a); offending "
+        f"id={cross_suite_row_id!r}"
+    )
+
+    # Ordering — started_at DESC (newest first). The 3 timestamps were
+    # seeded in ascending microsecond order, so the canonical desc order is
+    # the reverse of insertion order.
+    returned_started_ats = [
+        getattr(it, "started_at", it.get("started_at") if isinstance(it, dict) else None)
+        for it in items
+    ]
+    assert returned_started_ats == sorted(
+        returned_started_ats, reverse=True,
+    ), (
+        f"list_replays MUST return rows ordered by started_at DESC (newest "
+        f"first) per spec §3 ix_run_row_suite_id index ordering; got "
+        f"{returned_started_ats!r}"
     )
