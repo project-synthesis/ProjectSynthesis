@@ -115,7 +115,6 @@ def _build_prompts_snapshot(
             "raw_prompt": r.get("raw_prompt", ""),
             "intent_label": r.get("intent_label"),
             "original_optimization_id": r.get("optimization_id"),
-            "category": r.get("category"),
         }
         for r in prompt_results
     ]
@@ -382,6 +381,7 @@ class ValidationSuiteService:
 
         await write_queue.submit(
             _work,
+            timeout=30,
             operation_label="validation_suite_create",
         )
 
