@@ -110,6 +110,19 @@ class SuiteRetireInputs:
     the WHERE clause, ``retired_at`` + ``retired_reason`` for the SET
     clause). Every other column on ``ValidationSuite`` stays untouched —
     pinned by ``test_retire_does_not_mutate_other_columns``.
+
+    Attributes
+    ----------
+    suite_id : str
+        Target ValidationSuite.id (drives the UPDATE WHERE clause).
+    retired_at : datetime
+        Timezone-aware UTC datetime (``datetime.now(UTC)`` at retire time).
+        Matches the ``DateTime`` column convention in ``app/models.py`` —
+        SQLAlchemy stores the aware value and reads it back transparently
+        for SQLite + PostgreSQL.
+    retired_reason : str
+        Caller-supplied reason, already ``.strip()``-ed by the service so
+        the writer-engine UPDATE writes a normalized value.
     """
 
     suite_id: str
@@ -279,14 +292,20 @@ async def _persist_suite_retire(
     await db.commit()
 
 
-def _emit_suite_retire_trace(inputs: SuiteRetireInputs, duration_ms: int) -> None:
-    """Append a ``phase="validation_suite"`` retire entry to today's JSONL.
+def _log_validation_suite_phase(
+    trace_id: str, duration_ms: int, result: dict[str, Any],
+) -> None:
+    """Shared scaffold for both create + retire JSONL trace emissions.
 
-    Spec §9 trace tagging — both create and retire emit under the same
-    phase; callers filter on ``result.action`` (``create`` vs ``retire``)
-    to disambiguate. Lazy-instantiates ``TraceLogger`` reading
-    ``app.config.DATA_DIR`` at call time so test-side
+    Spec §9 trace tagging — every ValidationSuite-lifecycle event emits under
+    ``phase="validation_suite"``; callers filter on ``result["action"]``
+    (``create`` vs ``retire``) to disambiguate. Lazy-instantiates
+    ``TraceLogger`` reading ``app.config.DATA_DIR`` at call time so test-side
     ``monkeypatch.setattr(cfg_mod, "DATA_DIR", tmp_path)`` works.
+
+    Trace failure must never break a successful suite-lifecycle write —
+    ``OSError`` / ``RuntimeError`` / ``ValueError`` are logged at DEBUG and
+    swallowed; any other exception type propagates (genuine bug).
     """
     try:
         from app.services.trace_logger import TraceLogger
@@ -294,59 +313,50 @@ def _emit_suite_retire_trace(inputs: SuiteRetireInputs, duration_ms: int) -> Non
         traces_dir = _config_mod.DATA_DIR / "traces"
         logger_ = TraceLogger(traces_dir)
         logger_.log_phase(
-            trace_id=inputs.suite_id,
+            trace_id=trace_id,
             phase="validation_suite",
             duration_ms=duration_ms,
             tokens_in=0,
             tokens_out=0,
             model="",
             provider="",
-            result={
-                "action": "retire",
-                "suite_id": inputs.suite_id,
-                "retired_at": inputs.retired_at.isoformat(),
-                "retired_reason": inputs.retired_reason,
-            },
+            result=result,
         )
     except (OSError, RuntimeError, ValueError) as exc:
-        # Trace failure must never break suite retire.
-        logger.debug("validation_suite retire trace emission failed: %s", exc)
+        # Trace failure must never break the host suite-lifecycle write.
+        logger.debug("validation_suite trace emission failed: %s", exc)
+
+
+def _emit_suite_retire_trace(inputs: SuiteRetireInputs, duration_ms: int) -> None:
+    """Append a ``phase="validation_suite"`` retire entry to today's JSONL."""
+    _log_validation_suite_phase(
+        trace_id=inputs.suite_id,
+        duration_ms=duration_ms,
+        result={
+            "action": "retire",
+            "suite_id": inputs.suite_id,
+            "retired_at": inputs.retired_at.isoformat(),
+            "retired_reason": inputs.retired_reason,
+        },
+    )
 
 
 def _emit_suite_create_trace(snapshot: SuiteSnapshotInputs, duration_ms: int) -> None:
-    """Append a ``phase="validation_suite"`` entry to today's traces JSONL.
-
-    Per spec §9 trace tagging. Lazy-instantiates ``TraceLogger`` reading
-    ``app.config.DATA_DIR`` at call time — preserves test-side
-    ``monkeypatch.setattr(cfg_mod, "DATA_DIR", tmp_path)`` semantics.
-    """
-    try:
-        from app.services.trace_logger import TraceLogger
-
-        traces_dir = _config_mod.DATA_DIR / "traces"
-        logger_ = TraceLogger(traces_dir)
-        logger_.log_phase(
-            trace_id=snapshot.suite_id,
-            phase="validation_suite",
-            duration_ms=duration_ms,
-            tokens_in=0,
-            tokens_out=0,
-            model="",
-            provider="",
-            result={
-                "action": "create",
-                "suite_id": snapshot.suite_id,
-                "source_run_id": snapshot.source_run_id,
-                "label": snapshot.label,
-                "tolerance_abs": snapshot.tolerance_abs,
-                "prompts_count": len(snapshot.prompts_snapshot),
-                "baseline_mean": snapshot.baseline_scores.get("mean_overall"),
-                "project_id": snapshot.project_id,
-            },
-        )
-    except (OSError, RuntimeError, ValueError) as exc:
-        # Trace failure must never break suite creation.
-        logger.debug("validation_suite trace emission failed: %s", exc)
+    """Append a ``phase="validation_suite"`` create entry to today's JSONL."""
+    _log_validation_suite_phase(
+        trace_id=snapshot.suite_id,
+        duration_ms=duration_ms,
+        result={
+            "action": "create",
+            "suite_id": snapshot.suite_id,
+            "source_run_id": snapshot.source_run_id,
+            "label": snapshot.label,
+            "tolerance_abs": snapshot.tolerance_abs,
+            "prompts_count": len(snapshot.prompts_snapshot),
+            "baseline_mean": snapshot.baseline_scores.get("mean_overall"),
+            "project_id": snapshot.project_id,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -500,16 +510,23 @@ class ValidationSuiteService:
         """Idempotent soft-delete of a ValidationSuite.
 
         Spec §5 retire body:
-        * First retire — read suite → build :class:`SuiteRetireInputs` →
+
+        * **First retire** — read suite → build :class:`SuiteRetireInputs` →
           submit through ``write_queue`` with
           ``operation_label='validation_suite_retire'`` → emit
           ``validation_suite_retired`` event → write JSONL retire trace.
-        * Re-retire of an already-retired suite — short-circuits BEFORE
-          ``WriteQueue.submit()``: no write, no event, no trace.
+        * **Re-retire** of an already-retired suite — second and subsequent
+          calls short-circuit BEFORE :meth:`WriteQueue.submit` and return
+          successfully. Three observability invariants hold on the no-op
+          path: **NO DB write**, **NO event publish**, **NO JSONL trace
+          entry**. Pinned by tests
+          ``test_retire_is_idempotent_on_already_retired``,
+          ``test_retire_idempotent_no_event_emitted_on_re_retire``, and
+          ``test_retire_uses_validation_suite_retire_op_label``.
 
         The short-circuit ordering matters: the spec §4 operation-label
         clause + §9 event-emission contract both pin "first retire only"
-        observability, so the `retired_at is not None` guard runs inside
+        observability, so the ``retired_at is not None`` guard runs inside
         the read session, before any queue submission.
 
         Parameters
@@ -518,12 +535,22 @@ class ValidationSuiteService:
             Target suite. Missing id raises ``ValueError("suite_not_found")``.
         reason : str
             Caller-supplied retirement reason. Stripped before persistence
-            (matches the existing P4 routing convention).
+            (matches the existing P4 routing convention). Pydantic-validated
+            at the router boundary against :class:`RetireSuiteRequest`
+            (``min_length=1, max_length=500``); the service trusts that
+            validation.
         db : AsyncSession | None
             Signature-only — the service always opens a short read session
             via ``async_session_factory`` (Foundation P4 contract).
         write_queue : WriteQueue
             Required collaborator — terminal write routes through this queue.
+
+        Raises
+        ------
+        ValueError
+            ``suite_not_found`` when ``suite_id`` does not exist — same
+            canonical code as :meth:`get` so the REST layer can map both
+            to a single 404 envelope.
         """
         start = time.monotonic()
 
@@ -586,6 +613,23 @@ class ValidationSuiteService:
         suite, and adapts it through ``ValidationSuiteOut.model_validate``
         (the schema is configured with ``from_attributes=True``).
 
+        Parameters
+        ----------
+        suite_id : str
+            Target suite id. Missing id raises
+            ``ValueError("suite_not_found")``.
+        db : AsyncSession | None
+            Signature-only — the service always opens a short read session
+            via ``async_session_factory`` (Foundation P4 contract).
+
+        Returns
+        -------
+        ValidationSuiteOut
+            Fully-populated read view — includes ``prompts_snapshot`` and
+            ``baseline_scores`` parsed as nested Pydantic models. Both
+            ``retired_at`` and ``retired_reason`` are ``None`` for active
+            suites.
+
         Raises
         ------
         ValueError
@@ -625,10 +669,31 @@ class ValidationSuiteService:
         Order is ``created_at DESC`` (newest first) to match the
         ``ix_validation_suite_active`` partial-index direction.
 
-        Returns the canonical paginated envelope
-        :class:`ValidationSuiteListResponse` — ``total`` reflects the
-        filtered set, NOT the page slice; ``limit`` + ``offset`` shape the
-        ``items`` window only.
+        Parameters
+        ----------
+        include_retired : bool, default False
+            When ``False`` (the default), filters out retired suites
+            (``retired_at IS NULL``). When ``True``, returns the union of
+            active + retired.
+        project_id : str | None, default None
+            When provided, narrows to suites whose ``project_id`` matches;
+            None (default) returns suites across all projects.
+        limit : int, default 20
+            Page size. Pydantic ``Query(ge=1, le=100)`` clamps at the
+            router boundary; defensive runtime validation lives there.
+        offset : int, default 0
+            Page offset. Pydantic ``Query(ge=0)`` clamps at the router.
+        db : AsyncSession | None
+            Signature-only — the service always opens a short read session.
+
+        Returns
+        -------
+        ValidationSuiteListResponse
+            Canonical paginated envelope. ``total`` reflects the FILTERED
+            set, NOT the page slice; ``limit`` + ``offset`` shape the
+            ``items`` window only. A filter yielding zero rows returns
+            ``total=0, count=0, items=[], has_more=False,
+            next_offset=None`` (empty envelope, never an error).
         """
         session_ctx = _database_mod.async_session_factory()
         read_db = await session_ctx.__aenter__()
@@ -679,12 +744,34 @@ class ValidationSuiteService:
         ``RunRow.suite_id == suite_id``. Ordering is ``started_at DESC``
         per the ``ix_run_row_suite_id (suite_id, started_at DESC)`` index.
 
-        Returns the canonical :class:`RunListResponse` envelope (spec §4
-        line 275) — ``items`` is ``list[RunSummary]`` so the row id is
-        accessible as ``item.id`` and the started timestamp as
-        ``item.started_at``, matching the contract that
-        ``test_list_replays_returns_only_replay_run_mode_rows_for_suite``
-        inspects.
+        Per spec §5 a non-existent ``suite_id`` returns an empty paginated
+        envelope (``total=0, items=[]``) rather than raising
+        ``suite_not_found`` — this matches REST convention for resource-
+        scoped collection endpoints (``GET /resource/{x}/items`` returns
+        ``[]`` when ``x`` is unknown). The suite-existence check, if
+        needed, happens at the router layer via :meth:`get`.
+
+        Parameters
+        ----------
+        suite_id : str
+            Parent suite. Non-existent ids yield an empty envelope, NOT
+            an error — see note above.
+        limit : int, default 20
+            Page size. Pydantic ``Query(ge=1, le=100)`` clamps at the
+            router boundary.
+        offset : int, default 0
+            Page offset. Pydantic ``Query(ge=0)`` clamps at the router.
+        db : AsyncSession | None
+            Signature-only — the service always opens a short read session.
+
+        Returns
+        -------
+        RunListResponse
+            Canonical pagination envelope (spec §4 line 275) — ``items``
+            is ``list[RunSummary]`` so the row id is accessible as
+            ``item.id`` and the started timestamp as ``item.started_at``,
+            matching the contract pinned by
+            ``test_list_replays_returns_only_replay_run_mode_rows_for_suite``.
         """
         session_ctx = _database_mod.async_session_factory()
         read_db = await session_ctx.__aenter__()
