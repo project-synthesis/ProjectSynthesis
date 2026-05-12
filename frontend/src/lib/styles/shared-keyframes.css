@@ -111,3 +111,32 @@
     transform: translateY(0);
   }
 }
+
+/* --- Forge motion signature ---------------------------------------------- */
+
+/* forge-spark — brief sharp flash + scale + rotation. The signature Validate-
+   stage motion per brand guidelines `SKILL.md:327`: "yellow flash + scale(1.2)
+   + rotation on the forge action button". Used by Topic Probe Tier 2 (v0.4.22)
+   on two surfaces:
+     - Save-Suite button (TopicProbeReportCard) — confirms the save action by
+       briefly stamping the button yellow before settling back.
+     - Emergent taxonomy nodes (TaxonomyMiniView) — flash when the probe run
+       discovers a new domain/sub-domain mid-run.
+   3 anchor stops (0% / 25% / 100%) per spec §6 forge-motion-personality table.
+   Consumed via `animation: forge-spark 250ms ease-out` shorthand — the
+   timing pin (250ms ease-out) is part of the spec contract. */
+@keyframes forge-spark {
+  0% {
+    transform: scale(1) rotate(0deg);
+    color: var(--color-text-primary);
+  }
+  25% {
+    transform: scale(1.2) rotate(3deg);
+    color: var(--color-neon-yellow);
+    background-color: color-mix(in srgb, var(--color-neon-yellow) 12%, transparent);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    color: var(--color-text-primary);
+  }
+}
