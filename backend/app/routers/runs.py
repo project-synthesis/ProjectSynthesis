@@ -58,7 +58,7 @@ def _serialize_full(row: RunRow) -> RunResult:
 
 @router.get("/runs", response_model=RunListResponse)
 async def list_runs(
-    mode: Literal["topic_probe", "seed_agent"] | None = Query(None),
+    mode: Literal["topic_probe", "seed_agent", "replay_run"] | None = Query(None),
     status: str | None = Query(None),
     project_id: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
