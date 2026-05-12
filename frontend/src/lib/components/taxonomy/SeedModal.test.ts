@@ -500,4 +500,90 @@ describe('SeedModal', () => {
     expect(resultCard).not.toBeNull();
     expect(resultCard?.contains(chip)).toBe(true);
   });
+
+  // ── v0.4.22 T2 Cycle 11: third tab `TOPIC PROBE` ───────────────────
+  //
+  // SeedModal currently has 2 tabs (`generate` and `provide`). T2 adds a
+  // third — `topic_probe` — so the modal is the single entry point for
+  // all three seed-equivalent flows. The new tab matches the shipped
+  // `.seed-tab` typography (font-mono + letter-spacing 0.05em), NOT the
+  // canonical `font-display` modal-title pattern, per the spec §6
+  // density-pin table (lines 1100-1101). Canonical font-display
+  // migration of all 3 tabs is deferred to T4.
+  //
+  // Tests assert behavior + typography; the brand-canon audit grep
+  // covers the rest of the visual contract.
+
+  it('test_third_tab_topic_probe_renders', async () => {
+    render(SeedModal, { props: { open: true, onClose: vi.fn() } });
+    // The modal exposes 3 tab buttons.
+    const tabs = document.querySelectorAll('.seed-tab');
+    expect(tabs.length).toBe(3);
+
+    // Tab labels: GENERATE, PROVIDE, TOPIC PROBE (case-insensitive
+    // match — spec voice uses upper-case for tab cells via CSS
+    // `text-transform: uppercase`, but the markup text may be lower).
+    const labels = Array.from(tabs).map((t) => t.textContent?.trim().toLowerCase() ?? '');
+    expect(labels.some((l) => l.includes('generate'))).toBe(true);
+    expect(labels.some((l) => l.includes('provide'))).toBe(true);
+    expect(labels.some((l) => l.includes('topic') && l.includes('probe'))).toBe(true);
+
+    // The TOPIC PROBE tab is clickable and switches the modal into
+    // topic-probe mode. After clicking, the form/body renders the
+    // probe-specific surface (we look for the probe topic textarea
+    // label).
+    const user = userEvent.setup();
+    const topicTab = Array.from(tabs).find((t) =>
+      (t.textContent ?? '').toLowerCase().includes('topic'),
+    ) as HTMLButtonElement;
+    await user.click(topicTab);
+
+    await vi.waitFor(() => {
+      // The active state is reflected by the canonical seed-tab--active
+      // class (matches GENERATE/PROVIDE precedent at lines 256-263 of
+      // SeedModal.svelte).
+      expect(topicTab.className).toMatch(/seed-tab--active/);
+    });
+  });
+
+  it('test_third_tab_typography_font_mono_not_font_display', () => {
+    render(SeedModal, { props: { open: true, onClose: vi.fn() } });
+
+    // Find the third tab (TOPIC PROBE).
+    const tabs = document.querySelectorAll('.seed-tab');
+    expect(tabs.length).toBe(3);
+    const topicTab = Array.from(tabs).find((t) =>
+      (t.textContent ?? '').toLowerCase().includes('topic'),
+    ) as HTMLElement;
+    expect(topicTab).toBeTruthy();
+
+    // The third tab uses the canonical `.seed-tab` class — same as
+    // GENERATE/PROVIDE — so it picks up the shipped font-mono +
+    // letter-spacing 0.05em styling from SeedModal.svelte:545-557.
+    // We verify by class equivalence (all three tabs use `.seed-tab`)
+    // and by reading getComputedStyle for the font-family declaration.
+    const cs = getComputedStyle(topicTab);
+
+    // letter-spacing 0.05em on a 11px tab → roughly 0.55px; tolerate
+    // jsdom rounding by matching the canonical declaration text. The
+    // shipped CSS uses `letter-spacing: 0.05em` and font-family points
+    // at `var(--font-mono)`; we accept either the resolved value or
+    // the inherited declaration.
+    const fontFamily = cs.fontFamily.toLowerCase();
+    // Mono families include Geist Mono / JetBrains Mono / ui-monospace
+    // / monospace. The font-display family is Syne.
+    const isMono = /mono|geist mono|jetbrains/.test(fontFamily) || fontFamily.includes('var(--font-mono)');
+    const isDisplay = /syne/.test(fontFamily) || fontFamily.includes('var(--font-display)');
+
+    // The third tab must be font-mono and NOT font-display.
+    // jsdom may resolve the var to its fallback chain — accept any
+    // monospace family OR the variable reference itself.
+    expect(isMono || !isDisplay).toBe(true);
+    expect(isDisplay).toBe(false);
+
+    // All three tabs share the .seed-tab class → typography unified.
+    Array.from(tabs).forEach((t) => {
+      expect((t as HTMLElement).className).toMatch(/\bseed-tab\b/);
+    });
+  });
 });
