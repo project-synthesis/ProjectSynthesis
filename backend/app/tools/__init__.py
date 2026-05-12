@@ -15,7 +15,9 @@ from app.tools.optimize import handle_optimize
 from app.tools.prepare import handle_prepare
 from app.tools.probe import handle_probe
 from app.tools.refine import handle_refine
+from app.tools.replay_suite import handle_replay_suite
 from app.tools.save_result import handle_save_result
+from app.tools.save_suite import handle_save_suite
 from app.tools.seed import handle_seed
 from app.tools.strategies import handle_strategies
 
@@ -32,7 +34,9 @@ __all__ = [
     "handle_prepare",
     "handle_probe",
     "handle_refine",
+    "handle_replay_suite",
     "handle_save_result",
+    "handle_save_suite",
     "handle_seed",
     "handle_strategies",
 ]

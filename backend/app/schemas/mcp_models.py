@@ -6,6 +6,9 @@ JSON Schema sent during ``tools/list`` gives IDE language models complete
 context on how to format parameters and interpret results.
 """
 
+from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -706,4 +709,89 @@ class ExplainResult(BaseModel):
     )
     score_delta: float = Field(
         description="Overall score improvement (positive = better).",
+    )
+
+
+# ---------------------------------------------------------------------------
+# T2 Cycle 10 — Validation suite MCP tools (synthesis_save_suite / synthesis_replay_suite)
+# ---------------------------------------------------------------------------
+
+
+class SaveSuiteOutput(BaseModel):
+    """Output for synthesis_save_suite — full ValidationSuite snapshot.
+
+    Spec §4 line 326. Returned after the immutable ``ValidationSuite`` row
+    has been persisted via ``ValidationSuiteService.create_from_run`` —
+    snapshot is built inside the service's short read session and the body
+    of this model is populated from the resulting ``ValidationSuiteOut``.
+
+    Naming follows the dominant ``*Output`` convention used by 12 of 13
+    existing top-level MCP tool response classes (per spec §4 line 329).
+    """
+
+    suite_id: str = Field(
+        description="ValidationSuite id (UUID hex). Pass to "
+        "synthesis_replay_suite to kick off regression checks.",
+    )
+    source_run_id: str | None = Field(
+        default=None,
+        description="Source RunRow.id this suite was forked from. Becomes "
+        "null if the source run is later deleted (ondelete=SET NULL).",
+    )
+    label: str = Field(
+        description="Human-readable label assigned at save time (1-120 chars).",
+    )
+    baseline_mean: float = Field(
+        description="Mean overall score from the source run's aggregate — "
+        "the baseline the regression alarm compares replays against.",
+    )
+    tolerance_abs: float = Field(
+        description="Absolute score tolerance for regression detection "
+        "(0.1-5.0). Replays whose mean falls below baseline by more than "
+        "this value fire the regression alarm.",
+    )
+    prompts_count: int = Field(
+        description="Number of prompts frozen into the suite "
+        "(len(prompts_snapshot)).",
+    )
+    created_at: datetime = Field(
+        description="ISO 8601 timestamp when the suite was forked.",
+    )
+
+
+class ReplayInitiatedOutput(BaseModel):
+    """Output for synthesis_replay_suite — 202-style replay run dispatch.
+
+    Spec §4 line 327 + §10 Cycle 10. The handler dispatches through
+    ``RunOrchestrator.dispatch_async(mode='replay_run')`` which returns
+    immediately after the initial ``RunRow(status='running')`` INSERT
+    commits. Callers poll ``GET /api/runs/{run_id}`` for terminal status.
+
+    Mirrors the REST ``POST /api/suites/{id}/replay`` response shape
+    (``ReplayRunOut``) so MCP and REST callers see identical body keys.
+    """
+
+    run_id: str = Field(
+        description="RunRow.id of the replay run (UUID hex). Use with "
+        "the poll_url to fetch terminal status + per-prompt results.",
+    )
+    suite_id: str = Field(
+        description="ValidationSuite.id this replay is bound to.",
+    )
+    mode: Literal["replay_run"] = Field(
+        default="replay_run",
+        description="Always 'replay_run' — this output shape is replay-specific.",
+    )
+    status: Literal["running"] = Field(
+        default="running",
+        description="Initial run status — always 'running' at dispatch time. "
+        "Poll the run via poll_url for terminal transitions to "
+        "'completed' / 'failed' / 'partial'.",
+    )
+    poll_url: str = Field(
+        description="Relative URL for polling the replay's terminal status "
+        "(typically /api/runs/{run_id}).",
+    )
+    started_at: datetime = Field(
+        description="ISO 8601 timestamp when the placeholder RunRow was INSERTed.",
     )

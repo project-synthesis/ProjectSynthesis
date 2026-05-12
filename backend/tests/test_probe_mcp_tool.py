@@ -138,11 +138,19 @@ async def stub_orchestrator(
 class TestSynthesisProbe:
     @pytest.mark.asyncio
     async def test_15th_mcp_tool_registered(self):
-        """AC-C6-1: synthesis_probe is the 15th tool registered on FastMCP server."""
+        """AC-C6-1: synthesis_probe is registered on the FastMCP server.
+
+        The total tool count has grown from 15 (v0.4.12, when this test
+        originally pinned exactly 15) to 17 (v0.4.22 T2 Cycle 10, when
+        ``synthesis_save_suite`` + ``synthesis_replay_suite`` shipped).
+        The presence assertion on ``synthesis_probe`` remains the load-bearing
+        check for the original v0.4.12 acceptance criterion; the count
+        assertion tracks the current 17-tool reality.
+        """
         from app import mcp_server
         tools = list(mcp_server.mcp._tool_manager._tools.keys())  # type: ignore[attr-defined]
         assert "synthesis_probe" in tools
-        assert len(tools) == 15
+        assert len(tools) == 17
 
     @pytest.mark.asyncio
     async def test_structured_output_decorator(self):
