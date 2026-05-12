@@ -193,8 +193,10 @@
       // `detachClipboardStub()` which restores the original descriptor)
       // so the test's `vi.fn().mockResolvedValue(undefined)` receives the
       // call. In production this branch is a no-op: the platform's native
-      // Clipboard object has no such symbol so `stubSymbol` is undefined,
-      // and the `Reflect.ownKeys(clip)` cost is bounded (5–7 keys).
+      // Clipboard object has no symbol-keyed own properties at all, so
+      // `Reflect.ownKeys(clip)` returns the small string-keyed surface
+      // (`read`/`readText`/`write`/`writeText`) and `find()` exits on
+      // first iteration without finding a symbol match.
       detachUserEventClipboardStub();
       await navigator.clipboard.writeText(body);
       copyFlash.trigger();
@@ -281,29 +283,32 @@
   </section>
 
   <!-- Taxonomy delta ─────────────────────────────────────────── -->
+  <!--
+    `tagRow` is a Svelte 5 snippet — local sub-template that renders the
+    label + chip-list pattern shared by `Domains` and `Sub-domains` rows
+    in the taxonomy delta. Extracted (REFACTOR) so the two visually
+    identical blocks don't drift in styling/markup over time. Co-located
+    rather than a separate component because the snippet body is a few
+    lines, the inputs are tightly coupled to the parent's data shape, and
+    no other component consumes it.
+  -->
+  {#snippet tagRow(label: string, items: string[])}
+    {#if items.length > 0}
+      <div class="report-delta-row">
+        <span class="report-delta-label">{label}</span>
+        <div class="report-delta-tags">
+          {#each items as item}
+            <span class="report-delta-tag">{item}</span>
+          {/each}
+        </div>
+      </div>
+    {/if}
+  {/snippet}
   <section class="report-section" data-test="report-section" data-section="taxonomy">
     <h3 class="report-section-title">Taxonomy Delta</h3>
     <div class="report-delta">
-      {#if taxonomy.domains_created.length > 0}
-        <div class="report-delta-row">
-          <span class="report-delta-label">Domains</span>
-          <div class="report-delta-tags">
-            {#each taxonomy.domains_created as d}
-              <span class="report-delta-tag">{d}</span>
-            {/each}
-          </div>
-        </div>
-      {/if}
-      {#if taxonomy.sub_domains_created.length > 0}
-        <div class="report-delta-row">
-          <span class="report-delta-label">Sub-domains</span>
-          <div class="report-delta-tags">
-            {#each taxonomy.sub_domains_created as sd}
-              <span class="report-delta-tag">{sd}</span>
-            {/each}
-          </div>
-        </div>
-      {/if}
+      {@render tagRow('Domains', taxonomy.domains_created)}
+      {@render tagRow('Sub-domains', taxonomy.sub_domains_created)}
       <div class="report-delta-row">
         <span class="report-delta-label">Clusters touched</span>
         <span class="report-delta-num">{taxonomy.clusters_touched}</span>
