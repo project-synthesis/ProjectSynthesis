@@ -325,7 +325,7 @@ Replay endpoint **always 202** — replays are full pipeline runs with no <30s c
 | `synthesis_save_suite` | `run_id, label[1..120], tolerance_abs?: float = 0.5` | `SaveSuiteOutput{suite_id, source_run_id, label, baseline_mean, tolerance_abs, prompts_count, created_at}` |
 | `synthesis_replay_suite` | `suite_id` | `ReplayInitiatedOutput{run_id, suite_id, mode: 'replay_run', poll_url, started_at}` |
 
-**MCP naming convention**: `*Output` suffix matches 15 of 16 existing `schemas/mcp_models.py` classes (OptimizeOutput, AnalyzeOutput, PrepareOutput, SaveResultOutput, FeedbackOutput, RefineOutput, HistoryOutput, MatchOutput, StrategiesOutput, DeleteOptimizationOutput, OptimizationDetailOutput, HealthOutput, etc.). The single outlier `ExplainResult` is legacy; T2 conforms to the dominant `*Output` convention.
+**MCP naming convention**: `*Output` suffix matches **12 of 13** existing top-level tool-response classes in `schemas/mcp_models.py` (OptimizeOutput, AnalyzeOutput, PrepareOutput, SaveResultOutput, FeedbackOutput, RefineOutput, HistoryOutput, MatchOutput, StrategiesOutput, DeleteOptimizationOutput, OptimizationDetailOutput, HealthOutput). The single outlier `ExplainResult` is legacy; T2 conforms to the dominant `*Output` convention.
 
 Listings deliberately REST-only (matches `synthesis_history` precedent — no `synthesis_list_runs` either).
 
@@ -806,10 +806,17 @@ class ReplayRunGenerator:
                                          # taxonomy from the source probe.
             # final_report: stub non-None string (one short markdown line —
             # the suite-detail UI surfaces the baseline diff, not narrative).
-            # RunResult.final_report is `str` (non-nullable per schemas/runs.py:49);
-            # passing None would fail Pydantic validation on subsequent
-            # GET /api/runs/{id}. Stub is intentionally minimal — the UI's
-            # SuiteDetailView reads aggregate + suite_id, not final_report.
+            # NOTE on rationale: GeneratorResult.final_report is declared
+            # `str | None` at generators/base.py:21, and SeedAgentGenerator
+            # returns None in multiple spots (seed_agent_generator.py:125 et al.).
+            # The router at routers/runs.py:52 coerces NULL → "" before
+            # constructing RunResult (whose final_report is non-nullable `str`
+            # per schemas/runs.py:49), so returning None would NOT crash —
+            # it would surface as an empty string downstream. T2 picks the
+            # minimal-stub form because operator-facing log readers benefit
+            # from a non-empty marker line distinguishing replay terminal
+            # rows from seed agent rows. SuiteDetailView reads aggregate +
+            # suite_id, not final_report.
             final_report=(
                 f"# Replay — suite_id={suite_id}\n"
                 f"See SuiteDetailView for the baseline-vs-latest diff."
@@ -993,7 +1000,41 @@ async def _run_to_completion(self, *, mode, request, run_id) -> None:
         current_run_id.reset(token)
 ```
 
-**Existing `run()` refactor:** `run()` becomes a thin wrapper that calls `dispatch_async()` then `await`s an `asyncio.Event` set by the spawned task at terminal status — preserves the "blocks until terminal" contract for SSE callers + tests, while sharing the dispatch_async body. (Alternative: keep `run()` as a separate code path; the spec prefers the unified body to avoid two-codepath divergence that the reviewer flagged.)
+**Existing `run()` refactor:** `run()` becomes a thin wrapper that calls `dispatch_async()` then `await`s an `asyncio.Event` set by the spawned task at terminal status — preserves the "blocks until terminal" contract for SSE callers + tests, while sharing the dispatch_async body. The synchronization shape:
+
+```python
+async def run(self, mode, request, *, run_id=None) -> RunRow:
+    if run_id is None:
+        run_id = uuid4().hex
+    done = asyncio.Event()
+    # dispatch_async accepts an optional done_event kwarg; when provided,
+    # _run_to_completion's finally-block sets it after current_run_id.reset.
+    await self.dispatch_async(
+        mode=mode, request=request, run_id=run_id, done_event=done,
+    )
+    await done.wait()
+    return await self._reload(run_id)
+
+
+async def _run_to_completion(self, *, mode, request, run_id, done_event=None) -> None:
+    token = current_run_id.set(run_id)
+    try:
+        await self._run_generator_and_persist(mode, request, run_id)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await asyncio.shield(self._mark_failed(run_id, error="cancelled"))
+        raise
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            await self._mark_failed(run_id, error=f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        current_run_id.reset(token)
+        if done_event is not None:
+            done_event.set()   # success / failure / cancellation all reach this
+```
+
+The `done_event` is per-call (instantiated by `run()` per invocation, garbage-collected when both `run()` and the spawned task release their refs) — no per-run-id leak. 202-Accepted callers do not pass `done_event`, so the spawned task's `done_event is not None` branch is a no-op for them. (Alternative: keep `run()` as a separate code path; the spec prefers the unified body to avoid two-codepath divergence that the reviewer flagged.)
 
 **Cancellation contract diff vs existing:**
 
@@ -1152,8 +1193,10 @@ The project's frontend API client is split into **per-domain modules** under `fr
 ```typescript
 // frontend/src/lib/api/suites.ts (NEW)
 // Imports the canonical apiFetch helper — matches the existing pattern in
-// frontend/src/lib/api/seed.ts:2 + runs.ts (verified). `client.ts` exports
-// apiFetch / tryFetch / streamSSE, NOT a `client` object.
+// frontend/src/lib/api/seed.ts:2 + runs.ts (verified). client.ts exports
+// apiFetch + tryFetch + per-feature wrapper functions (getHealth,
+// streamOptimize, etc.); streamSSE is module-private inside client.ts and
+// used only internally by those wrappers. There is no `client` named export.
 import { apiFetch } from './client';
 
 export function saveSuite(runId: string, label: string, toleranceAbs?: number): Promise<ValidationSuiteOut>
@@ -1320,13 +1363,13 @@ For each cycle, the most likely anti-patterns INTEGRATE + OPERATE must explicitl
 | 1 | Migration + `ValidationSuite` ORM + `RunRow.__table_args__` `ix_run_row_suite_id` declaration | **7** (pure-schema invariants enumerated: (1) `inspector.has_table('validation_suite')`, (2) 11-column existence assertion, (3) `validation_suite.source_run_id` FK reflection (nullable + ondelete=SET NULL), (4) 3-index existence reflection on `validation_suite` (`ix_validation_suite_project_id`, `_source_run_id`, `_active`), (5) partial-index `WHERE retired_at IS NULL` predicate reflection on `ix_validation_suite_active`, (6) `ix_run_row_suite_id` existence + descending-order reflection, (7) `RunRow.suite_id` FK constraint reflection. **All 7 tests are themselves consumer tests for the ORM + migration code** — they assert reflected DB state via SQLAlchemy `inspect()`, which satisfies "Scaffolding ≠ TDD" without cross-cycle hand-off.) | A2 (migration follows `bdd8e96cf489_consolidate_lifespan_ddl_into_alembic.py` precedent — single forward-only migration; `alembic check` exits clean post-upgrade; `inspector.has_table()` idempotency guard matches consolidation style; ORM `__table_args__` index declarations match migration `op.create_index` calls so `alembic check` reports zero drift; SQLite FK addition uses `batch_alter_table("run_row", recreate="always")` per `a2f6d8e31b09:76,97` precedent) · A5 (test fixtures construct real `ValidationSuite(...)` instances, no `MagicMock`) | O2 (migration completes cleanly under WriteQueue active; `alembic upgrade head` + `downgrade -1` round-trip on fresh DB; `tests/test_main_lifespan_no_ddl.py` continues to pass) |
 | 2 | `ValidationSuiteService.create_from_run` + `SuiteSnapshotInputs` | 11 | A4 (`SuiteSnapshotInputs` populates ALL columns; column-by-column diff against `ValidationSuite` ORM) · A5 (real `RunRow` rows in fixtures, not mocked) | O1 (`SELECT * FROM validation_suite WHERE id=:s` after create — confirm row exists with all columns populated; **never trust the function's return value as evidence persistence happened** per O1 canon) |
 | 3 | `.retire`, `.get`, `.list`, `.list_replays` + `SuiteRetireInputs` + `validation_suite_retire` operation label | 9 | A4 (retire updates only `retired_at`/`retired_reason` — no other column mutated; column-by-column post-update diff) · A2 (use `WriteQueue.submit()` — do not write directly) | O1 (re-retire is idempotent and persists no-op; `validation_suite_retired` event NOT emitted on re-retire — assert via event-bus subscription) |
-| 4 | `.compute_regression_alarm` + 30s TTL cache + `regression_alarm_transition` event | 7 | A3 (Python-side filter matches canonical alarm-evaluation logic; cite the spec's SQL + Python filter as the canonical reference) · A1 (alarm-query result columns ALL consumed — none silently dropped) | O2 (alarm query under concurrent `replay_run` writes — no inconsistent snapshots; verify with concurrent writer harness) · O6 (cross-process replay writes from MCP do not corrupt alarm state) |
+| 4 | `.compute_regression_alarm` + 30s TTL cache + `regression_alarm_transition` event | 7 | A3 (Python-side filter matches canonical alarm-evaluation logic; cite the spec's SQL + Python filter as the canonical reference) · A1 (alarm-query result columns ALL consumed — none silently dropped) | **O4** (alarm query is a READ path; under concurrent `replay_run` writes the verification is "background-task race conditions visible only under live load" per `feedback_tdd_protocol.md:268-271`, NOT O2 which targets multi-row write batches — race-free snapshot via WAL; verify with concurrent writer harness) · O6 (cross-process replay writes from MCP do not corrupt alarm state) |
 | **B — REST + Generators (5-9)** | | | | |
-| 5 | `routers/suites.py` (6 endpoints, rate limits, error envelopes) | 15 | A2 (use `WriteQueue.submit()` indirectly via `ValidationSuiteService` — do NOT re-implement persistence in the router) · A4 (response payloads populate all `ValidationSuiteOut` / `ReplayRunOut` / `RunListResponse` fields — no NULL leakage from JOIN queries) | **OPERATE LIGHT — replay-endpoint INSERT-then-spawn semantics are deferred to Cycle 8 (when `dispatch_async()` lands).** Cycle 5 OPERATE covers only the 5 non-replay endpoints' surface (save-as-suite, list, detail, replays-list, retire) — O5 (client disconnect mid-request for save-as-suite/retire — no orphan rows on rate-limit-rejected writes), O2 (concurrent listings during active write_queue traffic). The deferred replay-endpoint O5+O8 checks (client disconnects mid-replay-dispatch + INSERT-then-spawn cancellation reconciliation via `_gc_orphan_runs`) move to Cycle 8's OPERATE focus where the `dispatch_async()` spawn primitive exists. Mirrors the peer-plan v0.4.16-p1a Cycle 1 OPERATE-light precedent (cited at §10 line ~1300). |
+| 5 | `routers/suites.py` (6 endpoints, rate limits, error envelopes) | 15 | A2 (use `WriteQueue.submit()` indirectly via `ValidationSuiteService` — do NOT re-implement persistence in the router) · A4 (response payloads populate all `ValidationSuiteOut` / `ReplayRunOut` / `RunListResponse` fields — no NULL leakage from JOIN queries) | **OPERATE LIGHT — replay-endpoint INSERT-then-spawn semantics are deferred to Cycle 8 (when `dispatch_async()` lands).** Cycle 5 OPERATE covers only the 5 non-replay endpoints' surface (save-as-suite, list, detail, replays-list, retire) — O5 (client disconnect mid-request for save-as-suite/retire — no orphan rows on rate-limit-rejected writes), O2 (concurrent listings during active write_queue traffic). The deferred replay-endpoint O5+O8 checks (client disconnects mid-replay-dispatch + INSERT-then-spawn cancellation reconciliation via `_gc_orphan_runs`) move to Cycle 8's OPERATE focus where the `dispatch_async()` spawn primitive exists. Mirrors the peer-plan v0.4.16-p1a Cycle 1 OPERATE-light precedent (peer-plan Task 1.5, lines 466-503 — "Mandate: Cycle 1 OPERATE is light — full concurrent peer-writer load test belongs to Cycle 2"). |
 | 6 | `ReplayRunGenerator` + lifespan registration extension | 11 | A2 (use `batch_pipeline.run_single_prompt` — NOT a hand-rolled inner pipeline) · A3 (diff `ReplayRunGenerator.run()` return shape against `TopicProbeGenerator.run()` and `SeedAgentGenerator.run()`; any `GeneratorResult` field the canonical generators populate that replay leaves default must have documented justification — `taxonomy_delta={}` is justified inline in §5 (replay produces no taxonomy delta) and `final_report` is set to a non-None minimal markdown stub per §5 (the `final_report=(f"# Replay — suite_id={suite_id}\n..." `non-None stub inside the `return GeneratorResult(...)` block) since `RunResult.final_report: str` is non-nullable at `schemas/runs.py:49`) · A5 (replay tests construct real `ValidationSuite(...)` rows and real `SuiteSnapshotInputs` instances; no MagicMock for the snapshot dataclasses) · A6 (every prompt receives full enrichment context — codebase + strategy intelligence + applied patterns — same as `batch_orchestrator.run_batch` canonical pattern) · A1 (read every field of `run_single_prompt`'s **`PendingOptimization`** — not just `overall_score`; the 5 score dimensions, **`trace_id`** (NOT `.id` — replay does not bulk_persist; see §5 trace_id rationale), `task_type` are each used by the replay result-handler per §5) | O3 (per-prompt persistence routes through queue in short batches — replay's 30-min worst-case duration must NOT hold any single write transaction >5s; verify warm-engine debounce + hot-path commits do not starve under sequential-replay load) · O4 (warm-engine debounce fires mid-replay — no contention) · O7 (replay's worst-case 30-min duration — every timeout in path: LLM provider, HTTP client, async_wait_for — must be ≥ that plus buffer) · O8 (cancel mid-replay — `RunRow.status` reaches terminal `failed` via `asyncio.shield()` write; test by killing the spawned task at every per-prompt boundary) |
 | 7 | Topic-only mode — `TopicProbeGenerator` branch + 2nd template + `probe_generation` signature extension + `ProbeContext` schema extension | 9 | A2 (don't re-implement Phase 2 generation — call existing `probe_generation.generate_probe_prompts` with new `mode`/`template_name` kwargs) · A3 (consume same return shape across both modes; downstream phases handle empty `relevant_files`/`None` `explore_synthesis_excerpt` as valid degenerate state) | O1 (`RunRow.topic_probe_meta.grounding_mode='topic_only'` persisted and queryable via `GET /api/runs/{id}`) |
 | 8 | 202+polling on `POST /api/probes` + `dispatch_async` + `current_run_id` ContextVar transfer | 7 | A2 (`dispatch_async` reuses existing `RunOrchestrator._create_row` + `_persist_final` lifecycle; SSE entry path refactors to internally call `dispatch_async` — single-codepath body shared between SSE + 202) | O1 (poll endpoint reflects committed row immediately after 202 returns — INSERT awaited before response; verify with race-stress test: dispatch_async + immediate GET, 1000 iterations) · O5 (curl `--max-time` shorter than initial INSERT — server-side state remains consistent under client disconnect mid-INSERT; **plus the deferred Cycle-5 replay-endpoint check: `curl --max-time 0.1` against `POST /api/suites/{id}/replay` — no orphan rows after disconnect**) · O7 (inventory every timeout in `dispatch_async` path: initial-INSERT WriteQueue timeout, spawned-task max duration, `_gc_orphan_runs` TTL; longest must ≥ worst-case probe duration plus buffer) · O8 (spawned task survives 202 caller's connection close via `asyncio.shield`; verify by closing connection mid-spawn and checking `RunRow` reaches terminal status; **plus the deferred Cycle-5 check: replay endpoint INSERT-then-spawn — cancellation between INSERT commit and task spawn must be reconciled by `_gc_orphan_runs` within TTL**) |
-| 9 | `/api/health` regression_alarm block | 5 | A4 (`RegressionAlarmEntry` populates all required fields from joined query — no NULL leakage; column-by-column diff against the join-SQL result columns in spec §5) | O2 (alarm query coexists with active replays — no read-write contention; verify with 30 concurrent `/api/health` polls during an active replay) |
+| 9 | `/api/health` regression_alarm block | 5 | A4 (`RegressionAlarmEntry` populates all required fields from joined query — no NULL leakage; column-by-column diff against the join-SQL result columns in spec §5) | **O4** (alarm-query READ path coexists with active replays — race-free snapshot per `feedback_tdd_protocol.md:268-271` background-task race scenario, NOT O2; verify with 30 concurrent `/api/health` polls during an active replay) |
 | **C — MCP (10)** | | | | |
 | 10 | `synthesis_save_suite` + `synthesis_replay_suite` | 9 | A2 (MCP handlers call `ValidationSuiteService` methods — don't re-implement persistence) · A4 (`SaveSuiteOutput` + `ReplayInitiatedOutput` populate all fields per `schemas/mcp_models.py` extensions) · A5 (MCP test fixtures use real `RunRow` + `ValidationSuite` rows, not mocked) | O6 (cross-process MCP→backend bridge for `replay_run` writes works under load — verify with concurrent MCP `synthesis_replay_suite` from 3 clients) · O5 (MCP client disconnects after `synthesis_save_suite` returns — write already committed; verify by inspecting DB after disconnect) |
 | **D — Frontend (11-13)** | | | | |
