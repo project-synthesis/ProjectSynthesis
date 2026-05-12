@@ -639,10 +639,9 @@ class RunRow(Base):
     taxonomy_delta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     final_report: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Suite linkage (T2): FK + named constraint added by migration
-    # 5576c539720f via batch_alter_table(recreate="always") since SQLite
-    # cannot ALTER a constraint in place. ondelete=SET NULL preserves the
-    # RunRow when its source suite is later retired/deleted.
+    # Suite linkage (T2, v0.4.22). SET NULL preserves the RunRow when its
+    # source suite is retired/deleted. The FK is named here for the migration's
+    # batch_alter_table contract — see migration 5576c539720f.
     suite_id: Mapped[str | None] = mapped_column(
         String,
         ForeignKey(
@@ -668,9 +667,7 @@ class RunRow(Base):
         Index("ix_run_row_status_started", "status", "started_at"),
         Index("ix_run_row_project_id", "project_id"),
         Index("ix_run_row_topic", "topic"),
-        # T2: (suite_id, started_at DESC) — backs the regression-alarm
-        # "latest replay per suite_id" query pattern. DESC matches the
-        # migration's sa.text("started_at DESC") in 5576c539720f.
+        # T2: backs the regression-alarm "latest replay per suite_id" query.
         Index("ix_run_row_suite_id", "suite_id", started_at.desc()),
     )
 
@@ -689,11 +686,9 @@ class ValidationSuite(Base):
     __tablename__ = "validation_suite"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid_hex)
+    # source_run_id is nullable=True to honor ondelete=SET NULL — the suite
+    # stays intact when its source run row is later deleted.
     source_run_id: Mapped[str | None] = mapped_column(
-        # SET NULL semantics require nullable=True; the suite stays intact when
-        # its source run row is later deleted. NOT NULL would conflict with
-        # ondelete=SET NULL at delete time — pick nullable to honor the cascade
-        # contract.
         String,
         ForeignKey("run_row.id", ondelete="SET NULL"),
         nullable=True,
@@ -717,12 +712,8 @@ class ValidationSuite(Base):
     __table_args__ = (
         Index("ix_validation_suite_project_id", "project_id"),
         Index("ix_validation_suite_source_run_id", "source_run_id"),
-        # Partial index on (created_at DESC) WHERE retired_at IS NULL —
-        # matches default reverse-chrono list ordering on the active set.
-        # Suites are immutable, so the predicate value is stable per row.
-        # ``created_at.desc()`` is the canonical models.py DESC-Index form
-        # (precedent: ix_optimizations_project_created:125,
-        # ix_prompt_cluster_created_at:250, ix_taxonomy_snapshot_created_at:350).
+        # Partial DESC index backs the default reverse-chrono list ordering on
+        # the active set. Suites are immutable so the predicate is stable per row.
         Index(
             "ix_validation_suite_active",
             created_at.desc(),
