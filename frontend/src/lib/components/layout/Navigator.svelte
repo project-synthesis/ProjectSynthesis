@@ -15,13 +15,21 @@
   import HistoryPanel from './HistoryPanel.svelte';
   import GitHubPanel from './GitHubPanel.svelte';
   import SettingsPanel from './SettingsPanel.svelte';
+  import SuitesPanel from '$lib/components/suites/SuitesPanel.svelte';
   import { getStrategies } from '$lib/api/client';
   import type { StrategyInfo } from '$lib/api/client';
   import { projectStore } from '$lib/stores/project.svelte';
   import { addToast, type ToastAction } from '$lib/stores/toast.svelte';
   import { tooltip } from '$lib/actions/tooltip';
 
-  type Activity = 'editor' | 'history' | 'clusters' | 'github' | 'settings';
+  // ── Activity union (v0.4.22 T2 EXTEND) ─────────────────────────────────
+  // 'suites' is the validation-suites surface. Routing matches the
+  // ActivityBar tab order (editor → history → clusters → suites → github →
+  // settings). Per spec § 6 "EXTENDED components" Left-nav row + plan task
+  // 12.1 test 3 (`test_suites_panel_navigator_entry_routes_correctly`):
+  // clicking the SUITES tab renders SuitesPanel; switching to any other
+  // tab unmounts it via the existing prop-driven `active` contract.
+  type Activity = 'editor' | 'history' | 'clusters' | 'suites' | 'github' | 'settings';
 
   let { active }: { active: Activity } = $props();
 
@@ -119,6 +127,8 @@
     <HistoryPanel active={true} />
   {:else if active === 'clusters'}
     <ClusterNavigator />
+  {:else if active === 'suites'}
+    <SuitesPanel active={true} />
   {:else if active === 'github'}
     <GitHubPanel active={true} />
   {:else if active === 'settings'}

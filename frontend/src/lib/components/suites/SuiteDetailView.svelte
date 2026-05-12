@@ -2,39 +2,64 @@
   /**
    * SuiteDetailView — full view for a single ValidationSuite.
    *
-   * Two stacked panels:
-   *   1. **Replay history** — paginated list of `RunRow` rows where
+   * Three stacked panels:
+   *   1. **Suite meta header** — surfaces every field of
+   *      `ValidationSuiteOut` not already encoded in the panel title: the
+   *      source run id, repo + project scope, created timestamp, tolerance
+   *      band, baseline distribution (mean / p5 / p50 / p95), task-type
+   *      distribution, plus the retired-at + retired-reason fields when
+   *      the suite has been retired. Per plan task 12.4 INTEGRATE A3 —
+   *      every `ValidationSuiteOut` field is either rendered visibly or
+   *      surfaced through tooltips so no canonical truth is hidden.
+   *   2. **Replay history** — paginated list of `RunRow` rows where
    *      `source_suite_id = suite.id`. Each row surfaces the run id, mode,
    *      status, started/completed timestamps, and prompts_generated count.
    *      Backs `GET /api/suites/{id}/replays`.
-   *   2. **Per-prompt baseline vs latest** — pairs
+   *   3. **Per-prompt baseline vs latest** — pairs
    *      `ValidationSuiteOut.baseline_scores.per_prompt[i].overall` with the
    *      matching index in `latestReplay.prompt_results[i].overall_score`,
    *      rendering a signed delta column per prompt. Spec § 10 Cycle 12
    *      INTEGRATE focus.
    *
+   * Plus a **replay warnings strip** between meta + replay-history —
+   * `latestReplay.aggregate.replay_warnings` is rendered as a neon-yellow
+   * chromatic row when non-empty. Per spec § 4 `suite_repo_drift`
+   * clarification + plan task 12.4: warnings come from the polled
+   * `GET /api/runs/{id}` aggregate, NOT from the immediate 202 dispatch
+   * response.
+   *
    * Both tables use `role="row"` + `data-test` markers — IDE-density canon
    * prefers data-grid markup over native `<table>`, but the a11y semantics
    * surface identically through axe-core.
    */
-  import type { RunListResponse, RunSummary } from '$lib/api/runs';
+  import type { RunListResponse, RunResult, RunSummary } from '$lib/api/runs';
   import type { ValidationSuiteOut } from '$lib/api/suites';
   import { formatSignedDelta } from '$lib/utils/formatting';
+  import { tooltip } from '$lib/actions/tooltip';
 
-  /** Minimal shape of a completed replay run carrying per-prompt results.
-   *  Pulled out of a `RunRow` row's `aggregate.prompt_results` payload. */
+  /**
+   * Minimal shape of a completed replay run carrying per-prompt results.
+   * Pulled out of a `RunRow` row's `prompt_results` payload. Tests
+   * exercise this shape directly (Cycle 12 RED test 8); the production
+   * call site uses the wider `RunResult` interface for the same purpose.
+   */
   export interface SuiteReplayRow extends RunSummary {
     prompt_results?: Array<{
       prompt_index: number;
       overall_score: number;
       raw_prompt?: string;
     }>;
+    aggregate?: RunResult['aggregate'];
   }
 
   interface Props {
     suite: ValidationSuiteOut;
     replays?: RunListResponse | null;
-    latestReplay?: SuiteReplayRow | null;
+    // Accept either the test fixture shape (`SuiteReplayRow`) or the full
+    // production `RunResult`. Both expose `prompt_results` + (optionally)
+    // `aggregate.replay_warnings` so the component does not branch on
+    // source.
+    latestReplay?: SuiteReplayRow | RunResult | null;
   }
 
   let { suite, replays = null, latestReplay = null }: Props = $props();
@@ -73,20 +98,109 @@
   });
 
   const replayItems = $derived(replays?.items ?? []);
+
+  // Pull the warning list from `aggregate.replay_warnings`. Both the
+  // SuiteReplayRow test fixture and the production RunResult expose the
+  // `aggregate` block; falling back to `[]` keeps the strip mount-stable.
+  const replayWarnings = $derived<string[]>(
+    (latestReplay && 'aggregate' in latestReplay
+      ? (latestReplay.aggregate as RunResult['aggregate'] | undefined)?.replay_warnings
+      : undefined) ?? [],
+  );
+
+  // Task-type distribution → sorted list of `"label: n"` chips for the
+  // baseline distribution row. Stable order keeps the header from
+  // re-flowing between renders.
+  const taskTypeChips = $derived(
+    Object.entries(suite.baseline_scores.task_type_distribution ?? {})
+      .sort((a, b) => (b[1] as number) - (a[1] as number))
+      .map(([label, count]) => `${label}: ${count}`),
+  );
+
+  // Headline tooltip — pin every secondary field of `ValidationSuiteOut`
+  // that doesn't get its own visible cell. Plan task 12.4 A3: every field
+  // should be either rendered or surfaced through a tooltip; this keeps
+  // the 20px-density chrome while giving operators a no-click path to the
+  // full row.
+  const headerTooltip = $derived.by(() => {
+    const parts: string[] = [];
+    if (suite.source_run_id) parts.push(`source_run: ${suite.source_run_id}`);
+    if (suite.repo_full_name) parts.push(`repo: ${suite.repo_full_name}`);
+    if (suite.project_id) parts.push(`project: ${suite.project_id}`);
+    parts.push(`created: ${fmt(suite.created_at)}`);
+    if (suite.retired_at) {
+      parts.push(`retired: ${fmt(suite.retired_at)}`);
+      if (suite.retired_reason) parts.push(`reason: ${suite.retired_reason}`);
+    }
+    return parts.join(' · ');
+  });
 </script>
 
 <section
   class="suite-detail-view"
   data-test="suite-detail-view"
   aria-label="Suite detail for {suite.label}"
+  data-retired={suite.retired_at != null}
 >
-  <header class="detail-header">
+  <header class="detail-header" use:tooltip={headerTooltip}>
     <span class="detail-label">{suite.label}</span>
     <span class="detail-meta">
       {suite.prompts_snapshot.length}p · baseline {suite.baseline_scores.mean_overall.toFixed(2)}
       · tolerance ±{suite.tolerance_abs.toFixed(2)}
     </span>
   </header>
+
+  <!-- ── Suite meta row — full ValidationSuiteOut field surfacing ─── -->
+  <div class="detail-meta-row" data-test="suite-meta">
+    {#if suite.source_run_id}
+      <span class="meta-chip" data-field="source_run_id">
+        <span class="meta-key">run</span><span class="meta-val">{suite.source_run_id}</span>
+      </span>
+    {/if}
+    {#if suite.repo_full_name}
+      <span class="meta-chip" data-field="repo_full_name">
+        <span class="meta-key">repo</span><span class="meta-val">{suite.repo_full_name}</span>
+      </span>
+    {/if}
+    {#if suite.project_id}
+      <span class="meta-chip" data-field="project_id">
+        <span class="meta-key">proj</span><span class="meta-val">{suite.project_id}</span>
+      </span>
+    {/if}
+    <span class="meta-chip" data-field="created_at">
+      <span class="meta-key">created</span><span class="meta-val">{fmt(suite.created_at)}</span>
+    </span>
+    <span class="meta-chip" data-field="baseline_distribution"
+      use:tooltip={`p5 ${suite.baseline_scores.p5_overall.toFixed(2)} · p50 ${suite.baseline_scores.p50_overall.toFixed(2)} · p95 ${suite.baseline_scores.p95_overall.toFixed(2)}`}>
+      <span class="meta-key">p50</span><span class="meta-val">{suite.baseline_scores.p50_overall.toFixed(2)}</span>
+    </span>
+    {#each taskTypeChips as chip (chip)}
+      <span class="meta-chip" data-field="task_type">
+        <span class="meta-val">{chip}</span>
+      </span>
+    {/each}
+    {#if suite.retired_at}
+      <span class="meta-chip meta-chip--retired" data-field="retired_at"
+        use:tooltip={suite.retired_reason ? `Retired: ${suite.retired_reason}` : 'Retired'}>
+        <span class="meta-key">retired</span><span class="meta-val">{fmt(suite.retired_at)}</span>
+      </span>
+    {/if}
+  </div>
+
+  <!-- ── Replay warnings strip (latestReplay.aggregate.replay_warnings) ─ -->
+  {#if replayWarnings.length > 0}
+    <div
+      class="warnings-strip"
+      data-test="replay-warnings"
+      role="status"
+      aria-live="polite"
+      aria-label={`${replayWarnings.length} replay warning${replayWarnings.length === 1 ? '' : 's'}`}
+    >
+      {#each replayWarnings as code (code)}
+        <span class="warning-chip" data-warning-code={code}>{code}</span>
+      {/each}
+    </div>
+  {/if}
 
   <!-- ── Replay history ─────────────────────────────────────────── -->
   <div class="replay-history" data-test="replay-history" role="table" aria-label="Replay history">
@@ -166,6 +280,86 @@
   .detail-meta {
     color: var(--color-text-dim);
     white-space: nowrap;
+  }
+
+  /* ── Suite meta row ─────────────────────────────────────────────
+     Chip-style surfacing of every ValidationSuiteOut field that
+     doesn't get its own visible row. h-5 chips with 4px gap, mono
+     numerics, single-line. Spec § 6 density-pin canon (p-1.5 for
+     parent, 1px subtle border on individual chips). */
+  .detail-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 0 4px;
+  }
+
+  .meta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 18px;
+    padding: 0 4px;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-bg-secondary, transparent);
+    font-size: 9px;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    max-width: 280px;
+    text-overflow: ellipsis;
+  }
+
+  .meta-chip .meta-key {
+    color: var(--color-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .meta-chip .meta-val {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .meta-chip--retired {
+    color: var(--color-neon-red, #ff3366);
+    border-color: var(--color-neon-red, #ff3366);
+  }
+
+  /* When the suite is retired the entire detail surface fades — keeps
+     operators from accidentally acting on a frozen-by-policy row. */
+  .suite-detail-view[data-retired='true'] {
+    opacity: 0.85;
+  }
+
+  /* ── Replay warnings strip ──────────────────────────────────────
+     Surfaces `aggregate.replay_warnings` from the polled latest-replay
+     RunResult. Neon-yellow chromatic encoding pairs with the
+     `RegressionBadge` neon-yellow tier so the workbench paints a
+     consistent "warn but not fired" palette. */
+  .warnings-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--color-neon-yellow, #ffd166);
+    background: color-mix(in srgb, var(--color-neon-yellow, #ffd166) 8%, transparent);
+  }
+
+  .warning-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-neon-yellow, #ffd166);
+    border: 1px solid var(--color-neon-yellow, #ffd166);
+    background: transparent;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .replay-history,

@@ -18,7 +18,10 @@
 
   let { children } = $props();
 
-  type Activity = 'editor' | 'history' | 'clusters' | 'github' | 'settings';
+  // v0.4.22 T2: 'suites' added between 'clusters' and 'github' — see
+  // ActivityBar.svelte for the rationale (validation surface is taxonomy-
+  // adjacent, not auth-adjacent).
+  type Activity = 'editor' | 'history' | 'clusters' | 'suites' | 'github' | 'settings';
   let activeActivity = $state<Activity>('editor');
 
   $effect(() => {
@@ -47,7 +50,14 @@
   $effect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail === 'editor' || detail === 'history' || detail === 'clusters' || detail === 'github' || detail === 'settings') {
+      if (
+        detail === 'editor' ||
+        detail === 'history' ||
+        detail === 'clusters' ||
+        detail === 'suites' ||
+        detail === 'github' ||
+        detail === 'settings'
+      ) {
         activeActivity = detail;
       }
     };

@@ -180,6 +180,29 @@ describe('Navigator', () => {
     expect(screen.getByRole('complementary', { name: 'Navigator' })).toBeInTheDocument();
   });
 
+  // ── v0.4.22 T2 — SUITES routing ────────────────────────────────────────────
+  // Clicking the SUITES tab (Navigator active='suites') mounts SuitesPanel.
+  // The panel exposes a `data-test="suites-panel"` root (verified in
+  // SuitesPanel.test.ts), so the routing branch is observable without
+  // pulling in the panel's own internal state.
+  it('routes to SuitesPanel when active is "suites"', () => {
+    defaultFetchHandlers();
+    const { container } = render(Navigator, { props: { active: 'suites' } });
+    const suitesRoot =
+      container.querySelector('[data-test="suites-panel"]') ??
+      container.querySelector('[aria-label="Suites"]');
+    expect(suitesRoot).not.toBeNull();
+  });
+
+  it('does not mount SuitesPanel when active is not "suites"', () => {
+    defaultFetchHandlers();
+    const { container } = render(Navigator, { props: { active: 'editor' } });
+    const suitesRoot =
+      container.querySelector('[data-test="suites-panel"]') ??
+      container.querySelector('[aria-label="Suites"]');
+    expect(suitesRoot).toBeNull();
+  });
+
   // ── Editor panel (strategies) ──────────────────────────────────────────────
 
   it('shows empty strategies message when no strategies are loaded', async () => {
