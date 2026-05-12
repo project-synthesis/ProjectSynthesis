@@ -1151,12 +1151,18 @@ async def lifespan(app: FastAPI):
     # Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md § 10.1
     # ------------------------------------------------------------------
     try:
+        from app.database import async_session_factory as _async_sf
+        from app.services.embedding_service import EmbeddingService
+        from app.services.generators.replay_run_generator import (
+            ReplayRunGenerator,
+        )
         from app.services.generators.seed_agent_generator import (
             SeedAgentGenerator,
         )
         from app.services.generators.topic_probe_generator import (
             TopicProbeGenerator,
         )
+        from app.services.prompt_loader import PromptLoader
         from app.services.run_orchestrator import RunOrchestrator
         from app.services.seed_orchestrator import SeedOrchestrator
 
@@ -1187,12 +1193,34 @@ async def lifespan(app: FastAPI):
             write_queue=_wq,
         )
 
+        # ReplayRunGenerator (T2 Cycle 6): replays a frozen
+        # ValidationSuite snapshot through the canonical
+        # ``batch_pipeline.run_single_prompt`` per-prompt path. Receives
+        # the full collaborator union — provider, prompt_loader,
+        # embedding_service, session_factory, taxonomy_engine,
+        # domain_resolver, context_service, write_queue — so each
+        # replay row goes through the same enrichment + scoring contract
+        # that the regular pipeline + batch seeding use.
+        _domain_resolver = getattr(app.state, "domain_resolver", None)
+        _context_service = getattr(app.state, "context_service", None)
+        replay_run_gen = ReplayRunGenerator(
+            provider=_provider,
+            prompt_loader=PromptLoader(PROMPTS_DIR),
+            embedding_service=EmbeddingService(),
+            session_factory=_async_sf,
+            taxonomy_engine=_taxonomy_engine,
+            domain_resolver=_domain_resolver,
+            context_service=_context_service,
+            write_queue=_wq,
+        )
+
         if _wq is not None:
             app.state.run_orchestrator = RunOrchestrator(
                 write_queue=_wq,
                 generators={
                     "topic_probe": topic_probe_gen,
                     "seed_agent": seed_agent_gen,
+                    "replay_run": replay_run_gen,
                 },
             )
             app.state.lifespan_order.append("run_orchestrator_registered")

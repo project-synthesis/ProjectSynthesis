@@ -17,12 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import statistics
 import time
 from datetime import datetime, timezone
 from typing import Any
 
-from app.schemas.pipeline_contracts import SCORING_FORMULA_VERSION
 from app.schemas.runs import RunRequest
 from app.services.event_bus import event_bus
 from app.services.generators.base import GeneratorResult
@@ -404,44 +402,18 @@ class TopicProbeGenerator:
         }
 
     def _build_aggregate(self, prompt_results: list[dict]) -> dict:
-        """Build the ProbeAggregate-shaped dict from per-prompt results."""
-        completed = [
-            r for r in prompt_results if r.get("status") == "completed"
-        ]
-        failed = [
-            r for r in prompt_results if r.get("status") != "completed"
-        ]
-        scores = [
-            float(r["overall_score"])
-            for r in completed
-            if r.get("overall_score") is not None
-        ]
+        """Build the ProbeAggregate-shaped dict from per-prompt results.
 
-        agg_mean: float | None = None
-        agg_p5: float | None = None
-        agg_p50: float | None = None
-        agg_p95: float | None = None
-        if scores:
-            agg_mean = round(statistics.mean(scores), 3)
-            agg_p50 = round(statistics.median(scores), 3)
-            if len(scores) >= 5:
-                qs = statistics.quantiles(scores, n=20)
-                agg_p5 = round(qs[0], 3)
-                agg_p95 = round(qs[-1], 3)
-            else:
-                agg_p5 = round(min(scores), 3)
-                agg_p95 = round(max(scores), 3)
-
-        return {
-            "mean_overall": agg_mean,
-            "p5_overall": agg_p5,
-            "p50_overall": agg_p50,
-            "p95_overall": agg_p95,
-            "completed_count": len(completed),
-            "failed_count": len(failed),
-            "f5_flag_fires": 0,
-            "scoring_formula_version": SCORING_FORMULA_VERSION,
-        }
+        Cycle 6 (T2): thin delegate to the shared
+        :func:`compute_run_aggregate` helper extracted into
+        ``services/generators/_aggregate.py``. Behaviour is byte-identical
+        with the prior inline implementation — same algorithm, same
+        ``None`` semantics on empty input, same ``scoring_formula_version``
+        constant — but the implementation now lives in one place and is
+        reused by ``ReplayRunGenerator``.
+        """
+        from app.services.generators._aggregate import compute_run_aggregate
+        return compute_run_aggregate(prompt_results)
 
     async def _compute_taxonomy_delta(self, run_id: str) -> dict:
         """Diff taxonomy state since run start.

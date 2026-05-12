@@ -83,7 +83,7 @@ class RunOrchestrator:
         try:
             try:
                 result = await generator.run(request, run_id=run_id)
-                await self._persist_final(run_id, result)
+                await self._persist_final(run_id, result, mode=mode)
             except asyncio.CancelledError:
                 # Mark failed under shield so the cancellation cannot
                 # interrupt the cleanup write itself. Suppress any error
@@ -126,6 +126,15 @@ class RunOrchestrator:
                 repo_full_name=request.payload.get("repo_full_name"),
                 topic=request.payload.get("topic"),
                 intent_hint=request.payload.get("intent_hint"),
+                # T2 Cycle 6: replay runs carry ``suite_id`` so the
+                # regression-alarm JOIN (run_row.suite_id → suite.id)
+                # finds the latest replay per suite. Other modes don't
+                # use suite linkage so the column stays NULL.
+                suite_id=(
+                    request.payload.get("suite_id")
+                    if mode == "replay_run"
+                    else None
+                ),
                 topic_probe_meta=self._extract_probe_meta(mode, request),
                 seed_agent_meta=self._extract_seed_meta(mode, request),
             )
@@ -140,11 +149,24 @@ class RunOrchestrator:
 
     @staticmethod
     def _extract_probe_meta(mode: str, request: RunRequest) -> dict | None:
+        """Return the ``topic_probe_meta`` JSON payload (or ``None``).
+
+        Gated on ``mode == 'topic_probe'`` per spec §4 — the column is
+        topic-probe-specific metadata, not a generic run-meta field.
+
+        T2 Cycle 6: ``grounding_mode`` is read out of the request payload
+        (defaulting to ``"codebase"`` when absent) so future grounding
+        strategies (``"none"``, ``"manual"``, ...) can be stored without
+        a schema migration.
+        """
         if mode != "topic_probe":
             return None
         return {
             "scope": request.payload.get("scope", "**/*"),
             "commit_sha": request.payload.get("commit_sha"),
+            "grounding_mode": request.payload.get(
+                "grounding_mode", "codebase",
+            ),
         }
 
     @staticmethod
@@ -183,11 +205,19 @@ class RunOrchestrator:
             operation_label=f"run_orchestrator.set_status[{status}]",
         )
 
-    async def _persist_final(self, run_id: str, result: GeneratorResult) -> None:
+    async def _persist_final(
+        self, run_id: str, result: GeneratorResult, *, mode: str,
+    ) -> None:
         """Write GeneratorResult fields + status from ``result.terminal_status``.
 
         Generator-classified status preserves today's 4-value contract on
         ``RunRow.status`` (running | completed | partial | failed).
+
+        T2 Cycle 6: ``mode`` selects a mode-keyed ``operation_label`` so
+        the WriteQueue audit-log + telemetry can attribute terminal
+        persists per-mode. ``replay_run`` uses ``replay_run_persist`` per
+        spec §4 + §10 Cycle 6 GREEN step 4; other modes keep the legacy
+        generic label to avoid an audit-log schema churn.
         """
 
         async def _work(write_db: AsyncSession) -> None:
@@ -203,10 +233,15 @@ class RunOrchestrator:
             row.final_report = result.final_report
             await write_db.commit()
 
+        op_label = (
+            "replay_run_persist"
+            if mode == "replay_run"
+            else "run_orchestrator.persist_final"
+        )
         await self._write_queue.submit(
             _work,
             timeout=60,
-            operation_label="run_orchestrator.persist_final",
+            operation_label=op_label,
         )
 
     async def _mark_failed(self, run_id: str, *, error: str) -> None:
