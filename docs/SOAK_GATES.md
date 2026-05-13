@@ -187,7 +187,7 @@ Each day during the soak window, the release-operator runs the verification comm
 | Date | Day | Operator | Restart? | C1 writes | C2 writes | C3 writes | Total WARN count | New sources | Decision | Evidence |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2026-05-11 | 0 (window opens) | release-bot | ✅ (post-v0.4.21 ship) | 0 (baseline) | 0 (baseline) | 0 (baseline) | (baseline TBD) | (baseline TBD) | 🟡 ACTIVE | v0.4.21 shipped, soak window opens, baseline log captured |
-| 2026-05-12 | 1 | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
+| 2026-05-12 | 1 | claude-soak-operator | ✅ (x3 — restarts during fix iteration) | 4 (3 synthetic + 1 verify) | 0 (not exercised — see notes) | 1 (overall_score 7.92) | 0 (post-fix) — 2 (pre-fix, both classes documented + fixed below) | 2 distinct bugs the soak gate surfaced + 1 latent singleton-wiring gap. See **Day 1 finding block** below | 🟡 ACTIVE (gate worked as designed — caught 3 real bugs before flip ships) | 3 commits + 5 new regression tests; all live-verified clean under RAISE; backend.log: 0 WARN over 308 post-fix lines |
 | 2026-05-13 | 2 | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
 | 2026-05-14 | 3 (mid-soak) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
 | 2026-05-15 | 4 (coverage-floor checkpoint) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | If any P4 cycle < 2 cumulative, the operator must run the synthetic recipe ≥1×/day from this point |
@@ -204,6 +204,50 @@ Cumulative coverage at close (filled at Day 7):
 | C3 (pipeline_failed_optimization_persist OR successful internal optimize) | _pending_ | _pending_ |
 
 **Operator note**: The `release-bot` row exists as a placeholder for an automated daily collector. Until that automation lands, the release-operator manually fills each row. The gate decision on day 7 (or later, if EXTENDED) closes the gate and either greenlights v0.4.22 ship (🟢) or routes back to restructure (🔴) OR EXTEND (🟤) if coverage floor isn't met.
+
+### Day 1 finding (2026-05-12) — gate worked as designed
+
+The soak gate caught three independent v0.4.22-flip blockers during synthetic-traffic exercise. All three were FIXED before merge with regression coverage. This is exactly the long-tail bug class documented in [Why this gate exists](#why-this-gate-exists) — *"a forgotten direct db.execute() in a less-traveled branch"* — and the bug-class found is broader than save_result alone.
+
+**Finding 1 — `POST /api/optimize/passthrough/save` raises under RAISE flip** (FIXED at `b288989a`)
+
+The REST web-UI manual-passthrough save path declared queue-routing only at the COMMIT layer (`_do_pt_save_commit` only ran `await write_db.commit()`), but applied ALL ORM mutations on the request-bound read-engine session PRIOR to the queue submit. Under v0.4.21 WARN-mode the autoflush triggered by the post-submit `db.refresh(opt)` emitted a `read-engine audit:` log line; under v0.4.22 RAISE-mode the same autoflush trips `WriteOnReadEngineError` → `PendingRollbackError` → HTTP 500.
+
+The endpoint was restructured to apply ALL mutations inside the WriteQueue closure on the write-engine session (matches the Foundation P4 canonical pattern at `app.tools.save_result._persist_save_result`). Read session is now used ONLY for read-only existence + value snapshotting + analyzer historical-stats fetching.
+
+**Finding 2 — `PATCH /api/optimize/{id}` (intent rename) raises under RAISE flip** (FIXED at `b288989a`)
+
+Same v0.4.14 oversight class as Finding 1. The rename mutation landed on the read-engine session before the empty-commit closure submitted, autoflush → `WriteOnReadEngineError` → HTTP 500. Restructured to apply the mutation inside the WriteQueue closure on the write-engine session.
+
+Both Finding 1+2 are covered by `backend/tests/test_audit_hook_passthrough_save.py` (3 tests asserting zero `read-engine audit:` WARN lines under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True` via caplog at logger `app.database`). Same pattern as `test_tools_optimize.py:907-908` + `test_audit_hook_full_t2_pipeline.py`.
+
+**Finding 3 — `POST /api/refine` returns "Routing service not initialized" in production** (FIXED at `de18b54a`)
+
+Latent for an unknown period. The MCP server process wires every `app.tools._shared` singleton at startup via `mcp_server.py` (lines 284, 307, 380, 399, 400, 458, 503). The backend process (`main.py`) lifespan was wiring ONLY 3 of these (`set_domain_resolver`, `set_signal_loader` (analyzer flavor), `set_write_queue`) — five singletons (`_shared.set_routing` + `_shared.set_taxonomy_engine` + `_shared.set_context_service` + `_shared.set_domain_resolver` (`_shared` flavor) + `_shared.set_run_orchestrator`) were missing.
+
+REST endpoints that delegate to MCP tool handlers in the same process (`POST /api/refine` → `handle_refine` → `get_routing()`, `POST /api/optimize/passthrough` → `handle_prepare` → `get_context_service()`, etc.) would emit `ValueError("X not initialized")` at the `get_X()` call. Tests passed in CI because `backend/tests/conftest.py:279` stubs `_shared.set_routing(test_routing)` directly.
+
+Added five missing `_shared.set_X` invocations to backend lifespan, each placed immediately after the corresponding service is constructed on `app.state.X`. Regression pinned by `backend/tests/test_main_lifespan_shared_singletons.py` (8 static-text-grep tests, same pattern as `test_main_lifespan_no_ddl.py`).
+
+**Live verification post-fix (single restart, RAISE default active)**:
+
+- `POST /api/optimize/passthrough/save` → 200 + `status=completed` + `overall_score=6.49`.
+- `PATCH /api/optimize/{id}` → 200 + intent_label correctly updated.
+- `POST /api/refine` → emits `started` event (no `error` event).
+- `POST /api/optimize` (internal tier) → full 3-phase pipeline succeeds, `overall_score=7.92`, hybrid scoring engaged, 115s duration.
+- `POST /api/feedback` → 200.
+- `POST /api/clusters/match` → 200 (no match yet).
+- `POST /api/seed` → 200 (returns failed with validation error — not an audit issue).
+- `POST /api/probes` (topic_only) → emits `probe_started`.
+- `POST /api/domains/{id}/rebuild-sub-domains` (dry_run) → 200.
+
+**Backend.log cumulative since post-fix restart**: 308 lines, **0** `audit_drift` lines, **0** `read-engine audit:` WARN lines, **0** `WriteOnReadEngineError` raises.
+
+**What this finding means for the gate decision**:
+
+- The gate WORKED — caught real bugs that would have been HTTP 500s on Day 1 of v0.4.22 user traffic.
+- The 7-day soak window continues to observe for remaining offenders (other REST handlers with `_do_*_commit` empty-commit closures at `routers/domains.py`, `routers/projects.py`, `routers/github_repos.py` — read-session mutations happen INSIDE the engine method called with `db`, not in the router, so the audit-hook signature differs; tested non-destructive `dry_run` paths clean).
+- This is NOT an INSUFFICIENT-COVERAGE day — synthetic-recipe wrote C1 evidence (4 cycles) + C3 evidence (1 internal-tier success at 7.92). C2 (refine_*) coverage will continue Days 2-7 once a non-passthrough optimization exists for refinement (passthrough opts have `provider=web_passthrough` which the refine pipeline doesn't accept).
 
 ### Decision matrix
 
