@@ -410,11 +410,26 @@ async def rebuild_sub_domains(
     """
     from app.services.taxonomy import get_engine
     engine = get_engine()
+
+    # v0.4.22 soak-gate Day 1 fix: previously the engine method was called
+    # with the request-bound read session AND a separate empty-commit
+    # closure was submitted to the write queue. Engine mutations on the
+    # read session would trigger ``WriteOnReadEngineError`` autoflush under
+    # the v0.4.22 RAISE flip. The engine method already supports the
+    # ``write_queue`` kwarg (v0.4.13 cycle 7b) which routes the entire body
+    # through ``write_queue.submit(operation_label="engine_rebuild_sub_domains")``
+    # on the write-engine session. Pass it directly and drop the redundant
+    # empty-commit closure.
+    #
+    # Dry-run path still routes through write_queue so the engine's read
+    # path uses the writer-pool connection consistently; the engine itself
+    # short-circuits the actual INSERTs when dry_run=True.
     try:
         result = await engine.rebuild_sub_domains(
-            db, domain_id,
+            None, domain_id,
             min_consistency_override=request.min_consistency,
             dry_run=request.dry_run,
+            write_queue=write_queue,
         )
     except ValueError as exc:
         msg = str(exc)
@@ -428,23 +443,8 @@ async def rebuild_sub_domains(
             ) from exc
         raise HTTPException(422, msg) from exc
     except OperationalError as exc:
-        await db.rollback()
         logger.warning("rebuild_sub_domains DB contention: %s", exc)
         raise HTTPException(503, "Database busy — retry in a moment") from exc
-
-    if not request.dry_run and result["created"]:
-        async def _do_rebuild_commit(write_db: AsyncSession) -> None:
-            await write_db.commit()
-
-        try:
-            await write_queue.submit(
-                _do_rebuild_commit,
-                operation_label="domain_rebuild_sub_domains",
-            )
-        except OperationalError as exc:
-            await db.rollback()
-            logger.warning("rebuild_sub_domains commit failed: %s", exc)
-            raise HTTPException(503, "Database busy — retry in a moment") from exc
 
     return RebuildSubDomainsResult(**result)
 
@@ -474,15 +474,32 @@ async def dissolve_empty_domain(
     """
     from app.services.taxonomy import get_engine
     engine = get_engine()
+
+    # v0.4.22 soak-gate Day 1 fix: route the entire engine call through
+    # the write queue so the engine's mutations + internal db.commit()
+    # land on the write-engine session. Previously the call ran on the
+    # request-bound read session (with the same empty-commit-closure
+    # anti-pattern as ``rebuild_sub_domains``), which would trigger
+    # ``WriteOnReadEngineError`` autoflush under the v0.4.22 RAISE flip
+    # when the engine actually mutates state on a successful dissolve.
+    #
+    # The engine method's ``ValueError("not found")`` branch fires before
+    # any write, so wrapping the entire call is safe — the engine still
+    # raises and the writer session is rolled back automatically.
     try:
-        result = await engine.dissolve_empty_domain(db, domain_id)
+        async def _do_dissolve(write_db: AsyncSession) -> dict:
+            return await engine.dissolve_empty_domain(write_db, domain_id)
+
+        result = await write_queue.submit(
+            _do_dissolve,
+            operation_label="domain_dissolve_empty",
+        )
     except ValueError as exc:
         msg_lower = str(exc).lower()
         if "not found" in msg_lower:
             raise HTTPException(404, "Domain not found") from exc
         raise HTTPException(422, str(exc)) from exc
     except OperationalError as exc:
-        await db.rollback()
         logger.warning("dissolve_empty_domain DB contention: %s", exc)
         raise HTTPException(503, "Database busy — retry in a moment") from exc
 
@@ -493,18 +510,5 @@ async def dissolve_empty_domain(
     reason = result.get("reason")
     if reason in ("not_empty", "too_young"):
         raise HTTPException(409, reason)
-
-    if result.get("dissolved"):
-        async def _do_dissolve_commit(write_db: AsyncSession) -> None:
-            await write_db.commit()
-
-        try:
-            await write_queue.submit(
-                _do_dissolve_commit, operation_label="domain_dissolve",
-            )
-        except OperationalError as exc:
-            await db.rollback()
-            logger.warning("dissolve_empty_domain commit failed: %s", exc)
-            raise HTTPException(503, "Database busy — retry in a moment") from exc
 
     return DissolveEmptyResult(**result)
