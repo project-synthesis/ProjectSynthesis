@@ -41,10 +41,12 @@ from app.models import (
     RunRow,
 )
 from app.services.gc import (
+    _STUCK_PENDING_AGE_HOURS,
     _gc_archived_zero_member_clusters,
     _gc_failed_optimizations,
     _gc_orphan_meta_patterns,
     _gc_orphan_probe_runs,
+    _gc_stuck_pending_optimizations,
     run_startup_gc,
 )
 
@@ -155,6 +157,180 @@ class TestGCFailedOptimizations:
 
     async def test_empty_database_is_noop(self, db_session):
         assert await _gc_failed_optimizations(db_session) == 0
+
+
+# ---------------------------------------------------------------------------
+# _gc_stuck_pending_optimizations  (v0.4.22 soak-gate Day 1 architectural fix)
+# ---------------------------------------------------------------------------
+
+class TestGCStuckPendingOptimizations:
+    """Pin the contract for the stuck-pending sweep added in
+    v0.4.22 soak-gate Day 1 (2026-05-12).
+
+    Background: the pre-fix v0.4.14 passthrough_save autoflush bug left 9
+    pending optimizations stuck in the worktree DB — the prepare step
+    succeeded (creating the pending row) before the save raised
+    ``PendingRollbackError``. Post-fix the bug is closed but the rows
+    remained, polluting the user-visible optimization count. This sweep
+    is the architectural defensive-in-depth against future similar
+    workflow interruptions (network errors mid-save, frontend crashes
+    between prepare and save, etc.).
+
+    Contract:
+      - Deletes rows with ``status='pending' AND optimized_prompt IS NULL
+        AND created_at < (now - _STUCK_PENDING_AGE_HOURS)``.
+      - Preserves rows younger than the grace window (active workflows).
+      - Preserves rows with ``optimized_prompt`` set (partial-save edge cases).
+      - Cascades to Feedback/RefinementTurn/OptimizationPattern.
+    """
+
+    async def test_deletes_stuck_pending_older_than_grace_window(self, db_session):
+        opt_id = str(uuid.uuid4())
+        # Backdate created_at past the grace window
+        stale_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            hours=_STUCK_PENDING_AGE_HOURS + 1,
+        )
+        db_session.add(Optimization(
+            id=opt_id,
+            raw_prompt="abandoned-prepare",
+            optimized_prompt=None,
+            status="pending",
+            created_at=stale_dt,
+        ))
+        await db_session.commit()
+
+        deleted = await _gc_stuck_pending_optimizations(db_session)
+        await db_session.commit()
+
+        assert deleted == 1
+        remaining = (await db_session.execute(
+            select(Optimization.id).where(Optimization.id == opt_id)
+        )).scalar_one_or_none()
+        assert remaining is None
+
+    async def test_preserves_pending_within_grace_window(self, db_session):
+        """A user mid-workflow (prepared 1 hour ago, hasn't saved yet)
+        MUST NOT be swept. Their next save would 404 with a confusing
+        trace_id-not-found if we did."""
+        opt_id = str(uuid.uuid4())
+        recent_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            hours=1,  # well within grace window
+        )
+        db_session.add(Optimization(
+            id=opt_id,
+            raw_prompt="active-workflow",
+            optimized_prompt=None,
+            status="pending",
+            created_at=recent_dt,
+        ))
+        await db_session.commit()
+
+        deleted = await _gc_stuck_pending_optimizations(db_session)
+        await db_session.commit()
+
+        assert deleted == 0
+        remaining = (await db_session.execute(
+            select(Optimization.id).where(Optimization.id == opt_id)
+        )).scalar_one_or_none()
+        assert remaining is not None
+
+    async def test_preserves_pending_with_partial_output(self, db_session):
+        """If somehow a pending row has ``optimized_prompt`` set (partial
+        save, mid-refactor edge), preserve it — it carries user data."""
+        opt_id = str(uuid.uuid4())
+        stale_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            hours=_STUCK_PENDING_AGE_HOURS + 1,
+        )
+        db_session.add(Optimization(
+            id=opt_id,
+            raw_prompt="raw",
+            optimized_prompt="partial-output",  # data present
+            status="pending",
+            created_at=stale_dt,
+        ))
+        await db_session.commit()
+
+        deleted = await _gc_stuck_pending_optimizations(db_session)
+        await db_session.commit()
+
+        assert deleted == 0
+        remaining = (await db_session.execute(
+            select(Optimization.id).where(Optimization.id == opt_id)
+        )).scalar_one_or_none()
+        assert remaining is not None
+
+    async def test_preserves_completed_and_failed_states(self, db_session):
+        """Only ``status='pending'`` is in scope. Completed + failed rows
+        have their own GC paths (_gc_failed_optimizations); this sweep
+        must not double-touch them."""
+        stale_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            hours=_STUCK_PENDING_AGE_HOURS + 1,
+        )
+        completed_id = str(uuid.uuid4())
+        failed_id = str(uuid.uuid4())
+        db_session.add(Optimization(
+            id=completed_id,
+            raw_prompt="r1",
+            optimized_prompt="opt",
+            status="completed",
+            created_at=stale_dt,
+        ))
+        db_session.add(Optimization(
+            id=failed_id,
+            raw_prompt="r2",
+            optimized_prompt=None,
+            status="failed",
+            created_at=stale_dt,
+        ))
+        await db_session.commit()
+
+        deleted = await _gc_stuck_pending_optimizations(db_session)
+        await db_session.commit()
+
+        assert deleted == 0
+        for opt_id in (completed_id, failed_id):
+            still_present = (await db_session.execute(
+                select(Optimization.id).where(Optimization.id == opt_id)
+            )).scalar_one_or_none()
+            assert still_present is not None
+
+    async def test_cascades_to_dependent_tables(self, db_session):
+        """Pending rows shouldn't normally have feedback/turns/patterns,
+        but the cascade is defensive — keeps FK constraints quiet under
+        the v0.4.22 audit-hook RAISE flip even if pre-existing junk
+        relationships exist."""
+        opt_id = str(uuid.uuid4())
+        stale_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            hours=_STUCK_PENDING_AGE_HOURS + 1,
+        )
+        db_session.add(Optimization(
+            id=opt_id,
+            raw_prompt="raw",
+            optimized_prompt=None,
+            status="pending",
+            created_at=stale_dt,
+        ))
+        # Defensive: stuff a feedback row in (real production won't have
+        # this for a pending opt, but the cascade must handle it).
+        db_session.add(Feedback(
+            id=str(uuid.uuid4()),
+            optimization_id=opt_id,
+            rating="thumbs_up",
+        ))
+        await db_session.commit()
+
+        deleted = await _gc_stuck_pending_optimizations(db_session)
+        await db_session.commit()
+
+        assert deleted == 1
+        # Feedback should be cascade-deleted, NOT raise FK violation
+        fb_remaining = (await db_session.execute(
+            select(Feedback.id).where(Feedback.optimization_id == opt_id)
+        )).all()
+        assert fb_remaining == []
+
+    async def test_empty_database_is_noop(self, db_session):
+        assert await _gc_stuck_pending_optimizations(db_session) == 0
 
 
 # ---------------------------------------------------------------------------

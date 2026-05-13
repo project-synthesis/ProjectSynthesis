@@ -77,6 +77,7 @@ async def run_startup_gc(
         async def _do_sweep(write_db: AsyncSession) -> int:
             total = 0
             total += await _gc_failed_optimizations(write_db)
+            total += await _gc_stuck_pending_optimizations(write_db)  # v0.4.22 D1
             total += await _gc_archived_zero_member_clusters(write_db)
             total += await _gc_orphan_meta_patterns(write_db)
             total += await _gc_orphan_probe_runs(write_db)  # legacy no-op (PR1; deleted PR2)
@@ -101,6 +102,7 @@ async def run_startup_gc(
     total_cleaned = 0
 
     total_cleaned += await _gc_failed_optimizations(db)
+    total_cleaned += await _gc_stuck_pending_optimizations(db)  # v0.4.22 D1
     total_cleaned += await _gc_archived_zero_member_clusters(db)
     total_cleaned += await _gc_orphan_meta_patterns(db)
     total_cleaned += await _gc_orphan_probe_runs(db)  # legacy no-op (PR1; deleted PR2)
@@ -124,6 +126,82 @@ async def run_startup_gc(
         logger.info("Startup GC: cleaned %d records total", total_cleaned)
     else:
         logger.debug("Startup GC: nothing to clean")
+
+
+#: How old a ``status='pending'`` Optimization row must be before the
+#: startup GC sweep treats it as orphaned. Seven days is generous enough
+#: to not break the legitimate manual-passthrough workflow (user runs
+#: prepare → goes to ChatGPT/Claude.ai → comes back days later to save)
+#: while still cleaning up real orphans from a soak window like
+#: SG-2026-05-11 Day 1 (where the v0.4.14 read-session-mutation bug left
+#: 9 prepares stuck in ``pending`` before the fix shipped). If a user
+#: comes back AFTER the 7-day window expires they can just re-run prepare
+#: — the prepare step generates no LLM output so no data is lost.
+_STUCK_PENDING_AGE_HOURS = 24 * 7
+
+
+async def _gc_stuck_pending_optimizations(db: AsyncSession) -> int:
+    """Delete optimizations stuck in ``status='pending'`` past the grace window.
+
+    Mirrors ``_gc_failed_optimizations`` for the symmetric class — a
+    ``pending`` row with ``optimized_prompt IS NULL`` and ``created_at``
+    older than ``_STUCK_PENDING_AGE_HOURS`` is an abandoned passthrough
+    prepare (or a leftover from a since-fixed save-path bug). Carries no
+    useful data, blocks no live workflow, and inflates the user-visible
+    optimization count.
+
+    Surfaced during v0.4.22 soak-gate Day 1 (2026-05-12): the
+    pre-fix ``passthrough_save`` autoflush bug (Findings 1+2) left 9
+    pending rows in the worktree DB because the prepare step succeeded
+    (creating the pending row) before the save raised
+    ``PendingRollbackError``. Post-fix the rows are simply abandoned —
+    this sweep collects them on the next ``./init.sh restart`` after
+    the 7-day window. Architectural: defensive-in-depth against future
+    similar workflow interruptions (network errors mid-save, frontend
+    crashes between prepare and save, etc.).
+    """
+    from app.models import Optimization
+
+    cutoff = _utcnow() - timedelta(hours=_STUCK_PENDING_AGE_HOURS)
+
+    result = await db.execute(
+        select(Optimization.id).where(
+            Optimization.status == "pending",
+            Optimization.optimized_prompt.is_(None),
+            Optimization.created_at < cutoff,
+        )
+    )
+    pending_ids = [r[0] for r in result.all()]
+
+    if not pending_ids:
+        return 0
+
+    # Delete any dependent records first (matches _gc_failed_optimizations
+    # cascade — pending rows shouldn't have these but the defensive
+    # cascade keeps the FK constraints quiet under audit-hook RAISE).
+    from app.models import Feedback, OptimizationPattern, RefinementTurn
+
+    await db.execute(
+        delete(Feedback).where(Feedback.optimization_id.in_(pending_ids))
+    )
+    await db.execute(
+        delete(RefinementTurn).where(RefinementTurn.optimization_id.in_(pending_ids))
+    )
+    await db.execute(
+        delete(OptimizationPattern).where(
+            OptimizationPattern.optimization_id.in_(pending_ids)
+        )
+    )
+
+    await db.execute(
+        delete(Optimization).where(Optimization.id.in_(pending_ids))
+    )
+
+    logger.info(
+        "GC: deleted %d stuck pending optimizations (older than %d hours)",
+        len(pending_ids), _STUCK_PENDING_AGE_HOURS,
+    )
+    return len(pending_ids)
 
 
 async def _gc_failed_optimizations(db: AsyncSession) -> int:
