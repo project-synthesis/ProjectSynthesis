@@ -388,53 +388,80 @@ async def update_optimization(
 
     Uses the optimization ``id`` (UUID), not ``trace_id``.
 
-    v0.4.13 cycle 8: the rename UPDATE routes through
-    ``write_queue.submit()`` under
-    ``operation_label='optimization_intent_rename'``.
+    v0.4.22 audit-hook flip alignment: ALL ORM mutations happen inside the
+    WriteQueue closure on the write-engine session (matches the Foundation
+    P4 canonical pattern). Prior to the fix, the rename mutation landed on
+    the read-engine session and the v0.4.22 RAISE default tripped
+    ``WriteOnReadEngineError`` on autoflush.
     """
+    # Read-only existence + snapshot
     result = await db.execute(
         select(Optimization).where(Optimization.id == optimization_id)
     )
-    opt = result.scalar_one_or_none()
-    if opt is None:
+    existing_opt = result.scalar_one_or_none()
+    if existing_opt is None:
         raise HTTPException(status_code=404, detail="Optimization not found.")
 
-    changed = False
+    old_label = existing_opt.intent_label
+    raw_prompt_snapshot = existing_opt.raw_prompt
+
+    # Detach read-session object to prevent incidental autoflush
+    db.expire(existing_opt)
+
+    # Compute new label (pure)
+    new_label: str | None = None
     if body.intent_label is not None:
-        old_label = opt.intent_label
-        opt.intent_label = validate_intent_label(
+        new_label = validate_intent_label(
             title_case_label(body.intent_label.strip()),
-            opt.raw_prompt,
+            raw_prompt_snapshot,
         )[:MAX_INTENT_LABEL_LENGTH]
-        if opt.intent_label != old_label:
-            changed = True
-            logger.info(
-                "Optimization renamed: id=%s '%s' -> '%s'",
-                optimization_id, old_label, opt.intent_label,
-            )
+
+    changed = new_label is not None and new_label != old_label
 
     if changed:
-        async def _do_rename_commit(write_db: AsyncSession) -> None:
-            await write_db.commit()
+        logger.info(
+            "Optimization renamed: id=%s '%s' -> '%s'",
+            optimization_id, old_label, new_label,
+        )
 
-        await write_queue.submit(
-            _do_rename_commit,
+        async def _persist_rename(write_db: AsyncSession) -> dict:
+            result = await write_db.execute(
+                select(Optimization).where(Optimization.id == optimization_id)
+            )
+            opt = result.scalar_one_or_none()
+            if opt is None:
+                # Defensive — opt deleted between read-session check + writer
+                # session execution. Caller should retry.
+                raise HTTPException(status_code=404, detail="Optimization not found.")
+            opt.intent_label = new_label
+            await write_db.commit()
+            return {
+                "id": opt.id,
+                "trace_id": opt.trace_id,
+                "intent_label": opt.intent_label,
+            }
+
+        event_payload = await write_queue.submit(
+            _persist_rename,
             operation_label="optimization_intent_rename",
         )
+
         # Publish event so SSE subscribers (Navigator, ActivityPanel) update
         try:
             from app.services.event_bus import event_bus
 
-            event_bus.publish("optimization_updated", {
-                "id": opt.id,
-                "trace_id": opt.trace_id,
-                "intent_label": opt.intent_label,
-            })
+            event_bus.publish("optimization_updated", event_payload)
         except Exception:
             pass  # non-critical
 
-    cluster_id = await _get_cluster_id(db, opt.id)
-    return _serialize_optimization(opt, cluster_id=cluster_id)
+    # Re-fetch fresh for response (safe — read session has no dirty state on
+    # this object; SQLite WAL allows the read engine to observe write commits).
+    fresh_result = await db.execute(
+        select(Optimization).where(Optimization.id == optimization_id)
+    )
+    fresh_opt = fresh_result.scalar_one()
+    cluster_id = await _get_cluster_id(db, fresh_opt.id)
+    return _serialize_optimization(fresh_opt, cluster_id=cluster_id)
 
 
 async def _get_cluster_id(db: AsyncSession, optimization_id: str) -> str | None:
@@ -676,13 +703,33 @@ async def passthrough_save(
     Applies heuristic scoring unless the user has disabled scoring in preferences.
     Looks up the pending Optimization by trace_id, updates the record to completed,
     and publishes an optimization_created event.
+
+    v0.4.22 audit-hook flip alignment: ALL ORM mutations happen inside the
+    WriteQueue closure on the write-engine session. The read session is used
+    ONLY for read-only existence + value snapshotting + analyzer historical
+    stats. Matches the Foundation P4 canonical pattern in
+    ``app.tools.save_result._persist_save_result``.
     """
+    # Read-only existence check + value snapshot from read session.
+    # We snapshot the fields we need into local variables so that no ORM
+    # mutations ever land on the read-session object (which would trigger
+    # SQLAlchemy autoflush → read-engine write → audit-hook RAISE).
     result = await db.execute(
         select(Optimization).where(Optimization.trace_id == body.trace_id)
     )
-    opt = result.scalar_one_or_none()
-    if not opt:
+    existing_opt = result.scalar_one_or_none()
+    if not existing_opt:
         raise HTTPException(404, "No pending optimization for this trace_id")
+
+    raw_prompt_snapshot = existing_opt.raw_prompt
+    existing_task_type = existing_opt.task_type
+    existing_strategy = existing_opt.strategy_used
+    existing_intent = existing_opt.intent_label
+    existing_domain_raw = existing_opt.domain_raw
+
+    # Detach the read-session object so any incidental attribute access later
+    # (e.g., during response serialization) won't autoflush.
+    db.expire(existing_opt)
 
     # Validate output length — reject excessively large prompts early
     if len(body.optimized_prompt) > settings.MAX_RAW_PROMPT_CHARS:
@@ -724,7 +771,7 @@ async def passthrough_save(
             exclude_scoring_modes=["heuristic", "hybrid_passthrough"],
         )
         score_result = await score_passthrough(
-            raw_prompt=opt.raw_prompt,
+            raw_prompt=raw_prompt_snapshot,
             optimized_prompt=cleaned_prompt,
             external_scores=body.scores,
             historical_stats=historical_stats,
@@ -738,90 +785,120 @@ async def passthrough_save(
         heuristic_flags = score_result.divergence_flags
 
     # Normalize strategy if external LLM returned a verbose name
-    effective_strategy = opt.strategy_used
+    effective_strategy = existing_strategy
     if body.strategy_used:
         from app.services.strategy_loader import StrategyLoader
         strategy_loader = StrategyLoader(PROMPTS_DIR / "strategies")
         effective_strategy = strategy_loader.normalize_strategy(body.strategy_used)
 
-    # Update record
-    opt.optimized_prompt = cleaned_prompt
-    opt.changes_summary = effective_changes or ""
-    _raw_task_type = body.task_type or opt.task_type or "general"
-    opt.task_type = _raw_task_type if _raw_task_type in VALID_TASK_TYPES else "general"
-    opt.strategy_used = effective_strategy
+    # Compute final field values (no DB writes)
+    _raw_task_type = body.task_type or existing_task_type or "general"
+    final_task_type = _raw_task_type if _raw_task_type in VALID_TASK_TYPES else "general"
+
     _domain_resolver = getattr(request.app.state, "domain_resolver", None)
     if _domain_resolver is not None:
         # confidence=1.0: passthrough has no analyzer confidence — domain trusted from external LLM or heuristic
         validated_domain = await _domain_resolver.resolve(body.domain, confidence=1.0)
     else:
         validated_domain = "general"
-    opt.domain = validated_domain
-    # cluster_id is set asynchronously via optimization_created event → taxonomy hot path
-    opt.domain_raw = (body.domain or opt.domain_raw or "general")[:MAX_DOMAIN_RAW_LENGTH]
-    opt.intent_label = validate_intent_label(
-        title_case_label((body.intent_label or opt.intent_label or "general")[:MAX_INTENT_LABEL_LENGTH]),
-        opt.raw_prompt,
-    )
-    if optimized_scores:
-        opt.score_clarity = optimized_scores["clarity"]
-        opt.score_specificity = optimized_scores["specificity"]
-        opt.score_structure = optimized_scores["structure"]
-        opt.score_faithfulness = optimized_scores["faithfulness"]
-        opt.score_conciseness = optimized_scores["conciseness"]
-    opt.overall_score = overall
-    opt.original_scores = original_scores
-    opt.score_deltas = deltas
-    opt.scoring_mode = scoring_mode
-    opt.heuristic_flags = heuristic_flags if heuristic_flags else None  # type: ignore[assignment]
 
-    # Generate heuristic suggestions (zero-LLM)
+    final_domain_raw = (body.domain or existing_domain_raw or "general")[:MAX_DOMAIN_RAW_LENGTH]
+    final_intent = validate_intent_label(
+        title_case_label((body.intent_label or existing_intent or "general")[:MAX_INTENT_LABEL_LENGTH]),
+        raw_prompt_snapshot,
+    )
+
+    # Generate heuristic suggestions (zero-LLM, read-only DB access)
     from app.services.heuristic_analyzer import HeuristicAnalyzer
     _routing_state = getattr(request.app.state, "routing", None)
     _provider = _routing_state.state.provider if _routing_state else None
     _analyzer = HeuristicAnalyzer()
-    _analysis = await _analyzer.analyze(opt.raw_prompt, db, provider=_provider)
+    _analysis = await _analyzer.analyze(raw_prompt_snapshot, db, provider=_provider)
     suggestions = generate_heuristic_suggestions(
         dimension_scores=optimized_scores or {},
         weaknesses=_analysis.weaknesses,
         strategy_used=effective_strategy or "auto",
     )
-    opt.suggestions = suggestions
 
-    opt.status = "completed"
-    opt.model_used = body.model or "external"
-    opt.models_by_phase = {"optimize": body.model or "external"}
+    final_heuristic_flags = heuristic_flags if heuristic_flags else None
+    final_model = body.model or "external"
+    final_models_by_phase = {"optimize": body.model or "external"}
 
-    # v0.4.13 cycle 8: route the passthrough save commit through the
-    # write queue under operation_label='optimize_passthrough_save'.
-    async def _do_pt_save_commit(write_db: AsyncSession) -> None:
+    # Persist via WriteQueue closure — all ORM mutations bound to write_db session.
+    # v0.4.22 audit-hook flip alignment (closes v0.4.14 oversight): the previous
+    # implementation mutated existing_opt on the read session, then submitted a
+    # closure that only ran ``await write_db.commit()`` — which committed an
+    # empty write transaction while the read session's dirty state autoflushed
+    # to the read engine, tripping the audit hook.
+    async def _persist_passthrough_save(write_db: AsyncSession) -> dict:
+        result = await write_db.execute(
+            select(Optimization).where(Optimization.trace_id == body.trace_id)
+        )
+        opt = result.scalar_one_or_none()
+        if not opt:
+            # Defensive — opt vanished between read-session check + writer
+            # session execution. Caller should retry.
+            raise HTTPException(404, "No pending optimization for this trace_id")
+
+        opt.optimized_prompt = cleaned_prompt
+        opt.changes_summary = effective_changes or ""
+        opt.task_type = final_task_type
+        opt.strategy_used = effective_strategy
+        opt.domain = validated_domain
+        opt.domain_raw = final_domain_raw
+        opt.intent_label = final_intent
+        if optimized_scores:
+            opt.score_clarity = optimized_scores["clarity"]
+            opt.score_specificity = optimized_scores["specificity"]
+            opt.score_structure = optimized_scores["structure"]
+            opt.score_faithfulness = optimized_scores["faithfulness"]
+            opt.score_conciseness = optimized_scores["conciseness"]
+        opt.overall_score = overall
+        opt.original_scores = original_scores
+        opt.score_deltas = deltas
+        opt.scoring_mode = scoring_mode
+        opt.heuristic_flags = final_heuristic_flags  # type: ignore[assignment]
+        opt.suggestions = suggestions
+        opt.status = "completed"
+        opt.model_used = final_model
+        opt.models_by_phase = final_models_by_phase
+
         await write_db.commit()
+        await write_db.refresh(opt)
 
-    await write_queue.submit(
-        _do_pt_save_commit, operation_label="optimize_passthrough_save",
+        return {
+            "id": opt.id,
+            "trace_id": opt.trace_id,
+            "task_type": opt.task_type,
+            "intent_label": opt.intent_label or "general",
+            "domain": opt.domain or "general",
+            "domain_raw": opt.domain_raw or "general",
+            "strategy_used": opt.strategy_used,
+            "overall_score": overall,
+            "provider": "web_passthrough",
+            "status": "completed",
+        }
+
+    event_payload = await write_queue.submit(
+        _persist_passthrough_save,
+        operation_label="optimize_passthrough_save",
     )
-    await db.refresh(opt)
 
-    # Publish event
+    # Publish event (payload is already a plain dict — no ORM access leaks)
     from app.services.event_bus import event_bus
-
-    event_bus.publish("optimization_created", {
-        "id": opt.id,
-        "trace_id": opt.trace_id,
-        "task_type": opt.task_type,
-        "intent_label": opt.intent_label or "general",
-        "domain": opt.domain or "general",
-        "domain_raw": getattr(opt, "domain_raw", None) or "general",
-        "strategy_used": opt.strategy_used,
-        "overall_score": overall,
-        "provider": "web_passthrough",
-        "status": "completed",
-    })
+    event_bus.publish("optimization_created", event_payload)
 
     logger.info(
         "Passthrough saved: trace_id=%s overall=%s scoring_mode=%s",
         body.trace_id, f"{overall:.2f}" if overall is not None else "N/A", scoring_mode,
     )
 
+    # Re-fetch the now-completed row for response serialization. Safe because
+    # the read session has no dirty state on this object (expired earlier) and
+    # SQLite WAL allows the read engine to observe write-engine commits.
+    fresh_result = await db.execute(
+        select(Optimization).where(Optimization.trace_id == body.trace_id)
+    )
+    fresh_opt = fresh_result.scalar_one()
     # Passthrough optimizations have no family yet (extraction is async)
-    return _serialize_optimization(opt, cluster_id=None)
+    return _serialize_optimization(fresh_opt, cluster_id=None)
