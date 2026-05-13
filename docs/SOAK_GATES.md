@@ -187,7 +187,7 @@ Each day during the soak window, the release-operator runs the verification comm
 | Date | Day | Operator | Restart? | C1 writes | C2 writes | C3 writes | Total WARN count | New sources | Decision | Evidence |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2026-05-11 | 0 (window opens) | release-bot | ✅ (post-v0.4.21 ship) | 0 (baseline) | 0 (baseline) | 0 (baseline) | (baseline TBD) | (baseline TBD) | 🟡 ACTIVE | v0.4.21 shipped, soak window opens, baseline log captured |
-| 2026-05-12 | 1 | claude-soak-operator | ✅ (x3 — restarts during fix iteration) | 4 (3 synthetic + 1 verify) | 0 (not exercised — see notes) | 1 (overall_score 7.92) | 0 (post-fix) — 2 (pre-fix, both classes documented + fixed below) | 2 distinct bugs the soak gate surfaced + 1 latent singleton-wiring gap. See **Day 1 finding block** below | 🟡 ACTIVE (gate worked as designed — caught 3 real bugs before flip ships) | 3 commits + 5 new regression tests; all live-verified clean under RAISE; backend.log: 0 WARN over 308 post-fix lines |
+| 2026-05-12 | 1 | claude-soak-operator | ✅ (x4 — restarts during fix iteration) | 4 (3 synthetic + 1 verify) | 3 (initial-turn + persist + rollback + post-rollback persist) | 3 (overall 7.92 + 7.49 + 8.48) | 0 (post-fix) — 3 (pre-fix, all classes documented + fixed below) | **4 distinct bugs the soak gate surfaced** + 1 latent singleton-wiring gap. See **Day 1 finding block** below | 🟡 ACTIVE (gate worked as designed — caught 4 real bugs before flip ships) | 4 commits + 12 new regression tests; all live-verified clean under RAISE; backend.log: 0 WARN over 600+ post-fix lines covering 15+ endpoint exercises |
 | 2026-05-13 | 2 | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
 | 2026-05-14 | 3 (mid-soak) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
 | 2026-05-15 | 4 (coverage-floor checkpoint) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | If any P4 cycle < 2 cumulative, the operator must run the synthetic recipe ≥1×/day from this point |
@@ -243,11 +243,38 @@ Added five missing `_shared.set_X` invocations to backend lifespan, each placed 
 
 **Backend.log cumulative since post-fix restart**: 308 lines, **0** `audit_drift` lines, **0** `read-engine audit:` WARN lines, **0** `WriteOnReadEngineError` raises.
 
+**Finding 4 — refine-after-rollback UX defect** (FIXED at `bc5267b9`)
+
+Surfaced during C2 (refine_*) coverage exercise. `POST /api/refine/{id}/rollback` created a new `RefinementBranch` but did NOT seed it with an initial turn. Subsequent `POST /api/refine` without an explicit `branch_id` defaulted to the empty rollback branch and raised `ValueError("invoke_refinement_pipeline requires latest_turn_snapshot; caller must seed via build_initial_turn_payload + queue submit")`.
+
+This was NOT an audit-hook RAISE blocker (system correctly emitted a `ValueError` SSE event, not a 500), but it was a synthesis-pipeline UX defect — the error message pointed at internal mechanics, and the workaround (specify `branch_id` explicitly) was non-obvious.
+
+`RollbackPayload` was extended with `seed_turn_kwargs`. `RefinementService.rollback()` now builds them by copying every field from the `target_turn` (the version being rolled back to) — prompt, scores, deltas, strategy, suggestions, trace_id. The rollback persist callback now inserts BOTH the new branch AND a seed `RefinementTurn` (version 1) in the same write transaction.
+
+Regression coverage at `backend/tests/test_audit_hook_passthrough_save.py::test_rollback_seeds_initial_turn_so_subsequent_refine_works` + extended `test_tools_refine.py::test_refinement_service_rollback_returns_payload`.
+
+**Live post-fix lifecycle verification (single restart)**:
+
+1. `POST /api/optimize` (internal tier) → `overall_score 7.49`.
+2. `POST /api/refine` → `version 2` on primary branch.
+3. `POST /api/refine/{id}/rollback {to_version: 1}` → new branch `df7206db` with `forked_at_version: 1`.
+4. **`POST /api/refine` (NO `branch_id`) → `version 2` on the rollback branch** (was: `ValueError` pre-fix).
+5. data/backend.log: 0 audit-hook WARN, 0 `WriteOnReadEngineError`.
+
+**Coverage floor status (Day 1 cumulative)**:
+
+| Cycle | Writes today | Floor (≥3)? |
+|---|---|---|
+| C1 (save_result_persist) | 4 | ✅ |
+| C2 (refine_initial_turn / refine_persist_turn / refine_rollback) | 3+ (initial + persist v2 + rollback + persist v2-of-rollback-branch) | ✅ |
+| C3 (internal-tier optimize / pipeline_failed_optimization_persist) | 3 (overall 7.92 + 7.49 + 8.48) | ✅ |
+
 **What this finding means for the gate decision**:
 
-- The gate WORKED — caught real bugs that would have been HTTP 500s on Day 1 of v0.4.22 user traffic.
+- The gate WORKED — caught **4 real bugs** that would have been user-visible defects or HTTP 500s on Day 1 of v0.4.22 user traffic.
+- All 3 P4 coverage rows met the ≥3 floor on Day 1 alone via synthetic-recipe + targeted refine exercises.
 - The 7-day soak window continues to observe for remaining offenders (other REST handlers with `_do_*_commit` empty-commit closures at `routers/domains.py`, `routers/projects.py`, `routers/github_repos.py` — read-session mutations happen INSIDE the engine method called with `db`, not in the router, so the audit-hook signature differs; tested non-destructive `dry_run` paths clean).
-- This is NOT an INSUFFICIENT-COVERAGE day — synthetic-recipe wrote C1 evidence (4 cycles) + C3 evidence (1 internal-tier success at 7.92). C2 (refine_*) coverage will continue Days 2-7 once a non-passthrough optimization exists for refinement (passthrough opts have `provider=web_passthrough` which the refine pipeline doesn't accept).
+- Day 1 is a strong 🟡 → 🟢 trend: zero audit-hook RAISE across 600+ lines of post-fix backend.log over 15+ endpoint exercises.
 
 ### Decision matrix
 
