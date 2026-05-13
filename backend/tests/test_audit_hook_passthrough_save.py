@@ -239,6 +239,106 @@ async def test_update_optimization_intent_rename_emits_zero_warn_under_raise_mod
 
 
 @pytest.mark.integration
+async def test_rollback_seeds_initial_turn_so_subsequent_refine_works(
+    app_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """v0.4.22 soak-gate Day 1 finding: rollback used to create a new
+    branch with zero turns. The next ``POST /api/refine`` without an
+    explicit ``branch_id`` defaulted to the empty rollback branch and
+    raised ``ValueError("invoke_refinement_pipeline requires
+    latest_turn_snapshot; caller must seed via build_initial_turn_payload
+    + queue submit")``.
+
+    Post-fix: rollback also seeds an initial ``RefinementTurn`` (version 1)
+    on the new branch carrying the content of the version being rolled
+    back to. Subsequent refines find that seed turn and proceed normally.
+
+    This test asserts the structural fix at the DB layer (no LLM call).
+    The end-to-end live verification happens via ``./init.sh restart`` +
+    operator probe (see ``docs/SOAK_GATES.md`` Day 1 finding).
+    """
+    import uuid as _uuid
+
+    from app.models import (
+        Optimization,
+        RefinementBranch,
+        RefinementTurn,
+    )
+    from app.services.refinement_service import RefinementService
+
+    # Seed: optimization + branch with 2 turns
+    opt_id = str(_uuid.uuid4())
+    branch_id = str(_uuid.uuid4())
+    db_session.add(Optimization(
+        id=opt_id,
+        trace_id=str(_uuid.uuid4()),
+        raw_prompt="raw",
+        optimized_prompt="opt-v2-content",
+        task_type="general",
+        domain="general",
+        strategy_used="auto",
+        status="completed",
+    ))
+    db_session.add(RefinementBranch(
+        id=branch_id,
+        optimization_id=opt_id,
+        parent_branch_id=None,
+        forked_at_version=0,
+    ))
+    db_session.add(RefinementTurn(
+        id=str(_uuid.uuid4()),
+        optimization_id=opt_id,
+        branch_id=branch_id,
+        version=1,
+        parent_version=0,
+        prompt="v1-prompt-content",
+        refinement_request="seed",
+        scores={"clarity": 7.0, "specificity": 7.0},
+        strategy_used="chain-of-thought",
+        trace_id=str(_uuid.uuid4()),
+    ))
+    db_session.add(RefinementTurn(
+        id=str(_uuid.uuid4()),
+        optimization_id=opt_id,
+        branch_id=branch_id,
+        version=2,
+        parent_version=1,
+        prompt="v2-prompt-content",
+        refinement_request="r2",
+        scores={"clarity": 8.0, "specificity": 8.0},
+        strategy_used="auto",
+        trace_id=str(_uuid.uuid4()),
+    ))
+    await db_session.commit()
+
+    # Invoke rollback service method directly (router-equivalent path);
+    # asserts payload carries both branch_kwargs AND seed_turn_kwargs.
+    from app.config import PROMPTS_DIR
+    svc = RefinementService(prompts_dir=PROMPTS_DIR)  # No LLM exercised here
+
+    payload = await svc.rollback(db_session, opt_id, to_version=1)
+
+    # Branch kwargs intact
+    assert payload.branch_kwargs["optimization_id"] == opt_id
+    assert payload.branch_kwargs["parent_branch_id"] == branch_id
+    assert payload.branch_kwargs["forked_at_version"] == 1
+
+    # Seed turn kwargs carry v1's content
+    assert payload.seed_turn_kwargs["optimization_id"] == opt_id
+    assert payload.seed_turn_kwargs["branch_id"] == (
+        payload.branch_kwargs["id"]
+    )
+    assert payload.seed_turn_kwargs["version"] == 1
+    assert payload.seed_turn_kwargs["prompt"] == "v1-prompt-content"
+    assert payload.seed_turn_kwargs["strategy_used"] == "chain-of-thought"
+    assert payload.seed_turn_kwargs["scores"] == {
+        "clarity": 7.0, "specificity": 7.0,
+    }
+    assert "Rollback seed" in payload.seed_turn_kwargs["refinement_request"]
+
+
+@pytest.mark.integration
 async def test_passthrough_save_returns_completed_status_under_raise_mode(
     app_client: AsyncClient,
     db_session: AsyncSession,

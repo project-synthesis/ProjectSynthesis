@@ -504,12 +504,24 @@ class RefinementService:
         optimization_id: str,
         to_version: int,
     ) -> "RollbackPayload":
-        """Build a new branch forked at `to_version`. Returns an un-attached
-        `RollbackPayload` — caller persists via WriteQueue.submit().
+        """Build a new branch forked at `to_version` AND seed it with an
+        initial turn carrying the content of the rolled-back-from version.
+        Returns an un-attached ``RollbackPayload`` — caller persists both
+        rows atomically via ``WriteQueue.submit()``.
 
         Cycle 2: drops inline `db.commit()` AND drops `self.db` (db is now
         a method param). Pure read + payload construction. The actual
-        INSERT runs inside the caller's queue callback.
+        INSERTs run inside the caller's queue callback.
+
+        v0.4.22 soak-gate Day 1 fix (refine-after-rollback UX defect): in
+        addition to the new branch kwargs, this method now also returns
+        ``seed_turn_kwargs`` for an initial ``RefinementTurn`` on the new
+        branch. The seed turn copies the content of ``target_turn``
+        (the version being rolled back to) so that subsequent
+        ``POST /api/refine`` without an explicit ``branch_id`` works
+        seamlessly — the latest-branch lookup defaults to the rollback
+        branch, the latest-turn lookup finds the seed turn, and refinement
+        proceeds from the rolled-back state.
 
         Args:
             db: Read session (for verifying the to_version exists).
@@ -517,8 +529,8 @@ class RefinementService:
             to_version: Version to fork from.
 
         Returns:
-            Frozen RollbackPayload with `branch_kwargs` ready to splat
-            into RefinementBranch(...).
+            Frozen RollbackPayload with ``branch_kwargs`` + ``seed_turn_kwargs``
+            ready to splat into RefinementBranch + RefinementTurn constructors.
 
         Raises:
             ValueError if `to_version` does not exist for `optimization_id`.
@@ -560,7 +572,35 @@ class RefinementService:
             "forked_at_version": to_version,
         }
 
-        return RollbackPayload(branch_kwargs=branch_kwargs)
+        # v0.4.22 fix: seed an initial turn on the new branch with the
+        # rolled-back content. Snapshot the fields synchronously from the
+        # attached ``target_turn`` ORM row (we're still inside the read
+        # session here). The new branch's seed turn is version 1 — branches
+        # have independent version sequences (RefinementTurn unique key is
+        # branch_id + version, NOT optimization_id + version).
+        seed_turn_kwargs = {
+            "id": str(_uuid.uuid4()),
+            "optimization_id": optimization_id,
+            "branch_id": new_branch_id,
+            "version": 1,
+            "parent_version": None,
+            "refinement_request": (
+                f"Rollback seed: branched from v{to_version} of "
+                f"{parent_branch.id}"
+            ),
+            "prompt": target_turn.prompt,
+            "scores": target_turn.scores,
+            "deltas": target_turn.deltas,
+            "deltas_from_original": target_turn.deltas_from_original,
+            "strategy_used": target_turn.strategy_used,
+            "suggestions": target_turn.suggestions,
+            "trace_id": target_turn.trace_id,
+        }
+
+        return RollbackPayload(
+            branch_kwargs=branch_kwargs,
+            seed_turn_kwargs=seed_turn_kwargs,
+        )
 
     async def get_branches(
         self,

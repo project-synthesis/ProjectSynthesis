@@ -490,7 +490,8 @@ def test_refinement_context_dataclass_immutable():
 
     # _InitialTurnPayload + RollbackPayload: frozen
     init_payload = _InitialTurnPayload(branch_kwargs={}, turn_kwargs={})
-    rollback_payload = RollbackPayload(branch_kwargs={})
+    # v0.4.22 soak-gate Day 1 fix: RollbackPayload gained seed_turn_kwargs
+    rollback_payload = RollbackPayload(branch_kwargs={}, seed_turn_kwargs={})
     for payload in (init_payload, rollback_payload):
         with pytest.raises(FrozenInstanceError):
             payload.branch_kwargs = {"changed": True}  # type: ignore[misc]
@@ -978,6 +979,25 @@ async def test_refinement_service_rollback_returns_payload(
         assert "id" in payload.branch_kwargs
         assert "optimization_id" in payload.branch_kwargs
         assert payload.branch_kwargs["optimization_id"] == opt_id
+
+        # v0.4.22 soak-gate Day 1 fix: rollback now also returns
+        # seed_turn_kwargs so the new branch starts with version 1
+        # carrying the content of the version being rolled back to.
+        # This makes subsequent refines on the rolled-back branch work
+        # seamlessly (prior to the fix, the empty branch caused
+        # ``ValueError("requires latest_turn_snapshot")`` on the next refine).
+        assert payload.seed_turn_kwargs is not None
+        assert payload.seed_turn_kwargs["optimization_id"] == opt_id
+        assert payload.seed_turn_kwargs["branch_id"] == (
+            payload.branch_kwargs["id"]
+        )
+        assert payload.seed_turn_kwargs["version"] == 1
+        # Seed turn carries v1's content (the version we rolled back to)
+        assert payload.seed_turn_kwargs["prompt"] == "opt"
+        assert payload.seed_turn_kwargs["strategy_used"] == "auto"
+        # refinement_request communicates the rollback origin for clarity
+        assert "Rollback seed" in payload.seed_turn_kwargs["refinement_request"]
+        assert "v1" in payload.seed_turn_kwargs["refinement_request"]
 
 
 # --- Test 15: Rollback persists via queue --------------------------------

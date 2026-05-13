@@ -176,14 +176,33 @@ async def rollback(
         raise HTTPException(status_code=status, detail="Rollback failed.") from exc
 
     branch_kwargs = payload.branch_kwargs
+    seed_turn_kwargs = payload.seed_turn_kwargs
 
     async def _persist_rollback(write_db: AsyncSession) -> dict:
+        """Persist the new RefinementBranch + seed RefinementTurn atomically.
+
+        v0.4.22 soak-gate Day 1 fix: prior to this change, the callback
+        inserted ONLY the new branch row, leaving subsequent refines on
+        the rolled-back branch broken (zero turns → latest_turn_snapshot
+        is None → ValueError). The seed turn — carrying the content of
+        the version being rolled back to — fixes that. Both rows commit
+        in the same write transaction; either both succeed or neither
+        persists (RefinementTurn has a FK to RefinementBranch.id with no
+        ON DELETE clause so the FK enforces transactional cohesion).
+        """
         from datetime import UTC, datetime
 
-        from app.models import RefinementBranch
+        from app.models import RefinementBranch, RefinementTurn
 
         new_branch = RefinementBranch(**branch_kwargs)
         write_db.add(new_branch)
+        # Flush the branch BEFORE inserting the seed turn so the FK
+        # constraint on RefinementTurn.branch_id sees the branch row.
+        await write_db.flush()
+
+        seed_turn = RefinementTurn(**seed_turn_kwargs)
+        write_db.add(seed_turn)
+
         await write_db.commit()
         await write_db.refresh(new_branch)
         return {
