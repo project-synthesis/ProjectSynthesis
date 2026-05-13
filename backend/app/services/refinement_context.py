@@ -221,9 +221,21 @@ class _InitialTurnPayload:
 class RollbackPayload:
     """Pure-compute output of `RefinementService.rollback()`.
 
-    Carries the un-attached branch fields needed by the persist callback to
-    INSERT a new RefinementBranch row at rollback time. Router uses the
-    callback's return dict (post-commit `db.refresh()`-populated) to construct
-    the HTTP response without touching detached ORM objects.
+    Carries the un-attached branch + seed-turn fields needed by the persist
+    callback to INSERT both a new RefinementBranch row AND a seed
+    RefinementTurn row at rollback time. Router uses the callback's return
+    dict (post-commit `db.refresh()`-populated) to construct the HTTP
+    response without touching detached ORM objects.
+
+    v0.4.22 soak-gate Day 1 finding (refine-after-rollback UX defect): prior
+    to seed-turn inclusion, the new branch shipped with zero turns; any
+    subsequent ``POST /api/refine`` without an explicit ``branch_id``
+    defaulted to the latest branch (the empty rollback branch) and raised
+    ``ValueError("invoke_refinement_pipeline requires latest_turn_snapshot;
+    caller must seed via build_initial_turn_payload + queue submit")``. The
+    seed turn is now created as version 1 of the new branch carrying the
+    content of the version being rolled back to — refines on the rolled-back
+    branch work seamlessly from that point on.
     """
     branch_kwargs: dict[str, Any]
+    seed_turn_kwargs: dict[str, Any]
