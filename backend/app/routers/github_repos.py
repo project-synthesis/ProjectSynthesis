@@ -358,37 +358,47 @@ async def link_repo(
     language = repo_info.get("language")
     active_branch = branch or default_branch
 
-    # Remove any existing linked repo for this session
-    result = await db.execute(
-        select(LinkedRepo).where(LinkedRepo.session_id == session_id)
-    )
-    existing = result.scalar_one_or_none()
-    if existing:
-        await db.delete(existing)
-        await db.flush()
-
-    linked = LinkedRepo(
-        session_id=session_id,
-        full_name=full_name,
-        default_branch=default_branch,
-        branch=active_branch,
-        language=language,
-    )
-    db.add(linked)
-
-    # ADR-005 Phase 2A: ensure project node exists for this repo
+    # v0.4.22 soak-gate Day 1 fix: previously the mutations below ran on
+    # the request-bound read session (db.delete/db.add/ensure_project_for_repo
+    # all hitting ``db``) with only an empty-commit closure submitted to the
+    # queue. Under the v0.4.22 RAISE flip the audit hook would trip on the
+    # ``db.flush()`` between delete + add. Route ALL writes through the
+    # queue closure on the write-engine session.
     from app.services.project_service import ensure_project_for_repo
-    project_node_id = await ensure_project_for_repo(db, full_name, target_project_id=body.project_id)
-    linked.project_node_id = project_node_id
 
-    # v0.4.13 cycle 8: route the link commit through the write queue
-    # under operation_label='github_repo_link'.
-    async def _do_link_commit(write_db: AsyncSession) -> None:
+    async def _persist_link(write_db: AsyncSession) -> dict:
+        # Remove any existing linked repo for this session
+        result = await write_db.execute(
+            select(LinkedRepo).where(LinkedRepo.session_id == session_id)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            await write_db.delete(existing)
+            await write_db.flush()
+
+        linked_row = LinkedRepo(
+            session_id=session_id,
+            full_name=full_name,
+            default_branch=default_branch,
+            branch=active_branch,
+            language=language,
+        )
+        write_db.add(linked_row)
+        await write_db.flush()
+
+        # ADR-005 Phase 2A: ensure project node exists for this repo
+        new_project_node_id = await ensure_project_for_repo(
+            write_db, full_name, target_project_id=body.project_id,
+        )
+        linked_row.project_node_id = new_project_node_id
+
         await write_db.commit()
+        return {"project_node_id": new_project_node_id}
 
-    await write_queue.submit(
-        _do_link_commit, operation_label="github_repo_link",
+    persist_result = await write_queue.submit(
+        _persist_link, operation_label="github_repo_link",
     )
+    project_node_id = persist_result["project_node_id"]
 
     # Emit project/taxonomy event
     try:
@@ -555,6 +565,8 @@ async def unlink_repo(
     deletes the project node itself — projects are forever (ADR-005).
     """
     session_id, _token = await _get_session_token(request, db)
+
+    # Read-only existence check
     result = await db.execute(
         select(LinkedRepo).where(LinkedRepo.session_id == session_id)
     )
@@ -566,40 +578,59 @@ async def unlink_repo(
     if linked:
         project_id = linked.project_node_id
 
-        # B5 rehome: before deleting the link, migrate the last-7-day opts
-        # back to Legacy so the user doesn't see them under a "disconnected"
-        # project selector.
-        if mode == "rehome" and project_id:
-            try:
-                from datetime import datetime, timedelta, timezone
+        # v0.4.22 soak-gate Day 1 fix: previously the rehome migration +
+        # link delete + empty-commit closure all hit the read session,
+        # tripping the audit-hook RAISE flip. Route ALL writes (rehome
+        # UPDATE + LinkedRepo DELETE + commit) through the write queue.
+        from datetime import datetime, timedelta, timezone
 
-                from app.services.project_service import (
-                    get_legacy_project_id,
-                    migrate_optimizations,
-                )
-
-                legacy_id = await get_legacy_project_id(db)
-                if legacy_id and legacy_id != project_id:
-                    since_dt = datetime.now(timezone.utc) - timedelta(days=7)
-                    rehomed = await migrate_optimizations(
-                        db,
-                        from_project_id=project_id,
-                        to_project_id=legacy_id,
-                        since=since_dt,
-                    )
-            except Exception as exc:
-                logger.warning("B5 rehome failed (non-fatal): %s", exc)
-                rehomed = 0
-
-        await db.delete(linked)
-        # v0.4.13 cycle 8: route the unlink commit through the write
-        # queue under operation_label='github_repo_unlink'.
-        async def _do_unlink_commit(write_db: AsyncSession) -> None:
-            await write_db.commit()
-
-        await write_queue.submit(
-            _do_unlink_commit, operation_label="github_repo_unlink",
+        from app.services.project_service import (
+            get_legacy_project_id,
+            migrate_optimizations,
         )
+
+        linked_id = linked.id
+
+        async def _persist_unlink(write_db: AsyncSession) -> dict:
+            rehomed_count = 0
+
+            # B5 rehome: before deleting the link, migrate the last-7-day
+            # opts back to Legacy so the user doesn't see them under a
+            # "disconnected" project selector.
+            if mode == "rehome" and project_id:
+                try:
+                    legacy_id = await get_legacy_project_id(write_db)
+                    if legacy_id and legacy_id != project_id:
+                        since_dt = (
+                            datetime.now(timezone.utc) - timedelta(days=7)
+                        )
+                        rehomed_count = await migrate_optimizations(
+                            write_db,
+                            from_project_id=project_id,
+                            to_project_id=legacy_id,
+                            since=since_dt,
+                        )
+                except Exception as exc:
+                    logger.warning("B5 rehome failed (non-fatal): %s", exc)
+                    rehomed_count = 0
+
+            # Re-fetch the LinkedRepo row on the writer session before
+            # delete (the ORM instance from the read session is bound to
+            # a different session).
+            fetch = await write_db.execute(
+                select(LinkedRepo).where(LinkedRepo.id == linked_id)
+            )
+            writer_linked = fetch.scalar_one_or_none()
+            if writer_linked is not None:
+                await write_db.delete(writer_linked)
+
+            await write_db.commit()
+            return {"rehomed": int(rehomed_count)}
+
+        unlink_result = await write_queue.submit(
+            _persist_unlink, operation_label="github_repo_unlink",
+        )
+        rehomed = unlink_result["rehomed"]
 
         # Emit observability event so the UI can toast "disconnected" status.
         try:

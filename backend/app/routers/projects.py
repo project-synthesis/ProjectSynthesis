@@ -108,25 +108,49 @@ async def post_migrate_projects(
     ``write_queue.submit()`` under ``operation_label='projects_migrate'``.
     Dry-run still uses the read session — no commit.
     """
+    # v0.4.22 soak-gate Day 1 fix: previously this endpoint called
+    # migrate_optimizations(db, ...) with the request-bound read session
+    # which issued ``UPDATE optimizations SET project_id=...`` on the read
+    # engine. Under the v0.4.22 RAISE flip this would trigger
+    # ``WriteOnReadEngineError`` autoflush on the next read. The
+    # empty-commit closure submitted afterward committed an empty write
+    # transaction and did NOT actually move the rows.
+    #
+    # Dry-run path stays on the read session (no writes). Non-dry path
+    # routes the full UPDATE through ``write_queue.submit()`` on the
+    # write-engine session.
     try:
-        count = await migrate_optimizations(
-            db,
-            from_project_id=body.from_project_id,
-            to_project_id=body.to_project_id,
-            since=body.since,
-            repo_full_name_is_null=body.repo_full_name_is_null,
-            dry_run=body.dry_run,
-        )
+        if body.dry_run:
+            count = await migrate_optimizations(
+                db,
+                from_project_id=body.from_project_id,
+                to_project_id=body.to_project_id,
+                since=body.since,
+                repo_full_name_is_null=body.repo_full_name_is_null,
+                dry_run=True,
+            )
+        else:
+            async def _persist_migrate(write_db: AsyncSession) -> int:
+                migrated = await migrate_optimizations(
+                    write_db,
+                    from_project_id=body.from_project_id,
+                    to_project_id=body.to_project_id,
+                    since=body.since,
+                    repo_full_name_is_null=body.repo_full_name_is_null,
+                    dry_run=False,
+                )
+                await write_db.commit()
+                return int(migrated)
+
+            count = await write_queue.submit(
+                _persist_migrate,
+                operation_label="projects_migrate",
+            )
     except ValueError as exc:
         # Invalid destination project id — 400, not 500.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if not body.dry_run:
-        async def _do_commit(write_db: AsyncSession) -> None:
-            await write_db.commit()
-
-        await write_queue.submit(_do_commit, operation_label="projects_migrate")
-
+    if not body.dry_run and count > 0:
         # Notify the tree to re-fetch scoped views for both projects.
         try:
             event_bus.publish("taxonomy_changed", {
