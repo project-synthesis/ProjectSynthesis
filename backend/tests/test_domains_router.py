@@ -522,6 +522,29 @@ class TestRebuildSubDomainsEndpoint:
     422 (no schema).
     """
 
+    @pytest.fixture(autouse=True)
+    def _reset_rate_limit_storage(self):
+        """Reset the rate-limit moving window before/after each rebuild test.
+
+        Mirrors ``_reset_rate_limit_storage_dissolve``. The storage is a
+        process-level singleton; without this autouse fixture, accumulated
+        calls from earlier tests in the broader sweep (test_link_repo_b4 /
+        test_unlink_repo_b5 / test_project_migration / test_projects_router)
+        can exhaust the ``10/minute`` budget before
+        ``test_rebuild_endpoint_200_idempotent_re_run`` runs its 2 calls —
+        yielding a false 429.
+
+        Surfaced during v0.4.22 soak-gate Day 1 (2026-05-12) cross-cutting
+        regression sweep at commit ``63912684``. Pre-existing flake; the
+        v0.4.22 routers/domains.py fix at ``7a6a7f33`` did not change
+        rate-limit behavior but the new broader-sweep coverage made it
+        observable.
+        """
+        from app.dependencies.rate_limit import reset_rate_limit_storage
+        reset_rate_limit_storage()
+        yield
+        reset_rate_limit_storage()
+
     @pytest.mark.asyncio
     async def test_rebuild_endpoint_404_unknown_domain(
         self, app_client, db_session,

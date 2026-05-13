@@ -187,7 +187,7 @@ Each day during the soak window, the release-operator runs the verification comm
 | Date | Day | Operator | Restart? | C1 writes | C2 writes | C3 writes | Total WARN count | New sources | Decision | Evidence |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2026-05-11 | 0 (window opens) | release-bot | ✅ (post-v0.4.21 ship) | 0 (baseline) | 0 (baseline) | 0 (baseline) | (baseline TBD) | (baseline TBD) | 🟡 ACTIVE | v0.4.21 shipped, soak window opens, baseline log captured |
-| 2026-05-12 | 1 | claude-soak-operator | ✅ (x4 — restarts during fix iteration) | 4 (3 synthetic + 1 verify) | 3 (initial-turn + persist + rollback + post-rollback persist) | 3 (overall 7.92 + 7.49 + 8.48) | 0 (post-fix) — 3 (pre-fix, all classes documented + fixed below) | **4 distinct bugs the soak gate surfaced** + 1 latent singleton-wiring gap. See **Day 1 finding block** below | 🟡 ACTIVE (gate worked as designed — caught 4 real bugs before flip ships) | 4 commits + 12 new regression tests; all live-verified clean under RAISE; backend.log: 0 WARN over 600+ post-fix lines covering 15+ endpoint exercises |
+| 2026-05-12 | 1 | claude-soak-operator | ✅ (x5 — restarts during fix iteration) | 4 (3 synthetic + 1 verify) | 3 (initial-turn + persist + rollback + post-rollback persist) | 3 (overall 7.92 + 7.49 + 8.48) | 0 (post-fix) — 6 (pre-fix, all classes documented + fixed below) | **6 distinct bugs the soak gate surfaced** + 1 latent singleton-wiring gap. See **Day 1 finding block** below | 🟡 ACTIVE (gate worked as designed — caught 6 real bugs before flip ships) | 6 commits + 12 new regression tests; all live-verified clean under RAISE; backend.log: 0 WARN over 600+ post-fix lines covering 20+ endpoint exercises |
 | 2026-05-13 | 2 | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
 | 2026-05-14 | 3 (mid-soak) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
 | 2026-05-15 | 4 (coverage-floor checkpoint) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | If any P4 cycle < 2 cumulative, the operator must run the synthetic recipe ≥1×/day from this point |
@@ -269,11 +269,33 @@ Regression coverage at `backend/tests/test_audit_hook_passthrough_save.py::test_
 | C2 (refine_initial_turn / refine_persist_turn / refine_rollback) | 3+ (initial + persist v2 + rollback + persist v2-of-rollback-branch) | ✅ |
 | C3 (internal-tier optimize / pipeline_failed_optimization_persist) | 3 (overall 7.92 + 7.49 + 8.48) | ✅ |
 
+**Finding 5 — domains.py engine calls not routed through WriteQueue** (FIXED at `7a6a7f33`)
+
+Both `POST /api/domains/{id}/rebuild-sub-domains` and `POST /api/domains/{id}/dissolve-empty` called the taxonomy engine method with the request-bound read session AND submitted a separate empty-commit closure. Same v0.4.14 oversight class.
+
+`rebuild_sub_domains` — engine method has `write_queue=` kwarg (v0.4.13 cycle 7b) that internally routes the entire body through `write_queue.submit(operation_label="engine_rebuild_sub_domains")`. Router now passes `write_queue=write_queue` and drops the redundant empty-commit closure.
+
+`dissolve_empty_domain` — engine method doesn't take `write_queue`. Router now wraps the entire engine call in a `write_queue.submit(operation_label="domain_dissolve_empty")` closure so the engine's mutations + internal commit land on the write-engine session.
+
+Regression coverage: existing `test_domains_router.py` (8 tests) + `test_routers_queue_routing.py::test_domains_dissolve_label` (substring guard). 38 domain-related tests PASS post-fix. Live-verified: dry_run + non-dry_run both return 200 under RAISE.
+
+**Finding 6 — projects.py + github_repos.py empty-commit closures** (FIXED at `63912684`)
+
+Three more endpoints with the same anti-pattern:
+
+- `POST /api/projects/migrate` — `migrate_optimizations(db, ...)` issued `UPDATE optimizations SET project_id=...` on the read session.
+- `POST /api/repos/link` — `db.delete(existing)` + `db.flush()` + `db.add(linked)` + `ensure_project_for_repo(db, ...)` all on the read session.
+- `DELETE /api/repos/unlink` — B5 rehome migration + `db.delete(linked)` on the read session.
+
+All three restructured to run mutations inside `write_queue.submit(operation_label=...)` closures on the write-engine session. The unlink path re-fetches LinkedRepo on the writer session by id before delete (since the read-session ORM instance is bound to a different session).
+
+Regression coverage: 39 tests across `test_link_repo_b4.py`, `test_unlink_repo_b5.py`, `test_projects_router.py`, `test_project_migration.py`, `test_project_creation.py`, `test_routers_queue_routing.py`, `test_topology_project_filter.py` — all PASS post-fix. Operation_label substrings preserved for the substring-guard tests.
+
 **What this finding means for the gate decision**:
 
-- The gate WORKED — caught **4 real bugs** that would have been user-visible defects or HTTP 500s on Day 1 of v0.4.22 user traffic.
+- The gate WORKED — caught **6 real bugs** that would have been user-visible defects or HTTP 500s on Day 1 of v0.4.22 user traffic.
 - All 3 P4 coverage rows met the ≥3 floor on Day 1 alone via synthetic-recipe + targeted refine exercises.
-- The 7-day soak window continues to observe for remaining offenders (other REST handlers with `_do_*_commit` empty-commit closures at `routers/domains.py`, `routers/projects.py`, `routers/github_repos.py` — read-session mutations happen INSIDE the engine method called with `db`, not in the router, so the audit-hook signature differs; tested non-destructive `dry_run` paths clean).
+- Comprehensive sweep complete: remaining `_do_*_commit` patterns at `routers/clusters.py` (4), `routers/templates.py` (3), `routers/github_auth.py` (4) all verified CORRECT — mutations happen inside the closure on `write_db` (the `db` parameter is the writer session passed by `write_queue.submit`, not the read session).
 - Day 1 is a strong 🟡 → 🟢 trend: zero audit-hook RAISE across 600+ lines of post-fix backend.log over 15+ endpoint exercises.
 
 ### Decision matrix
