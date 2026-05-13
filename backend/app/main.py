@@ -258,6 +258,23 @@ async def lifespan(app: FastAPI):
         provider = None
     routing.set_provider(provider)
     app.state.routing = routing
+
+    # v0.4.22 soak-gate finding (2026-05-12 Day 1): the backend lifespan was
+    # storing routing on ``app.state.routing`` but NOT propagating to the
+    # ``app.tools._shared._routing`` module-level singleton that MCP tool
+    # handlers (``handle_refine``, ``handle_save_result``, ``handle_optimize``)
+    # call ``get_routing()`` against. The MCP server process wires this via
+    # ``mcp_server.py:284`` but the backend process did not. REST endpoints
+    # that delegate to MCP tool handlers (e.g. ``POST /api/refine`` →
+    # ``handle_refine``) would emit ``ValueError("Routing service not
+    # initialized")`` in production while tests passed because
+    # ``backend/tests/conftest.py:279`` stubs the singleton.
+    #
+    # Wire here so MCP tool handlers called from REST in the backend process
+    # find the routing singleton.
+    from app.tools._shared import set_routing as _set_shared_routing
+    _set_shared_routing(routing)
+
     logger.info(
         "Routing initialized: provider=%s available_tiers=%s",
         routing.state.provider_name or "none",
@@ -453,6 +470,12 @@ async def lifespan(app: FastAPI):
             )
             app.state.taxonomy_engine = engine
             set_engine(engine)
+            # v0.4.22 soak-gate finding: wire taxonomy engine singleton so MCP
+            # tool handlers (``tools/optimize.py:243``, ``tools/match.py:24``)
+            # called from REST in the backend process find it. MCP server
+            # process wires this via ``mcp_server.py:307``.
+            from app.tools._shared import set_taxonomy_engine as _set_shared_taxonomy
+            _set_shared_taxonomy(engine)
 
             # v0.4.16 P1a Cycle 1: defensive recovery for engine bootstrap.
             # If a prior process crashed mid-cold-path, hydrate
@@ -490,6 +513,19 @@ async def lifespan(app: FastAPI):
             app.state.domain_resolver = domain_resolver
             app.state.signal_loader = signal_loader
             set_domain_resolver(domain_resolver)
+
+            # v0.4.22 soak-gate finding: wire the ``_shared`` domain_resolver
+            # + signal_loader singletons so REST-callable MCP tool handlers
+            # (``tools/optimize.py:226``, ``tools/analyze.py:24``,
+            # ``services/sampling_pipeline.py`` paths) find them in the
+            # backend process. MCP server process wires this via
+            # ``mcp_server.py:399-400``.
+            from app.tools._shared import (
+                set_domain_resolver as _set_shared_dr,
+                set_signal_loader as _set_shared_sl,
+            )
+            _set_shared_dr(domain_resolver)
+            _set_shared_sl(signal_loader)
 
             # Wire signal loader into heuristic analyzer for dynamic domain signals
             from app.services.heuristic_analyzer import set_signal_loader as set_analyzer_signal_loader
@@ -1223,6 +1259,13 @@ async def lifespan(app: FastAPI):
                     "replay_run": replay_run_gen,
                 },
             )
+            # v0.4.22 soak-gate finding: wire run_orchestrator singleton so
+            # MCP tool handlers (``tools/probe.py:70``, ``tools/seed.py:168``,
+            # ``tools/replay_suite.py:154``) called from REST in the backend
+            # process find it. MCP server process wires this via
+            # ``mcp_server.py:503``.
+            from app.tools._shared import set_run_orchestrator as _set_shared_ro
+            _set_shared_ro(app.state.run_orchestrator)
             app.state.lifespan_order.append("run_orchestrator_registered")
             logger.info(
                 "RunOrchestrator registered (modes=%s)",
@@ -1284,6 +1327,12 @@ async def lifespan(app: FastAPI):
             github_client=GitHubClient(),
             taxonomy_engine=getattr(app.state, "taxonomy_engine", None),
         )
+        # v0.4.22 soak-gate finding: wire context_service singleton so MCP
+        # tool handlers (``tools/refine.py:309``, ``tools/prepare.py:85``,
+        # ``tools/optimize.py:81``) called from REST in the backend process
+        # find it. MCP server process wires this via ``mcp_server.py:380``.
+        from app.tools._shared import set_context_service as _set_shared_ctx_svc
+        _set_shared_ctx_svc(app.state.context_service)
         logger.info("ContextEnrichmentService initialized")
     except Exception as exc:
         logger.error(
