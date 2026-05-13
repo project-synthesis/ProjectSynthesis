@@ -70,6 +70,10 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
   - **`backend/app/routers/domains.py`** — `POST /api/domains/{id}/rebuild-sub-domains` now passes `write_queue=write_queue` to the engine method (which has internal `write_queue` support since v0.4.13 cycle 7b). `POST /api/domains/{id}/dissolve-empty` wraps the entire engine call in `write_queue.submit(operation_label="domain_dissolve_empty")` so engine mutations + internal commit land on the write-engine session. Drops both redundant empty-commit closures.
   - **`backend/app/routers/projects.py::post_migrate_projects`** + **`backend/app/routers/github_repos.py::link_repo`/`unlink_repo`** — three more endpoints with the v0.4.14 empty-commit-closure oversight. All restructured to apply mutations inside `write_queue.submit()` closures on the write-engine session. The unlink path re-fetches LinkedRepo on the writer session by id before delete (the read-session ORM instance is bound to a different session).
 
+### Changed (v0.4.22 architectural — soak-gate Day 1)
+
+- **`backend/app/services/gc.py::_gc_stuck_pending_optimizations`** (NEW) — startup GC sweep for `status='pending' AND optimized_prompt IS NULL` rows older than `_STUCK_PENDING_AGE_HOURS=24*7` (7 days). Wired into `run_startup_gc` dispatch (queue + legacy branches). Mirrors `_gc_failed_optimizations` defensive cascade (deletes Feedback / RefinementTurn / OptimizationPattern rows first). Addresses orphan rows produced by the pre-fix passthrough_save autoflush bug (Findings 1+2) and acts as defense-in-depth against future workflow interruptions (network errors mid-save, frontend crashes between prepare and save). 7-day grace window preserves legitimate manual-passthrough workflows. Regression at `backend/tests/test_gc.py::TestGCStuckPendingOptimizations` (6 tests). Live-verified: 9 stuck rows swept on `./init.sh restart` via "GC: deleted 9 stuck pending optimizations (older than 168 hours)" log line.
+
 ## v0.4.21 — 2026-05-11
 
 ### Added
