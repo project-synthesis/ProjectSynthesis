@@ -100,8 +100,8 @@ def test_main_py_wires_shared_singleton(setter_name: str, callers: list[str]) ->
         f"`ValueError(\"{setter_name.replace('set_', '').replace('_', ' ')} "
         f"not initialized\")` in production:\n"
         + "\n".join(f"  - {c}" for c in callers)
-        + f"\n\nMCP server process wires this via `mcp_server.py`; backend "
-        f"process must do the same to keep singleton coherence."
+        + "\n\nMCP server process wires this via `mcp_server.py`; backend "
+        "process must do the same to keep singleton coherence."
     )
 
     # Match either of two valid invocation forms (alias OR direct call):
