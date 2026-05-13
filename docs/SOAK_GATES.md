@@ -298,6 +298,36 @@ Regression coverage: 39 tests across `test_link_repo_b4.py`, `test_unlink_repo_b
 - Comprehensive sweep complete: remaining `_do_*_commit` patterns at `routers/clusters.py` (4), `routers/templates.py` (3), `routers/github_auth.py` (4) all verified CORRECT — mutations happen inside the closure on `write_db` (the `db` parameter is the writer session passed by `write_queue.submit`, not the read session).
 - Day 1 is a strong 🟡 → 🟢 trend: zero audit-hook RAISE across 600+ lines of post-fix backend.log over 15+ endpoint exercises.
 
+**MCP tool handler + service-layer audit closure** (2026-05-12 Day 1):
+
+Exhaustive sweep of `backend/app/tools/*.py` (17 tool handlers) and `backend/app/services/*.py` (25+ services) for the same v0.4.14 oversight class:
+
+- All 4 `await db.commit()` calls in `backend/app/tools/` (`feedback.py:40`, `optimize.py:330`, `prepare.py:160`, `save_result.py:317`) verified inside `write_queue.submit()` closures — the `db` parameter is the writer session, not the read session.
+- All service-layer commits in `pattern_injection.py` / `pipeline_phases.py` / `validation_suite_service.py` / `batch_persistence.py` / `feedback_service.py` / `template_service.py` verified inside writer-queue closures or properly delegate to caller commits in writer paths.
+- Remaining service `db.commit()` calls (`gc.py`, `orphan_recovery.py`, `repo_index_service.py`, `taxonomy/cold_path.py`, `taxonomy/snapshot.py`, etc.) are all in background paths (warm cycle, cold path, GC sweeps, repo indexing) that already run on writer-engine sessions per v0.4.13/14/16 migrations.
+
+**Real-MCP-client end-to-end round-trip** (2026-05-12 Day 1):
+
+Live-invoked via real MCP tool calls (not the test stub):
+
+- `synthesis_health` → 200, `provider=claude_cli`, `available_tiers=[internal, passthrough]`, `total_optimizations: 17`, `avg_score: 7.04`, `domain_count: 2`.
+- `synthesis_optimize` (chain-of-thought, soak-D1-mcp-#1 prompt) → 200, `pipeline_mode: internal`, `model_used: claude-opus-4-7`, full 3-phase pipeline (analyze/optimize/score), 8.07 overall (7.7/8.5/7/9.1/8.1).
+- `synthesis_feedback` (thumbs_up) → 200, `strategy_affinity_updated: true`.
+- Domain emergence: `domain_count` advanced from 1 → 2 organically during the round-trip — synthesis pipeline + taxonomy emergence functional under RAISE.
+- Backend.log post-MCP-roundtrip: 0 `audit_drift` / `read-engine audit:` / `WriteOnReadEngineError` / `PendingRollbackError`.
+
+**CI status (PR #74 as of 2026-05-12 Day 1 close)**:
+
+| Check | Status |
+|---|---|
+| test | ✅ SUCCESS |
+| claude-review | ✅ SUCCESS |
+| backend-integration | ✅ SUCCESS |
+| lint | ✅ SUCCESS |
+| frontend | ✅ SUCCESS |
+
+10/10 commits on PR. All Day 1 fixes + regression coverage shipped. Gate continues observing Days 2-7 (closes 2026-05-18).
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
