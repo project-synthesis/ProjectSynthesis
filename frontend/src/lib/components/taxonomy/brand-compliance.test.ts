@@ -33,6 +33,7 @@ const SCOPE_FILES = [
   'BeamPool.ts',
   'BeamShader.ts',
   'ClusterPhysics.ts',
+  'DomainEdgeShader.ts',  // T1.3 — domain structural edge shader
   'EdgeShader.ts',
   'EnvelopePool.ts',     // canon F19 — plasma envelopement pool
   'EnvelopeShader.ts',   // canon F19 — envelope shader (BeamShader-adapted)
@@ -61,6 +62,7 @@ const fileContents = import.meta.glob<string>(
     './BeamPool.ts',
     './BeamShader.ts',
     './ClusterPhysics.ts',
+    './DomainEdgeShader.ts',
     './EdgeShader.ts',
     './EnvelopePool.ts',
     './EnvelopeShader.ts',
@@ -118,6 +120,9 @@ describe('Brand compliance — 3D Pattern Graph scope', () => {
     );
     expect(renderer).toMatch(
       /from\s+['"]three\/addons\/postprocessing\/FilmPass\.js['"]/,
+    );
+    expect(renderer).toMatch(
+      /from\s+['"]three\/addons\/postprocessing\/SMAAPass\.js['"]/,
     );
   });
 });

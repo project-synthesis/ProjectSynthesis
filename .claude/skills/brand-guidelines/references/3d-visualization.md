@@ -50,11 +50,14 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Geometry:** `IcosahedronGeometry(1, 2)` for clusters; `DodecahedronGeometry(1, 2)` for domain anchors.
 - **Material:** `MeshStandardMaterial`
   - `color: new THREE.Color(node.color).multiplyScalar(fillScalar)` where `fillScalar = 0.15` (cluster) / `0.08` (structural)
-  - `emissive: new THREE.Color(node.color)` — same domain hex as `color`
-  - `emissiveIntensity` — **data-driven**:
-    - Cluster: `0.6 + 0.8 * clamp((memberCount - 1) / 49, 0, 1)` → `[0.6, 1.4]`
+  - `emissive:` — clusters use coherence-warmed color (see below), domain anchors use raw `node.color`
+  - `emissiveIntensity` — **data-driven**, compound signal:
+    - Base (member count): `0.6 + 0.8 * clamp((memberCount - 1) / 49, 0, 1)` → `[0.6, 1.4]`
     - Domain anchor: `0.4` (recessed — context, not foreground)
+    - Coherence boost (clusters only): `× (1.0 + 0.1 * coherence)` — hotter clusters radiate more
+    - Score boost (clusters only): `× (0.85 + 0.15 * clamp(avgScore / 10, 0, 1))` — high-scoring clusters bloom brighter
     - Hovered cluster: multiplied by `1.0 + 0.4 * hoverIntensity` (transient lift)
+  - **Coherence-driven color temperature** (chromatic encoding axiom): cluster `emissive` color lerps toward white by `coherence * 0.03` — high-coherence clusters read as "hotter plasma" (shifted toward white/cyan), low-coherence clusters stay at domain base hue. Domain anchors do not participate.
   - `roughness: 0.6` (matte)
   - `metalness: 0.0`
   - `transparent: true`, `opacity: node.opacity * 0.9`
@@ -114,7 +117,8 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Per-frame pulse:** `_removeEdgeAnim` callback updates `uTime` value on every registered edge's uniforms — drives shader pulse (data-flow signal)
 - **Color:** parent's domain hex (`parentNode.color`)
 - **Catenary sag:** `0.15 * distance` (15% of cluster-to-cluster distance)
-- *Source: `SemanticTopology.svelte` `buildMergedCurveGeometry` + `EdgeShader.ts`*
+- **Domain structural edge shader:** domain dodecahedron `EdgesGeometry` uses `DOMAIN_EDGE_VERTEX` / `DOMAIN_EDGE_FRAGMENT` (`DomainEdgeShader.ts`) — half-frequency "slow heartbeat" pulse that differentiates the parent container's rhythm from the faster child data-flow signal. Higher baseline opacity (0.4 vs 0.3) so the domain container never fully dims between pulses. Moderate HDR boost (0.5 vs 0.8) so domains don't outshine data-carrying children. Shared `uTime` uniform keeps both systems phase-coherent.
+- *Source: `SemanticTopology.svelte` `buildMergedCurveGeometry` + `EdgeShader.ts` + `DomainEdgeShader.ts`*
 
 ### F6 — Similarity / Injection Edge
 
@@ -142,7 +146,8 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 
 - **Per-frame callback:** `_breathingAnim`
 - **Time accumulator:** `_breathingTime += 0.016` per frame (~60fps)
-- **Base:** `scaleBase = sin(_breathingTime * 1.5) * 0.02 + 1.0` → `±2%` oscillation
+- **Per-node phase offset:** `_nodePhaseOffsets: Map<string, number>` populated during `rebuildScene` via a deterministic string hash of the node ID mapped to `[0, 2π]`. Each cluster oscillates at the same frequency but with a unique phase shift, so the colony reads as organic rather than a synchronized grid.
+- **Base:** `scaleBase = sin((_breathingTime + phaseOffset) * 1.5) * 0.02 + 1.0` → `±2%` oscillation
 - **Hover amplification:** `targetScaleMultiplier = isHovered ? scaleBase * 1.1 : scaleBase` → up to `±12%` when hovered
 - **Apply to:** every cluster mesh (`mesh.scale.lerp(_scratchVec3a.set(s, s, s), 0.1)`), the parent group's children at the same scale, the readiness ring (`scale.setScalar(targetScaleMultiplier)`), the template ring
 - **Allocation budget:** the `_scratchVec3a` borrow in `mesh.scale.lerp(...)` is mandatory — the per-frame `new THREE.Vector3()` form is banned (see "Per-Frame Allocation Budget" below)
@@ -209,7 +214,7 @@ The 3D Pattern Graph **uses post-processing**. Render via `composer.render()` no
 | `RenderPass` | **Required** | scene + camera | Foundation for the composer chain |
 | `UnrealBloomPass` | **Yes** | `(resolution, strength: 1.5, radius: 0.4, threshold: 0.85)` | Amplifies emissive surfaces — the canonical "alive" feeling |
 | `FilmPass` | **Yes** | `(intensity: 0.35, grayscale: false)` | Cinematic grain — texture without noise. `intensity ≤ 0.4` keeps it subtle |
-| `SMAAPass` / `FXAAPass` | **Yes** | default | Anti-aliasing — supports edge sharpness |
+| `SMAAPass` / `FXAAPass` | **Yes** | default | Anti-aliasing — supports edge sharpness. `SMAAPass` is the canonical choice (placed after `FilmPass`). |
 | `ToneMappingPass` | **Yes (rare)** | when doing PBR with HDR colors | Default `THREE.NoToneMapping` is fine for non-HDR |
 | `GodRaysPass` / `GlitchPass` / `DotScreenPass` / `RGBShiftPass` | **No** | — | Aesthetic-only or decorative; no data signal. The brand-compliance test bans imports of all four. |
 
@@ -219,6 +224,7 @@ this.composer = new EffectComposer(this.renderer);
 this.composer.addPass(new RenderPass(this.scene, this.camera));
 this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 1.5, 0.4, 0.85));
 this.composer.addPass(new FilmPass(0.35, false));
+this.composer.addPass(new SMAAPass(w, h));
 ```
 
 **Disposal:** `composer.dispose()` + each pass disposed; resize via `composer.setSize(w, h)`.
@@ -368,28 +374,35 @@ Every GPU resource reaches a `dispose()` call from cleanup.
 Run through each numbered feature. **The implementation passes if every line below is checked**.
 
 ### Visual canon
-- [ ] **F1**: cluster fill = `MeshStandardMaterial` with `roughness: 0.6`, `metalness: 0`, `emissive` = domain hex, `emissiveIntensity` data-driven `[0.6, 1.4]`
+- [ ] **F1**: cluster fill = `MeshStandardMaterial` with `roughness: 0.6`, `metalness: 0`, `emissiveIntensity` data-driven compound signal (member count + coherence + score)
 - [ ] **F1**: cluster mesh `castShadow = true` AND `receiveShadow = true`
+- [ ] **F1**: coherence-driven color temperature — cluster `emissive` lerps toward white by `coherence * 0.03`
+- [ ] **F1**: score-driven emissive modulation — `avgScore` lifts emissiveIntensity via `0.85 + 0.15 * clamp(avgScore/10, 0, 1)` multiplier
 - [ ] **F2**: domain anchor vertex points = `PointsMaterial` with radial-gradient `__semTopGlowTexture` map, `AdditiveBlending`, `size: 0.35`
 - [ ] **F2**: JSDOM stability — `if (!ctx) globalThis.__semTopGlowTexture = undefined` fallback
 - [ ] **F3**: template ring = `RingGeometry(1.25, 1.35, 64)`, `MeshBasicMaterial`, color `0x00e5ff`, opacity `0.35`, `DoubleSide`
 - [ ] **F3**: template ring pool = `_templateRingPool` with `INITIAL=50` / `GROW=50` / `MAX=500`
 - [ ] **F3**: hover behavior — opacity oscillates, `rotation.z` spins
+- [ ] **F3**: entry/exit transitions — 400ms cubic ease-in on acquire, 300ms cubic ease-out on release
 - [ ] **F4**: readiness ring uses `MeshBasicMaterial` with `depthWrite: false` AND `side: DoubleSide`
 - [ ] **F4**: per-frame billboard via `_removeReadinessBillboard`
 - [ ] **F4**: LOD-attenuated opacity (far/mid/near = 0.4/0.7/1.0)
 - [ ] **F5**: hierarchical edges use `ShaderMaterial` with `uTime` uniform driven by `_removeEdgeAnim`
 - [ ] **F5**: catenary sag = `0.15 * distance`
+- [ ] **F5**: domain structural edges use `DomainEdgeShader` (`ShaderMaterial`) with shared `uTime`, half-frequency heartbeat
+- [ ] **F5**: per-vertex `aAlpha` attribute encodes child member count weight — heavier edges render brighter (floor 0.3, max 1.0)
 - [ ] **F6**: similarity edges use `LineDashedMaterial`; injection edges use `LineBasicMaterial`; both visibility-toggled via `clustersStore.showSimilarityEdges` / `showInjectionEdges`
 - [ ] **F7**: BeamPool of 10 reusable `PlasmaBeam` instances; FPS-weapon NDC origin
 - [ ] **F8**: `_breathingAnim` per-frame callback updates every cluster mesh + ring
+- [ ] **F8**: per-node phase offset via `_nodePhaseOffsets` — deterministic hash of node ID → `[0, 2π]`
 - [ ] **F8**: hover amplifies breathing to `±12%`
+- [ ] **F8**: hover proximity field — clusters within 8 units of hovered cluster receive distance-attenuated breathing amplification (quadratic falloff, max 60% of full hover amplitude)
 - [ ] **F9**: ClusterPhysics integration uses `k=120`, `d=12`, `dt clamp=0.1`, `velocityFloor=1e-4`
 - [ ] **F9**: snap-to-target floor (prevents infinite micro-oscillation)
 - [ ] **F10**: Neural Dust = 3000-particle `Points` cloud, `0x88ccff`, additive blending, slow XY rotation
 - [ ] **F11**: 3 lights (Ambient 0.3, Directional 0.7 at (5,10,5), Hemisphere 0.2)
 - [ ] **F12**: `shadowMap.enabled = true`, `type = PCFShadowMap`, `mapSize 1024×1024`
-- [ ] **F13**: `EffectComposer` with `RenderPass` + `UnrealBloomPass(1.5, 0.4, 0.85)` + `FilmPass(0.35, false)`
+- [ ] **F13**: `EffectComposer` with `RenderPass` + `UnrealBloomPass(1.5, 0.4, 0.85)` + `FilmPass(0.35, false)` + `SMAAPass`
 - [ ] **F13**: `composer.render()` not `renderer.render()`; `composer.setSize` on resize
 
 ### Interaction canon

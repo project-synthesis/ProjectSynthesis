@@ -10,6 +10,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { FilmPass } from 'three/addons/postprocessing/FilmPass.js';
+import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 
 import { computeFocusEndpoint } from './focus-math';
 
@@ -98,6 +99,7 @@ export class TopologyRenderer {
       ),
     );
     this.composer.addPass(new FilmPass(0.35, false));
+    this.composer.addPass(new SMAAPass(canvas.clientWidth, canvas.clientHeight));
 
     // Controls
     this.controls = new OrbitControls(this.camera, canvas);

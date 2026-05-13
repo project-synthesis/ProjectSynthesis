@@ -23,6 +23,7 @@
   import { EnvelopePool } from './EnvelopePool';
   import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
   import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
+  import { DOMAIN_EDGE_VERTEX, DOMAIN_EDGE_FRAGMENT, createDomainEdgeUniforms } from './DomainEdgeShader';
   import { readinessTierColor } from './readiness-tier';
   import type { ReadinessTier } from './readiness-tier';
 
@@ -219,11 +220,35 @@
   }
 
   function _releaseTemplateRing(cid: string, mesh: THREE.Mesh): void {
-    mesh.visible = false;
-    if (mesh.parent) mesh.parent.remove(mesh);
-    _templateRingById.delete(cid);
-    // Only recycle meshes that belong to the pool (not spill-allocated ones).
-    if (_templateRingPoolSet.has(mesh)) _freeTemplateRings.push(mesh);
+    // T2.2 — Exit transition: animate opacity/scale down before returning to pool.
+    // Use a simple RAF-based linear fade (300ms) instead of allocating a tween object.
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    const startOpacity = mat.opacity;
+    const startScale = mesh.scale.x;
+    const exitStart = performance.now();
+    const EXIT_MS = 300;
+    function exitStep() {
+      const elapsed = performance.now() - exitStart;
+      const t = Math.min(elapsed / EXIT_MS, 1.0);
+      const easeT = 1 - (1 - t) * (1 - t) * (1 - t); // cubic ease-out
+      mat.opacity = startOpacity * (1 - easeT);
+      mesh.scale.setScalar(startScale * (1 - easeT * 0.5));
+      if (t < 1.0) {
+        requestAnimationFrame(exitStep);
+      } else {
+        mesh.visible = false;
+        mat.opacity = 0.35; // reset for reuse
+        mesh.scale.setScalar(1.0);
+        if (mesh.parent) mesh.parent.remove(mesh);
+        _templateRingById.delete(cid);
+        if (_templateRingPoolSet.has(mesh)) _freeTemplateRings.push(mesh);
+      }
+    }
+    // Start immediately — ring visually dissolves while the node data might
+    // have already changed. Removing from _templateRingById only after the
+    // animation completes prevents the sync function from re-acquiring the
+    // same ring mid-exit.
+    requestAnimationFrame(exitStep);
   }
 
   /** Sync template ring meshes to the current cluster set.  Called from within
@@ -247,6 +272,7 @@
     _ensureTemplateRingPool(newAttachments);
 
     for (const c of templated) {
+      const isNew = !_templateRingById.has(c.id);
       let mesh = _templateRingById.get(c.id);
       if (!mesh) {
         mesh = _acquireTemplateRing();
@@ -262,6 +288,27 @@
       // Color follows the cluster's live color — same source as the node wireframe.
       const colorHex = parseInt(c.color.replace('#', ''), 16);
       (mesh.material as THREE.MeshBasicMaterial).color.setHex(colorHex);
+
+      // T2.2 — Entry transition: new rings start at opacity 0 + scale 0.5,
+      // animate to resting state over 400ms. Only fires when a ring was just
+      // acquired (not on position/color updates of existing rings).
+      if (isNew) {
+        const entryMat = mesh.material as THREE.MeshBasicMaterial;
+        entryMat.opacity = 0;
+        mesh.scale.setScalar(0.5);
+        const entryMesh = mesh; // capture for closure
+        const entryStart = performance.now();
+        const ENTRY_MS = 400;
+        function entryStep() {
+          const elapsed = performance.now() - entryStart;
+          const t = Math.min(elapsed / ENTRY_MS, 1.0);
+          const easeT = 1 - (1 - t) * (1 - t) * (1 - t); // cubic ease-out
+          entryMat.opacity = 0.35 * easeT;
+          entryMesh.scale.setScalar(0.5 + 0.5 * easeT);
+          if (t < 1.0) requestAnimationFrame(entryStep);
+        }
+        requestAnimationFrame(entryStep);
+      }
     }
   }
 
@@ -291,8 +338,13 @@
    *  Used by buildCurvePositions and callers for index construction. */
   const CURVE_SEGMENTS = 12;
 
-  /** Endpoint pair for hierarchical edge curve building. */
-  interface HierEdge { from: [number, number, number]; to: [number, number, number] }
+  /** Endpoint pair for hierarchical edge curve building.
+   *  T2.3 extends with optional memberCount for per-vertex alpha encoding. */
+  interface HierEdge {
+    from: [number, number, number];
+    to: [number, number, number];
+    memberCount?: number;
+  }
 
   // Edge groups — persisted across rebuilds for visibility toggle
   let similarityEdgeGroup: THREE.Group | null = null;
@@ -416,6 +468,11 @@
   let _removeDustAnim: (() => void) | null = null;
   let _breathingAnim: (() => void) | null = null;
   let _breathingTime = 0;
+
+  // T1.1 — Per-node phase offset for desynchronized organic breathing.
+  // Seeded from a deterministic string hash so the same node always gets
+  // the same phase (stable across rebuilds). Populated during rebuildScene.
+  let _nodePhaseOffsets: Map<string, number> = new Map();
 
   // Canon F2 — radial-gradient glow texture build sentinel. Records that
   // we've already attempted to construct the texture (success OR JSDOM
@@ -689,17 +746,31 @@
 
   /** Merge multiple curved edges into a single geometry's position + index arrays.
    *  Used by both initial rebuildScene and formation animation rebuild. */
-  function buildMergedCurveGeometry(edges: HierEdge[]): { positions: number[]; indices: number[] } {
+  function buildMergedCurveGeometry(edges: HierEdge[]): { positions: number[]; indices: number[]; alphas: number[] } {
     const positions: number[] = [];
     const indices: number[] = [];
+    const alphas: number[] = [];
+    // T2.3 — Compute max memberCount across siblings for normalization.
+    let maxMembers = 1;
+    for (const e of edges) {
+      if (e.memberCount != null && e.memberCount > maxMembers) maxMembers = e.memberCount;
+    }
     let offset = 0;
     for (let i = 0; i < edges.length; i++) {
       const cp = buildCurvePositions(edges[i].from, edges[i].to, i, edges.length);
+      // Per-vertex alpha: normalized member count → [0.3, 1.0].
+      // Edges to heavier children render brighter; lighter children dimmer.
+      // Floor of 0.3 prevents edges from vanishing entirely.
+      const memberAlpha = edges[i].memberCount != null
+        ? 0.3 + 0.7 * (edges[i].memberCount! / maxMembers)
+        : 1.0;
       for (let j = 0; j < cp.length; j++) positions.push(cp[j]);
+      // Each curve has CURVE_SEGMENTS + 1 vertices — fill alpha for each.
+      for (let j = 0; j <= CURVE_SEGMENTS; j++) alphas.push(memberAlpha);
       for (let j = 0; j < CURVE_SEGMENTS; j++) indices.push(offset + j, offset + j + 1);
       offset += CURVE_SEGMENTS + 1;
     }
-    return { positions, indices };
+    return { positions, indices, alphas };
   }
 
   /** Build curved edge geometry from start→end with a perpendicular arc.
@@ -886,18 +957,42 @@
       // foreground signal. Source: brand reference, "Cluster sphere" + "Domain
       // anchor" rows.
       const HERO_MEMBER_COUNT = 50;
-      const emissiveIntensity = isStructural
+      const baseEmissiveIntensity = isStructural
         ? 0.4
         : 0.6 + 0.8 * Math.min(1, Math.max(0, (node.memberCount - 1) / (HERO_MEMBER_COUNT - 1)));
+
+      // T1.2 — Coherence-driven color temperature (chromatic encoding axiom).
+      // High-coherence clusters shift emissive toward white ("hotter plasma"),
+      // low-coherence clusters stay at the domain base hue ("cooler").
+      // Also lifts emissiveIntensity slightly so hot clusters radiate more.
+      const coherenceBoost = isStructural ? 0 : 0.1 * node.coherence;
+      const emissiveColor = new THREE.Color(node.color);
+      if (!isStructural && coherenceBoost > 0) {
+        emissiveColor.lerp(new THREE.Color(0xffffff), coherenceBoost * 0.3);
+      }
+
+      // T2.1 — Score-driven emissive modulation: avgScore lifts emissive so
+      // high-scoring clusters radiate more under bloom.
+      const scoreModifier = (!isStructural && node.avgScore != null)
+        ? 0.85 + 0.15 * Math.min(1, Math.max(0, node.avgScore / 10))
+        : 1.0;
+      const emissiveIntensity = baseEmissiveIntensity * (1.0 + coherenceBoost) * scoreModifier;
+
       const fillMat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(node.color).multiplyScalar(fillScalar),
-        emissive: new THREE.Color(node.color),
+        emissive: emissiveColor,
         emissiveIntensity,
         roughness: 0.6,
         metalness: 0.0,
         transparent: true,
         opacity: node.opacity * 0.9,
       });
+
+      // T1.1 — Compute deterministic phase offset for desynchronized breathing.
+      // Simple hash: sum of char codes mod 1000, mapped to [0, 2π].
+      let hash = 0;
+      for (let ci = 0; ci < node.id.length; ci++) hash += node.id.charCodeAt(ci);
+      _nodePhaseOffsets.set(node.id, (hash % 1000) / 1000 * Math.PI * 2);
       const fillGeo = isStructural ? domainFillGeo : clusterFillGeo;
       const fill = new THREE.Mesh(fillGeo, fillMat);
       // Self-shadowing: clusters cast shadows AND receive shadows from
@@ -912,10 +1007,18 @@
 
       if (isStructural) {
         // Domain: EdgesGeometry — clean pentagonal structural outlines
-        const edgeMat = new THREE.LineBasicMaterial({
-          color: node.color,
+        // T1.3 — ShaderMaterial with slow heartbeat pulse (half-frequency
+        // of hierarchical child edges). Shared uTime uniform drives both
+        // systems phase-coherently. Replaces static LineBasicMaterial.
+        const domainEdgeColor = parseInt(node.color.replace('#', ''), 16);
+        const domainEdgeUniforms = createDomainEdgeUniforms(domainEdgeColor, node.opacity * 0.9);
+        _edgeUniforms.push(domainEdgeUniforms); // driven by _removeEdgeAnim
+        const edgeMat = new THREE.ShaderMaterial({
+          uniforms: domainEdgeUniforms,
+          vertexShader: DOMAIN_EDGE_VERTEX,
+          fragmentShader: DOMAIN_EDGE_FRAGMENT,
           transparent: true,
-          opacity: node.opacity * 0.9,
+          depthWrite: false,
         });
         const edges = new THREE.LineSegments(domainEdgesGeo, edgeMat);
         edges.scale.setScalar(node.size);
@@ -1134,14 +1237,40 @@
     _breathingAnim?.();
     _breathingAnim = renderer.addAnimationCallback(() => {
       _breathingTime += 0.016;
-      const scaleBase = Math.sin(_breathingTime * 1.5) * 0.02 + 1.0;
       for (const [nodeId, mesh] of nodeMeshes) {
         const node = _sceneNodeMap.get(nodeId);
         if (!node) continue;
 
-        // Hover resonance pushes scale higher on the hovered cluster.
+        // T1.1 — Per-node phase offset for desynchronized breathing.
+        // Each cluster oscillates at the same frequency but with a
+        // deterministic phase shift so the colony reads as organic,
+        // not a mechanical grid.
+        const phase = _nodePhaseOffsets.get(nodeId) ?? 0;
+        const scaleBase = Math.sin((_breathingTime + phase) * 1.5) * 0.02 + 1.0;
+
+        // T2.4 — Hover proximity field: clusters near the hovered cluster
+        // receive distance-attenuated breathing amplification. The hovered
+        // cluster itself gets full ±12%, neighbors within PROXIMITY_RADIUS
+        // get a proportional lift, and distant clusters stay at base ±2%.
+        const PROXIMITY_RADIUS = 8.0;
         const isHovered = (hoveredNodeId === nodeId);
-        const targetScaleMultiplier = isHovered ? scaleBase * 1.1 : scaleBase;
+        let proximityFactor = 0;
+        if (!isHovered && hoveredNodeId) {
+          const hoveredNode = _sceneNodeMap.get(hoveredNodeId);
+          if (hoveredNode) {
+            const dx = node.position[0] - hoveredNode.position[0];
+            const dy = node.position[1] - hoveredNode.position[1];
+            const dz = node.position[2] - hoveredNode.position[2];
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist < PROXIMITY_RADIUS) {
+              // Quadratic falloff — closer = stronger
+              const t = 1 - dist / PROXIMITY_RADIUS;
+              proximityFactor = t * t * 0.6; // max 60% of full hover amplitude
+            }
+          }
+        }
+        const hoverAmplification = isHovered ? 1.1 : (1.0 + 0.1 * proximityFactor);
+        const targetScaleMultiplier = scaleBase * hoverAmplification;
         const targetScale = node.size * targetScaleMultiplier;
 
         // Smoothly lerp into the target scale via the canonical scratch
@@ -1200,7 +1329,9 @@
       if (edge.distance != null && edge.distance < EDGE_PROXIMITY_THRESHOLD) continue;
       let bucket = _edgesByParent.get(edge.from);
       if (!bucket) { bucket = []; _edgesByParent.set(edge.from, bucket); }
-      bucket.push({ from: from.position, to: to.position });
+      // T2.3 — Carry child memberCount so buildMergedCurveGeometry can compute
+      // per-vertex alpha for weight-based visual encoding.
+      bucket.push({ from: from.position, to: to.position, memberCount: to.memberCount });
     }
 
     // Count total children per parent (including proximity-suppressed ones)
@@ -1217,10 +1348,12 @@
       if (edges.length === 0) continue;
       const childCount = childCountByParent.get(parentId) ?? 1;
       const opacity = computeHierarchicalOpacity(childCount);
-      const { positions: curvePositions, indices: curveIndices } = buildMergedCurveGeometry(edges);
+      const { positions: curvePositions, indices: curveIndices, alphas: curveAlphas } = buildMergedCurveGeometry(edges);
 
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(curvePositions, 3));
+      // T2.3 — Per-vertex alpha for member-count weight encoding.
+      geo.setAttribute('aAlpha', new THREE.Float32BufferAttribute(curveAlphas, 1));
       geo.setIndex(curveIndices);
 
       // Inherit parent domain's color — edges fan out in the domain's hue
@@ -1621,8 +1754,9 @@
                       if (!parentId) continue;
                       const edges = _edgesByParent.get(parentId);
                       if (!edges || edges.length === 0) continue;
-                      const { positions, indices } = buildMergedCurveGeometry(edges);
+                      const { positions, indices, alphas } = buildMergedCurveGeometry(edges);
                       ls.geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                      ls.geometry.setAttribute('aAlpha', new THREE.Float32BufferAttribute(alphas, 1));
                       ls.geometry.setIndex(indices);
                     }
                     obj.visible = true;
@@ -1841,14 +1975,13 @@
       for (let i = 0; i < group.children.length; i++) {
         const child = group.children[i];
         // Fill meshes are `MeshStandardMaterial` (cluster + domain anchor) per
-        // brand reference; edges + points are LineBasicMaterial / PointsMaterial.
-        // The wire ShaderMaterial uses uniforms — handled by the explicit
-        // `isShaderMaterial && uniforms?.uOpacity` guard a few lines below
-        // (line ~1504), which `continue`s before the `mat.opacity =`
-        // assignment. The cast widening here is safe because that downstream
-        // guard catches the ShaderMaterial branch; the cast just keeps the
-        // `.opacity` access type-checked for the LineBasic/Points/Standard
-        // cases.
+        // brand reference; points are PointsMaterial. Both cluster wireframe
+        // and domain structural edges use ShaderMaterial (with uOpacity uniform)
+        // — handled by the explicit `isShaderMaterial && uniforms?.uOpacity`
+        // guard below, which `continue`s before the `mat.opacity =` assignment.
+        // The cast widening here is safe because that downstream guard catches
+        // the ShaderMaterial branch; the cast just keeps the `.opacity` access
+        // type-checked for the PointsMaterial/Standard cases.
         const mat = (child as THREE.Mesh | THREE.LineSegments | THREE.Points).material as
           THREE.MeshStandardMaterial | THREE.LineBasicMaterial | THREE.PointsMaterial;
         if (!mat) continue;
@@ -1860,7 +1993,7 @@
         } else {
           baseOpacity = node.opacity * (0.5 + 0.5 * node.coherence); // cluster wire (coherence)
         }
-        // Handle ripple ShaderMaterial (wireframe child)
+        // Handle ShaderMaterial (cluster wireframe ripple + domain edge heartbeat)
         if ((mat as any).isShaderMaterial && (mat as any).uniforms?.uOpacity) {
           (mat as any).uniforms.uOpacity.value = baseOpacity * dimFactor;
           continue;
