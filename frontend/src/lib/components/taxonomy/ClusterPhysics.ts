@@ -45,6 +45,11 @@ export class ClusterPhysics {
     }
     state.targetScale += ACCRETION_DELTA;
     state.rippleIntensity = 1.0;
+
+    // T3.3 — Trigger camera micro-shake
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('beam-impact'));
+    }
   }
 
   update(

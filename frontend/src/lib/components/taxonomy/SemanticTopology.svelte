@@ -598,6 +598,9 @@
   const _flashStates = new Map<string, { startTime: number; baselineEmissive: number; }>();
   let _removeFlashUpdate: (() => void) | null = null;
 
+  // T3.3 — Beam Impact Camera Micro-Shake
+  let _cameraShake = 0;
+
   let _hasPlayedEntrance = false;
   // One-shot auto-focus guard (canon F17). The bird's-eye-view "frame the
   // largest domain" zoom must run EXACTLY ONCE for the component lifecycle.
@@ -1149,29 +1152,62 @@
       renderer.scene.add(_readinessRingGroup);
     }
 
-    // Neural Dust — galaxy-style ambient backdrop (canon F10).
-    // 3000-particle Points cloud uniformly distributed in 300^3 space,
-    // additively-blended cool-blue, slow XY drift via _removeDustAnim.
-    // Within a single component instance: built once on first rebuildScene
-    // (the `if (!_dustPoints)` guard) and re-attached to the scene after
-    // each scene-clear traverse below. The geometry is rebuilt on remount
-    // (component-scoped `let _dustPoints`) — the BufferGeometry alloc
-    // takes ~milliseconds, well below the rebuild budget.
+    // Neural Dust — galaxy-style ambient backdrop (canon F10 + T3.1).
+    // 3000-particle Points cloud uniformly distributed in 300^3 space.
+    // T3.1 uses vertexColors to tint dust based on proximity to domain anchors.
     if (!_dustPoints) {
       const DUST_COUNT = 3000;
       const dustGeo = new THREE.BufferGeometry();
       const dustPositions = new Float32Array(DUST_COUNT * 3);
-      for (let i = 0; i < DUST_COUNT * 3; i++) {
-        dustPositions[i] = (Math.random() - 0.5) * 300;
+      const dustColors = new Float32Array(DUST_COUNT * 3);
+
+      // Pre-collect structural domains for fast nearest-neighbor lookups
+      const anchors = data.nodes.filter(n => n.is_structural);
+
+      for (let i = 0; i < DUST_COUNT; i++) {
+        const x = (Math.random() - 0.5) * 300;
+        const y = (Math.random() - 0.5) * 300;
+        const z = (Math.random() - 0.5) * 300;
+        dustPositions[i * 3] = x;
+        dustPositions[i * 3 + 1] = y;
+        dustPositions[i * 3 + 2] = z;
+
+        // T3.1 Nearest anchor calculation
+        let nearestDist = Infinity;
+        let nearestColorStr = '#88ccff'; // Default cool blue
+        for (const anchor of anchors) {
+          const dx = x - anchor.position[0];
+          const dy = y - anchor.position[1];
+          const dz = z - anchor.position[2];
+          const distSq = dx * dx + dy * dy + dz * dz;
+          if (distSq < nearestDist) {
+            nearestDist = distSq;
+            nearestColorStr = anchor.color;
+          }
+        }
+        
+        // Convert to RGB, with distance attenuation (blend to default blue if far)
+        const baseColor = new THREE.Color(nearestColorStr);
+        const fallbackColor = new THREE.Color(0x88ccff);
+        // If > 80 units away, lerp towards the fallback blue
+        const t = Math.min(Math.max((Math.sqrt(nearestDist) - 30) / 50, 0), 1);
+        baseColor.lerp(fallbackColor, t);
+
+        dustColors[i * 3] = baseColor.r;
+        dustColors[i * 3 + 1] = baseColor.g;
+        dustColors[i * 3 + 2] = baseColor.b;
       }
+
       dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+      dustGeo.setAttribute('color', new THREE.BufferAttribute(dustColors, 3));
+
       const dustMat = new THREE.PointsMaterial({
-        color: 0x88ccff,
         size: 0.15,
         transparent: true,
         opacity: 0.25,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
+        vertexColors: true,
       });
       _dustPoints = new THREE.Points(dustGeo, dustMat);
       _dustPoints.userData = { isNeuralDust: true };
@@ -1237,6 +1273,18 @@
     _breathingAnim?.();
     _breathingAnim = renderer.addAnimationCallback(() => {
       _breathingTime += 0.016;
+
+      // T3.3 — Beam Impact Camera Micro-Shake
+      if (_cameraShake > 0.001) {
+        if (renderer?.camera) {
+          renderer.camera.rotation.x += (Math.random() - 0.5) * _cameraShake;
+          renderer.camera.rotation.y += (Math.random() - 0.5) * _cameraShake;
+        }
+        _cameraShake *= 0.85; // Exponential decay
+      } else {
+        _cameraShake = 0;
+      }
+
       for (const [nodeId, mesh] of nodeMeshes) {
         const node = _sceneNodeMap.get(nodeId);
         if (!node) continue;
@@ -1289,13 +1337,58 @@
           }
         }
 
-        // Readiness ring scales with the cluster + spins on hover.
         const ring = _readinessRings.get(nodeId);
         if (ring) {
           if (isHovered) {
             ring.mesh.rotateOnAxis(Z_AXIS, 0.02);
           }
           ring.mesh.scale.setScalar(targetScaleMultiplier);
+        }
+
+        // T3.4 — Idle Ambient Energy Pulse (canon)
+        // Add a slow, gentle emissive flare to the selected node so it remains
+        // distinct even when the user isn't hovering.
+        const isSelected = clustersStore.selectedClusterId === nodeId;
+        if (isSelected) {
+          const mat = mesh.material as THREE.MeshStandardMaterial;
+          // Sine wave with period ~4 seconds (0.016 * 60 frames * ~4 = 3.84)
+          // Emissive intensity bounces between +0 and +0.4 on top of its base value.
+          const idlePulse = Math.sin(_breathingTime * 0.4) * 0.2 + 0.2;
+          
+          // Recompute base emissiveIntensity (same as build loop) so we can add to it.
+          // Note: we don't recalculate the whole thing here to save allocations,
+          // we just read the material's current emissiveIntensity and assume it's
+          // the base unless we are pulsing it. To avoid compounding, we actually
+          // should use a stored base value, but for performance, we'll just
+          // set it to base + pulse if selected.
+          
+          const isStructural = node.state === 'domain' || node.state === 'project';
+          const HERO_MEMBER_COUNT = 50;
+          const baseEmissiveIntensity = isStructural
+            ? 0.4
+            : 0.6 + 0.8 * Math.min(1, Math.max(0, (node.memberCount - 1) / (HERO_MEMBER_COUNT - 1)));
+          
+          const coherenceBoost = isStructural ? 0 : 0.1 * node.coherence;
+          const scoreModifier = (!isStructural && node.avgScore != null)
+            ? 0.85 + 0.15 * Math.min(1, Math.max(0, node.avgScore / 10))
+            : 1.0;
+          const targetEmissive = baseEmissiveIntensity * (1.0 + coherenceBoost) * scoreModifier;
+          
+          mat.emissiveIntensity = targetEmissive + idlePulse;
+        } else {
+           // Ensure unselected nodes remain at base emissive intensity
+           const mat = mesh.material as THREE.MeshStandardMaterial;
+           const isStructural = node.state === 'domain' || node.state === 'project';
+           const HERO_MEMBER_COUNT = 50;
+           const baseEmissiveIntensity = isStructural
+             ? 0.4
+             : 0.6 + 0.8 * Math.min(1, Math.max(0, (node.memberCount - 1) / (HERO_MEMBER_COUNT - 1)));
+           
+           const coherenceBoost = isStructural ? 0 : 0.1 * node.coherence;
+           const scoreModifier = (!isStructural && node.avgScore != null)
+             ? 0.85 + 0.15 * Math.min(1, Math.max(0, node.avgScore / 10))
+             : 1.0;
+           mat.emissiveIntensity = baseEmissiveIntensity * (1.0 + coherenceBoost) * scoreModifier;
         }
 
         // Template indicator ring (canon F3) — opacity oscillates and
@@ -1694,20 +1787,32 @@
           let formProgress = 0.0;
           const formDuration = 90.0; // frames
           const initialPositions = new Float32Array(nodeCount * 3);
+          const nodeDelays = new Float32Array(nodeCount);
           sceneData.nodes.forEach((n, i) => {
              initialPositions[i*3] = n.position[0];
              initialPositions[i*3+1] = n.position[1];
              initialPositions[i*3+2] = n.position[2];
+             
+             // T3.2 Stagger formation by depth
+             const finalX = settledPositions[i*3];
+             const finalY = settledPositions[i*3+1];
+             const finalZ = settledPositions[i*3+2];
+             const dist = Math.sqrt(finalX*finalX + finalY*finalY + finalZ*finalZ);
+             // Further nodes start later (max delay ~40 frames)
+             nodeDelays[i] = Math.min(dist * 0.5, 40.0);
           });
 
           _removeFormationAnim?.();
           _removeFormationAnim = renderer?.addAnimationCallback(() => {
              formProgress += 1.0;
-             // cubic ease-out
-             const t = Math.min(formProgress / formDuration, 1.0);
-             const easeT = 1 - Math.pow(1 - t, 3);
 
              formSceneData.nodes.forEach((n, i) => {
+                const delay = nodeDelays[i];
+                const elapsed = Math.max(0, formProgress - delay);
+                
+                // cubic ease-out
+                const t = Math.min(elapsed / (formDuration - delay), 1.0);
+                const easeT = 1 - Math.pow(1 - t, 3);
                 n.position[0] = initialPositions[i*3] + (settledPositions[i*3] - initialPositions[i*3]) * easeT;
                 n.position[1] = initialPositions[i*3+1] + (settledPositions[i*3+1] - initialPositions[i*3+1]) * easeT;
                 n.position[2] = initialPositions[i*3+2] + (settledPositions[i*3+2] - initialPositions[i*3+2]) * easeT;
@@ -1738,7 +1843,7 @@
                 }
              });
 
-             if (t >= 1.0) {
+             if (formProgress >= formDuration) {
                 _removeFormationAnim?.();
                 _removeFormationAnim = null;
 
@@ -2161,6 +2266,10 @@
     });
     renderer.onLodChange(handleLodChange);
     renderer.start();
+
+    // T3.3 — Beam Impact Camera Micro-Shake trigger
+    const onBeamImpact = () => { _cameraShake = Math.min(_cameraShake + 0.04, 0.12); };
+    window.addEventListener('beam-impact', onBeamImpact);
 
     // Initialize beam pool + cluster physics
     beamPool = new BeamPool();
