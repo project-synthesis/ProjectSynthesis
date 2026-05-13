@@ -390,6 +390,8 @@ curl http://localhost:8000/api/runs?mode=replay_run
 
 **Pre-condition**: SG-2026-05-11 soak gate CLOSED with 🟢 PASSED status (see [`SOAK_GATES.md`](SOAK_GATES.md)).
 
+⚠️ **A 🟢 PASS is only valid if the [coverage floor](SOAK_GATES.md#soak-traffic-generation) was met** — each of the 3 P4 cycles (`save_result_persist`, `refine_*`, internal-tier `optimize`) exercised ≥3 times via real or synthetic traffic during the window. A "0 WARN × 0 writes" close is a vacuous PASS that does NOT validate the flip precondition. If the operator's daily check-in log shows no writes, run the [Soak-traffic generation](SOAK_GATES.md#soak-traffic-generation) recipe ≥3 days BEFORE flipping. The flip is gated on **evidence collected**, not **time elapsed**.
+
 ```bash
 # Confirm flipped default
 cd backend && source .venv/bin/activate
@@ -420,7 +422,10 @@ unset WRITE_QUEUE_AUDIT_HOOK_RAISE
 
 Run this once before clicking "merge" on the PR:
 
-- [ ] **SG-2026-05-11 soak gate**: 🟢 PASSED status confirmed in [`SOAK_GATES.md`](SOAK_GATES.md)
+- [ ] **SG-2026-05-11 soak gate**: 🟢 PASSED status confirmed in [`SOAK_GATES.md`](SOAK_GATES.md) — verified the gate is **evidence-based PASS, not vacuous PASS**:
+  - [ ] Coverage floor met: C1 ≥3 writes, C2 ≥3 writes, C3 ≥3 writes (recorded in Daily check-in log)
+  - [ ] Zero unexpected `read-engine audit:` WARN lines over the full window
+  - [ ] Zero `audit_drift` warnings
 - [ ] **Stage 1**: backend unit + integration tests PASS (1 cmd)
 - [ ] **Stage 2**: frontend unit + integration tests PASS (1 cmd)
 - [ ] **Stage 3**: brand audit 3 grep sweeps zero hits + a11y audit re-verify
@@ -448,6 +453,8 @@ After `./scripts/release.sh` completes:
 - [ ] Smoke test the Topic Probe end-to-end on a fresh clone
 - [ ] Open the workbench, verify RegressionBadge mounts (will be empty `null` since no suites yet — that's correct)
 - [ ] Monitor `data/backend.log` for 24h post-ship — confirm zero `read-engine audit:` WARN lines on real production traffic
+- [ ] **Same vacuous-PASS guard as pre-merge**: if 24h passes with little/no real user traffic, run the [Soak-traffic generation](SOAK_GATES.md#soak-traffic-generation) recipe at least once during the 24h window so the post-ship observation surface is non-empty. Idle 24h ≠ verified-safe 24h.
+- [ ] Verify kill-switch is documented in `backend/app/config.py` Field description: operators reading the config should find the `WRITE_QUEUE_AUDIT_HOOK_RAISE=false` revert path without consulting this doc.
 
 ---
 
