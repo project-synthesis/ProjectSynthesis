@@ -37,11 +37,14 @@ This PR is gated on the 7-day post-v0.4.21 soak window closing at **≥2026-05-1
 **Pre-merge checklist** (release operator fills before rebase-merge):
 
 - [ ] SG-2026-05-11 status: 🟢 PASSED (see [`docs/SOAK_GATES.md`](docs/SOAK_GATES.md) daily check-in table)
-- [ ] Cumulative `audit_drift|read-engine audit:` WARN count over 7 days: 0 (or all explained sources only)
+- [ ] **Evidence-based PASS, not vacuous PASS** — verify the gate observed real traffic:
+  - [ ] Cumulative writes during window: C1 (`save_result_persist`) ≥3, C2 (`refine_*`) ≥3, C3 (internal-tier optimize) ≥3
+  - [ ] Cumulative `audit_drift|read-engine audit:` WARN count over 7 days: 0 (or all explained sources only)
 - [ ] `./init.sh restart` produces clean post-restart log
 - [ ] `docs/SOAK_GATES.md` daily check-in rows filled through gate-close date
 - [ ] Kill-switch documented + verified: `WRITE_QUEUE_AUDIT_HOOK_RAISE=false` env var path
 - [ ] **E2E pre-ship verification per [`docs/E2E_TEST_MATRIX.md`](docs/E2E_TEST_MATRIX.md)** — all 8 stages clean (action × error matrix + full-stack walkthrough)
+- [ ] If real user traffic was absent during the window, ran the [Soak-traffic generation](docs/SOAK_GATES.md#soak-traffic-generation) recipe ≥3 days to backfill C1/C2/C3 coverage
 
 ## References
 
