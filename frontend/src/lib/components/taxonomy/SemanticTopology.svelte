@@ -605,11 +605,15 @@
   // a strong surge on domains (0.4→2.0) and a decisive punch on clusters
   // (0.6→2.2) without overdriving the bloom pass.
   const GLOW_PEAK_DELTA = 1.6;
+  // Domain emissive color is stored per-glow so the burst always fires in the
+  // node's brand color even if the highlight system has swapped mat.emissive to
+  // HIGHLIGHT_COLOR (neon cyan). On completion, the correct emissive is decided
+  // by a live _highlightedId check — NOT a prevEmissive snapshot, which would be
+  // stale if the user switched nodes during the 1380ms glow window.
   const _flashStates = new Map<string, {
     startTime: number;
     baselineEmissive: number;
     domainEmissive: THREE.Color;  // node brand color — applied to mat.emissive during burst
-    prevEmissive: THREE.Color;    // snapshot of mat.emissive before burst (may be highlight cyan)
   }>();
   let _removeFlashUpdate: (() => void) | null = null;
 
@@ -697,21 +701,15 @@
     const mat = mesh.material as THREE.MeshStandardMaterial;
     const existing = _flashStates.get(nodeId);
     // MUST use the true baseEmissive cached on the mesh, otherwise rapid refires
-    // while the node is pulsing (idlePulse) will compound the pulse into the baseline
+    // while the node is pulsing (idlePulse) will compound the pulse into the baseline.
     const trueBase = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
     const baseline = existing ? existing.baselineEmissive : trueBase;
-    // Snapshot the current emissive color so we can restore it on completion
-    // (it may already be HIGHLIGHT_COLOR from applyHighlight).
-    const prevEmissive = existing
-      ? existing.prevEmissive          // re-fire: preserve original pre-glow color
-      : mat.emissive.clone();          // first fire: capture current (may be highlight)
     _flashStates.set(nodeId, {
       startTime: performance.now(),
       baselineEmissive: baseline,
       domainEmissive: domainColor.clone(),
-      prevEmissive,
     });
-    // Apply domain color immediately so there's no one-frame cyan blip at attack onset.
+    // Apply domain color immediately so there is no one-frame cyan blip at attack onset.
     mat.emissive.copy(domainColor);
   }
 
@@ -759,9 +757,18 @@
       const peak = state.baselineEmissive + GLOW_PEAK_DELTA;
 
       if (elapsed >= GLOW_TOTAL_MS) {
-        // Glow complete: restore pre-glow emissive color (highlight or domain)
-        // and baseline intensity.
-        mat.emissive.copy(state.prevEmissive);
+        // Glow complete. Determine the correct emissive color by live-checking
+        // the highlight state — NOT from a prevEmissive snapshot which may be
+        // stale if the user clicked a different node during the 1380ms glow window.
+        // applyHighlight restores the old node to domain color when switching nodes,
+        // so a stale "cyan" snapshot would incorrectly re-apply highlight to a node
+        // that is no longer selected.
+        if (_highlightedId === nodeId) {
+          mat.emissive.setHex(HIGHLIGHT_COLOR);
+        } else {
+          // Not selected: domain color is already correct (tick drives it every frame).
+          mat.emissive.copy(state.domainEmissive);
+        }
         mat.emissiveIntensity = state.baselineEmissive;
         _flashStates.delete(nodeId);
         continue;
@@ -2418,6 +2425,12 @@
         const mesh = nodeMeshes.get(nodeId);
         if (mesh) {
           const mat = mesh.material as THREE.MeshStandardMaterial;
+          // Restore emissive color: live check ensures no stale cyan bleed on remount.
+          if (_highlightedId === nodeId) {
+            mat.emissive.setHex(HIGHLIGHT_COLOR);
+          } else {
+            mat.emissive.copy(state.domainEmissive);
+          }
           mat.emissiveIntensity = state.baselineEmissive;
         }
       }
