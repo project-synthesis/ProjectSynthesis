@@ -44,7 +44,7 @@ describe('T3.1 — Domain-Tinted Neural Dust', () => {
     // Must contain a distance-check loop against domain anchors
     expect(src).toMatch(/Math\.min\(/); // or similar distance comparison
     // Domain anchors check
-    expect(src).toMatch(/n\.is_structural/);
+    expect(src).toMatch(/n\.state\s*===\s*['"]domain['"]/);
   });
 });
 

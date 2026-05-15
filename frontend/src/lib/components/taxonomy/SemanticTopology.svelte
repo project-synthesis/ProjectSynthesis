@@ -1006,6 +1006,7 @@
       // no receivers is wasted compute).
       fill.castShadow = true;
       fill.receiveShadow = true;
+      fill.userData = { isClusterFill: true, baseEmissive: emissiveIntensity };
       fill.scale.setScalar(node.size);
       group.add(fill); // child 0: fill
 
@@ -1163,7 +1164,7 @@
       const dustColors = new Float32Array(DUST_COUNT * 3);
 
       // Pre-collect structural domains for fast nearest-neighbor lookups
-      const anchors = data.nodes.filter(n => n.is_structural);
+      const anchors = data.nodes.filter(n => n.state === 'domain');
 
       for (let i = 0; i < DUST_COUNT; i++) {
         const x = (Math.random() - 0.5) * 300;
@@ -1350,46 +1351,17 @@
         // Add a slow, gentle emissive flare to the selected node so it remains
         // distinct even when the user isn't hovering.
         const isSelected = clustersStore.selectedClusterId === nodeId;
+        const mat = mesh.material as THREE.MeshStandardMaterial;
+        const baseEmissive = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
+
         if (isSelected) {
-          const mat = mesh.material as THREE.MeshStandardMaterial;
           // Sine wave with period ~4 seconds (0.016 * 60 frames * ~4 = 3.84)
           // Emissive intensity bounces between +0 and +0.4 on top of its base value.
           const idlePulse = Math.sin(_breathingTime * 0.4) * 0.2 + 0.2;
-          
-          // Recompute base emissiveIntensity (same as build loop) so we can add to it.
-          // Note: we don't recalculate the whole thing here to save allocations,
-          // we just read the material's current emissiveIntensity and assume it's
-          // the base unless we are pulsing it. To avoid compounding, we actually
-          // should use a stored base value, but for performance, we'll just
-          // set it to base + pulse if selected.
-          
-          const isStructural = node.state === 'domain' || node.state === 'project';
-          const HERO_MEMBER_COUNT = 50;
-          const baseEmissiveIntensity = isStructural
-            ? 0.4
-            : 0.6 + 0.8 * Math.min(1, Math.max(0, (node.memberCount - 1) / (HERO_MEMBER_COUNT - 1)));
-          
-          const coherenceBoost = isStructural ? 0 : 0.1 * node.coherence;
-          const scoreModifier = (!isStructural && node.avgScore != null)
-            ? 0.85 + 0.15 * Math.min(1, Math.max(0, node.avgScore / 10))
-            : 1.0;
-          const targetEmissive = baseEmissiveIntensity * (1.0 + coherenceBoost) * scoreModifier;
-          
-          mat.emissiveIntensity = targetEmissive + idlePulse;
+          mat.emissiveIntensity = baseEmissive + idlePulse;
         } else {
-           // Ensure unselected nodes remain at base emissive intensity
-           const mat = mesh.material as THREE.MeshStandardMaterial;
-           const isStructural = node.state === 'domain' || node.state === 'project';
-           const HERO_MEMBER_COUNT = 50;
-           const baseEmissiveIntensity = isStructural
-             ? 0.4
-             : 0.6 + 0.8 * Math.min(1, Math.max(0, (node.memberCount - 1) / (HERO_MEMBER_COUNT - 1)));
-           
-           const coherenceBoost = isStructural ? 0 : 0.1 * node.coherence;
-           const scoreModifier = (!isStructural && node.avgScore != null)
-             ? 0.85 + 0.15 * Math.min(1, Math.max(0, node.avgScore / 10))
-             : 1.0;
-           mat.emissiveIntensity = baseEmissiveIntensity * (1.0 + coherenceBoost) * scoreModifier;
+          // Ensure unselected nodes remain at base emissive intensity
+          mat.emissiveIntensity = baseEmissive;
         }
 
         // Template indicator ring (canon F3) — opacity oscillates and

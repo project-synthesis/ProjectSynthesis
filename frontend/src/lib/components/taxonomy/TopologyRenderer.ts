@@ -99,7 +99,7 @@ export class TopologyRenderer {
       ),
     );
     this.composer.addPass(new FilmPass(0.35, false));
-    this.composer.addPass(new SMAAPass(canvas.clientWidth, canvas.clientHeight));
+    this.composer.addPass(new SMAAPass());
 
     // Controls
     this.controls = new OrbitControls(this.camera, canvas);
