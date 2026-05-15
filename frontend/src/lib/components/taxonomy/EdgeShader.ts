@@ -7,10 +7,13 @@
 import * as THREE from 'three';
 
 export const EDGE_DEPTH_VERTEX = /* glsl */ `
+  attribute float aAlpha;
   varying float vDepth;
+  varying float vAlpha;
   void main() {
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     vDepth = -mvPosition.z;
+    vAlpha = aAlpha;
     gl_Position = projectionMatrix * mvPosition;
   }
 `;
@@ -24,6 +27,7 @@ export const EDGE_DEPTH_FRAGMENT = /* glsl */ `
   uniform float uTime;
 
   varying float vDepth;
+  varying float vAlpha;
 
   void main() {
     // Synaptic data tendons (canon F5). Edges aren't static lines — they
@@ -41,7 +45,7 @@ export const EDGE_DEPTH_FRAGMENT = /* glsl */ `
 
     // Depth attenuation × organic envelope. The 0.3 baseline prevents
     // edges from disappearing entirely between pulses.
-    float opacity = uBaseOpacity * (1.0 - t * uMaxReduction) * (0.3 + organicEnergy * 0.7);
+    float opacity = uBaseOpacity * vAlpha * (1.0 - t * uMaxReduction) * (0.3 + organicEnergy * 0.7);
 
     // HDR color boost — multiplies above 1.0 into the EffectComposer
     // bloom pass, producing dynamic glow as energy peaks cross the
