@@ -2516,7 +2516,7 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(preAcquire).not.toMatch(/clusterPhysics\?\.onBeamImpact/);
   });
 
-  it('source: onImpact callback body fires clusterPhysics.onBeamImpact + envelopePool.acquire + flashEmissive for the same node', () => {
+  it('source: onImpact callback body fires envelopePool.acquire + flashEmissive (passive inspection, no kinetic shake)', () => {
     const src = _semTopSrc();
     // Scope the search to the click selection $effect (anchored on the
     // "Sync external family selection" comment). Multiple `onImpact`
@@ -2542,7 +2542,7 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     } while (depth > 0 && i < src.length);
     const onImpactBody = src.slice(bodyStart, i - 1);
 
-    expect(onImpactBody).toMatch(/clusterPhysics\?\.onBeamImpact\(\s*node\.id/);
+    expect(onImpactBody).not.toMatch(/clusterPhysics\?\.onBeamImpact\(\s*node\.id/);
     expect(onImpactBody).toMatch(/envelopePool\?\.acquire\(\s*group\s*,\s*node\.size/);
     expect(onImpactBody).toMatch(/flashEmissive\(\s*node\.id/);
   });
