@@ -602,10 +602,15 @@
   // Additive (not multiplicative) to stay within the bloom pass's designed
   // headroom: a 4× multiplier on a high-score cluster (base ~1.4) would reach
   // 5.6 — deep into white-out territory. An absolute delta of +1.6 gives
-  // a strong surge on domains (0.4→1.0) and a decisive punch on clusters
-  // (0.6↓2.2) without overdrivng the bloom pass.
+  // a strong surge on domains (0.4→2.0) and a decisive punch on clusters
+  // (0.6→2.2) without overdriving the bloom pass.
   const GLOW_PEAK_DELTA = 1.6;
-  const _flashStates = new Map<string, { startTime: number; baselineEmissive: number }>();
+  const _flashStates = new Map<string, {
+    startTime: number;
+    baselineEmissive: number;
+    domainEmissive: THREE.Color;  // node brand color — applied to mat.emissive during burst
+    prevEmissive: THREE.Color;    // snapshot of mat.emissive before burst (may be highlight cyan)
+  }>();
   let _removeFlashUpdate: (() => void) | null = null;
 
   // T3.3 — Beam Impact Camera Micro-Shake
@@ -679,15 +684,14 @@
   /**
    * Trigger emissive engulfment glow on a node at beam impact.
    *
-   * Stamps start time and baseline. The per-frame `_tickFlashStates` drives
-   * all interpolation across attack → hold → decay phases.
-   *
-   * Baseline always reads `mesh.userData.baseEmissive` (the immutable
-   * scene-build value) rather than the live `mat.emissiveIntensity`, so
-   * rapid re-fires during idlePulse or a prior glow never compound the
-   * baseline. On re-fire mid-glow, the prior baseline is preserved.
+   * `domainColor` is the node's brand color from the SceneNode data — always
+   * the organic domain hue, never the highlight cyan. It is applied to
+   * `mat.emissive` during the glow so the inner burst radiates the correct
+   * brand color even when the highlight system has already swapped the emissive
+   * to HIGHLIGHT_COLOR. The prior emissive is snapshot-ed and restored on
+   * glow completion so the cyan highlight persists correctly afterwards.
    */
-  function flashEmissive(nodeId: string): void {
+  function flashEmissive(nodeId: string, domainColor: THREE.Color): void {
     const mesh = nodeMeshes.get(nodeId);
     if (!mesh) return;
     const mat = mesh.material as THREE.MeshStandardMaterial;
@@ -696,10 +700,19 @@
     // while the node is pulsing (idlePulse) will compound the pulse into the baseline
     const trueBase = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
     const baseline = existing ? existing.baselineEmissive : trueBase;
+    // Snapshot the current emissive color so we can restore it on completion
+    // (it may already be HIGHLIGHT_COLOR from applyHighlight).
+    const prevEmissive = existing
+      ? existing.prevEmissive          // re-fire: preserve original pre-glow color
+      : mat.emissive.clone();          // first fire: capture current (may be highlight)
     _flashStates.set(nodeId, {
       startTime: performance.now(),
       baselineEmissive: baseline,
+      domainEmissive: domainColor.clone(),
+      prevEmissive,
     });
+    // Apply domain color immediately so there's no one-frame cyan blip at attack onset.
+    mat.emissive.copy(domainColor);
   }
 
   /**
@@ -721,9 +734,11 @@
     if (kineticDisplacement) {
       clusterPhysics?.onBeamImpact(freshNode.id, freshNode.size);
     }
-    
+
     envelopePool?.acquire(currentGroup, freshNode.size, shape, envelopeColor);
-    flashEmissive(freshNode.id);
+    // Pass the node's brand color so the emissive burst glows the domain hue,
+    // not the highlight cyan that applyHighlight may have already set.
+    flashEmissive(freshNode.id, envelopeColor);
   }
 
   /**
@@ -744,10 +759,17 @@
       const peak = state.baselineEmissive + GLOW_PEAK_DELTA;
 
       if (elapsed >= GLOW_TOTAL_MS) {
+        // Glow complete: restore pre-glow emissive color (highlight or domain)
+        // and baseline intensity.
+        mat.emissive.copy(state.prevEmissive);
         mat.emissiveIntensity = state.baselineEmissive;
         _flashStates.delete(nodeId);
         continue;
       }
+
+      // Keep domain color active throughout the glow so rapid re-fires or
+      // concurrent highlight changes cannot re-inject cyan during the burst.
+      mat.emissive.copy(state.domainEmissive);
 
       if (elapsed < GLOW_ATTACK_MS) {
         // Attack: cubic ease-out ramp baseline → peak.
