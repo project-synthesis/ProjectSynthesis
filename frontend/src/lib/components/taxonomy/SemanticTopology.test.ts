@@ -2549,32 +2549,29 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   // semantics. Combined with the envelope (external plasma skin) the
   // node now reads as both internally energized AND externally engulfed
   // at impact.
-  it('source: _flashStates Map + _removeFlashUpdate canceller declared at module scope', () => {
+  it('source: _flashStates Map includes domainEmissive + prevEmissive for brand-color burst', () => {
     const src = _semTopSrc();
-    // Map declaration exists with startTime + baselineEmissive fields (phase is optional extra).
+    // Core fields
     expect(src).toMatch(/_flashStates\s*=\s*new\s+Map/);
     expect(src).toMatch(/startTime\s*:\s*number/);
     expect(src).toMatch(/baselineEmissive\s*:\s*number/);
+    // Color contract: domain color drives the burst; prevEmissive is restored on completion.
+    expect(src).toMatch(/domainEmissive\s*:\s*THREE\.Color/);
+    expect(src).toMatch(/prevEmissive\s*:\s*THREE\.Color/);
     expect(src).toMatch(/let\s+_removeFlashUpdate\s*:\s*\(\(\)\s*=>\s*void\)\s*\|\s*null\s*=\s*null/);
   });
 
-  it('source: flashEmissive uses baseline-capture pattern (rapid re-fires reuse prior baseline)', () => {
+  it('source: flashEmissive takes domainColor arg + uses prevEmissive snapshot for highlight restoration', () => {
     const src = _semTopSrc();
-    // The pattern: capture an existing entry first; if present, reuse its
-    // `baselineEmissive`. Otherwise read the material's current value.
-    // This stops a re-click during an active flash from locking in a
-    // peak-multiplied baseline.
-    expect(src).toMatch(
-      /existing\s*\?\s*existing\.baselineEmissive\s*:\s*trueBase/,
-    );
-    // After the smoothness fix: flashEmissive only stamps startTime +
-    // baselineEmissive. The per-frame tick handles ALL interpolation
-    // (ease-in attack + ease-out decay). Earlier `flashEmissive` did
-    // an instant jump to `baseline * FLASH_PEAK_MULTIPLIER`, which
-    // combined with the envelope swell read as a hard "thud."
-    expect(src).toMatch(
-      /_flashStates\.set\(\s*nodeId\s*,\s*\{\s*\n?\s*startTime\s*:\s*performance\.now\(\)/,
-    );
+    // Signature: flashEmissive(nodeId, domainColor)
+    expect(src).toMatch(/function flashEmissive\(\s*nodeId\s*:\s*string\s*,\s*domainColor\s*:\s*THREE\.Color\s*\)/);
+    // Baseline capture: preserve prior state on re-fire
+    expect(src).toMatch(/existing\s*\?\s*existing\.baselineEmissive\s*:\s*trueBase/);
+    // prevEmissive snapshot: first fire clones, re-fire preserves original pre-glow value
+    expect(src).toMatch(/existing\.prevEmissive/);
+    expect(src).toMatch(/mat\.emissive\.clone\(\)/);
+    // Domain color applied immediately at stamp time (no one-frame cyan blip)
+    expect(src).toMatch(/mat\.emissive\.copy\(\s*domainColor\s*\)/);
   });
 
   it('source: per-frame tick handles attack/hold/decay 3-phase lifecycle with additive peak delta', () => {
@@ -2589,11 +2586,14 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     const easeMatches = src.match(/1\s*-\s*Math\.pow\(\s*1\s*-\s*t\s*,\s*3\s*\)/g);
     expect(easeMatches).not.toBeNull();
     expect(easeMatches!.length).toBeGreaterThanOrEqual(2);
-    // Total expiry — `elapsed >= GLOW_TOTAL_MS` deletes entry + restores baseline.
+    // Total expiry — restores prevEmissive color + baselineEmissive intensity.
     expect(src).toMatch(/elapsed\s*>=\s*GLOW_TOTAL_MS/);
+    expect(src).toMatch(/mat\.emissive\.copy\(\s*state\.prevEmissive\s*\)/);
     expect(src).toMatch(
       /mat\.emissiveIntensity\s*=\s*state\.baselineEmissive[\s\S]{0,80}_flashStates\.delete\(\s*nodeId\s*\)/,
     );
+    // Domain color re-asserted every frame during glow (guards against concurrent highlight change)
+    expect(src).toMatch(/mat\.emissive\.copy\(\s*state\.domainEmissive\s*\)/);
   });
 
   it('source: _removeFlashUpdate registered via addAnimationCallback in onMount', () => {
