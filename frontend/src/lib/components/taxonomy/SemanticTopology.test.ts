@@ -2552,9 +2552,10 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   // at impact.
   it('source: _flashStates Map + _removeFlashUpdate canceller declared at module scope', () => {
     const src = _semTopSrc();
-    expect(src).toMatch(
-      /(?:const|let)\s+_flashStates\s*=\s*new\s+Map<\s*string\s*,\s*\{\s*startTime\s*:\s*number\s*;\s*baselineEmissive\s*:\s*number\s*;?\s*\}\s*>\(\)/,
-    );
+    // Map declaration exists with startTime + baselineEmissive fields (phase is optional extra).
+    expect(src).toMatch(/_flashStates\s*=\s*new\s+Map/);
+    expect(src).toMatch(/startTime\s*:\s*number/);
+    expect(src).toMatch(/baselineEmissive\s*:\s*number/);
     expect(src).toMatch(/let\s+_removeFlashUpdate\s*:\s*\(\(\)\s*=>\s*void\)\s*\|\s*null\s*=\s*null/);
   });
 
@@ -2577,21 +2578,18 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     );
   });
 
-  it('source: per-frame tick handles attack (cubic ease-out ramp UP) + decay (ease-out down) + restore on expiry', () => {
+  it('source: per-frame tick handles attack/hold/decay 3-phase lifecycle', () => {
     const src = _semTopSrc();
-    // Attack window — `elapsed < FLASH_ATTACK_MS` is the eased ramp UP
-    // from baseline to peak. Decay branch (`else`) is the eased ramp
-    // DOWN from peak to baseline.
-    expect(src).toMatch(/elapsed\s*<\s*FLASH_ATTACK_MS/);
-    // Cubic ease-out used for both ramps — same shape as
-    // TopologyRenderer.focusOn and EnvelopePool. `1 - Math.pow(1 - t, 3)`.
+    // 3-phase lifecycle mirrors EnvelopePool exactly.
+    expect(src).toMatch(/elapsed\s*<\s*GLOW_ATTACK_MS/);
+    expect(src).toMatch(/elapsed\s*<\s*GLOW_ATTACK_MS\s*\+\s*GLOW_HOLD_MS/);
+    // Cubic ease-out used for attack + decay — same shape as EnvelopePool.
     const easeMatches = src.match(/1\s*-\s*Math\.pow\(\s*1\s*-\s*t\s*,\s*3\s*\)/g);
     expect(easeMatches).not.toBeNull();
     // Two occurrences inside _tickFlashStates: one for attack, one for decay.
     expect(easeMatches!.length).toBeGreaterThanOrEqual(2);
-    // Total expiry — `elapsed >= FLASH_TOTAL_MS` deletes entry +
-    // restores baseline.
-    expect(src).toMatch(/elapsed\s*>=\s*FLASH_TOTAL_MS/);
+    // Total expiry — `elapsed >= GLOW_TOTAL_MS` deletes entry + restores baseline.
+    expect(src).toMatch(/elapsed\s*>=\s*GLOW_TOTAL_MS/);
     expect(src).toMatch(
       /mat\.emissiveIntensity\s*=\s*state\.baselineEmissive[\s\S]{0,80}_flashStates\.delete\(\s*nodeId\s*\)/,
     );

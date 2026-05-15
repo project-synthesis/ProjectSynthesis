@@ -12,10 +12,8 @@
  * `rebuildScene` cleanup of node groups mid-effect doesn't crash; missing
  * target is handled by per-frame existence-check in `update()`.
  *
- * State machine: idle → attack (220ms) → hold (180ms) → decay (580ms) → idle
- * Total active duration: 980ms. Cubic-ease-out for attack + decay. Earlier
- * 120/180/500 (total 800ms) read as a punchy "thud" alongside the emissive
- * flash; the smoothness re-tune extended attack + decay for a gradient swell.
+ * State machine: idle → attack (120ms) → hold (580ms) → decay (680ms) → idle
+ * Total active duration: 1380ms. Cubic-ease-out for attack + decay.
  */
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three';
@@ -35,27 +33,26 @@ function makeTarget(x = 5, y = 0, z = 0): THREE.Object3D {
 }
 
 describe('EnvelopePool — phase duration constants (canon F19)', () => {
-  test('ATTACK_MS is 220 (smoother swell — eases pressure off the impact onset)', () => {
-    // Earlier 120ms read as a punchy "thud" landing alongside the
-    // emissive flash. 220ms lets the plasma skin grow more
-    // organically across ~13 frames at 60fps.
-    expect(ATTACK_MS).toBe(220);
+  test('ATTACK_MS is 120 (snappy landing — node responds immediately to beam impact)', () => {
+    // 120ms lets the plasma skin swell quickly at the moment of contact,
+    // then sustains at full engulfment for the entire beam sustain window.
+    expect(ATTACK_MS).toBe(120);
   });
 
-  test('HOLD_MS is 180 (sustained plasma skin during beam sustain)', () => {
-    expect(HOLD_MS).toBe(180);
+  test('HOLD_MS is 580 (sustained engulfment covering the full beam sustain window)', () => {
+    expect(HOLD_MS).toBe(580);
   });
 
-  test('DECAY_MS is 580 (smoother slow dissipation across ~35 frames at 60fps)', () => {
-    expect(DECAY_MS).toBe(580);
+  test('DECAY_MS is 680 (dissolves alongside beam terminate phase)', () => {
+    expect(DECAY_MS).toBe(680);
   });
 
-  test('PEAK_SWELL is 1.18 (visible plasma skin, no neighbor overlap)', () => {
-    expect(PEAK_SWELL).toBeCloseTo(1.18);
+  test('PEAK_SWELL is 1.28 (clearly visible engulfment burst at impact)', () => {
+    expect(PEAK_SWELL).toBeCloseTo(1.28);
   });
 
-  test('total envelope lifecycle is 980 ms (~beam sustain window)', () => {
-    expect(ATTACK_MS + HOLD_MS + DECAY_MS).toBe(980);
+  test('total envelope lifecycle is 1380 ms (attack + hold spans beam sustain, decay spans beam terminate)', () => {
+    expect(ATTACK_MS + HOLD_MS + DECAY_MS).toBe(1380);
   });
 });
 

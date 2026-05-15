@@ -8,8 +8,8 @@
 // detection terminates gracefully when the target is removed from the
 // scene graph.
 //
-// State machine: idle → attack (220ms) → hold (180ms) → decay (580ms) → idle
-// Total: 980 ms. Cubic-ease-out for both attack and decay phases.
+// * State machine: idle → attack (120ms) → hold (580ms) → decay (680ms) → idle
+// * Total active duration: 1380ms. Cubic-ease-out for attack + decay.
 //
 // Brand: `.claude/skills/brand-guidelines/references/3d-visualization.md`
 //        canon F19 "Envelopement Burst" (added in this cycle)
@@ -23,26 +23,28 @@ import {
 const POOL_SIZE = 10;
 
 /**
- * Phase durations in milliseconds. Total lifecycle = 980ms.
+ * Phase durations in milliseconds. Total lifecycle = 1380ms.
  * Synchronizes with the beam sustain window so the envelope finishes
  * dissipating around the time the beam's terminate phase begins.
  *
- * The 220ms attack (was 120ms) softens the impact onset — earlier the
- * envelope swelled in 7 frames while the emissive flash jumped instantly
- * to peak, which combined into a punchy "thud." 220ms (~13 frames at
- * 60fps) reads as the plasma skin growing organically. Decay extends
- * 500→580ms for a longer, smoother dissipation reveal.
+ * The 120ms attack (was 220ms) tightens the landing — the node responds
+ * snappily at beam impact and reaches full engulfment faster. HOLD_MS now
+ * spans 580ms (was 180ms) to cover the full 800ms beam sustain window so the
+ * node remains engulfed the entire time the beam is connected. DECAY_MS extends
+ * to 680ms (was 580ms) so the plasma skin dissolves alongside the beam's own
+ * terminate phase (250ms) rather than vanishing abruptly beforehand.
  */
-export const ATTACK_MS = 220;
-export const HOLD_MS = 180;
-export const DECAY_MS = 580;
+export const ATTACK_MS = 120;
+export const HOLD_MS = 580;
+export const DECAY_MS = 680;
 
 /**
  * Peak envelope swell, multiplied with `baseScale` (the node fill size) to
- * compute the maximum plasma-skin radius. 1.18 sits just outside the cluster
- * silhouette without overlapping neighbors in dense areas.
+ * compute the maximum plasma-skin radius. 1.28 is clearly visible at impact
+ * — the engulfment reads as a decisive burst of plasma surrounding the node,
+ * consistent with its status as the culmination of the beam journey.
  */
-export const PEAK_SWELL = 1.18;
+export const PEAK_SWELL = 1.28;
 
 export type NodeShape = 'cluster' | 'domain';
 type EnvelopeState = 'idle' | 'attack' | 'hold' | 'decay';
