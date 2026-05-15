@@ -598,9 +598,14 @@
   const GLOW_HOLD_MS = 580;
   const GLOW_DECAY_MS = 680;
   const GLOW_TOTAL_MS = GLOW_ATTACK_MS + GLOW_HOLD_MS + GLOW_DECAY_MS; // 1380ms
-  const GLOW_PEAK_MULTIPLIER = 4;
-  type GlowPhase = 'attack' | 'hold' | 'decay';
-  const _flashStates = new Map<string, { startTime: number; baselineEmissive: number; phase: GlowPhase }>();
+  // Additive delta on top of the node's baseline emissive.
+  // Additive (not multiplicative) to stay within the bloom pass's designed
+  // headroom: a 4× multiplier on a high-score cluster (base ~1.4) would reach
+  // 5.6 — deep into white-out territory. An absolute delta of +1.6 gives
+  // a strong surge on domains (0.4→1.0) and a decisive punch on clusters
+  // (0.6↓2.2) without overdrivng the bloom pass.
+  const GLOW_PEAK_DELTA = 1.6;
+  const _flashStates = new Map<string, { startTime: number; baselineEmissive: number }>();
   let _removeFlashUpdate: (() => void) | null = null;
 
   // T3.3 — Beam Impact Camera Micro-Shake
@@ -694,7 +699,6 @@
     _flashStates.set(nodeId, {
       startTime: performance.now(),
       baselineEmissive: baseline,
-      phase: 'attack',
     });
   }
 
@@ -737,7 +741,7 @@
       }
       const mat = mesh.material as THREE.MeshStandardMaterial;
       const elapsed = now - state.startTime;
-      const peak = state.baselineEmissive * GLOW_PEAK_MULTIPLIER;
+      const peak = state.baselineEmissive + GLOW_PEAK_DELTA;
 
       if (elapsed >= GLOW_TOTAL_MS) {
         mat.emissiveIntensity = state.baselineEmissive;
@@ -1378,16 +1382,26 @@
         const mat = mesh.material as THREE.MeshStandardMaterial;
         const baseEmissive = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
 
-        if (!_flashStates.has(nodeId)) {
-          if (isSelected) {
-            // Sine wave with period ~4 seconds (0.016 * 60 frames * ~4 = 3.84)
-            // Emissive intensity bounces between +0 and +0.4 on top of its base value.
+        // Guard: the idle pulse should not hard-cut at the exact frame the glow
+        // starts. If the glow is in its early attack phase, blend the idle pulse
+        // out proportionally so the transition is seamless.
+        if (_flashStates.has(nodeId)) {
+          const glowState = _flashStates.get(nodeId)!;
+          const glowElapsed = performance.now() - glowState.startTime;
+          if (glowElapsed < GLOW_ATTACK_MS && isSelected) {
+            // Smoothly blend the idle pulse down as the glow attack ramps up
+            const blendOut = 1 - glowElapsed / GLOW_ATTACK_MS;
             const idlePulse = Math.sin(_breathingTime * 0.4) * 0.2 + 0.2;
-            mat.emissiveIntensity = baseEmissive + idlePulse;
-          } else {
-            // Ensure unselected nodes remain at base emissive intensity
-            mat.emissiveIntensity = baseEmissive;
+            mat.emissiveIntensity = baseEmissive + idlePulse * blendOut;
           }
+          // else: fully inside glow hold/decay — _tickFlashStates owns emissiveIntensity
+        } else if (isSelected) {
+          // Normal idle pulse: selected node glows gently between beam events
+          const idlePulse = Math.sin(_breathingTime * 0.4) * 0.2 + 0.2;
+          mat.emissiveIntensity = baseEmissive + idlePulse;
+        } else {
+          // Ensure unselected nodes remain at base emissive intensity
+          mat.emissiveIntensity = baseEmissive;
         }
 
         // Template indicator ring (canon F3) — opacity oscillates and
@@ -2239,16 +2253,12 @@
     if (beamPool) {
       const group = _beamNodeGroups.get(node.id);
       if (group) {
-        // BeamConfig.color is stored on the acquired beam (held until
-        // sustain elapses), so a fresh Color is required here — cannot
-        // borrow `_scratchColor` because it would be re-mutated before the
-        // beam release. Per-selection event (not per-frame); negligible.
-        const envelopeColor = new THREE.Color(node.color);
-        const envelopeShape = node.state === 'domain' ? 'domain' : 'cluster';
+        // BeamConfig.color must be a fresh Color per acquire — cannot borrow
+        // `_scratchColor` because it would be re-mutated before beam release.
         beamPool.acquire(
           group,
           {
-            color: envelopeColor,
+            color: new THREE.Color(node.color),
             radius: Math.max(node.size * 0.04, 0.1),
             sustainMs: 800, // short, sharp injection burst
             onImpact: () => _triggerBeamImpact(node, group, false),
