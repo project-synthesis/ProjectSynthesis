@@ -2378,11 +2378,19 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(src).toMatch(/detail\?\.status\s*!==\s*['"]completed['"]/);
   });
 
-  it('source: snapshot writes _prevNodeSizes from current scene node sizes', () => {
+  it('source: optimization-event immediately fires live beam to assigned domain', () => {
     const src = _semTopSrc();
-    // Both onOptimization (status=completed) and onSeedProgress should
-    // snapshot all current sizes into _prevNodeSizes for later growth
-    // comparison.
+    // Instead of waiting for a post-rebuild growth check, single optimize
+    // fires a beam immediately on the event to provide real-time synthesis feel.
+    expect(src).toMatch(/targetDomain\s*=\s*detail\.domain\s*\?\s*parsePrimaryDomain\(detail\.domain\)\s*:\s*['"]general['"]/);
+    expect(src).toMatch(/targetNode\s*=\s*sceneData\?\.nodes\.find/);
+    expect(src).toMatch(/beamPool\.acquire\(/);
+  });
+
+  it('source: snapshot writes _prevNodeSizes from current scene node sizes during seed batch', () => {
+    const src = _semTopSrc();
+    // onSeedProgress should snapshot all current sizes into _prevNodeSizes 
+    // for later growth comparison.
     expect(src).toMatch(/_prevNodeSizes\.clear\(\)/);
     expect(src).toMatch(/_prevNodeSizes\.set\([^,]+,\s*[a-zA-Z_$][\w.$]*\.size\)/);
   });
@@ -2400,9 +2408,10 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     const src = _semTopSrc();
     // Per Data-as-Matter spec § Trigger Mapping: batch seed beams are
     // visually distinct (thicker, longer-lived) to convey the higher
-    // throughput. The wiring uses an `isSeedBatch` ternary on both axes.
-    expect(src).toMatch(/isSeedBatch\s*\?\s*[a-zA-Z_$][\w.$]*\s*\*\s*2\.0\s*:\s*[a-zA-Z_$][\w.$]*/);
-    expect(src).toMatch(/isSeedBatch\s*\?\s*3500\s*:\s*2500/);
+    // throughput. The post-growth wiring (now exclusive to seed batches)
+    // explicitly scales radius by 2.0 and sets base sustain to 3500.
+    expect(src).toMatch(/radius:\s*nodeRadius\s*\*\s*2\.0/);
+    expect(src).toMatch(/sustainMs:\s*3500\s*\+\s*\(/);
   });
 
   it('source: growth-detection filters to domain-only nodes (documented design call)', () => {

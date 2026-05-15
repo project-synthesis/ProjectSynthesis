@@ -17,6 +17,7 @@
   import { triggerRecluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
   import { stateColor, HIGHLIGHT_COLOR_HEX, SIMILARITY_EDGE_COLOR_HEX } from '$lib/utils/colors';
+  import { parsePrimaryDomain } from '$lib/utils/formatting';
   import type { ClusterNode } from '$lib/api/clusters';
   import { BeamPool } from './BeamPool';
   import { ClusterPhysics } from './ClusterPhysics';
@@ -1960,9 +1961,9 @@
           });
         }
 
-        // Fire beams at clusters that grew (post-optimization or post-seed)
+        // Fire beams at clusters that grew (post-seed only)
         const isSeedBatch = _seedBatchActive;
-        if (_prevNodeSizes.size > 0 && beamPool && renderer) {
+        if (isSeedBatch && _prevNodeSizes.size > 0 && beamPool && renderer) {
           let firedCount = 0;
           for (const node of sceneData.nodes) {
             if (node.state !== 'domain') continue; // Only for domain nodes
@@ -1979,8 +1980,8 @@
                   
                   beamPool.acquire(group, {
                     color: new THREE.Color(node.color),
-                    radius: isSeedBatch ? nodeRadius * 2.0 : nodeRadius,
-                    sustainMs: (isSeedBatch ? 3500 : 2500) + (sizeFactor * 500),
+                    radius: nodeRadius * 2.0, // seed batch beams are thicker
+                    sustainMs: 3500 + (sizeFactor * 500), // seed batch beams sustain longer
                     // Canon F7 causal-ordering invariant — see entrance
                     // burst above. Post-growth bursts (post-optimization
                     // or post-seed) follow the same rule: ripple syncs
@@ -1989,7 +1990,7 @@
                       clusterPhysics?.onBeamImpact(node.id, node.size);
                     },
                   }, renderer.camera);
-                }, isSeedBatch ? firedCount * 120 : 0);
+                }, firedCount * 120);
                 firedCount++;
               }
             }
@@ -2019,16 +2020,31 @@
     }
   });
 
-  // Optimization event listener — snapshot member counts before tree rebuild
+  // Optimization event listener — fire immediate beam to assigned cluster
   $effect(() => {
     if (!beamPool || !renderer) return;
     function onOptimization(e: Event) {
-      // Only snapshot on actual optimization completions — ignore feedback/failure
+      // Only fire on actual optimization completions — ignore feedback/failure
       const detail = (e as CustomEvent).detail;
       if (detail?.status !== 'completed') return;
-      _prevNodeSizes.clear();
-      for (const [id, node] of _sceneNodeMap) {
-        _prevNodeSizes.set(id, node.size);
+      
+      // Real-time organic synthetization: fire beam immediately to domain
+      const targetDomain = detail.domain ? parsePrimaryDomain(detail.domain) : 'general';
+      const targetNode = sceneData?.nodes.find(n => n.state === 'domain' && n.domain === targetDomain);
+      
+      if (targetNode && beamPool && renderer) {
+        const group = _beamNodeGroups.get(targetNode.id);
+        if (group) {
+          const sizeFactor = Math.min(Math.max(targetNode.size / 50, 0.5), 3.0);
+          beamPool.acquire(group, {
+            color: new THREE.Color(targetNode.color),
+            radius: targetNode.size * 0.04 * sizeFactor,
+            sustainMs: 800, // per Data-as-Matter spec: 300ms fire, 800ms sustain
+            onImpact: () => {
+              clusterPhysics?.onBeamImpact(targetNode.id, targetNode.size);
+            },
+          }, renderer.camera);
+        }
       }
     }
     window.addEventListener('optimization-event', onOptimization);
