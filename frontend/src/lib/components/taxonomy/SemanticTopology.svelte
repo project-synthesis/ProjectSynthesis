@@ -692,11 +692,38 @@
     if (!mesh) return;
     const mat = mesh.material as THREE.MeshStandardMaterial;
     const existing = _flashStates.get(nodeId);
-    const baseline = existing ? existing.baselineEmissive : mat.emissiveIntensity;
+    // MUST use the true baseEmissive cached on the mesh, otherwise rapid refires
+    // while the node is pulsing (idlePulse) will compound the pulse into the baseline
+    const trueBase = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
+    const baseline = existing ? existing.baselineEmissive : trueBase;
     _flashStates.set(nodeId, {
       startTime: performance.now(),
       baselineEmissive: baseline,
     });
+  }
+
+  /**
+   * Universal router for curated beam impact effects.
+   * Dynamically fetches fresh references from the scene map to prevent
+   * stale closures from killing the effects if the scene rebuilt mid-flight
+   * (e.g. from an optimization or seed event updating the data store).
+   */
+  function _triggerBeamImpact(
+    staleNode: SceneNode,
+    staleGroup: THREE.Group,
+    kineticDisplacement: boolean,
+  ): void {
+    const freshNode = _sceneNodeMap.get(staleNode.id) ?? staleNode;
+    const currentGroup = _beamNodeGroups.get(freshNode.id) ?? staleGroup;
+    const envelopeColor = new THREE.Color(freshNode.color);
+    const shape = freshNode.state === 'domain' ? 'domain' : 'cluster';
+
+    if (kineticDisplacement) {
+      clusterPhysics?.onBeamImpact(freshNode.id, freshNode.size);
+    }
+    
+    envelopePool?.acquire(currentGroup, freshNode.size, shape, envelopeColor);
+    flashEmissive(freshNode.id);
   }
 
   /**
@@ -1354,14 +1381,16 @@
         const mat = mesh.material as THREE.MeshStandardMaterial;
         const baseEmissive = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
 
-        if (isSelected) {
-          // Sine wave with period ~4 seconds (0.016 * 60 frames * ~4 = 3.84)
-          // Emissive intensity bounces between +0 and +0.4 on top of its base value.
-          const idlePulse = Math.sin(_breathingTime * 0.4) * 0.2 + 0.2;
-          mat.emissiveIntensity = baseEmissive + idlePulse;
-        } else {
-          // Ensure unselected nodes remain at base emissive intensity
-          mat.emissiveIntensity = baseEmissive;
+        if (!_flashStates.has(nodeId)) {
+          if (isSelected) {
+            // Sine wave with period ~4 seconds (0.016 * 60 frames * ~4 = 3.84)
+            // Emissive intensity bounces between +0 and +0.4 on top of its base value.
+            const idlePulse = Math.sin(_breathingTime * 0.4) * 0.2 + 0.2;
+            mat.emissiveIntensity = baseEmissive + idlePulse;
+          } else {
+            // Ensure unselected nodes remain at base emissive intensity
+            mat.emissiveIntensity = baseEmissive;
+          }
         }
 
         // Template indicator ring (canon F3) — opacity oscillates and
@@ -1958,12 +1987,7 @@
                     // burst above. Post-growth bursts (post-optimization
                     // or post-seed) follow the same rule: ripple syncs
                     // to beam arrival, not to acquire time.
-                    onImpact: () => {
-                      const envelopeColor = new THREE.Color(node.color);
-                      clusterPhysics?.onBeamImpact(node.id, node.size);
-                      envelopePool?.acquire(group, node.size, 'domain', envelopeColor);
-                      flashEmissive(node.id);
-                    },
+                    onImpact: () => _triggerBeamImpact(node, group, true),
                   }, renderer.camera);
                 }, firedCount * 120);
                 firedCount++;
@@ -2015,12 +2039,7 @@
             color: new THREE.Color(targetNode.color),
             radius: targetNode.size * 0.04 * sizeFactor,
             sustainMs: 800, // per Data-as-Matter spec: 300ms fire, 800ms sustain
-            onImpact: () => {
-              const envelopeColor = new THREE.Color(targetNode.color);
-              clusterPhysics?.onBeamImpact(targetNode.id, targetNode.size);
-              envelopePool?.acquire(group, targetNode.size, 'domain', envelopeColor);
-              flashEmissive(targetNode.id);
-            },
+            onImpact: () => _triggerBeamImpact(targetNode, group, true),
           }, renderer.camera);
         }
       }
@@ -2235,11 +2254,7 @@
             color: envelopeColor,
             radius: Math.max(node.size * 0.04, 0.1),
             sustainMs: 800, // short, sharp injection burst
-            onImpact: () => {
-              // Passive inspection: purely visual energy feedback (no kinetic shake)
-              envelopePool?.acquire(group, node.size, envelopeShape, envelopeColor);
-              flashEmissive(node.id);
-            },
+            onImpact: () => _triggerBeamImpact(node, group, false),
           },
           renderer.camera,
         );
