@@ -2534,13 +2534,12 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(onImpactBody).toMatch(/_triggerBeamImpact\(\s*node\s*,\s*group\s*,\s*false\s*\)/);
   });
 
-  it('source: envelope shape literal — "domain" for state==="domain", else "cluster"', () => {
+  it('source: envelope shape literal — "domain" for state==="domain", else "cluster" — lives in _triggerBeamImpact', () => {
     const src = _semTopSrc();
-    // The shape selection appears as a ternary or guard near the beam
-    // acquire site. Pinning the literal string ensures the dispatch
-    // matches EnvelopePool.NodeShape.
+    // Shape selection now lives inside _triggerBeamImpact (the DRY helper),
+    // not duplicated at each call site. The ternary assigns to `shape`.
     expect(src).toMatch(
-      /node\.state\s*===\s*['"]domain['"]\s*\?\s*['"]domain['"]\s*:\s*['"]cluster['"]/,
+      /freshNode\.state\s*===\s*['"]domain['"]\s*\?\s*['"]domain['"]\s*:\s*['"]cluster['"]/,
     );
   });
 
@@ -2578,15 +2577,17 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     );
   });
 
-  it('source: per-frame tick handles attack/hold/decay 3-phase lifecycle', () => {
+  it('source: per-frame tick handles attack/hold/decay 3-phase lifecycle with additive peak delta', () => {
     const src = _semTopSrc();
     // 3-phase lifecycle mirrors EnvelopePool exactly.
     expect(src).toMatch(/elapsed\s*<\s*GLOW_ATTACK_MS/);
     expect(src).toMatch(/elapsed\s*<\s*GLOW_ATTACK_MS\s*\+\s*GLOW_HOLD_MS/);
+    // Peak uses additive GLOW_PEAK_DELTA (not multiplicative) to stay within bloom headroom.
+    expect(src).toMatch(/GLOW_PEAK_DELTA/);
+    expect(src).toMatch(/baselineEmissive\s*\+\s*GLOW_PEAK_DELTA/);
     // Cubic ease-out used for attack + decay — same shape as EnvelopePool.
     const easeMatches = src.match(/1\s*-\s*Math\.pow\(\s*1\s*-\s*t\s*,\s*3\s*\)/g);
     expect(easeMatches).not.toBeNull();
-    // Two occurrences inside _tickFlashStates: one for attack, one for decay.
     expect(easeMatches!.length).toBeGreaterThanOrEqual(2);
     // Total expiry — `elapsed >= GLOW_TOTAL_MS` deletes entry + restores baseline.
     expect(src).toMatch(/elapsed\s*>=\s*GLOW_TOTAL_MS/);
