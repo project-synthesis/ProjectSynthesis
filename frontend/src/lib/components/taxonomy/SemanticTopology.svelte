@@ -1926,7 +1926,7 @@
                 // visually arrives, regardless of trigger (click, sidebar
                 // selection, or this entrance burst).
                 onImpact: () => {
-                  clusterPhysics?.onBeamImpact(node.id, node.size);
+                  // Purely visual materialization (no kinetic shake)
                 },
               }, renderer.camera);
             }, i * 150);
@@ -1959,7 +1959,10 @@
                     // or post-seed) follow the same rule: ripple syncs
                     // to beam arrival, not to acquire time.
                     onImpact: () => {
+                      const envelopeColor = new THREE.Color(node.color);
                       clusterPhysics?.onBeamImpact(node.id, node.size);
+                      envelopePool?.acquire(group, node.size, 'domain', envelopeColor);
+                      flashEmissive(node.id);
                     },
                   }, renderer.camera);
                 }, firedCount * 120);
@@ -2013,7 +2016,10 @@
             radius: targetNode.size * 0.04 * sizeFactor,
             sustainMs: 800, // per Data-as-Matter spec: 300ms fire, 800ms sustain
             onImpact: () => {
+              const envelopeColor = new THREE.Color(targetNode.color);
               clusterPhysics?.onBeamImpact(targetNode.id, targetNode.size);
+              envelopePool?.acquire(group, targetNode.size, 'domain', envelopeColor);
+              flashEmissive(targetNode.id);
             },
           }, renderer.camera);
         }
@@ -2230,10 +2236,7 @@
             radius: Math.max(node.size * 0.04, 0.1),
             sustainMs: 800, // short, sharp injection burst
             onImpact: () => {
-              // Single anchor point — fires at the beam's
-              // firing→sustain transition (`FIRING_MS`, ~700ms post-acquire). All
-              // three reactions read as one coherent beat:
-              clusterPhysics?.onBeamImpact(node.id, node.size);
+              // Passive inspection: purely visual energy feedback (no kinetic shake)
               envelopePool?.acquire(group, node.size, envelopeShape, envelopeColor);
               flashEmissive(node.id);
             },
