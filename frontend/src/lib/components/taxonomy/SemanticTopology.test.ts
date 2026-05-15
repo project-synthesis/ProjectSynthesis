@@ -2549,27 +2549,26 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   // semantics. Combined with the envelope (external plasma skin) the
   // node now reads as both internally energized AND externally engulfed
   // at impact.
-  it('source: _flashStates Map includes domainEmissive + prevEmissive for brand-color burst', () => {
+  it('source: _flashStates Map includes domainEmissive for brand-color burst (no prevEmissive snapshot)', () => {
     const src = _semTopSrc();
     // Core fields
     expect(src).toMatch(/_flashStates\s*=\s*new\s+Map/);
     expect(src).toMatch(/startTime\s*:\s*number/);
     expect(src).toMatch(/baselineEmissive\s*:\s*number/);
-    // Color contract: domain color drives the burst; prevEmissive is restored on completion.
+    // Brand color contract: domainEmissive drives burst; NO prevEmissive (stale if node deselected mid-glow).
     expect(src).toMatch(/domainEmissive\s*:\s*THREE\.Color/);
-    expect(src).toMatch(/prevEmissive\s*:\s*THREE\.Color/);
+    expect(src).not.toMatch(/prevEmissive\s*:\s*THREE\.Color/);
     expect(src).toMatch(/let\s+_removeFlashUpdate\s*:\s*\(\(\)\s*=>\s*void\)\s*\|\s*null\s*=\s*null/);
   });
 
-  it('source: flashEmissive takes domainColor arg + uses prevEmissive snapshot for highlight restoration', () => {
+  it('source: flashEmissive takes domainColor arg + applies it immediately (no prevEmissive snapshot)', () => {
     const src = _semTopSrc();
     // Signature: flashEmissive(nodeId, domainColor)
     expect(src).toMatch(/function flashEmissive\(\s*nodeId\s*:\s*string\s*,\s*domainColor\s*:\s*THREE\.Color\s*\)/);
     // Baseline capture: preserve prior state on re-fire
     expect(src).toMatch(/existing\s*\?\s*existing\.baselineEmissive\s*:\s*trueBase/);
-    // prevEmissive snapshot: first fire clones, re-fire preserves original pre-glow value
-    expect(src).toMatch(/existing\.prevEmissive/);
-    expect(src).toMatch(/mat\.emissive\.clone\(\)/);
+    // No prevEmissive snapshot — stale if user switches nodes during 1380ms glow.
+    expect(src).not.toMatch(/existing\.prevEmissive/);
     // Domain color applied immediately at stamp time (no one-frame cyan blip)
     expect(src).toMatch(/mat\.emissive\.copy\(\s*domainColor\s*\)/);
   });
@@ -2586,13 +2585,14 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     const easeMatches = src.match(/1\s*-\s*Math\.pow\(\s*1\s*-\s*t\s*,\s*3\s*\)/g);
     expect(easeMatches).not.toBeNull();
     expect(easeMatches!.length).toBeGreaterThanOrEqual(2);
-    // Total expiry — restores prevEmissive color + baselineEmissive intensity.
+    // Completion: live _highlightedId check decides correct emissive color (not stale prevEmissive).
     expect(src).toMatch(/elapsed\s*>=\s*GLOW_TOTAL_MS/);
-    expect(src).toMatch(/mat\.emissive\.copy\(\s*state\.prevEmissive\s*\)/);
+    expect(src).toMatch(/_highlightedId\s*===\s*nodeId/);
+    expect(src).toMatch(/mat\.emissive\.setHex\(\s*HIGHLIGHT_COLOR\s*\)/);
     expect(src).toMatch(
       /mat\.emissiveIntensity\s*=\s*state\.baselineEmissive[\s\S]{0,80}_flashStates\.delete\(\s*nodeId\s*\)/,
     );
-    // Domain color re-asserted every frame during glow (guards against concurrent highlight change)
+    // Domain color re-asserted every frame during glow (guards against concurrent highlight change).
     expect(src).toMatch(/mat\.emissive\.copy\(\s*state\.domainEmissive\s*\)/);
   });
 
