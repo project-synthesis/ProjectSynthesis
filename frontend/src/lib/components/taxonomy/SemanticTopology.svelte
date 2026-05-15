@@ -583,20 +583,24 @@
   let envelopePool: EnvelopePool | null = null;
   let _removeEnvelopeUpdate: (() => void) | null = null;
 
-  // Emissive flash state — per-node MeshStandardMaterial.emissiveIntensity
-  // burst at impact. Layered with the additive plasma envelope: envelope
-  // wraps the node from outside (additive blending), emissive flash lights
-  // it from within. Together they read as a complete impact beat — the
-  // node is briefly energized AND engulfed.
+  // Emissive engulfment state — per-node MeshStandardMaterial.emissiveIntensity
+  // burst at beam impact. Mirrors the 3-phase EnvelopePool lifecycle so the
+  // inner glow (emissive) and outer plasma skin (envelope) rise, hold, and
+  // dissolve as one continuous effect — the node is engulfed from both inside
+  // and outside simultaneously.
   //
-  // Both phases use cubic ease-out for a smooth, non-jarring onset.
-  // Attack RAMPS UP from baseline to peak (was an instant jump to peak,
-  // which combined with the envelope swell read as a hard "thud").
-  const FLASH_PEAK_MULTIPLIER = 4;
-  const FLASH_ATTACK_MS = 80;
-  const FLASH_DECAY_MS = 280;
-  const FLASH_TOTAL_MS = FLASH_ATTACK_MS + FLASH_DECAY_MS;
-  const _flashStates = new Map<string, { startTime: number; baselineEmissive: number; }>();
+  // Timeline (matches EnvelopePool exactly):
+  //   attack (120ms): cubic ease-out ramp baseline → peak (avoids jarring jump)
+  //   hold   (580ms): sustained at peak — node glows while beam is connected
+  //   decay  (680ms): cubic ease-out decay peak → baseline — dissolves with beam
+  // Total: 1380ms (= ATTACK_MS + HOLD_MS + DECAY_MS from EnvelopePool.ts)
+  const GLOW_ATTACK_MS = 120;
+  const GLOW_HOLD_MS = 580;
+  const GLOW_DECAY_MS = 680;
+  const GLOW_TOTAL_MS = GLOW_ATTACK_MS + GLOW_HOLD_MS + GLOW_DECAY_MS; // 1380ms
+  const GLOW_PEAK_MULTIPLIER = 4;
+  type GlowPhase = 'attack' | 'hold' | 'decay';
+  const _flashStates = new Map<string, { startTime: number; baselineEmissive: number; phase: GlowPhase }>();
   let _removeFlashUpdate: (() => void) | null = null;
 
   // T3.3 — Beam Impact Camera Micro-Shake
@@ -668,24 +672,15 @@
   }
 
   /**
-   * Flash a node's MeshStandardMaterial emissive intensity at beam impact.
+   * Trigger emissive engulfment glow on a node at beam impact.
    *
-   * Lifecycle (driven by `_tickFlashStates` per-frame):
-   *   - 0 → FLASH_ATTACK_MS (80ms): cubic ease-out RAMP from baseline up
-   *     to baseline × FLASH_PEAK_MULTIPLIER — no instant jump
-   *   - FLASH_ATTACK_MS → FLASH_TOTAL_MS (280ms decay): cubic ease-out
-   *     back to baseline
-   *   - At FLASH_TOTAL_MS: emissiveIntensity restored, map entry deleted
+   * Stamps start time and baseline. The per-frame `_tickFlashStates` drives
+   * all interpolation across attack → hold → decay phases.
    *
-   * `flashEmissive` only stamps the start time and captures the baseline.
-   * The per-frame tick handles every interpolation. This eliminates the
-   * pre-fix instant jump-to-peak which read as a hard "thud" alongside
-   * the envelope swell.
-   *
-   * Baseline-capture: rapid re-fires during an active flash reuse the
-   * prior baseline so emissiveIntensity doesn't lock at peak * peak (which
-   * a naive read of the live value would do — peak overrides baseline,
-   * second flash reads the inflated value as "baseline" and goes to 16×).
+   * Baseline always reads `mesh.userData.baseEmissive` (the immutable
+   * scene-build value) rather than the live `mat.emissiveIntensity`, so
+   * rapid re-fires during idlePulse or a prior glow never compound the
+   * baseline. On re-fire mid-glow, the prior baseline is preserved.
    */
   function flashEmissive(nodeId: string): void {
     const mesh = nodeMeshes.get(nodeId);
@@ -699,6 +694,7 @@
     _flashStates.set(nodeId, {
       startTime: performance.now(),
       baselineEmissive: baseline,
+      phase: 'attack',
     });
   }
 
@@ -727,38 +723,39 @@
   }
 
   /**
-   * Per-frame advance for every active emissive flash. Registered once via
-   * `addAnimationCallback` in `onMount`; canceller stored in
-   * `_removeFlashUpdate`. Iterates the small `_flashStates` map (≤ a few
-   * entries in steady state — only nodes recently impacted), restores
-   * baselines and deletes entries on expiry.
+   * Per-frame advance for every active emissive engulfment glow.
+   * Mirrors the 3-phase EnvelopePool state machine (attack → hold → decay)
+   * so the inner glow and outer envelope are always in phase.
    */
   function _tickFlashStates(now: number): void {
     if (_flashStates.size === 0) return;
     for (const [nodeId, state] of _flashStates) {
       const mesh = nodeMeshes.get(nodeId);
       if (!mesh) {
-        // Mesh was rebuilt out from under this flash — drop the stale
-        // entry so the map doesn't grow unboundedly across rebuilds.
         _flashStates.delete(nodeId);
         continue;
       }
       const mat = mesh.material as THREE.MeshStandardMaterial;
       const elapsed = now - state.startTime;
-      const peak = state.baselineEmissive * FLASH_PEAK_MULTIPLIER;
-      if (elapsed >= FLASH_TOTAL_MS) {
+      const peak = state.baselineEmissive * GLOW_PEAK_MULTIPLIER;
+
+      if (elapsed >= GLOW_TOTAL_MS) {
         mat.emissiveIntensity = state.baselineEmissive;
         _flashStates.delete(nodeId);
         continue;
       }
-      if (elapsed < FLASH_ATTACK_MS) {
+
+      if (elapsed < GLOW_ATTACK_MS) {
         // Attack: cubic ease-out ramp baseline → peak.
-        const t = elapsed / FLASH_ATTACK_MS;
+        const t = elapsed / GLOW_ATTACK_MS;
         const ease = 1 - Math.pow(1 - t, 3);
         mat.emissiveIntensity = state.baselineEmissive + (peak - state.baselineEmissive) * ease;
+      } else if (elapsed < GLOW_ATTACK_MS + GLOW_HOLD_MS) {
+        // Hold: node radiates at full engulfment peak while beam is connected.
+        mat.emissiveIntensity = peak;
       } else {
-        // Decay: cubic ease-out from peak → baseline.
-        const t = (elapsed - FLASH_ATTACK_MS) / FLASH_DECAY_MS;
+        // Decay: cubic ease-out from peak → baseline, in sync with envelope dissolve.
+        const t = (elapsed - GLOW_ATTACK_MS - GLOW_HOLD_MS) / GLOW_DECAY_MS;
         const ease = 1 - Math.pow(1 - t, 3);
         mat.emissiveIntensity = peak + (state.baselineEmissive - peak) * ease;
       }
