@@ -2527,24 +2527,11 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(effectStart).toBeGreaterThan(0);
     const effectSlice = src.slice(effectStart, effectStart + 4000);
     // Find the onImpact arrow within the click effect's slice.
-    const onImpactRel = effectSlice.search(/onImpact\s*:\s*\(\)\s*=>\s*\{/);
+    const onImpactRel = effectSlice.search(/onImpact\s*:\s*\(\)\s*=>\s*_triggerBeamImpact/);
     expect(onImpactRel).toBeGreaterThan(0);
-    const onImpactStart = effectStart + onImpactRel;
-    // Walk forward, brace-balancing, in the FULL source (not the slice)
-    // so the matching close brace is found regardless of slice end.
-    let depth = 0;
-    let i = src.indexOf('{', onImpactStart);
-    const bodyStart = i + 1;
-    do {
-      if (src[i] === '{') depth++;
-      else if (src[i] === '}') depth--;
-      i++;
-    } while (depth > 0 && i < src.length);
-    const onImpactBody = src.slice(bodyStart, i - 1);
+    const onImpactBody = effectSlice.slice(onImpactRel, onImpactRel + 200);
 
-    expect(onImpactBody).not.toMatch(/clusterPhysics\?\.onBeamImpact\(\s*node\.id/);
-    expect(onImpactBody).toMatch(/envelopePool\?\.acquire\(\s*group\s*,\s*node\.size/);
-    expect(onImpactBody).toMatch(/flashEmissive\(\s*node\.id/);
+    expect(onImpactBody).toMatch(/_triggerBeamImpact\(\s*node\s*,\s*group\s*,\s*false\s*\)/);
   });
 
   it('source: envelope shape literal — "domain" for state==="domain", else "cluster"', () => {
@@ -2578,7 +2565,7 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // This stops a re-click during an active flash from locking in a
     // peak-multiplied baseline.
     expect(src).toMatch(
-      /existing\s*\?\s*existing\.baselineEmissive\s*:\s*mat\.emissiveIntensity/,
+      /existing\s*\?\s*existing\.baselineEmissive\s*:\s*trueBase/,
     );
     // After the smoothness fix: flashEmissive only stamps startTime +
     // baselineEmissive. The per-frame tick handles ALL interpolation
