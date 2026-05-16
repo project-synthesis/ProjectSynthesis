@@ -680,6 +680,27 @@ The stuck pre-fix replay row `182230c75dd4...` (created at `03:11:51` against th
 
 The other replay row `f2b8f25f...` (post-fix completion, the one driving the alarm) stays at `status='completed'`. The regression alarm now correctly reads from a single terminal row, the GC fossil is cleaned, and the suite's `/replays` endpoint shows both rows in terminal state for operator inspection.
 
+### Day 4 supplementary close — retire synthetic d4-replay-test-suite
+
+Per operator decision: the `d4-replay-test-suite` synthetic fixture has served its purpose (T2 surface validation + Finding 15 dispatch fix verification + GC reconciliation verification). Retiring it now closes the flapping regression alarm caused by synthetic 16-char prompt noise.
+
+```bash
+POST /api/suites/6e37f19e6822433caf0d5e305539e00c/retire
+{
+  "reason": "Day 4 soak fixture — synthetic 16-char prompts (D4 replay test #N) used solely to validate the T2 replay surface and Finding 15 dispatch fix. Both purposes complete; the suite was flapping the regression alarm due to score variance on near-empty prompts, not real pipeline regression. Retiring per operator decision documented in SOAK_GATES.md Day 4."
+}
+→ 200 OK, retired_at=2026-05-16T04:32:50.374495
+```
+
+**Retire-surface invariants confirmed**:
+- `GET /api/suites` (default): 0 items — retired suite hidden from the clean operator view.
+- `GET /api/suites?include_retired=true`: 2 retired suites visible (audit trail preserved) — surfaces both `d4-replay-test-suite` (just retired) and a pre-existing `day-4-meta-test-suite` retired earlier in the soak window.
+- `GET /api/suites/{id}/replays` still queryable: both replay rows (`f2b8f25f...` completed, `182230c7...` GC-failed) preserved — historical replay state survives retirement (immutability invariant).
+- `POST /api/suites/{id}/replay` on retired suite returns **HTTP 409 `suite_retired`** per spec §4 error envelope.
+- `GET /api/health.regression_alarm`: now reports `{"suites_total": 0, "suites_in_alarm": 0, "latest_alarms": []}` — the alarm cleared. The frontend `RegressionBadge` Svelte 5 component will transition from `firing` → `nominal` on the next 30s poll.
+
+The replay history retention behavior is correct for v0.4.22's design intent: retire is a soft-delete (sets `retired_at` + `retired_reason`) so audit reviewers can later trace what prompts ran, when, and against which pipeline version. The hard-delete path would only fire if the operator later decides to purge audit history (out of scope for v0.4.22).
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
