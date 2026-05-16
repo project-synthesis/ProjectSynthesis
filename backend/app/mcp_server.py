@@ -508,11 +508,35 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             )
             _mcp_taxonomy = _shared.get_taxonomy_engine()
 
+            # Collaborator resolutions hoisted ABOVE TopicProbeGenerator
+            # construction so both generators (topic_probe + replay_run)
+            # receive the full graph. Either resolver may be None if its
+            # init block failed non-fatally — both generators tolerate
+            # None via the collaborator-passthrough to
+            # ``batch_pipeline.run_single_prompt``.
+            try:
+                _mcp_domain_resolver = _shared.get_domain_resolver()
+            except (ValueError, Exception):
+                _mcp_domain_resolver = None
+            try:
+                _mcp_context_service = _shared.get_context_service()
+            except (ValueError, Exception):
+                _mcp_context_service = None
+
+            # Finding 16 fix: thread the full collaborator graph into
+            # TopicProbeGenerator so ``_run_one_prompt`` can delegate to
+            # ``batch_pipeline.run_single_prompt`` — restoring the
+            # v0.4.12 T1 design intent that v0.4.18 P3 reduced to a stub.
             _topic_probe_gen = TopicProbeGenerator(
                 provider=_mcp_provider,
                 repo_index_query=None,
                 taxonomy_engine=_mcp_taxonomy,
                 write_queue=_mcp_wq,
+                prompt_loader=PromptLoader(PROMPTS_DIR),
+                embedding_service=_mcp_embedding_service,
+                session_factory=_shared.async_session_factory,
+                context_service=_mcp_context_service,
+                domain_resolver=_mcp_domain_resolver,
             )
             _seed_orch_mcp = SeedOrchestrator(provider=_mcp_provider)
             _seed_agent_gen = SeedAgentGenerator(
@@ -523,20 +547,6 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             # ReplayRunGenerator — receives the full collaborator union so
             # every replay row threads through the same enrichment +
             # scoring contract the regular pipeline + batch seeding use.
-            # ``domain_resolver`` + ``context_service`` are fetched via
-            # ``_shared`` getters because both singletons land in their
-            # respective service modules earlier in this lifespan
-            # (lines 380 / 399). Either may be None if their init blocks
-            # failed non-fatally — the generator tolerates None via its
-            # collaborator-passthrough to ``batch_pipeline.run_single_prompt``.
-            try:
-                _mcp_domain_resolver = _shared.get_domain_resolver()
-            except (ValueError, Exception):
-                _mcp_domain_resolver = None
-            try:
-                _mcp_context_service = _shared.get_context_service()
-            except (ValueError, Exception):
-                _mcp_context_service = None
 
             _replay_run_gen = ReplayRunGenerator(
                 provider=_mcp_provider,

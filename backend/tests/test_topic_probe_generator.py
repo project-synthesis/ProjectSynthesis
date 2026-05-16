@@ -348,3 +348,141 @@ async def test_channel_2_probe_decisions_carry_run_id_in_context(
             f"probe decision {d.decision} missing run_id correlation: "
             f"{d.context!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Finding 16 regression (HIGH) — production path delegates to batch_pipeline
+# ---------------------------------------------------------------------------
+
+
+async def test_run_one_prompt_delegates_to_batch_pipeline_when_collaborators_wired(
+    provider_mock: Any,
+    repo_index_mock: Any,
+    taxonomy_mock: Any,
+    monkeypatch: Any,
+) -> None:
+    """Finding 16 regression: when the full collaborator graph is wired,
+    ``_run_one_prompt`` MUST delegate to
+    :func:`batch_pipeline.run_single_prompt` (the production path) — NOT
+    fall back to the stub ``provider.complete_parsed`` call.
+
+    Pre-fix the production wiring (``main.py`` + ``mcp_server.py``) passed
+    only ``provider`` + ``taxonomy_engine`` + ``write_queue``, so every
+    probe hit the stub path which called
+    ``self._provider.complete_parsed(prompt=..., context=...)`` with the
+    WRONG kwargs (the canonical ABC signature is
+    ``model`` + ``system_prompt`` + ``user_message`` + ``output_format``)
+    and EVERY prompt raised
+    ``TypeError: ... got an unexpected keyword argument 'prompt'`` — all
+    real probes failed with `status='failed'` and zero completed prompts.
+
+    This test wires the full collaborator graph and verifies that the
+    production path is taken by patching
+    ``batch_pipeline.run_single_prompt`` to a recording fake.
+    """
+    from app.services.generators.topic_probe_generator import TopicProbeGenerator
+
+    calls: list[dict[str, Any]] = []
+
+    class _FakePending:
+        id = "opt-id-1"
+        trace_id = "trace-1"
+        score_overall = 8.5
+        intent_label = "test intent"
+        cluster_id = None
+        cluster_label = None
+        domain = "backend"
+        duration_ms = 1234
+        optimized_prompt = "OPTIMIZED"
+
+    async def _fake_run_single_prompt(
+        prompt_text: str, *args: Any, **kwargs: Any,
+    ) -> Any:
+        calls.append({
+            "prompt_text": prompt_text,
+            "tier": kwargs.get("tier"),
+            "batch_id": kwargs.get("batch_id"),
+            "prompt_index": kwargs.get("prompt_index"),
+        })
+        return _FakePending()
+
+    from app.services import batch_pipeline as batch_mod
+    monkeypatch.setattr(
+        batch_mod, "run_single_prompt", _fake_run_single_prompt,
+    )
+
+    gen = TopicProbeGenerator(
+        provider=provider_mock,
+        repo_index_query=repo_index_mock,
+        taxonomy_engine=taxonomy_mock,
+        # Finding 16 fix: full collaborator graph
+        prompt_loader=object(),  # any non-None
+        embedding_service=object(),
+        session_factory=object(),
+        context_service=object(),
+        domain_resolver=object(),
+    )
+
+    ctx_dict = {
+        "topic": "test topic",
+        "n_prompts": 3,
+        "project_id": None,
+        "repo_full_name": None,
+    }
+    result = await gen._run_one_prompt(
+        idx=0, prompt_text="real prompt", ctx=ctx_dict, run_id="rid-1",
+    )
+
+    # Production path verification: batch_pipeline.run_single_prompt
+    # received the call (provider.complete_parsed was NOT invoked).
+    assert len(calls) == 1, (
+        f"expected exactly 1 batch_pipeline.run_single_prompt call, "
+        f"got {len(calls)}: {calls!r}"
+    )
+    assert calls[0]["prompt_text"] == "real prompt"
+    assert calls[0]["tier"] == "internal"
+    assert calls[0]["batch_id"] == "rid-1"
+    assert calls[0]["prompt_index"] == 0
+    assert result["status"] == "completed"
+    assert result["overall_score"] == 8.5
+    assert result["domain"] == "backend"
+
+
+async def test_run_one_prompt_falls_back_to_stub_when_collaborators_missing(
+    provider_mock: Any,
+    repo_index_mock: Any,
+    taxonomy_mock: Any,
+) -> None:
+    """Test-fixture path: when ``prompt_loader`` / ``embedding_service`` /
+    ``session_factory`` are ``None`` (legacy unit-test DI minimal-shape),
+    ``_run_one_prompt`` falls back to a thin
+    ``provider.complete_parsed(model=, system_prompt=, user_message=,
+    output_format=)`` call — preserving compatibility with the existing
+    ``provider_mock`` fixtures that use ``AsyncMock`` (which absorbs any
+    kwargs).
+    """
+    from app.services.generators.topic_probe_generator import TopicProbeGenerator
+
+    gen = TopicProbeGenerator(
+        provider=provider_mock,
+        repo_index_query=repo_index_mock,
+        taxonomy_engine=taxonomy_mock,
+    )
+    ctx_dict = {"topic": "t", "n_prompts": 1}
+    result = await gen._run_one_prompt(
+        idx=0, prompt_text="x", ctx=ctx_dict, run_id="rid-2",
+    )
+    # Stub path returns deterministic placeholder.
+    assert result["overall_score"] == 7.0
+    assert result["status"] == "completed"
+    # And the provider.complete_parsed was called with the CANONICAL
+    # ABC signature (not the broken ``prompt=...`` kwarg).
+    provider_mock.complete_parsed.assert_called_once()
+    call_kwargs = provider_mock.complete_parsed.call_args.kwargs
+    assert "model" in call_kwargs
+    assert "system_prompt" in call_kwargs
+    assert "user_message" in call_kwargs
+    assert "output_format" in call_kwargs
+    assert "prompt" not in call_kwargs, (
+        "regression: the broken ``prompt=`` kwarg leaked back in"
+    )
