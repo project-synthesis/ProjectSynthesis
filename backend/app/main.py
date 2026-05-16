@@ -289,9 +289,23 @@ async def lifespan(app: FastAPI):
     rate_limit_store = get_rate_limit_store()
 
     # Synchronize initial routing state
-    # Iterate through all active rate limits in the store and sync them
+    # Iterate through all active rate limits in the store and sync them.
+    # Finding 18 defense: skip records whose provider key is the legacy
+    # placeholder ``"unknown"`` (a sentinel from pre-fix
+    # ``handle_rate_limit_active`` calls that defaulted to ``"unknown"``
+    # when the payload lacked a provider). Re-syncing those records would
+    # falsely degrade routing.available_tiers to ``passthrough`` only and
+    # surface a stale rate-limit banner with no actionable provider
+    # attribution in the UI.
     active_state = rate_limit_store._state
     for provider_name in active_state:
+        if not provider_name or provider_name == "unknown":
+            logger.warning(
+                "Skipping legacy rate-limit record with placeholder "
+                "provider=%r during startup sync (Finding 18 cleanup)",
+                provider_name,
+            )
+            continue
         routing.sync_rate_limit(provider_name, True)
 
     # Start the proactive expiration watcher

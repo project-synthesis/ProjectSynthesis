@@ -420,3 +420,101 @@ class TestWatcherBackgroundProbing:
         active = store.get_active("claude_cli")
         assert active["reset_at_iso"] == new_reset.isoformat()
 
+
+
+# ---------------------------------------------------------------------------
+# Finding 18 regression — defensive provider validation
+# ---------------------------------------------------------------------------
+
+
+def test_handle_rate_limit_active_skips_missing_provider(
+    tmp_path: object,
+    caplog: object,
+) -> None:
+    """Finding 18 regression: a malformed payload without ``provider`` must
+    NOT corrupt ``_state`` with the legacy ``"unknown"`` placeholder.
+
+    Pre-fix the handler defaulted to ``provider="unknown"`` which:
+    1. Wrote ``_state["unknown"] = {...}`` (corrupt key).
+    2. Propagated to ``routing.sync_rate_limit("unknown", True)``.
+    3. Degraded ``routing.available_tiers`` to ``["passthrough"]``.
+    4. Surfaced a stale rate-limit banner in the UI with no actionable
+       provider attribution ("rate-limited due to: unknown").
+
+    The fix: handler skips the record + logs a warning when provider is
+    missing/invalid; no downstream corruption.
+    """
+    import logging
+    from pathlib import Path
+
+    from app.services.rate_limit_state import RateLimitStateStore
+
+    store = RateLimitStateStore(state_dir=Path(tmp_path))  # type: ignore[arg-type]
+
+    # Malformed payload — no ``provider`` key at all.
+    with caplog.at_level(logging.WARNING):  # type: ignore[attr-defined]
+        store.handle_rate_limit_active({
+            "reset_at_iso": "2026-05-16T05:00:00+00:00",
+            "estimated_wait_seconds": 60,
+        })
+
+    # _state must remain empty — no "unknown" key fabricated.
+    assert "unknown" not in store._state, (
+        f"regression: 'unknown' key fabricated into _state: {store._state!r}"
+    )
+    assert len(store._state) == 0, (
+        f"regression: malformed payload corrupted _state: {store._state!r}"
+    )
+
+    # Warning logged for forensic trace of who's publishing malformed events.
+    warnings = [
+        r for r in caplog.records  # type: ignore[attr-defined]
+        if r.levelname == "WARNING" and "missing/invalid provider" in r.message
+    ]
+    assert len(warnings) == 1, (
+        f"expected 1 'missing/invalid provider' warning, got {len(warnings)}"
+    )
+
+
+def test_handle_rate_limit_active_skips_explicit_unknown_provider(
+    tmp_path: object,
+) -> None:
+    """Defense-in-depth: even when the payload explicitly provides
+    ``provider="unknown"`` (the legacy placeholder), the handler must
+    reject it. Catches cross-process publishers (MCP server / external
+    /_publish endpoint) that may still send the legacy token.
+    """
+    from pathlib import Path
+
+    from app.services.rate_limit_state import RateLimitStateStore
+
+    store = RateLimitStateStore(state_dir=Path(tmp_path))  # type: ignore[arg-type]
+
+    store.handle_rate_limit_active({
+        "provider": "unknown",  # legacy placeholder
+        "reset_at_iso": "2026-05-16T05:00:00+00:00",
+    })
+
+    assert "unknown" not in store._state
+
+
+def test_handle_rate_limit_active_accepts_valid_provider(
+    tmp_path: object,
+) -> None:
+    """The fix does NOT weaken the canonical path: a payload with a real
+    provider name still gets recorded.
+    """
+    from pathlib import Path
+
+    from app.services.rate_limit_state import RateLimitStateStore
+
+    store = RateLimitStateStore(state_dir=Path(tmp_path))  # type: ignore[arg-type]
+
+    store.handle_rate_limit_active({
+        "provider": "claude_cli",
+        "reset_at_iso": "2026-05-16T05:00:00+00:00",
+        "estimated_wait_seconds": 60,
+    })
+
+    assert "claude_cli" in store._state
+    assert store._state["claude_cli"]["provider"] == "claude_cli"

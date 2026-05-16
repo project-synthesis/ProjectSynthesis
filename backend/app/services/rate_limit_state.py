@@ -178,8 +178,30 @@ class RateLimitStateStore:
     # -- Event-bus handlers ------------------------------------------------
 
     def handle_rate_limit_active(self, payload: dict[str, Any]) -> None:
-        """Handle a ``rate_limit_active`` event-bus event."""
-        provider = payload.get("provider", "unknown")
+        """Handle a ``rate_limit_active`` event-bus event.
+
+        Finding 18 defense: skip records whose payload lacks a real
+        ``provider`` field instead of fabricating ``"unknown"`` and
+        corrupting downstream state. Pre-fix the placeholder ``"unknown"``
+        leaked into the ``_state`` dict, then into ``sync_rate_limit``,
+        then degraded ``routing.available_tiers`` to ``passthrough`` —
+        the user-visible symptom was a stale ``rate-limit`` banner with
+        no actionable provider attribution.
+
+        All canonical publishers (``publish_rate_limit_active`` helper +
+        provider-side ``call_provider_with_retry`` + probe rate-limit
+        emit path) include a real provider name. The defensive skip-and-
+        log here catches malformed third-party / test / cross-process
+        publishers without paying the corruption cost.
+        """
+        provider = payload.get("provider")
+        if not provider or not isinstance(provider, str) or provider == "unknown":
+            logger.warning(
+                "rate_limit_active event received with missing/invalid "
+                "provider (%r) — skipping record. Payload keys: %s",
+                provider, sorted(payload.keys()),
+            )
+            return
         reset_at_iso = payload.get("reset_at_iso")
         reset_at: datetime | None = None
         if reset_at_iso:
