@@ -316,6 +316,26 @@ Live-invoked via real MCP tool calls (not the test stub):
 - Domain emergence: `domain_count` advanced from 1 → 2 organically during the round-trip — synthesis pipeline + taxonomy emergence functional under RAISE.
 - Backend.log post-MCP-roundtrip: 0 `audit_drift` / `read-engine audit:` / `WriteOnReadEngineError` / `PendingRollbackError`.
 
+**Intelligent meta-test round (2026-05-12 Day 1 supplement)**:
+
+After the GC architectural fix (`b9a31703`) and service-swap from main repo back to worktree, a fresh 5-stage meta-test burst exercised diverse code paths:
+
+| Stage | Surface | Calls | Outcome |
+|---|---|---|---|
+| 1 | `POST /api/optimize` (internal tier) | 3 parallel, mixed strategies (few-shot / role-playing / chain-of-thought) | Routing degraded to passthrough — `claude_cli` provider rate-limited mid-session; system gracefully delivered passthrough preps with full enrichment (applied-patterns from existing taxonomy clusters injected) |
+| 2 | `POST /api/optimize/passthrough/save` (C1) | 3 parallel | All 200, scores 8.39/8.18/8.14, status=completed |
+| 3 | `POST /api/clusters/match` | 3 parallel | All 200, hit existing "Async Python Sqlite Blocking Diagnosis" cluster (backend/analysis), 5 meta-patterns returned |
+| 4 | `POST /api/feedback` | 3 parallel (2 thumbs_up + 1 thumbs_down) | All 200, strategy_affinity_updated |
+| 5 | `POST /api/refine` | 1 call under rate-limited provider | Emitted `started` event cleanly; curl timed out at 30s while waiting for LLM (provider rate-limit, NOT audit-hook) |
+
+**Burst log diff**: 376 new lines, **0 audit_drift / read-engine audit: / WriteOnReadEngineError / PendingRollbackError**.
+
+**What this meta-test validated beyond the basic floor**:
+- Provider rate-limit degradation path: routing correctly drops `internal` from available_tiers and routes to passthrough — no manual intervention required.
+- Applied-pattern injection: passthrough preps under enrichment received 5 meta-patterns from the existing taxonomy cluster — confirms the cluster→pattern→injection loop is functional under RAISE.
+- Taxonomy hot-path match: 3 distinct prompts all resolved to the same backend/analysis cluster — confirms embedding-based assignment is operating on the current centroid index.
+- Adaptation tracker: 3 feedbacks (mixed sentiment) committed without audit-hook trip — confirms `feedback_service.create_feedback` queue-routed write path.
+
 **CI status (PR #74 as of 2026-05-12 Day 1 close)**:
 
 | Check | Status |
