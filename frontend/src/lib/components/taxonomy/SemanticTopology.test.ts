@@ -2850,4 +2850,42 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   });
 
 
+  it('source: _triggerBeamImpact applies ENVELOPE_MIN_SCALE floor so plasma engulfment is visibly bloomed for all clusters regardless of node.size (Envelope-Visibility regression)', () => {
+    // Live-observed: the engulfment effect on DATABASE/MATURE clusters showed
+    // a dramatic bloom-glow follow-through after beam impact, but ACTIVE
+    // clusters with low member count (node.size ~3-5) showed essentially
+    // nothing. Root cause: PEAK_SWELL = 1.28 in EnvelopePool means the
+    // envelope only scales 28% beyond baseScale = freshNode.size. For a
+    // 3-member cluster the envelope peaks at ~3.8 screen units — a small
+    // dot the UnrealBloomPass (radius 0.4 screen-space) barely bloomed.
+    // For a 33-member mature cluster (size ~30) the envelope peaks at ~38
+    // units, which produces the dramatic bloomed engulfment.
+    //
+    // Fix: floor baseScale at ENVELOPE_MIN_SCALE so single/few-member
+    // clusters get a visible bloomed shell. Mature/domain clusters with
+    // size > floor preserve their natural data-driven scaling (via
+    // Math.max), preserving the asymmetry — they bloom bigger, not equal.
+    const src = _semTopSrc();
+
+    // The floor constant must exist (named, not a magic number, so future
+    // edits don't accidentally regress the visibility floor).
+    const triggerBody = src.match(
+      /function _triggerBeamImpact\([\s\S]*?\n  \}/,
+    );
+    expect(triggerBody).not.toBeNull();
+    const body = triggerBody![0];
+
+    expect(body).toMatch(/ENVELOPE_MIN_SCALE\s*=\s*8\.0/);
+    expect(body).toMatch(
+      /Math\.max\(\s*freshNode\.size\s*,\s*ENVELOPE_MIN_SCALE\s*\)/,
+    );
+    // The acquire() call must pass the FLOORED scale, not the raw size,
+    // so the regression can't be reintroduced by re-using the unfloored
+    // variable.
+    expect(body).toMatch(
+      /envelopePool\?\.acquire\(\s*currentGroup\s*,\s*envelopeBaseScale\s*,/,
+    );
+  });
+
+
 });
