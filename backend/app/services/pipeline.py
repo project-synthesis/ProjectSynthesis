@@ -659,9 +659,23 @@ class PipelineOrchestrator:
             # ---------------------------------------------------------------
             suggestions: list[dict[str, str]] = []
             if scoring and scoring.optimized_scores and analysis.weaknesses is not None:
+                # v0.4.22 SG Day 4 code-quality fix: surface the configured
+                # Haiku model rather than a hardcoded literal. Per
+                # ``backend/CLAUDE.md`` model-ID guidance: "Never hardcode —
+                # use ``PreferencesService.resolve_model(phase, snapshot)``
+                # (or ``settings.MODEL_*``)". The event payload's ``model``
+                # field is observability for the suggest phase; pulling
+                # from ``settings.MODEL_HAIKU`` propagates operator overrides
+                # into the live SSE feed instead of pinning a stale literal
+                # that would drift on the next default bump.
+                from app.config import settings as _settings_for_event
                 yield PipelineEvent(
                     event="status",
-                    data={"stage": "suggest", "state": "running", "model": "claude-haiku-4-5"},
+                    data={
+                        "stage": "suggest",
+                        "state": "running",
+                        "model": _settings_for_event.MODEL_HAIKU,
+                    },
                 )
                 suggestions = await run_suggestion_phase(
                     optimization=optimization,

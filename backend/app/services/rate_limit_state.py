@@ -471,9 +471,15 @@ async def probe_rate_limit(
     class _ProbeResult(BaseModel):
         ok: bool = True
 
+    # v0.4.22 SG Day 4 code-quality fix: use ``settings.MODEL_HAIKU`` instead
+    # of a hardcoded ID. Per ``backend/CLAUDE.md`` model-ID guidance, the
+    # canonical Haiku model lives in the config singleton — hardcoding here
+    # would drift if the default ever bumps (and the rate-limit probe is
+    # exactly the path that needs to survive provider-tier rollouts).
+    from app.config import settings as _settings_for_probe
     try:
         await provider.complete_parsed(
-            model="claude-haiku-4-5",  # cheapest model
+            model=_settings_for_probe.MODEL_HAIKU,  # cheapest model
             system_prompt="Reply with {\"ok\": true}",
             user_message="ping",
             output_format=_ProbeResult,
