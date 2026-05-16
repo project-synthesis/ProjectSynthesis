@@ -1411,19 +1411,22 @@
         const mat = mesh.material as THREE.MeshStandardMaterial;
         const baseEmissive = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
 
-        // Guard: the idle pulse should not hard-cut at the exact frame the glow
-        // starts. If the glow is in its early attack phase, blend the idle pulse
-        // out proportionally so the transition is seamless.
+        // Glow state takes full priority: `_tickFlashStates` owns the entire
+        // attack → hold → decay emissive ramp. The breathing loop MUST NOT
+        // touch `mat.emissiveIntensity` while a flash is active, otherwise
+        // the attack-phase ramp (baseline → peak via cubic ease) gets
+        // overwritten and the engulfment burst never reaches bloom threshold
+        // (0.85) for low-baseline clusters (active state, ~0.6 baseline),
+        // making the burst visually invisible for non-mature clusters while
+        // mature/domain clusters with high baseline (~1.1) still look fully
+        // engulfed. Pre-fix the breathing loop ran a blend-OUT formula
+        // (`baseEmissive + idlePulse * blendOut`) during the first 120ms
+        // that decayed *toward* the baseline rather than ramping *up to*
+        // the peak — for active clusters the attack phase stayed sub-bloom
+        // and the entire engulfment effect was barely visible.
         if (_flashStates.has(nodeId)) {
-          const glowState = _flashStates.get(nodeId)!;
-          const glowElapsed = performance.now() - glowState.startTime;
-          if (glowElapsed < GLOW_ATTACK_MS && isSelected) {
-            // Smoothly blend the idle pulse down as the glow attack ramps up
-            const blendOut = 1 - glowElapsed / GLOW_ATTACK_MS;
-            const idlePulse = Math.sin(_breathingTime * 0.4) * 0.2 + 0.2;
-            mat.emissiveIntensity = baseEmissive + idlePulse * blendOut;
-          }
-          // else: fully inside glow hold/decay — _tickFlashStates owns emissiveIntensity
+          // No-op — `_tickFlashStates` (which runs earlier in the per-frame
+          // callback chain) already set the correct phase-driven value.
         } else if (isSelected) {
           // Normal idle pulse: selected node glows gently between beam events
           const idlePulse = Math.sin(_breathingTime * 0.4) * 0.2 + 0.2;

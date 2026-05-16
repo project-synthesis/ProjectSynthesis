@@ -2768,4 +2768,47 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
       /\}\s*else\s*\{[\s\S]{0,2000}n\.position\s*=\s*\[\s*\n?\s*settledPositions\[i\s*\*\s*3\]/,
     );
   });
+  it('source: breathing loop does NOT override emissiveIntensity while _flashStates.has(nodeId) — _tickFlashStates owns full attack→hold→decay ramp (Engulfment-Bug regression)', () => {
+    // Live-observed: MATURE/database clusters showed the full engulfment burst
+    // on selection, but ACTIVE clusters (low member count, baseline ~0.5-0.6)
+    // appeared dim during the 120ms attack phase and only briefly bloomed
+    // during hold. Root cause: the breathing animation loop ran a blend-OUT
+    // formula `mat.emissiveIntensity = baseEmissive + idlePulse * blendOut`
+    // during `glowElapsed < GLOW_ATTACK_MS && isSelected` that DECAYED toward
+    // baseEmissive at frame 120ms — overwriting `_tickFlashStates`' cubic
+    // ramp from baseline → peak. For low-baseline clusters that meant the
+    // attack phase never crossed the 0.85 bloom threshold and the engulfment
+    // was effectively invisible. For high-baseline mature clusters (~1.1)
+    // the override still landed above bloom threshold so the engulfment
+    // appeared "full" — creating the per-state visual asymmetry the operator
+    // observed and reported as a bug.
+    //
+    // The fix: when `_flashStates.has(nodeId)` is true, the breathing loop
+    // MUST be a no-op for `mat.emissiveIntensity`. `_tickFlashStates` (which
+    // runs earlier in the per-frame chain) owns the entire ramp.
+    const src = _semTopSrc();
+
+    // Locate the breathing-loop section.
+    const breathingMatch = src.match(
+      /T3\.4 — Idle Ambient Energy Pulse[\s\S]*?\(canon\)[\s\S]*?const isSelected = clustersStore\.selectedClusterId === nodeId/,
+    );
+    expect(breathingMatch).not.toBeNull();
+
+    // The `if (_flashStates.has(nodeId))` block must NOT contain any line
+    // that writes `mat.emissiveIntensity = ...` — the regression bug was
+    // the blend-out write that decayed toward baseEmissive during attack.
+    const flashBranchMatch = src.match(
+      /if \(_flashStates\.has\(nodeId\)\) \{([\s\S]*?)\} else if \(isSelected\)/,
+    );
+    expect(flashBranchMatch).not.toBeNull();
+    const flashBranchBody = flashBranchMatch![1];
+    expect(flashBranchBody).not.toMatch(/mat\.emissiveIntensity\s*=/);
+    expect(flashBranchBody).not.toMatch(/blendOut/);
+
+    // Defense-in-depth: the comment must mention that _tickFlashStates owns
+    // the ramp, so future editors don't accidentally re-add an override.
+    expect(flashBranchBody).toMatch(/_tickFlashStates/);
+  });
+
+
 });
