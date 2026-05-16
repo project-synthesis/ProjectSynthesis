@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.22 — 2026-05-16
+
 ### Added — Topic Probe Tier 2 (v0.4.22, ships 2026-05-16 — evidence-based soak-gate close ahead of the documented 7-day minimum; PASSED per [SG-2026-05-11](SOAK_GATES.md#sg-2026-05-11--audit-hook-warnrise-flip) decision-matrix row 2; pre-ship verification per [E2E_TEST_MATRIX.md](E2E_TEST_MATRIX.md))
 
 - `backend/alembic/versions/5576c539720f_validation_suite_topic_probe_t2.py` — atomic forward-only migration. Creates `validation_suite` table (11 columns: `id`, `source_run_id`, `prompts_snapshot`, `baseline_scores`, `tolerance_abs`, `label`, `project_id`, `repo_full_name`, `created_at`, `retired_at`, `retired_reason`) + 3 indexes (`ix_validation_suite_project_id`, `ix_validation_suite_source_run_id`, `ix_validation_suite_active` partial-on `retired_at IS NULL DESC on created_at`). Extends `run_row.suite_id` with `ForeignKey("validation_suite.id", ondelete=SET NULL)` + `ix_run_row_suite_id` composite index on `(suite_id, started_at DESC)`. `inspector.has_table` / `_has_index` / `_has_fk_named` idempotency guards. Reversible downgrade nulls `run_row.suite_id` before drop. Cycle 1.
