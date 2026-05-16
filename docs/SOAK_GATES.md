@@ -767,11 +767,45 @@ Fix: snapshot builder now reads `r.get("raw_prompt") or r.get("prompt_text") or 
 - Final suite ecosystem: 1 ACTIVE (`c0aec58b` — clean real-content) + 3 RETIRED (audit trail preserved): D4 synthetic, Day 4 meta-test, Finding-20 fossil.
 
 **Cumulative Day 4/5 work (post-Findings 16-20)**:
-- 15 commits this session on PR #74 (was 10 at Round 4 close)
+- 16 commits this session on PR #74 (was 10 at Round 4 close)
 - **21 named findings**: 5 HIGH + 6 MED + 8 LOW + 2 architectural improvements
 - 0 audit-hook lines across the entire Day 4 + Day 5 window
-- Backend tests: 3774/3774 PASS (3756 pre-Day-4 baseline + 18 new regression tests)
+- Backend tests: **3769 non-integration + 7 integration = 3776 / 3776 PASS** (full sweep 2026-05-16T06:24Z; was 3749 pre-Day-4-supplementary baseline + 27 new regression tests across the 21-finding span)
 - Topic Probe T1 + T2 + audit-hook flip all verified end-to-end on the unified `RunRow` substrate (modulo deferred Finding 19b)
+
+### Gate closure (2026-05-16T06:25Z)
+
+**Outcome**: 🟢 **PASS (evidence-based)** per decision-matrix row 2 (✅ coverage floor met, 0 cumulative WARN, 0 unique new sources).
+
+**Calendar buffer remaining**: ~42 hours until the time-based release gate opens at 2026-05-18T00:00:00Z. The branch is in steady-state observation mode for this window; no further proactive work needed.
+
+**Final pre-release gate sheet (verified 2026-05-16T06:25Z)**:
+
+| Gate | Result |
+|---|---|
+| Backend non-integration tests | 3769 / 3769 PASS (5m34s) |
+| Backend integration tests | 7 / 7 PASS |
+| Frontend vitest | 1901 / 1901 PASS |
+| svelte-check | 1104 files / 0 errors / 0 warnings |
+| alembic check | exit 0 (no schema drift) |
+| ruff (backend) | clean |
+| Rebase against `origin/main` (dry-run) | **96 commits, 0 conflicts** (was 84 pre-Day-5; +12 session commits all conflict-free) |
+| PR #74 CI on latest commit `473c5baa` | **all 5 checks SUCCESS** (test + backend-integration + frontend + lint + claude-review) |
+| Audit-hook WARN (REST + MCP processes, full window) | 0 |
+| `WriteOnReadEngineError` raises | 0 |
+| `audit_drift` lines | 0 |
+| Regression alarm | `suites_total=1, suites_in_alarm=0` (clean — 1 active suite with no replay history yet) |
+
+**Release-day procedure** (when 2026-05-18T00:00:00Z opens):
+1. `git fetch origin && git rebase origin/main` on `feature/probe-tier-2` (verified conflict-free above)
+2. Force-push the rebased branch (or rebase-merge via GitHub UI — equivalent outcome; matches `feedback_pr_merge_strategy.md` preference for >20-commit PRs)
+3. Verify CI re-green on the rebased branch
+4. Run `./scripts/release.sh` from `main` (strips `-dev`, syncs versions, commits, tags `v0.4.22`, pushes, drafts GitHub Release with the v0.4.22 changelog body, then bumps to `0.4.23-dev`)
+5. Post-ship: doc-sync SHIPPED.md + ROADMAP.md entries; the audit-hook kill-switch revert path stays documented in `config.py` and SOAK_GATES.md for the first 7 days post-ship
+
+**Carryover to v0.4.23**:
+- **Finding 19b**: Wire `bulk_persist` into TopicProbeGenerator so the pipeline's computed scores + embeddings + cluster assignments actually save to `Optimization` rows. ~50 LOC + cluster-assignment timing + partial-batch failure semantics + 5-10 regression tests. Tracked in ROADMAP.md v0.4.23 entry.
+- **Cycle 7 Path B**: Phase 3 body extraction (deferred indefinitely per existing ROADMAP entry; not blocking v0.4.22)
 
 ### Day 4 supplementary close — full pre-release test sweep + MCP-side audit-hook coverage
 
