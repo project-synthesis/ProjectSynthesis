@@ -84,7 +84,21 @@
   );
 
   $effect(() => {
-    if (mode === 'domain' && selectedId) {
+    // Defense against stale-detail race: when the user switches selection
+    // from a domain to an active/cluster node, `selectedId` updates first
+    // and `detail` is async-refetched. During that brief window `mode`
+    // (computed from `detail.state`) can still read `'domain'` from the
+    // PREVIOUS detail while `selectedId` is already the new (non-domain)
+    // cluster id. Without the `detail?.id === selectedId` guard the effect
+    // fires `loadOne(newClusterId)` → backend correctly rejects with 422
+    // ('Cluster X is not a domain node') and the console fills with red
+    // ApiError rows. The id-match guard ensures we only act on stable,
+    // freshly-fetched detail that actually corresponds to the selection.
+    if (
+      mode === 'domain'
+      && selectedId
+      && detail?.id === selectedId
+    ) {
       if (!readinessStore.isFresh) {
         void readinessStore.loadAll();
       }
