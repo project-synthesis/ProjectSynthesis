@@ -539,6 +539,42 @@ Live evidence: a replay kicked off at 2026-05-16T03:11:51 against suite `6e37f19
 - Backend tests: 3745+ passed; new dispatch-assertion test added (`tests/test_routers_suites.py::test_replay_dispatches_generator_via_run_orchestrator`)
 - T2 replay surface verified end-to-end against live LLM provider (first time)
 
+**PR #74 CI on `63a0379a` (Finding 15 fix)** — all 5 checks SUCCESS: lint, test, backend-integration, frontend, claude-review.
+
+### Day 4 supplementary continued — concurrent-burst meta-test + REST surface sweep
+
+After Finding 15 closure, ran a 3-prompt concurrent optimize burst designed to (1) keep the C3 coverage cycle hot under realistic load and (2) re-validate the Finding 14 fix under live LLM. Surfaces exercised in parallel: `POST /api/optimize` ×3, `POST /api/feedback`, `POST /api/clusters/match`, `GET /api/strategies`, `GET /api/history`, `GET /api/templates`, `GET /api/runs?mode=replay_run`, `GET /api/suites/{id}/replays`, `GET /api/preferences`, `GET /api/domains`, `GET /api/clusters/activity`.
+
+| # | Prompt | task_type | domain | score | strategy |
+|---|---|---|---|---|---|
+| A | "Audit `_propose_sub_domains` Phase 4.95 isolated-session pattern for correctness" | analysis | backend | 7.75 | chain-of-thought |
+| B | "Design Kalman filter for noisy temperature sensor data, adaptive gain, 10Hz sampling" | analysis | data | 8.08 | structured-output |
+| C | "Draft migration runbook for renaming `RunRow.suite_id` to `RunRow.source_id` — Alembic + rollback + comms plan" | **writing** | database | 8.85 | role-playing |
+
+**Finding 14 fix held under production load**: Prompt C is dense with code identifiers (``RunRow.suite_id``, ``Alembic``, ``RunRow.source_id``) but is OBVIOUSLY a writing task ("draft a migration runbook"). The classifier correctly preserved `task_type='writing'` rather than rescuing to `coding` — the `_CREATIVE_FORM_MARKERS` + lead-verb guard work as designed for procedural-prose with embedded code refs, not just narrative fiction. Score: 8.85 (highest of the burst).
+
+**New domain emergence**: `database` (Prompt C) — Optimization.domain populated; awaits Phase 5 discovery to promote to a DomainNode entry. Reflects the organic discovery cadence working correctly.
+
+**Soak signals during the burst**:
+- **Audit-hook WARN count**: 0 (full `data/backend.log` grep).
+- **`WriteOnReadEngineError` raises**: 0.
+- **WriteQueue**: 32 submitted / 30 completed / 0 failed / 0 timeout / p95 27.4 s (skewed by warm-path Phase 4 LLM label generation — not a regression).
+- **Op_label coverage in the last 100 decisions**: `persist_and_propagate` ×3 (C3), `feedback_create` ×2, `hot_path_assign_cluster` ×2, `warm_phase_lifecycle` ×3 + 8 distinct warm sub-phases. Full warm-path cadence ran cleanly under RAISE.
+- **Score health**: 21 completed optimizations (was 18), mean 7.781, stddev 0.883 — healthy distribution maintained.
+
+**T2 surface end-to-end verified for the first time** (in addition to the dispatch fix itself):
+- `GET /api/suites/{id}/replays` returns both replay rows (post-fix completion + pre-fix stuck row) with correct ordering.
+- `GET /api/health` `regression_alarm` block correctly fires using the latest **completed** replay's aggregate (`latest_mean=6.687 vs baseline_mean=7.9, delta=-1.213, exceeds tolerance_abs=0.5`). The stuck pre-fix row is correctly ignored.
+- `GET /api/runs?mode=replay_run` filter returns 2 rows with proper status differentiation.
+
+**Cumulative Day 4 work (post-burst)**:
+- 21 optimizations in the corpus (up from 14 at Day 4 supplementary start)
+- 7 task_types + 8 domains exercised (added `database`)
+- 0 audit-hook lines across the entire Day 4 window
+- 2 feedback rows submitted under RAISE (feedback_create label)
+- T2 surface fully validated end-to-end (save → replay → poll → list → regression-alarm)
+- All 5 CI checks SUCCESS on the Finding 15 commit
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
