@@ -625,6 +625,34 @@ Round 3 of Day 4 meta-tests: full C2 cycle exercise (refine + rollback) plus two
 
 All 3 cycles exceed the ≥3 floor by a wide margin.
 
+### Day 4 supplementary continued — breadth coverage (Svelte + philosophy)
+
+Round 4 — 2 additional prompts deliberately picked for **domain breadth** rather than classifier stress:
+
+| # | Prompt | task_type | domain | score | strategy |
+|---|---|---|---|---|---|
+| F | "Design a Svelte 5 runes-based store for managing a paginated SuitesPanel list — must handle: cross-tab updates via BroadcastChannel, optimistic retire UI with rollback on 4xx, scroll position preservation across project switches, and dispose-safe `$effect.root` for SSE subscription." | coding | **frontend** | 8.61 | structured-output |
+| G | "What is the philosophical relationship between Heraclitean flux and the immutability invariants we enforce in append-only event-sourced systems? Limit response to ≤300 words. Voice: rigorous, no padding." | writing | **philosophy** | 7.88 | role-playing |
+
+Both prompts produced new organic domains:
+- **`frontend`** (Svelte 5 + runes + SvelteKit identifiers) — first UI-domain optimization in the corpus.
+- **`philosophy`** (Heraclitean flux + event sourcing essay) — first humanities-domain optimization.
+
+Both unmapped at the DomainNode tier (no anchor cluster yet — they wait for Phase 5 promotion). Prompt G recorded a **classification_disagreement** event: heuristic said `analysis+general:observability` (caught "philosophical relationship" + "rigorous" as analysis cues), LLM said `writing+philosophy` (correctly read the essay form). LLM signal won.
+
+**Cumulative state (Day 4 absolute close)**:
+- **25 optimizations** in the corpus (up from 14 at Day 4 supplementary start)
+- **10 distinct domain labels** seen on Optimization rows: `backend`, `fiction-techlit`, `devops`, `data`, `database`, `creative-poetry`, `security`, `frontend`, `philosophy`, `general`. Only `backend` + `general` promoted to DomainNodes so far — the others await Phase 5 emergence at their member-count + consistency thresholds.
+- **7 distinct task_types** exercised live: `coding`, `writing`, `analysis`, `creative`, `data`, `system`, plus the implicit `general` fallback.
+- **WriteQueue**: 90 submitted / 88 completed / 0 failed / 0 timeout. Two in-flight at the snapshot moment — both warm-path tail jobs (Phase 4 label generation).
+- **Score health**: 25 completed, mean **7.876**, stddev **0.846** — the cluster-tight distribution improved under sustained Day 4 load.
+- **Q_system**: 0.827 (improved from 0.802 at the start of Day 4 supplementary). Coherence **0.94**, separation **0.57**, coverage **1.0**.
+- **Audit-hook WARN count**: **0** across the entire Day 4 + Day 5 window (cumulative).
+- **`WriteOnReadEngineError` raises**: **0**.
+- **`audit_drift` lines**: **0**.
+
+**Sub-domain emergence pipeline alive**: `audit-enforcement` qualifier passed both gates (consistency 0.6 > threshold 0.56, count 6 ≥ 5) — next Phase 5 cycle should promote it. The fully organic Haiku-vocabulary-driven emergence is producing real candidates from real traffic.
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
