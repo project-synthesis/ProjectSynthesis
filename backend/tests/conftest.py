@@ -353,6 +353,88 @@ async def app_client(mock_provider, db_session, tmp_path):
     _cfg.DATA_DIR = original_data_dir
 
 
+# ---------------------------------------------------------------------------
+# Audit-hook fixture — v0.4.22 SG-2026-05-11 Day 1 code-review HIGH fix
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture
+async def app_client_with_audit_hook(app_client, db_session):
+    """``app_client`` variant that installs the production read-engine audit
+    hook on the test engine, with a ``_TestWriteQueue.submit`` wrapper that
+    bypasses the hook only INSIDE the writer-queue closure.
+
+    Why this fixture exists
+    -----------------------
+    The plain ``app_client`` fixture mounts the FastAPI app without running
+    its lifespan, so ``install_read_engine_audit_hook`` (called by lifespan
+    at ``main.py:1121``) never fires. Tests in
+    ``test_audit_hook_passthrough_save.py`` /
+    ``test_audit_hook_full_t2_pipeline.py`` claim to assert
+    ``len(audit_warnings) == 0``, but because the listener was never
+    installed on the test engine, ``caplog`` is vacuously empty — the
+    assertions would pass even if the underlying code regressed back to
+    pre-fix mutations on the read session.
+
+    This fixture closes that gap by:
+
+    1. Installing the audit hook on ``db_session.bind`` (the test engine).
+    2. Wrapping ``app.state.write_queue.submit`` so the hook is bypassed
+       (via ``read_engine_meta.migration_mode = True``) ONLY while the
+       writer-queue closure runs. The wrapper preserves the existing
+       ``_TestWriteQueue`` lock + dispatcher semantics.
+    3. Cleaning everything up on teardown (uninstall + restore).
+
+    Net effect: mutations the test makes inside the writer-queue closure
+    pass through (mimicking production's separate writer engine). Mutations
+    the test makes OUTSIDE the closure (e.g. directly via the handler's
+    request-bound ``db_session`` before submit) trip the audit hook —
+    catching the v0.4.14 oversight class (Findings 1+2) that surfaced
+    during SG-2026-05-11 Day 1.
+
+    TDD-verified
+    ------------
+    Verified by intentionally reverting the ``passthrough_save`` fix and
+    re-running ``test_passthrough_save_emits_zero_warn_under_raise_mode``:
+    the test FAILS with ``status_code == 500`` (``PendingRollbackError``)
+    + ``len(audit_warnings) > 0``. Restoring the fix passes again. Catches
+    real regressions.
+    """
+    from app.database import (
+        install_read_engine_audit_hook,
+        read_engine_meta,
+        uninstall_read_engine_audit_hook,
+    )
+    from app.main import app
+
+    install_read_engine_audit_hook(db_session.bind)
+
+    # Wrap the ``_TestWriteQueue.submit`` so the hook is bypassed inside the
+    # writer-queue closure. This mirrors production where the writer engine
+    # has no audit hook installed.
+    test_wq = app.state.write_queue
+    _original_submit = test_wq.submit
+
+    async def _audit_bypass_submit(work, *, timeout=None, operation_label=None):
+        async def _wrapped(session):
+            prior_mode = read_engine_meta.migration_mode
+            read_engine_meta.migration_mode = True
+            try:
+                return await work(session)
+            finally:
+                read_engine_meta.migration_mode = prior_mode
+        return await _original_submit(
+            _wrapped, timeout=timeout, operation_label=operation_label,
+        )
+
+    test_wq.submit = _audit_bypass_submit
+
+    try:
+        yield app_client
+    finally:
+        test_wq.submit = _original_submit
+        uninstall_read_engine_audit_hook()
+
+
 # WriteQueue fixtures (v0.4.13 — see docs/specs/sqlite-writer-queue-2026-05-02.md §9.10)
 
 

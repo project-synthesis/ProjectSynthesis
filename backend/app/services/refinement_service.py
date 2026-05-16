@@ -584,10 +584,11 @@ class RefinementService:
             "branch_id": new_branch_id,
             "version": 1,
             "parent_version": None,
-            "refinement_request": (
-                f"Rollback seed: branched from v{to_version} of "
-                f"{parent_branch.id}"
-            ),
+            # Use a clean user-facing label — version=1 falls through the
+            # ``RefinementTurnCard.svelte`` "version > 1" gate so this only
+            # appears in detail views, but we still keep it concise and
+            # avoid leaking the parent branch UUID into the UI.
+            "refinement_request": f"Rollback to v{to_version}",
             "prompt": target_turn.prompt,
             "scores": target_turn.scores,
             "deltas": target_turn.deltas,

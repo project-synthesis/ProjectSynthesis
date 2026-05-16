@@ -996,7 +996,7 @@ async def test_refinement_service_rollback_returns_payload(
         assert payload.seed_turn_kwargs["prompt"] == "opt"
         assert payload.seed_turn_kwargs["strategy_used"] == "auto"
         # refinement_request communicates the rollback origin for clarity
-        assert "Rollback seed" in payload.seed_turn_kwargs["refinement_request"]
+        assert payload.seed_turn_kwargs["refinement_request"] == "Rollback to v1"
         assert "v1" in payload.seed_turn_kwargs["refinement_request"]
 
 

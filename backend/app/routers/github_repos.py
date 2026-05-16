@@ -566,72 +566,75 @@ async def unlink_repo(
     """
     session_id, _token = await _get_session_token(request, db)
 
-    # Read-only existence check
-    result = await db.execute(
-        select(LinkedRepo).where(LinkedRepo.session_id == session_id)
+    # v0.4.22 soak-gate Day 1 fix: previously the rehome migration +
+    # link delete + empty-commit closure all hit the read session,
+    # tripping the audit-hook RAISE flip. Route ALL writes (rehome
+    # UPDATE + LinkedRepo DELETE + commit) through the write queue.
+    #
+    # Race-safety hardening (code-review MED, 2026-05-12 SG Day 1): the
+    # existence check + project_id capture now happen INSIDE the writer-
+    # queue closure, not on the read session. Previously a concurrent
+    # process could delete the LinkedRepo row between the read-session
+    # check and the writer-session re-fetch, causing the rehome to fire
+    # with a stale ``project_id`` migrating opts that no longer belonged
+    # to that project. The closure-bound fetch closes that window — the
+    # entire {existence check, rehome, delete} sequence now runs in one
+    # writer-session transaction.
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.project_service import (
+        get_legacy_project_id,
+        migrate_optimizations,
     )
-    linked = result.scalar_one_or_none()
 
-    project_id: str | None = None
-    rehomed = 0
-
-    if linked:
-        project_id = linked.project_node_id
-
-        # v0.4.22 soak-gate Day 1 fix: previously the rehome migration +
-        # link delete + empty-commit closure all hit the read session,
-        # tripping the audit-hook RAISE flip. Route ALL writes (rehome
-        # UPDATE + LinkedRepo DELETE + commit) through the write queue.
-        from datetime import datetime, timedelta, timezone
-
-        from app.services.project_service import (
-            get_legacy_project_id,
-            migrate_optimizations,
+    async def _persist_unlink(write_db: AsyncSession) -> dict:
+        # Re-fetch LinkedRepo on the writer session — single source of
+        # truth for both existence and project_id resolution.
+        fetch = await write_db.execute(
+            select(LinkedRepo).where(LinkedRepo.session_id == session_id)
         )
+        writer_linked = fetch.scalar_one_or_none()
+        if writer_linked is None:
+            return {"existed": False, "project_id": None, "rehomed": 0}
 
-        linked_id = linked.id
+        project_id_local = writer_linked.project_node_id
+        rehomed_count = 0
 
-        async def _persist_unlink(write_db: AsyncSession) -> dict:
-            rehomed_count = 0
+        # B5 rehome: before deleting the link, migrate the last-7-day
+        # opts back to Legacy so the user doesn't see them under a
+        # "disconnected" project selector.
+        if mode == "rehome" and project_id_local:
+            try:
+                legacy_id = await get_legacy_project_id(write_db)
+                if legacy_id and legacy_id != project_id_local:
+                    since_dt = (
+                        datetime.now(timezone.utc) - timedelta(days=7)
+                    )
+                    rehomed_count = await migrate_optimizations(
+                        write_db,
+                        from_project_id=project_id_local,
+                        to_project_id=legacy_id,
+                        since=since_dt,
+                    )
+            except Exception as exc:
+                logger.warning("B5 rehome failed (non-fatal): %s", exc)
+                rehomed_count = 0
 
-            # B5 rehome: before deleting the link, migrate the last-7-day
-            # opts back to Legacy so the user doesn't see them under a
-            # "disconnected" project selector.
-            if mode == "rehome" and project_id:
-                try:
-                    legacy_id = await get_legacy_project_id(write_db)
-                    if legacy_id and legacy_id != project_id:
-                        since_dt = (
-                            datetime.now(timezone.utc) - timedelta(days=7)
-                        )
-                        rehomed_count = await migrate_optimizations(
-                            write_db,
-                            from_project_id=project_id,
-                            to_project_id=legacy_id,
-                            since=since_dt,
-                        )
-                except Exception as exc:
-                    logger.warning("B5 rehome failed (non-fatal): %s", exc)
-                    rehomed_count = 0
+        await write_db.delete(writer_linked)
+        await write_db.commit()
+        return {
+            "existed": True,
+            "project_id": project_id_local,
+            "rehomed": int(rehomed_count),
+        }
 
-            # Re-fetch the LinkedRepo row on the writer session before
-            # delete (the ORM instance from the read session is bound to
-            # a different session).
-            fetch = await write_db.execute(
-                select(LinkedRepo).where(LinkedRepo.id == linked_id)
-            )
-            writer_linked = fetch.scalar_one_or_none()
-            if writer_linked is not None:
-                await write_db.delete(writer_linked)
+    unlink_result = await write_queue.submit(
+        _persist_unlink, operation_label="github_repo_unlink",
+    )
+    project_id = unlink_result["project_id"]
+    rehomed = unlink_result["rehomed"]
 
-            await write_db.commit()
-            return {"rehomed": int(rehomed_count)}
-
-        unlink_result = await write_queue.submit(
-            _persist_unlink, operation_label="github_repo_unlink",
-        )
-        rehomed = unlink_result["rehomed"]
-
+    if unlink_result["existed"]:
         # Emit observability event so the UI can toast "disconnected" status.
         try:
             from app.services.event_bus import event_bus
