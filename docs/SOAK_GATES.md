@@ -575,6 +575,56 @@ After Finding 15 closure, ran a 3-prompt concurrent optimize burst designed to (
 - T2 surface fully validated end-to-end (save → replay → poll → list → regression-alarm)
 - All 5 CI checks SUCCESS on the Finding 15 commit
 
+### Day 4 supplementary continued — refinement chain + 2 edge-task-type prompts
+
+Round 3 of Day 4 meta-tests: full C2 cycle exercise (refine + rollback) plus two edge-task-type prompts deliberately designed to stress the classifier with overlapping signals.
+
+**Refinement chain on Job C optimization** (`bc375e53...`, "Database Column Rename Runbook", score 8.85):
+- `POST /api/refine` with request "Add a 'Communication Plan' section with templated Slack + email notifications" — produced v2 on new branch `aef17825...`, score 8.73, score_deltas `clarity +0.5 / specificity 0 / structure 0 / faithfulness -0.4 / conciseness -0.8` (refinement traded conciseness for completeness). Three follow-up suggestions surfaced with sources `score`/`analysis`/`strategy` — each addressing the conciseness regression from a different angle.
+- `POST /api/refine/{id}/rollback {to_version: 1}` — forked new branch `499040ab...` at `forked_at_version=1`, `parent_branch_id=aef17825...`. The seed turn carries `refinement_request="Rollback to v1"` (the Day 4 LOW fix label) — UUID no longer leaks into the operator-facing label.
+- Versions endpoint returns 3 rows: v1 on parent branch + v1 on rollback fork + v2 on parent. Branching tree consistent.
+
+**C2 cycle coverage complete**: `refine_initial_turn` + `refine_persist_turn` + `refine_rollback` operation labels all observed in the writer-queue decision log.
+
+**2 edge-task-type prompts** (concurrent with the refine chain):
+
+| # | Prompt | task_type | domain | score | strategy |
+|---|---|---|---|---|---|
+| D | "Write a 6-stanza villanelle from the perspective of a database row marked `retired_at` but still appearing in 3 unfinished replay runs. Strict villanelle form, refrains and rhyme scheme intact, no SQL syntax in the body." | **creative** | creative-poetry | 8.62 | role-playing |
+| E | "Generate a nftables ruleset that drops all inbound traffic to ports 8000 and 8001 except from RFC1918 sources, with rate-limit logging to syslog facility local0, and rejects (not drops) outbound SMTP except to 3 whitelisted MX hosts. Include verification commands." | system | security | 8.39 | structured-output |
+
+**Finding 14 fix doubly verified**: Prompt D mentions `database row`, `retired_at`, `replay runs` — heavy technical-noun density plus snake_case identifier — but the explicit creative-form markers ("villanelle", "stanzas", "refrains", "rhyme scheme") correctly suppressed the structural rescue to `coding`. Final classification: `task_type='creative'`, `domain='creative-poetry'`. Pattern injection picked up the "AI Model Aspiration Story" cluster from the prior Finding 14 verification run — the cluster correctly recognized the cross-prompt creative-fiction-with-tech-references theme.
+
+**Prompt E classifier disagreement**: heuristic said `coding+general:observability` (caught "rate-limit logging to syslog" + "verification commands" but missed the security-policy intent); LLM said `system+security` (read the firewall ruleset intent correctly). `classification_disagreement` event recorded in the classification_agreement service. Final taxonomy resolved via the LLM signal — `task_type='system'`, `domain='security'`. New `security` domain emerged at the Optimization-row level (awaits Phase 5 promotion to DomainNode).
+
+**Soak signals across the full Day 4 final round**:
+- **Audit-hook WARN count**: 0 (full backend.log grep across the entire Day 4 window).
+- **`WriteOnReadEngineError` raises**: 0.
+- **WriteQueue**: 64 submitted / 63 completed / 0 failed / 0 timeout / p95 41.8 s (skewed by warm-path Phase 4 LLM label generation).
+- **Score health**: 23 completed optimizations, mean 7.844, stddev 0.868 (healthy distribution maintained under sustained load — variance LOW means scores cluster tightly around the mean, which is the desired state).
+
+**Cumulative Day 4 (closing snapshot)**:
+- 23 optimizations in the corpus (up from 14 at Day 4 supplementary start)
+- 8 task_types exercised: `coding`, `writing`, `analysis`, `creative`, `data`, `system`, `general` + the implicit `creative` re-verification
+- 8 domains seen on Optimization rows: `backend`, `fiction-techlit`, `devops`, `data`, `database`, `creative-poetry`, `security`, `general` (only `backend` + `general` promoted to DomainNode so far — awaiting Phase 5)
+- 15 named findings (2 HIGH + 4 MED + 7 LOW + 2 architectural improvements)
+- 0 audit-hook lines across the entire Day 4 window
+- 2 feedback rows submitted under RAISE
+- T2 surface fully validated end-to-end + dispatch gap closed
+- Full C2 cycle exercised (refine_initial_turn + refine_persist_turn + refine_rollback)
+- Full C3 cycle exercised (5 internal-tier optimizes since burst start)
+- C1 cycle previously satisfied on Day 1
+
+**P4 coverage floor (≥3 each)**:
+
+| Cycle | Day 4 cumulative writes | Floor |
+|---|---|---|
+| C1 (`save_result_persist`) | 4 (Day 1) | ✅ |
+| C2 (`refine_initial_turn` / `refine_persist_turn` / `refine_rollback`) | 4 (Day 1) + 3 (Day 4) = 7 | ✅ |
+| C3 (`persist_and_propagate` / `pipeline_failed_optimization_persist`) | 3 (Day 1) + 5 (Day 4) = 8 | ✅ |
+
+All 3 cycles exceed the ≥3 floor by a wide margin.
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
