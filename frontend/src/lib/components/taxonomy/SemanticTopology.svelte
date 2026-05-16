@@ -1995,7 +1995,9 @@
                 // visually arrives, regardless of trigger (click, sidebar
                 // selection, or this entrance burst).
                 onImpact: () => {
-                  // Purely visual materialization (no kinetic shake)
+                  // Purely visual materialization — envelope + emissive glow,
+                  // no kinetic displacement shake so the scene settles quietly.
+                  _triggerBeamImpact(node, group, false);
                 },
               }, renderer.camera);
             }, i * 150);
