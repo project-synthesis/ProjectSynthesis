@@ -4,6 +4,10 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+
+- `frontend/src/lib/components/taxonomy/TopologyInfoPanel.svelte` — guard the readiness `loadOne` effect against the stale-detail race that flooded the console with red `422 'Cluster X is not a domain node'` ApiError rows when the user switched selection from a domain node to any active/cluster node in the Pattern Graph. Pre-fix the panel's `mode` derivation read `detail.state` from the PREVIOUS (domain) detail during the brief async-refetch window between `selectedClusterId` flipping and `clusterDetail` arriving for the new cluster, causing the effect to fire `readinessStore.loadOne(newActiveClusterId)` against the canonical-rejecting backend. Added `detail?.id === selectedId` to the effect gate so the readiness load only fires on stable, freshly-fetched detail that actually corresponds to the current selection. Hotfix direct to main per the `feedback_bugfix_direct_to_main` policy — 1-line frontend guard, svelte-check clean.
+
 ## v0.4.22 — 2026-05-16
 
 ### Added — Topic Probe Tier 2 (v0.4.22, ships 2026-05-16 — evidence-based soak-gate close ahead of the documented 7-day minimum; PASSED per [SG-2026-05-11](SOAK_GATES.md#sg-2026-05-11--audit-hook-warnrise-flip) decision-matrix row 2; pre-ship verification per [E2E_TEST_MATRIX.md](E2E_TEST_MATRIX.md))
