@@ -2499,6 +2499,25 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     );
   });
 
+  it('source: entrance materialization beams wire onImpact to _triggerBeamImpact (all domains get full engulfment)', () => {
+    const src = _semTopSrc();
+    // Regression guard: the entrance burst fired beams at every domain node
+    // but had an empty onImpact callback, so only nodes that were subsequently
+    // clicked or hit by an optimization event ever got the plasma envelope +
+    // emissive glow. Fix: the entrance onImpact calls _triggerBeamImpact with
+    // kineticDisplacement=false (no shake, purely visual).
+    const entranceStart = src.indexOf('_hasPlayedEntrance = true');
+    expect(entranceStart).toBeGreaterThan(0);
+    // Slice ~2000 chars from that anchor — covers the forEach setTimeout block.
+    const entranceSlice = src.slice(entranceStart, entranceStart + 2000);
+    // _triggerBeamImpact must appear inside the entrance onImpact body.
+    expect(entranceSlice).toMatch(/_triggerBeamImpact\(\s*node\s*,\s*group\s*,\s*false\s*\)/);
+    // Kinetic displacement must be FALSE for entrance (no camera shake on materialization).
+    const triggerMatch = entranceSlice.match(/_triggerBeamImpact\(\s*node\s*,\s*group\s*,\s*(true|false)\s*\)/);
+    expect(triggerMatch).not.toBeNull();
+    expect(triggerMatch![1]).toBe('false');
+  });
+
   it('source: clusterPhysics.onBeamImpact is NOT called synchronously inside the click $effect', () => {
     const src = _semTopSrc();
     // Locate the click selection $effect — anchored on the comment
