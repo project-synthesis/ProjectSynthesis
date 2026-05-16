@@ -188,9 +188,9 @@ Each day during the soak window, the release-operator runs the verification comm
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2026-05-11 | 0 (window opens) | release-bot | ✅ (post-v0.4.21 ship) | 0 (baseline) | 0 (baseline) | 0 (baseline) | (baseline TBD) | (baseline TBD) | 🟡 ACTIVE | v0.4.21 shipped, soak window opens, baseline log captured |
 | 2026-05-12 | 1 | claude-soak-operator | ✅ (x5 — restarts during fix iteration) | 4 (3 synthetic + 1 verify) | 3 (initial-turn + persist + rollback + post-rollback persist) | 3 (overall 7.92 + 7.49 + 8.48) | 0 (post-fix) — 6 (pre-fix, all classes documented + fixed below) | **6 distinct bugs the soak gate surfaced** + 1 latent singleton-wiring gap. See **Day 1 finding block** below | 🟡 ACTIVE (gate worked as designed — caught 6 real bugs before flip ships) | 6 commits + 12 new regression tests; all live-verified clean under RAISE; backend.log: 0 WARN over 600+ post-fix lines covering 20+ endpoint exercises |
-| 2026-05-13 | 2 | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
-| 2026-05-14 | 3 (mid-soak) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
-| 2026-05-15 | 4 (coverage-floor checkpoint) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | If any P4 cycle < 2 cumulative, the operator must run the synthetic recipe ≥1×/day from this point |
+| 2026-05-13 | 2 | claude-soak-operator | — (no restart, no traffic) | 0 | 0 | 0 | 0 | 0 | 🟡 ACTIVE (silent day) | No work performed; backend.log unchanged since Day 1 close. Day 1 cumulative coverage floor already met. |
+| 2026-05-14 | 3 (mid-soak) | claude-soak-operator | — (no restart, no traffic) | 0 | 0 | 0 | 0 | 0 | 🟡 ACTIVE (silent day) | No work performed; cumulative state unchanged. |
+| 2026-05-15 | 4 (coverage-floor checkpoint) | claude-soak-operator | ✅ (x1 — post-fix verification) | 3 (parallel passthrough save burst) | 0 (rate-limited provider blocked refine LLM) | 0 (rate-limited provider degraded to passthrough) | 0 (post-fix) — 1 (test-fixture HIGH from 7-agent review; fixed at `92d68bf5`) | 1 — `app_client` fixture installed NO audit hook on the test engine → all 4 prior audit-hook regression tests were dead-coverage (caplog vacuously empty). Fixed via new `app_client_with_audit_hook` fixture + 1 self-test pinning the fixture contract. Plus 2 MED + 4 LOW findings (race window in unlink, "Detach" comment inaccuracy, refine UI label leak, unused Depends params, misleading engine commit comment). All addressed at root in 1 commit. | 🟡 ACTIVE (Day 4 supplementary review uncovered + fixed 7 more issues — all in **test infra** + **code-quality polish** scope, not new production audit-hook violations) | 13 commits cumulative on PR; 138/138 cross-cutting tests pass; ruff clean; fixture now actually catches what previously slipped through silently |
 | 2026-05-16 | 5 | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
 | 2026-05-17 | 6 (pre-close sanity) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
 | 2026-05-18 | 7 (close decision) | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | gate-close decision day — verify coverage floor met BEFORE flipping 🟢 |
@@ -348,6 +348,55 @@ After the GC architectural fix (`b9a31703`) and service-swap from main repo back
 
 10/10 commits on PR. All Day 1 fixes + regression coverage shipped. Gate continues observing Days 2-7 (closes 2026-05-18).
 
+### Day 4 supplementary findings (2026-05-15) — 7-agent code review of post-rate-limit work
+
+After the Day 1 → Day 4 calendar gap (no work performed on Days 2-3), 7 parallel `code-reviewer` agents reviewed each substantive Day 1 commit + the 3D taxonomy fix on the sibling branch (`77f95748`). The review produced 1 HIGH severity finding (test-infrastructure dead-coverage), 2 MED, 4 LOW. All addressed at the root in commit `92d68bf5`.
+
+**Finding 7 (HIGH) — audit-hook regression tests were dead-coverage** (FIXED at `92d68bf5`)
+
+The 4 audit-hook regression tests in `test_audit_hook_passthrough_save.py` + `test_audit_hook_full_t2_pipeline.py::test_audit_hook_emits_zero_warn_under_full_t2_pipeline` claimed to assert `len(audit_warnings) == 0` under `WRITE_QUEUE_AUDIT_HOOK_RAISE=True`. But the `app_client` fixture (`conftest.py:130`) mounts the FastAPI app **without running its lifespan**, so `install_read_engine_audit_hook` (called at `main.py:1121`) never fired. The test engine had **NO before_cursor_execute listener** — `caplog` was vacuously empty regardless of whether the code regressed.
+
+Verified empirically: `database._audit_listener is None` after every `app_client` setup. The status_code-200 assertions still tested the happy path indirectly, but the "0 audit-hook WARN lines" assertion was meaningless. Day 1's apparent test PASS would have remained green even if Findings 1-2 (`passthrough_save` + `intent_rename`) had regressed.
+
+Root fix: NEW `app_client_with_audit_hook` fixture in `conftest.py` that:
+1. Installs the production audit hook on `db_session.bind` (the test engine).
+2. Wraps `app.state.write_queue.submit` so the hook is bypassed (via `read_engine_meta.migration_mode = True`) ONLY INSIDE the writer-queue closure. Mimics production where the writer engine has no audit hook.
+3. Uninstalls on teardown.
+
+All 4 audit-hook tests rewired to the new fixture. The `test_audit_hook_emits_zero_warn_under_full_t2_pipeline` test seeding step is wrapped in `migration_mode = True` so test-fixture setup (data prep, not code-under-test) doesn't trip the hook.
+
+Self-test: NEW `test_audit_hook_fixture_catches_synthetic_regression` deliberately issues an UPDATE on `db_session` outside the writer-queue closure and asserts `WriteOnReadEngineError` raises. **If the fixture ever regresses back to dead-coverage state, this test fails first** and flags it before every other audit-hook test becomes vacuous.
+
+**Finding 8 (MED) — `unlink_repo` race window** (FIXED at `92d68bf5`)
+
+Existence check + `project_id` capture happened on the read session **BEFORE** the writer-queue closure. A concurrent process could delete the LinkedRepo row in the gap, causing rehome to fire with a stale `project_id` migrating opts that no longer belonged to that project. Fix: moved existence check + project_id resolution INSIDE the `_persist_unlink` closure. The full `{check, rehome, delete}` sequence now runs in one writer-session transaction.
+
+**Findings 9-12 (MED/LOW) — comment accuracy + UI label leak + unused dependencies** (FIXED at `92d68bf5`)
+
+- `routers/optimize.py` two comments said "Detach the read-session object" but the code calls `db.expire()` (which invalidates the attribute cache; `db.expunge()` would actually detach). Updated to accurately describe expire semantics.
+- `refinement_service.py` seed-turn `refinement_request` leaked `"Rollback seed: branched from v{N} of {uuid}"` (parent-branch UUID exposed to UI). Changed to `"Rollback to v{N}"`. Regression tests updated.
+- `routers/domains.py` comment claimed engine had "internal commit" — engine method has no internal commit; `WriteQueue.submit()` queue worker owns the transaction lifecycle. Rephrased.
+- `routers/domains.py` `rebuild_sub_domains` + `dissolve_empty_domain` had unused `db: Depends(get_db)` parameters (dead deps after the queue-routing fix). Dropped on both endpoints; 38 domain-related tests unaffected.
+
+**What this finding means for the gate decision**:
+
+- The HIGH (Finding 7) was a **test-infrastructure** gap, not a production code regression. The actual Day 1 production code fixes (Findings 1-6) were live-verified clean under RAISE via real HTTP traffic + log inspection — they work in production regardless of the test gap. CI passed Day 1 because of those live verifications + status-code-200 indirect tests.
+- The fixture fix is what makes future regressions detectable in CI. Without it, the gate would have closed clean on Day 7 but the regression protection would have been vapor.
+- MED + LOW are code-quality polish — production behavior unchanged.
+- **Day 4 cumulative: 0 new audit-hook WARN lines under RAISE.** Test infrastructure now actually validates the contract.
+
+**CI status (PR #74 as of 2026-05-15 Day 4 supplementary close)**:
+
+| Check | Status |
+|---|---|
+| test | (in progress on commit `92d68bf5`) |
+| claude-review | (in progress) |
+| backend-integration | (in progress) |
+| lint | (in progress) |
+| frontend | (in progress) |
+
+13/13 commits on PR. Gate continues Days 5-7.
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
@@ -390,6 +439,10 @@ The `Field(description=...)` block in `backend/app/config.py` documents this kil
 - **Cycle 15 plan**: `docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md` Cycle 15 (Tasks 15.1-15.7)
 - **P4 precondition test**: `backend/tests/test_tools_optimize.py::test_audit_hook_emits_zero_warn_under_full_pipeline` (`@pytest.mark.integration`)
 - **T2 extension test**: `backend/tests/test_audit_hook_full_t2_pipeline.py` (3 tests covering RAISE default + zero-WARN under full T2 pipeline + kill-switch revert)
+- **Day 1 audit-hook regression tests**: `backend/tests/test_audit_hook_passthrough_save.py` (4 tests covering passthrough_save + intent_rename + rollback-seed + fixture self-test)
+- **Day 4 audit-hook fixture fix**: `backend/tests/conftest.py::app_client_with_audit_hook` (installs production audit hook + writer-closure bypass for test-realistic semantics)
+- **Day 1 lifespan-wiring regression**: `backend/tests/test_main_lifespan_shared_singletons.py` (8 static-text-grep tests pinning every `_shared.set_X` invocation)
+- **Day 1 GC sweep + tests**: `backend/app/services/gc.py::_gc_stuck_pending_optimizations` + `backend/tests/test_gc.py::TestGCStuckPendingOptimizations` (6 tests)
 - **Foundation P4 SHIPPED entry**: `docs/SHIPPED.md` v0.4.21 section
 - **Config change**: `backend/app/config.py` `WRITE_QUEUE_AUDIT_HOOK_RAISE` Field default
 - **Audit-hook implementation**: `backend/app/database.py:395-397`
