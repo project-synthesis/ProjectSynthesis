@@ -396,7 +396,6 @@ async def promote_to_domain(
 async def rebuild_sub_domains(
     domain_id: str,
     request: RebuildSubDomainsRequest,
-    db: AsyncSession = Depends(get_db),
     write_queue: WriteQueue = Depends(get_write_queue),
 ) -> RebuildSubDomainsResult:
     """Operator-triggered sub-domain rebuild — see R6 in audit doc.
@@ -456,7 +455,6 @@ async def rebuild_sub_domains(
 )
 async def dissolve_empty_domain(
     domain_id: str,
-    db: AsyncSession = Depends(get_db),
     write_queue: WriteQueue = Depends(get_write_queue),
 ) -> DissolveEmptyResult:
     """v0.4.11 P1 operator escape hatch — force-dissolve an empty (ghost)
@@ -476,16 +474,18 @@ async def dissolve_empty_domain(
     engine = get_engine()
 
     # v0.4.22 soak-gate Day 1 fix: route the entire engine call through
-    # the write queue so the engine's mutations + internal db.commit()
-    # land on the write-engine session. Previously the call ran on the
-    # request-bound read session (with the same empty-commit-closure
-    # anti-pattern as ``rebuild_sub_domains``), which would trigger
-    # ``WriteOnReadEngineError`` autoflush under the v0.4.22 RAISE flip
-    # when the engine actually mutates state on a successful dissolve.
-    #
-    # The engine method's ``ValueError("not found")`` branch fires before
-    # any write, so wrapping the entire call is safe — the engine still
-    # raises and the writer session is rolled back automatically.
+    # the write queue so the engine's mutations land on the write-engine
+    # session. The queue worker's ``submit()`` wrapper owns the
+    # transaction lifecycle (commit on success, rollback on exception) —
+    # the engine method itself has no internal ``db.commit()``. Previously
+    # the call ran on the request-bound read session (with the same
+    # empty-commit-closure anti-pattern as ``rebuild_sub_domains``), which
+    # would trigger ``WriteOnReadEngineError`` autoflush under the v0.4.22
+    # RAISE flip when the engine actually mutates state on a successful
+    # dissolve. The engine method's ``ValueError("not found")`` branch
+    # fires before any write, so wrapping the entire call is safe — the
+    # exception propagates out of ``submit()`` and the writer session is
+    # rolled back automatically.
     try:
         async def _do_dissolve(write_db: AsyncSession) -> dict:
             return await engine.dissolve_empty_domain(write_db, domain_id)

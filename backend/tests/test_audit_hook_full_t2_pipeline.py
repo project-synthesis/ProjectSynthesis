@@ -153,7 +153,7 @@ def _canonical_prompt_results(n: int = 3) -> list[dict[str, Any]]:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_audit_hook_emits_zero_warn_under_full_t2_pipeline(
-    app_client: AsyncClient,
+    app_client_with_audit_hook: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -207,32 +207,52 @@ async def test_audit_hook_emits_zero_warn_under_full_t2_pipeline(
     _settings.WRITE_QUEUE_AUDIT_HOOK_RAISE = True
 
     try:
+        from app.database import read_engine_meta
         from app.models import RunRow
 
         # -----------------------------------------------------------------
         # Stage 1 — seed a completed topic_probe RunRow as the suite source.
         # The save-as-suite path requires mode='topic_probe' + status='completed'
         # + aggregate carrying mean_overall (spec §4 preconditions).
+        #
+        # v0.4.22 audit-hook fixture compatibility: the
+        # ``app_client_with_audit_hook`` fixture installs the production
+        # audit hook on the test engine. Test-FIXTURE setup (this seed
+        # commit) is NOT code-under-test — it's just data prep. Bypass
+        # the hook via ``read_engine_meta.migration_mode`` (same flag
+        # used by production lifespan migrations). The actual T2 surface
+        # exercises below (save-as-suite, retire, probe dispatch,
+        # replay) run with the hook ACTIVE on the read session, so any
+        # real read-session-write regression in those code paths still
+        # trips the assertion.
         # -----------------------------------------------------------------
         source_run_id = uuid.uuid4().hex
         now = datetime.now(UTC).replace(tzinfo=None)
-        db_session.add(RunRow(
-            id=source_run_id,
-            mode="topic_probe",
-            status="completed",
-            started_at=now,
-            completed_at=now,
-            prompts_generated=3,
-            prompt_results=_canonical_prompt_results(3),
-            aggregate=_canonical_aggregate(),
-            repo_full_name="acme/widget",
-        ))
-        await db_session.commit()
+        read_engine_meta.migration_mode = True
+        try:
+            db_session.add(RunRow(
+                id=source_run_id,
+                mode="topic_probe",
+                status="completed",
+                started_at=now,
+                completed_at=now,
+                prompts_generated=3,
+                prompt_results=_canonical_prompt_results(3),
+                aggregate=_canonical_aggregate(),
+                repo_full_name="acme/widget",
+            ))
+            await db_session.commit()
+        finally:
+            read_engine_meta.migration_mode = False
+        # Clear any caplog entries accumulated by the conftest's startup
+        # signal-extractor or other test-fixture preamble noise so the
+        # post-seed assertion below cleanly counts ONLY the T2 surface.
+        caplog.clear()
 
         # -----------------------------------------------------------------
         # Stage 2 — save-as-suite (Cycle 2 ``create_from_run``).
         # -----------------------------------------------------------------
-        save_resp = await app_client.post(
+        save_resp = await app_client_with_audit_hook.post(
             f"/api/probes/{source_run_id}/save-as-suite",
             json={"label": "audit-hook-t2-suite", "tolerance_abs": 0.5},
         )
@@ -298,7 +318,7 @@ async def test_audit_hook_emits_zero_warn_under_full_t2_pipeline(
                 # runs to completion and the orchestrator's _persist_final
                 # WriteQueue submit fires.
                 try:
-                    async with app_client.stream(
+                    async with app_client_with_audit_hook.stream(
                         "POST", "/api/probes", json=topic_body,
                     ) as topic_resp:
                         # Status 200 (SSE start) or 202 (Prefer: respond-async)
@@ -321,7 +341,7 @@ async def test_audit_hook_emits_zero_warn_under_full_t2_pipeline(
                 # generator above ensures the per-prompt loop is a no-op.
                 # -----------------------------------------------------------------
                 try:
-                    replay_resp = await app_client.post(
+                    replay_resp = await app_client_with_audit_hook.post(
                         f"/api/suites/{suite_id}/replay",
                     )
                     # 202 = accepted (canonical) or 200 = inline (legacy
@@ -337,7 +357,7 @@ async def test_audit_hook_emits_zero_warn_under_full_t2_pipeline(
         # -----------------------------------------------------------------
         # Stage 6 — retire (Cycle 3 ``ValidationSuiteService.retire``).
         # -----------------------------------------------------------------
-        retire_resp = await app_client.post(
+        retire_resp = await app_client_with_audit_hook.post(
             f"/api/suites/{suite_id}/retire",
             json={"reason": "audit-hook coverage sweep"},
         )

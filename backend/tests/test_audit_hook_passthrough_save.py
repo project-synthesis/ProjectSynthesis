@@ -71,7 +71,7 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.mark.integration
 async def test_passthrough_save_emits_zero_warn_under_raise_mode(
-    app_client: AsyncClient,
+    app_client_with_audit_hook: AsyncClient,
     db_session: AsyncSession,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -92,7 +92,7 @@ async def test_passthrough_save_emits_zero_warn_under_raise_mode(
 
     try:
         # Stage 1 — passthrough prepare creates the pending Optimization row.
-        prepare_resp = await app_client.post(
+        prepare_resp = await app_client_with_audit_hook.post(
             "/api/optimize/passthrough",
             json={
                 "prompt": (
@@ -113,7 +113,7 @@ async def test_passthrough_save_emits_zero_warn_under_raise_mode(
         # Stage 2 — passthrough save commits the row via WriteQueue closure.
         # This is the v0.4.22 audit-hook flip surface — prior to the fix
         # this raised PendingRollbackError → HTTP 500.
-        save_resp = await app_client.post(
+        save_resp = await app_client_with_audit_hook.post(
             "/api/optimize/passthrough/save",
             json={
                 "trace_id": trace_id,
@@ -157,7 +157,7 @@ async def test_passthrough_save_emits_zero_warn_under_raise_mode(
 
 @pytest.mark.integration
 async def test_update_optimization_intent_rename_emits_zero_warn_under_raise_mode(
-    app_client: AsyncClient,
+    app_client_with_audit_hook: AsyncClient,
     db_session: AsyncSession,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -179,7 +179,7 @@ async def test_update_optimization_intent_rename_emits_zero_warn_under_raise_mod
 
     try:
         # Stage 1 — create a passthrough optimization to rename.
-        prepare_resp = await app_client.post(
+        prepare_resp = await app_client_with_audit_hook.post(
             "/api/optimize/passthrough",
             json={
                 "prompt": (
@@ -192,7 +192,7 @@ async def test_update_optimization_intent_rename_emits_zero_warn_under_raise_mod
         assert prepare_resp.status_code == 200
         trace_id = prepare_resp.json()["trace_id"]
 
-        save_resp = await app_client.post(
+        save_resp = await app_client_with_audit_hook.post(
             "/api/optimize/passthrough/save",
             json={
                 "trace_id": trace_id,
@@ -208,7 +208,7 @@ async def test_update_optimization_intent_rename_emits_zero_warn_under_raise_mod
         opt_id = save_resp.json()["id"]
 
         # Stage 2 — rename via PATCH (the audit-hook flip surface).
-        patch_resp = await app_client.patch(
+        patch_resp = await app_client_with_audit_hook.patch(
             f"/api/optimize/{opt_id}",
             json={"intent_label": "renamed under RAISE flip"},
         )
@@ -335,12 +335,59 @@ async def test_rollback_seeds_initial_turn_so_subsequent_refine_works(
     assert payload.seed_turn_kwargs["scores"] == {
         "clarity": 7.0, "specificity": 7.0,
     }
-    assert "Rollback seed" in payload.seed_turn_kwargs["refinement_request"]
+    assert payload.seed_turn_kwargs["refinement_request"] == "Rollback to v1"
+
+
+@pytest.mark.integration
+async def test_audit_hook_fixture_catches_synthetic_regression(
+    app_client_with_audit_hook,  # noqa: ARG001 — fixture installs hook
+    db_session: AsyncSession,
+) -> None:
+    """Self-test: prove the ``app_client_with_audit_hook`` fixture actually
+    catches a regression that would have slipped past the plain ``app_client``.
+
+    Background — code-review HIGH finding (2026-05-12 SG-2026-05-11 Day 1):
+    the audit-hook regression tests were running against the
+    ``app_client`` fixture's separate in-memory engine that has NO audit
+    hook installed (lifespan never runs in tests), so ``caplog`` assertions
+    for ``"read-engine audit:"`` were vacuously empty regardless of whether
+    the code had regressed. This test pins the FIXTURE's contract: under
+    the new ``app_client_with_audit_hook`` fixture, a deliberate write on
+    the read-session OUTSIDE the writer-queue closure MUST trip the audit
+    hook RAISE.
+
+    If this test ever fails, it means the fixture has regressed back to
+    the dead-coverage state and EVERY other ``app_client_with_audit_hook``
+    test in this file (and ``test_audit_hook_full_t2_pipeline.py``) becomes
+    vacuous. Investigate ``conftest.py::app_client_with_audit_hook``.
+    """
+    from sqlalchemy import text
+
+    from app.config import settings as _settings
+    from app.database import WriteOnReadEngineError
+
+    _prior_raise = _settings.WRITE_QUEUE_AUDIT_HOOK_RAISE
+    _settings.WRITE_QUEUE_AUDIT_HOOK_RAISE = True
+
+    try:
+        # Deliberately issue an UPDATE on the read session WITHOUT going
+        # through the writer-queue closure. This mimics a code regression
+        # (e.g. an empty-commit-closure router that mutates ``opt.field``
+        # on the read session before submit).
+        with pytest.raises(WriteOnReadEngineError, match=r"write statement on read engine"):
+            await db_session.execute(
+                text(
+                    "UPDATE optimizations SET task_type='synthetic_regression' "
+                    "WHERE 1=0"
+                )
+            )
+    finally:
+        _settings.WRITE_QUEUE_AUDIT_HOOK_RAISE = _prior_raise
 
 
 @pytest.mark.integration
 async def test_passthrough_save_returns_completed_status_under_raise_mode(
-    app_client: AsyncClient,
+    app_client_with_audit_hook: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
     """The persisted row must transition pending → completed under RAISE.
@@ -355,7 +402,7 @@ async def test_passthrough_save_returns_completed_status_under_raise_mode(
     _settings.WRITE_QUEUE_AUDIT_HOOK_RAISE = True
 
     try:
-        prepare_resp = await app_client.post(
+        prepare_resp = await app_client_with_audit_hook.post(
             "/api/optimize/passthrough",
             json={
                 "prompt": (
@@ -368,7 +415,7 @@ async def test_passthrough_save_returns_completed_status_under_raise_mode(
         assert prepare_resp.status_code == 200
         trace_id = prepare_resp.json()["trace_id"]
 
-        save_resp = await app_client.post(
+        save_resp = await app_client_with_audit_hook.post(
             "/api/optimize/passthrough/save",
             json={
                 "trace_id": trace_id,

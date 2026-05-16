@@ -405,7 +405,12 @@ async def update_optimization(
     old_label = existing_opt.intent_label
     raw_prompt_snapshot = existing_opt.raw_prompt
 
-    # Detach read-session object to prevent incidental autoflush
+    # Expire (not detach) read-session attributes so future attribute access
+    # triggers a fresh SELECT instead of carrying any dirty state. The object
+    # remains attached to ``db`` — the snapshots above have already extracted
+    # the scalar values we need, so the only ORM access on this object after
+    # this point is via SELECT during ``_serialize_optimization``'s re-fetch
+    # below.
     db.expire(existing_opt)
 
     # Compute new label (pure)
@@ -727,8 +732,12 @@ async def passthrough_save(
     existing_intent = existing_opt.intent_label
     existing_domain_raw = existing_opt.domain_raw
 
-    # Detach the read-session object so any incidental attribute access later
-    # (e.g., during response serialization) won't autoflush.
+    # Expire (not detach) read-session attributes — the object stays
+    # attached to ``db`` but its attribute cache is invalidated. Any later
+    # attribute access will issue a fresh SELECT rather than carry dirty
+    # state from the snapshots above into an incidental autoflush. The
+    # response path below intentionally re-fetches via a fresh ``execute``
+    # so this object's lifetime ends with the snapshot extraction.
     db.expire(existing_opt)
 
     # Validate output length — reject excessively large prompts early
