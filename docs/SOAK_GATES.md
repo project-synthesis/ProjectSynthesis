@@ -465,6 +465,46 @@ These are pre-existing tech-debt — **not introduced by v0.4.22**. They're out 
 
 Recommended: file a follow-up plan under `docs/superpowers/plans/` once v0.4.22 ships, prioritising the 3 largest files (`engine.py`, `warm_phases.py`, `cold_path.py`) since they're hot/cold/warm-path centric and reviewing them is the highest-friction operation in maintaining the codebase.
 
+### Day 4 supplementary continued — diverse 5-prompt meta-test + Finding 14
+
+**Meta-test round** (post-provider-recovery, after the 14-endpoint surface sweep): a 5-prompt diverse parallel optimize batch designed to push the task-type classifier across all 7 valid task types simultaneously.
+
+| # | Strategy | Subject | Result task_type | Result domain | Score |
+|---|---|---|---|---|---|
+| 1 | chain-of-thought | analyze audit-hook test coverage gap | analysis | backend | 7.97 |
+| 2 | structured-output | systemd unit file for uvicorn | system | devops | 8.49 |
+| 3 | role-playing | v0.4.22 CHANGELOG entry | writing | backend | 8.54 |
+| 4 | few-shot | idempotent ETL pipeline design | data | data | 8.60 |
+| 5 | role-playing | short story about a daemon process | **coding** ⚠️ | fiction-techlit | 7.99 |
+
+All 5 prompts succeeded with high scores. Q_system stable (0.802 → 0.802). 3 new task-type signals + 4 new domain labels emerged (devops, data, fiction-techlit, fiction). Audit-hook clean.
+
+**Finding 14 (NEW)** — task-type classifier misclassified prompt #5 as `coding` (FIXED at `2d841a59`)
+
+Prompt #5: *"write a short story about a tiny daemon process that lives in the Linux kernel and dreams of being upgraded to a microservice — 4 paragraphs, present tense, no fourth-wall breaks"*
+
+The prompt is OBVIOUSLY creative writing. But the heuristic `rescue_task_type_via_structural_evidence()` saw the technical nouns (``daemon process``, ``kernel``, ``microservice``) and silently rewrote the creative/writing label to `coding`. The rescue was designed for code-vocabulary-but-prose-verb edge cases (``"design a class"``) but had no guard against creative-form markers (``"short story"``, ``"present tense"``, ``"fourth-wall"``).
+
+**Fix** at `backend/app/services/task_type_classifier.py`:
+- NEW `_CREATIVE_FORM_MARKERS` constant (30 form nouns + voice/POV + craft idioms)
+- NEW `_has_creative_form_marker()` helper (single-pass substring scan)
+- Guard added at the top of `rescue_task_type_via_structural_evidence()` — when the first sentence contains a creative-form marker, return `task_type` unchanged instead of rescuing to `coding`.
+
+**Live verification (post-restart, post-fix)**:
+Re-ran a similar prompt: *"write a short story about a haiku model dreaming of leveling up to opus, in present tense and no fourth-wall breaks"*
+
+Result: `task_type='creative'`, `domain='fiction'`, `intent='AI model aspiration story'`, `overall_score=8.03`. The enrichment-meta heuristic-task-type-scores show `coding=1.2 / writing=1.2 / creative=2.0` — creative correctly dominates. The optimize phase intelligently SKIPPED all 5 cluster-injected patterns (they were "hierarchical headers" patterns from backend/coding clusters — wrong fit for creative fiction). Beautifully self-aware system.
+
+**Regression coverage**: 3 new tests in `TestRescueTaskTypeViaStructuralEvidence` — pins the exact prompt shape that triggered Finding 14 + 2 sibling cases (poem with snake_case identifier, essay with PascalCase identifier).
+
+**Cumulative Day 4 work**:
+- 19 commits on PR (was 13 at Day 4 supplementary start)
+- 14 named findings (1 HIGH + 4 MED + 7 LOW + 2 architectural improvements)
+- 0 audit-hook lines across all soak observation
+- Backend tests: 3745 passed, 0 failures
+- Frontend tests: 1901/1901 passed
+- 7 distinct task_types + 7 distinct domain labels exercised under RAISE
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
