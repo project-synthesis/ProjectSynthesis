@@ -397,6 +397,74 @@ Existence check + `project_id` capture happened on the read session **BEFORE** t
 
 13/13 commits on PR. Gate continues Days 5-7.
 
+### Day 4 supplementary findings — code-quality polish + endpoint surface coverage
+
+**Finding 13 — 2 hardcoded model IDs in production paths** (FIXED at `056213ae`)
+
+Grep sweep across `backend/app/` for `claude-(sonnet|opus|haiku)-N` literals found 9 hits. 7 were legitimate (Pydantic Field descriptions + provider-capabilities parser fixtures). 2 were genuine anti-patterns:
+
+- `backend/app/services/pipeline.py:664` — SSE `status` event payload hardcoded `"claude-haiku-4-5"` as the `model` field for the suggest phase. Drifts on default bump; operator overrides of `MODEL_HAIKU` don't propagate into observability.
+- `backend/app/services/rate_limit_state.py:476` — rate-limit recovery probe call hardcoded `model="claude-haiku-4-5"`. The probe is exactly the path that needs to survive provider-tier rollouts.
+
+Both fixed by replacing the literal with `settings.MODEL_HAIKU` from the config singleton. The comment "# cheapest model" preserved at the probe site (still true; now also configurable).
+
+Verified clean state — remaining `claude-*-N` matches are all in:
+- `schemas/mcp_models.py` (Pydantic Field descriptions — documentation)
+- `providers/capabilities.py` (parsing/normalisation fixtures)
+- `routers/settings.py` (response-schema Field description)
+
+**Endpoint surface coverage (Day 4 supplementary)** — meta-test sweep across previously-untested surfaces, all clean under RAISE:
+
+| Surface | Test | Outcome |
+|---|---|---|
+| `GET /api/strategies` | List 6 strategies | ✅ |
+| `GET /api/strategies/{name}` | 1412-char `content` | ✅ |
+| `GET /api/preferences` | 6 top-level keys, strict schema | ✅ |
+| `PATCH /api/preferences` (invalid key) | 422 — extra_forbidden | ✅ (strict schema works) |
+| `GET /api/clusters/tree` | 9 nodes, hierarchy intact | ✅ |
+| `GET /api/clusters/stats` | Q_system=0.80, q_health=0.75 | ✅ |
+| `POST /api/clusters/repair` | 14 join deleted + 12 created + 36 meta-patterns created | ✅ (taxonomy repair functional under RAISE) |
+| `POST /api/probes/{id}/save-as-suite` | 201 + full ValidationSuite | ✅ |
+| `GET /api/suites` / `/api/suites/{id}` / `/replays` | Paginated, empty-envelope-not-404 | ✅ |
+| `POST /api/suites/{id}/retire` | 200 + retired_at + retired_reason | ✅ |
+| `GET /api/domains/readiness?fresh=true` | 2 domains, stability/emergence computed | ✅ |
+| `GET /api/taxonomy/pattern-density?period=7d` | 2 domain rollups, 60 total meta-patterns | ✅ |
+| `GET /api/runs` (+filters) | mode/status filters work, 3 total / 2 topic_probe / 1 seed_agent | ✅ |
+| Error envelope (404/422/400/405) | Consistent `{detail: ...}` shape | ✅ |
+
+**Code-quality grep sweep clean (Day 4)**:
+- 0 bare `except:` clauses
+- 0 `print()` statements in production
+- 0 `time.sleep()` in async paths (all use `asyncio.sleep()`)
+- 0 f-string logger calls (all parameterized per code-reviewer rubric)
+- 27 `assert` statements — all module-level invariants or test/setup contexts (acceptable; never run under `-O` strip in production)
+
+### Known follow-up: file-size violations (out of soak-gate scope)
+
+The Day 4 grep also surfaced 15 files exceeding the `backend/CLAUDE.md` 800-line guidance:
+
+| File | Lines |
+|---|---|
+| `services/taxonomy/engine.py` | 5696 |
+| `services/taxonomy/warm_phases.py` | 4682 |
+| `services/taxonomy/cold_path.py` | 2620 |
+| `main.py` | 2165 |
+| `services/repo_index_service.py` | 2036 |
+| `mcp_server.py` | 1638 |
+| `services/taxonomy/warm_path.py` | 1542 |
+| `services/pipeline_phases.py` | 1417 |
+| `services/taxonomy/family_ops.py` | 1347 |
+| `services/validation_suite_service.py` | 1294 |
+| `services/context_enrichment.py` | 1267 |
+| `services/taxonomy/sub_domain_readiness.py` | 1255 |
+| `routers/clusters.py` | 1074 |
+| `services/update_service.py` | 1050 |
+| `services/routing.py` | 1042 |
+
+These are pre-existing tech-debt — **not introduced by v0.4.22**. They're out of scope for the soak gate (the gate is for write-path observability), but should be tracked as a separate refactor cycle. The taxonomy engine alone is 7× over the guidance; a focused Phase 3-style split (analogous to the `repo_index_service` v0.4.x Phase 3C split) would address this without risking v0.4.22 ship.
+
+Recommended: file a follow-up plan under `docs/superpowers/plans/` once v0.4.22 ships, prioritising the 3 largest files (`engine.py`, `warm_phases.py`, `cold_path.py`) since they're hot/cold/warm-path centric and reviewing them is the highest-friction operation in maintaining the codebase.
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
