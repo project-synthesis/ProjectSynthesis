@@ -671,6 +671,51 @@ def has_technical_nouns(first_sentence: str) -> bool:
 _TASK_TYPE_RESCUE_TARGETS: frozenset[str] = frozenset({"creative", "writing"})
 
 
+#: Words that, when present in the first sentence, signal the prompt is
+#: explicitly a creative-writing exercise — overriding the structural-evidence
+#: rescue even if technical nouns appear in the subject.
+#:
+#: Surfaced during v0.4.22 SG Day 4 meta-test (2026-05-15, prompt #5):
+#: "write a short story about a tiny daemon process..." was misclassified
+#: as ``coding`` because ``daemon process`` / ``kernel`` / ``microservice``
+#: triggered the technical-noun branch. A short story IS creative
+#: regardless of its subject matter — the form markers below outweigh
+#: technical-noun rescue signals.
+#:
+#: Selection criteria: each token names a creative-writing form (story,
+#: poem, novel) or an explicit prose-craft constraint (stanza, verse,
+#: fourth-wall, first-person). Generic words like ``write`` or ``draft``
+#: are NOT in this set because they apply equally to coding (``write a
+#: function``) and creative writing — the discriminator is the FORM noun,
+#: not the lead verb.
+_CREATIVE_FORM_MARKERS: frozenset[str] = frozenset({
+    "story", "stories", "short-story", "short story",
+    "poem", "poems", "poetry", "verse", "verses", "stanza", "stanzas",
+    "novel", "novella", "novellas", "fiction", "narrative", "narratives",
+    "essay", "essays", "memoir", "memoirs",
+    "screenplay", "screenplays", "monologue", "monologues",
+    "dialogue", "dialogues",
+    "vignette", "vignettes",
+    "song", "lyric", "lyrics",
+    "fourth-wall", "fourth wall",
+    "first-person", "first person",
+    "third-person", "third person",
+    "present-tense", "present tense",
+})
+
+
+def _has_creative_form_marker(first_sentence_lower: str) -> bool:
+    """Return True if the first sentence carries an explicit creative-form marker.
+
+    Single-pass substring scan (not word-boundary) so multi-word phrases like
+    ``"short story"`` / ``"fourth wall"`` / ``"present tense"`` are caught
+    regardless of surrounding punctuation. The set is short enough (~30
+    entries) that linear scan is faster than building a regex alternation
+    per call.
+    """
+    return any(marker in first_sentence_lower for marker in _CREATIVE_FORM_MARKERS)
+
+
 def rescue_task_type_via_structural_evidence(
     task_type: str, raw_prompt: str,
 ) -> tuple[str, str | None]:
@@ -727,6 +772,21 @@ def rescue_task_type_via_structural_evidence(
     if not first_sentence_original:
         return (task_type, None)
     first_sentence_lower = first_sentence_original.lower()
+
+    # v0.4.22 SG Day 4 Finding 14: skip the structural rescue when the first
+    # sentence explicitly names a creative-writing form. A "short story
+    # about a daemon process" or a "poem about garbage collection" IS
+    # creative writing regardless of how many technical nouns appear in
+    # the subject. Form markers (``story`` / ``poem`` / ``fourth wall`` /
+    # ``present tense``) are stronger signals than technical-noun
+    # vocabulary because they directly identify the prompt as a
+    # creative-writing exercise. The rescue's original use case
+    # ("design a class" / "create the schema") has no such form marker —
+    # so the gate only fires on genuine creative-writing prompts, not on
+    # the code-vocabulary-but-prose-verb edge case the rescue was built
+    # for.
+    if _has_creative_form_marker(first_sentence_lower):
+        return (task_type, None)
 
     # Layer 1: syntactic identifier scan on ORIGINAL-case tokens.
     syntactic_reason: str | None = None
