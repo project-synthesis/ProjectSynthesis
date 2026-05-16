@@ -629,6 +629,87 @@ class TestRescueTaskTypeViaStructuralEvidence:
         assert reason is not None
         assert "_spawn_bg_task" in reason
 
+    def test_creative_with_explicit_story_form_marker_not_rescued(self):
+        """v0.4.22 SG Day 4 Finding 14 (2026-05-15): a short story prompt
+        about technical subject matter must NOT be silently re-classified
+        as ``coding``.
+
+        The misclassification was discovered during the Day 4 meta-test
+        round (commit 24c288c0). Prompt #5 was:
+
+            "write a short story about a tiny daemon process that lives
+             in the Linux kernel and dreams of being upgraded to a
+             microservice — 4 paragraphs, present tense, no fourth-wall
+             breaks"
+
+        The technical nouns (``daemon process``, ``kernel``,
+        ``microservice``) tripped the technical-noun branch of the
+        rescue. But the prompt is OBVIOUSLY creative writing — the
+        ``short story`` / ``present tense`` / ``fourth-wall`` form
+        markers are dispositive.
+
+        Fix: ``_has_creative_form_marker`` is checked BEFORE the
+        structural-evidence scan, and returns the original task_type
+        unchanged when a form marker is present.
+        """
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = (
+            "write a short story about a tiny daemon process that lives "
+            "in the Linux kernel and dreams of being upgraded to a "
+            "microservice — 4 paragraphs, present tense, no fourth-wall "
+            "breaks"
+        )
+        rescued, reason = rescue_task_type_via_structural_evidence(
+            "creative", prompt,
+        )
+        assert rescued == "creative", (
+            f"creative-form-marked prompt must NOT be rescued to coding; "
+            f"got {rescued!r}"
+        )
+        assert reason is None
+
+    def test_writing_with_poem_form_marker_not_rescued(self):
+        """A poem about garbage collection is creative writing, not coding.
+
+        Covers the same Finding 14 fix surface with a different
+        creative form (poem) + different technical vocab.
+        """
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = (
+            "write a poem about an _gc_orphan_runs sweep finding three "
+            "stuck RunRow rows at midnight"
+        )
+        rescued, reason = rescue_task_type_via_structural_evidence(
+            "writing", prompt,
+        )
+        assert rescued == "writing"
+        assert reason is None
+
+    def test_essay_form_marker_overrides_pascal_case_identifier(self):
+        """``essay`` is a creative-writing form even though the prompt
+        names a PascalCase class identifier — form beats syntax.
+        """
+        from app.services.task_type_classifier import (
+            rescue_task_type_via_structural_evidence,
+        )
+
+        prompt = (
+            "Write a personal essay reflecting on the day the "
+            "EmbeddingService.embed_single method changed the team's "
+            "approach to incremental indexing."
+        )
+        rescued, reason = rescue_task_type_via_structural_evidence(
+            "writing", prompt,
+        )
+        assert rescued == "writing"
+        assert reason is None
+
 
 class TestStaticSingleSignalsSurviveDynamicMerge:
     """B6: `set_task_type_signals()` must not wipe the default single-word
