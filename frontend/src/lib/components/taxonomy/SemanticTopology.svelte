@@ -1428,9 +1428,24 @@
           // No-op — `_tickFlashStates` (which runs earlier in the per-frame
           // callback chain) already set the correct phase-driven value.
         } else if (isSelected) {
-          // Normal idle pulse: selected node glows gently between beam events
-          const idlePulse = Math.sin(_breathingTime * 0.4) * 0.2 + 0.2;
-          mat.emissiveIntensity = baseEmissive + idlePulse;
+          // Idle ambient pulse on the selected node (canon T3.4). MUST cross
+          // the bloom threshold (UnrealBloomPass strength=1.5, threshold=0.85)
+          // for ALL clusters regardless of baseline so the selection feedback
+          // is visually consistent — operator-reported regression where only
+          // MATURE/domain nodes (baseline ~1.1) showed the continuous
+          // engulfment because their `baseEmissive + idlePulse` stayed above
+          // 0.85, while ACTIVE clusters (baseline ~0.5-0.6) stayed below
+          // bloom for ~half the pulse cycle and looked "dim/dead." Fix uses
+          // `Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR)` so the pulse
+          // is rooted at a luminance that always blooms, then adds the
+          // sin-wave delta on top — preserves the data-driven asymmetry for
+          // high-baseline mature/domain clusters (they still glow brighter
+          // because baseEmissive > floor) while restoring visibility for
+          // low-baseline active clusters.
+          const SELECTION_EMISSIVE_FLOOR = 1.0;
+          const idlePulse = Math.sin(_breathingTime * 0.4) * 0.3 + 0.5;
+          mat.emissiveIntensity =
+            Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR) + idlePulse;
         } else {
           // Ensure unselected nodes remain at base emissive intensity
           mat.emissiveIntensity = baseEmissive;

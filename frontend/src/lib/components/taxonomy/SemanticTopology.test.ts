@@ -2811,4 +2811,43 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   });
 
 
+  it('source: selection idle pulse uses SELECTION_EMISSIVE_FLOOR so the pulse crosses bloom threshold for ALL clusters (Engulfment-Visibility regression)', () => {
+    // Live-observed: even after the flash-override fix landed, the user reported
+    // only MATURE/database clusters showed the continuous engulfment glow on
+    // selection. Root cause: the IDLE PULSE for selected nodes (NOT the flash)
+    // is what produces the sustained breathing effect the operator perceives
+    // as "the engulfment." Pre-fix the formula was
+    // `baseEmissive + Math.sin(...) * 0.2 + 0.2` (range [base, base+0.4]).
+    // For MATURE clusters with baseEmissive ~1.1 this stayed above the
+    // UnrealBloomPass threshold (0.85) for the entire pulse cycle. For ACTIVE
+    // clusters with baseEmissive ~0.5-0.6 the pulse only crossed bloom near
+    // its peak and sat sub-bloom most of the cycle — producing a visually
+    // dead selection state.
+    //
+    // Fix: root the pulse at `Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR)`
+    // where the floor is >= the bloom threshold + margin (1.0). Then the
+    // sin-wave delta is added on top. Mature clusters with baseEmissive > floor
+    // preserve their data-driven asymmetry; active clusters get lifted to a
+    // visible baseline.
+    const src = _semTopSrc();
+
+    // Locate the selection idle-pulse branch.
+    const selectionBranchMatch = src.match(
+      /\} else if \(isSelected\) \{([\s\S]*?)\} else \{/,
+    );
+    expect(selectionBranchMatch).not.toBeNull();
+    const body = selectionBranchMatch![1];
+
+    // The floor constant must exist (named, not a magic number, so future
+    // editors don't regress it).
+    expect(body).toMatch(/SELECTION_EMISSIVE_FLOOR\s*=\s*1\.0/);
+
+    // The floor must be USED via Math.max against baseEmissive so the lift
+    // is conditional (mature clusters preserved at their natural baseline).
+    expect(body).toMatch(
+      /Math\.max\(\s*baseEmissive\s*,\s*SELECTION_EMISSIVE_FLOOR\s*\)/,
+    );
+  });
+
+
 });
