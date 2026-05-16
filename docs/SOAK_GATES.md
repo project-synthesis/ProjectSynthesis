@@ -777,7 +777,7 @@ Fix: snapshot builder now reads `r.get("raw_prompt") or r.get("prompt_text") or 
 
 **Outcome**: 🟢 **PASS (evidence-based)** per decision-matrix row 2 (✅ coverage floor met, 0 cumulative WARN, 0 unique new sources).
 
-**Calendar buffer remaining**: ~42 hours until the time-based release gate opens at 2026-05-18T00:00:00Z. The branch is in steady-state observation mode for this window; no further proactive work needed.
+**Early-ship decision (2026-05-16T06:30Z)**: Per operator authorization, shipping v0.4.22 on Day 5 of the 7-day soak window (~42h ahead of the documented ≥2026-05-18 minimum). Rationale: the evidence-based PASS condition is met independent of calendar time — coverage floor exceeded (C1=4, C2=7, C3=8), zero WARN across the full window, zero new sources surfaced after Day 1's documented bug-pattern cluster. The remaining calendar buffer was conservative protection against late-discovery findings; the Day 5 supplementary surge (Findings 14-20) compressed that risk-window's expected yield into the first 5 days. Documenting here for audit trail per the soak-gate kill-switch contract.
 
 **Final pre-release gate sheet (verified 2026-05-16T06:25Z)**:
 
