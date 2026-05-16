@@ -15,11 +15,13 @@ Surface contract pinned by these tests (spec §4):
 
 * ``POST /api/probes/{run_id}/save-as-suite``  → 201 / 400 / 404 / 409 / 429
   (rate-limit 20/min); body ``SaveSuiteRequest{label, tolerance_abs?}``
-* ``POST /api/suites/{suite_id}/replay``       → 202 / 404 / 409 / 429
-  (rate-limit 5/min); placeholder dispatch INSERTs the initial
-  ``RunRow(mode='replay_run', status='running', suite_id=...)`` and returns
-  immediately — no generator spawn (Cycle 5 GREEN-step shape per spec §10
-  Cycle 5; full spawn lands in Cycle 6+8)
+* ``POST /api/suites/{suite_id}/replay``       → 202 / 404 / 409 / 429 / 503
+  (rate-limit 5/min); dispatches the :class:`ReplayRunGenerator` via
+  ``app.state.run_orchestrator.dispatch_async(mode='replay_run', ...)``.
+  Orchestrator awaits the initial
+  ``RunRow(mode='replay_run', status='running', suite_id=...)`` INSERT
+  BEFORE the 202 returns, so callers can poll
+  ``GET /api/runs/{run_id}`` race-free.
 * ``GET /api/suites``                          → 200; paginated envelope
 * ``GET /api/suites/{suite_id}``               → 200 / 404
 * ``GET /api/suites/{suite_id}/replays``       → 200; paginated envelope
@@ -44,16 +46,20 @@ the 5/min rate limit (spec §10 Cycle 5 attention table).
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import RunRow, ValidationSuite
+from app.schemas.runs import RunRequest
+from app.services.generators.base import GeneratorResult
 
 pytestmark = pytest.mark.asyncio
 
@@ -75,6 +81,86 @@ def reset_rate_limit() -> Any:
     reset_rate_limit_storage()
     yield
     reset_rate_limit_storage()
+
+
+class _StubReplayGenerator:
+    """Deterministic replay-generator stub for router tests (Finding 15).
+
+    Records every ``(request, run_id)`` call into :attr:`calls` so tests can
+    assert the router actually dispatched the generator (not just INSERTed
+    a placeholder row). Yields a single event-loop tick to honour the
+    canonical ``RunGenerator`` Protocol contract before returning a
+    minimal :class:`GeneratorResult` with ``terminal_status='completed'``.
+
+    The 8-key ``aggregate`` block matches the production
+    ``compute_run_aggregate`` shape consumed by ``_persist_final`` so the
+    write path exercises the production columns. ``prompt_results`` is
+    intentionally empty — these router tests cover the dispatch contract,
+    not per-prompt fan-out (which lives in
+    ``tests/test_replay_run_generator.py``).
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[RunRequest, str]] = []
+
+    async def run(
+        self, request: RunRequest, *, run_id: str,
+    ) -> GeneratorResult:
+        self.calls.append((request, run_id))
+        # Yield a tick so the orchestrator's spawned task ordering matches
+        # production (the SSE consumer side has no router test coverage —
+        # we only need to honour the Protocol).
+        await asyncio.sleep(0)
+        return GeneratorResult(
+            terminal_status="completed",
+            prompts_generated=0,
+            prompt_results=[],
+            aggregate={
+                "mean_overall": 0.0,
+                "p5_overall": 0.0,
+                "p50_overall": 0.0,
+                "p95_overall": 0.0,
+                "completed_count": 0,
+                "failed_count": 0,
+                "f5_flag_fires": 0,
+                "scoring_formula_version": 4,
+            },
+            taxonomy_delta={},
+            final_report="# Replay Report\n\n_stub_",
+        )
+
+
+@pytest_asyncio.fixture
+async def stub_run_orchestrator(
+    app_client: AsyncClient, db_session: AsyncSession,
+) -> Any:
+    """Install a stub :class:`RunOrchestrator` on ``app.state.run_orchestrator``.
+
+    Mirrors the canonical fixture in ``tests/test_probe_router.py::stub_run_orchestrator``.
+    Uses the test ``write_queue`` so the initial ``_create_row`` INSERT lands
+    on the in-memory SQLite engine — the test can read the row back via the
+    same ``db_session``. Wires :class:`_StubReplayGenerator` under
+    ``mode='replay_run'`` so a 202 from the suites router dispatches
+    *something* (rather than 503 ``run_orchestrator_unavailable``).
+
+    Returned object: the :class:`_StubReplayGenerator` instance, so tests
+    can assert on ``.calls`` for dispatch evidence.
+    """
+    from app.main import app
+    from app.services.run_orchestrator import RunOrchestrator
+
+    write_queue = app.state.write_queue
+    stub_gen = _StubReplayGenerator()
+    orchestrator = RunOrchestrator(
+        write_queue=write_queue,
+        generators={"replay_run": stub_gen},
+    )
+    previous = getattr(app.state, "run_orchestrator", None)
+    app.state.run_orchestrator = orchestrator
+    try:
+        yield stub_gen
+    finally:
+        app.state.run_orchestrator = previous
 
 
 def _canonical_aggregate(mean: float = 7.85) -> dict:
@@ -535,6 +621,7 @@ async def test_save_as_suite_rate_limit_20_per_minute_returns_429_after_threshol
 
 async def test_replay_returns_202_with_replay_run_out_body_and_location_retry_after_headers(
     app_client: AsyncClient, db_session: AsyncSession,
+    stub_run_orchestrator: Any,
 ) -> None:
     """Spec §4 line 276 — replay returns 202 Accepted with a
     :class:`ReplayRunOut` body plus ``Location`` + ``Retry-After`` headers.
@@ -543,10 +630,11 @@ async def test_replay_returns_202_with_replay_run_out_body_and_location_retry_af
       ``run_id`` (str), ``suite_id`` (str), ``mode='replay_run'``,
       ``status='running'``, ``started_at`` (datetime), ``poll_url`` (str).
 
-    Cycle 5 GREEN-step (per spec §10 Cycle 5) ships the 202 + initial INSERT
-    only — the generator does NOT spawn yet. End-to-end replay completion
-    lands in Cycle 8 once ``dispatch_async()`` + ``ReplayRunGenerator``
-    registration both exist.
+    Spec §10 Cycles 5 + 6 + 8 combined ship the 202 response + initial INSERT
+    + generator dispatch in one router call. End-to-end replay completion is
+    exercised through the stub generator fixture — a real
+    :class:`ReplayRunGenerator` would require a full provider + suite-snapshot
+    pipeline, which lives in ``tests/test_replay_run_generator.py``.
 
     ``Location`` header must equal ``poll_url`` (RFC 7240 + spec §4 line 290
     precedent block). ``Retry-After`` is an integer-seconds hint to the
@@ -591,18 +679,23 @@ async def test_replay_returns_202_with_replay_run_out_body_and_location_retry_af
 
 async def test_replay_inserts_initial_run_row_mode_replay_run_status_running_suite_id_set(
     app_client: AsyncClient, db_session: AsyncSession,
+    stub_run_orchestrator: Any,
 ) -> None:
-    """The 202 placeholder dispatch INSERTs a ``RunRow`` with
-    ``mode='replay_run'``, ``status='running'``, and ``suite_id`` pointing
-    back to the source suite.
+    """``dispatch_async`` INSERTs a ``RunRow`` with ``mode='replay_run'``,
+    ``status='running'``, and ``suite_id`` pointing back to the source suite
+    BEFORE the 202 returns (race-safety contract per spec §8).
 
-    Spec §10 Cycle 5 GREEN-step note: "it INSERTs the initial
-    ``RunRow(mode='replay_run', status='running', suite_id=...)`` via
-    ``WriteQueue.submit()`` and returns 202 immediately, without spawning
-    the generator". The orphan ``running`` row is reconciled by the
-    existing ``_gc_orphan_runs`` sweep within 1h TTL until Cycle 6+8 land
-    the real spawn primitive — Cycle 5 OPERATE confirms the GC handles
-    the placeholder.
+    Spec §10 Cycles 5 + 6 + 8 combined: the orchestrator's ``_create_row``
+    awaits the INSERT inside ``dispatch_async`` so a caller's immediate
+    ``GET /api/runs/{run_id}`` is race-free. The spawned background task
+    then drives the generator to a terminal status.
+
+    The status field is intentionally NOT asserted because the spawned
+    stub generator may transition the row to ``completed`` before the test
+    DB query lands (asyncio cooperative scheduling). The time-invariant
+    columns (``mode``, ``suite_id``) are the canonical evidence — the
+    row's status lifecycle is covered by :func:`test_replay_dispatches_generator_via_run_orchestrator`
+    below (which asserts on ``.calls`` directly).
 
     DB query is the canonical evidence (Foundation P4 OPERATE/O1) — we
     never trust the 202 response body alone as proof of persistence.
@@ -623,11 +716,69 @@ async def test_replay_inserts_initial_run_row_mode_replay_run_status_running_sui
     assert row.mode == "replay_run", (
         f"expected mode='replay_run', got {row.mode!r}"
     )
-    assert row.status == "running", (
-        f"expected status='running', got {row.status!r}"
-    )
     assert row.suite_id == suite_id, (
         f"expected suite_id={suite_id!r}, got {row.suite_id!r}"
+    )
+    # ``status`` is in flux — the stub generator may have completed by
+    # now and ``_persist_final`` may have flipped the row to ``completed``.
+    # Both are valid terminal/intermediate states.
+    assert row.status in ("running", "completed"), (
+        f"expected status in {{'running', 'completed'}}, got {row.status!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8.5 (Finding 15) — replay endpoint actually dispatches the
+# ReplayRunGenerator (not just the placeholder INSERT)
+# ---------------------------------------------------------------------------
+
+
+async def test_replay_dispatches_generator_via_run_orchestrator(
+    app_client: AsyncClient, db_session: AsyncSession,
+    stub_run_orchestrator: Any,
+) -> None:
+    """``POST /api/suites/{id}/replay`` MUST dispatch the
+    :class:`ReplayRunGenerator` via
+    ``app.state.run_orchestrator.dispatch_async`` — not merely INSERT a
+    placeholder ``RunRow``. The placeholder-only behaviour was Finding 15
+    of the SG-2026-05-11 soak gate (replay endpoint returned 202 but the
+    generator never ran, leaving operators with rows stuck at
+    ``status='running'`` for the full 1h ``_gc_orphan_runs`` TTL).
+
+    Evidence: ``stub_run_orchestrator.calls`` is populated with exactly one
+    ``(request, run_id)`` tuple after the 202. The request payload carries
+    ``suite_id`` + ``project_id`` + ``repo_full_name`` so the generator's
+    suite-snapshot loader has the keys it expects per
+    ``ReplayRunGenerator.run`` (spec §5 lines 113-115).
+    """
+    suite_id = await _seed_suite_via_service(db_session)
+
+    resp = await app_client.post(f"/api/suites/{suite_id}/replay")
+    assert resp.status_code == 202
+    run_id = resp.json()["run_id"]
+
+    # Yield to the event loop so the spawned ``_run_to_completion`` task
+    # gets a chance to call ``generator.run()`` before we assert.
+    # ``stub_run_orchestrator.run`` itself awaits ``asyncio.sleep(0)``, so
+    # one tick here is enough to clear both ``create_task`` levels.
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+    assert len(stub_run_orchestrator.calls) == 1, (
+        f"expected exactly 1 dispatch of ReplayRunGenerator, got "
+        f"{len(stub_run_orchestrator.calls)}: {stub_run_orchestrator.calls!r}"
+    )
+    call_request, call_run_id = stub_run_orchestrator.calls[0]
+    assert call_run_id == run_id, (
+        f"generator received run_id={call_run_id!r}; response body "
+        f"returned {run_id!r}"
+    )
+    assert call_request.mode == "replay_run", (
+        f"expected RunRequest.mode='replay_run', got {call_request.mode!r}"
+    )
+    assert call_request.payload.get("suite_id") == suite_id, (
+        f"expected payload['suite_id']={suite_id!r}, got "
+        f"{call_request.payload.get('suite_id')!r}"
     )
 
 
@@ -686,6 +837,7 @@ async def test_replay_suite_not_found_or_retired_combined(
 
 async def test_replay_rate_limit_5_per_minute_returns_429(
     app_client: AsyncClient, db_session: AsyncSession,
+    stub_run_orchestrator: Any,
 ) -> None:
     """Spec §4 line 276 — 5/min rate limit on ``POST /api/suites/{id}/replay``.
 

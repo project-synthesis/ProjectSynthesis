@@ -5,8 +5,9 @@ Spec: ``docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md`` §4
 
 Six endpoints, all of which delegate persistence to
 :class:`ValidationSuiteService` (Cycles 2-4) — the router NEVER touches the DB
-directly except for the replay-placeholder ``RunRow`` INSERT, which routes
-through ``app.state.write_queue.submit()`` per the Foundation P4 contract.
+directly. The replay endpoint dispatches the :class:`ReplayRunGenerator`
+through ``app.state.run_orchestrator.dispatch_async()``, which performs the
+initial ``RunRow`` INSERT inside its own writer closure (Foundation P4 contract).
 
 Endpoints
 ---------
@@ -57,14 +58,16 @@ translated via :func:`_classify_validation_error` → the canonical 400-with-cod
 envelope. FastAPI's default 422 response would break the spec §4 error-
 envelope contract.
 
-Replay endpoint (Cycle 5 GREEN-step shape per spec §10 Cycle 5)
----------------------------------------------------------------
-:func:`replay_suite` returns 202 immediately after INSERTing the initial
-``RunRow(mode='replay_run', status='running', suite_id=...)`` through the
-write queue. NO generator spawn — that lands in Cycle 6 (registers
-``ReplayRunGenerator`` in lifespan) + Cycle 8 (``dispatch_async``) together.
-The orphan ``status='running'`` row is intentional and reconciled by the
-existing ``_gc_orphan_runs`` sweep within 1h TTL.
+Replay endpoint (spec §10 Cycles 5 + 6 + 8 combined)
+----------------------------------------------------
+:func:`replay_suite` dispatches the :class:`ReplayRunGenerator` via
+``app.state.run_orchestrator.dispatch_async(mode='replay_run', ...)`` and
+returns 202 Accepted immediately. ``dispatch_async`` awaits the initial
+``RunRow(mode='replay_run', status='running', suite_id=...)`` INSERT BEFORE
+returning — the caller's immediate ``GET /api/runs/{run_id}`` is race-safe.
+The spawned ``_run_to_completion`` task drives the generator to a terminal
+``completed`` / ``partial`` / ``failed`` status; ``_gc_orphan_runs`` reconciles
+any rows that miss terminal cleanup (1h TTL — defense-in-depth for crashes).
 
 Scope hardness (spec §14): NO ``PATCH /api/suites/{id}`` route. Suites are
 immutable after creation; the ONLY state transition is the retire soft-delete
@@ -83,11 +86,9 @@ from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ValidationError
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.rate_limit import RateLimit
-from app.models import RunRow
-from app.schemas.runs import RunListResponse
+from app.schemas.runs import RunListResponse, RunRequest
 from app.schemas.validation_suite import (
     ReplayRunOut,
     RetireSuiteRequest,
@@ -456,21 +457,24 @@ async def replay_suite(
     request: Request,
     response: Response,
 ) -> ReplayRunOut:
-    """Kick off a replay run against a suite (placeholder dispatch).
+    """Kick off a replay run against a suite.
 
     Spec §4 line 276 — 202 Accepted, 5/min rate limit. ``Location`` header
     mirrors ``poll_url`` (RFC 7240); ``Retry-After`` is a polling hint
     (integer seconds).
 
-    Cycle 5 GREEN-step shape per spec §10 Cycle 5: this handler INSERTs the
-    initial ``RunRow(mode='replay_run', status='running', suite_id=...)``
-    via ``WriteQueue.submit()`` and returns 202 immediately — NO generator
-    spawn yet. Cycle 6 + Cycle 8 together land the real ``dispatch_async``
-    + ``ReplayRunGenerator`` registration. The orphan ``status='running'``
-    row is reconciled by the existing ``_gc_orphan_runs`` sweep within 1h.
+    Spec §10 Cycles 5 + 6 + 8 combined: dispatches the
+    :class:`ReplayRunGenerator` via
+    ``app.state.run_orchestrator.dispatch_async(mode='replay_run', ...)``.
+    The orchestrator awaits the initial
+    ``RunRow(mode='replay_run', status='running', suite_id=...)`` INSERT
+    BEFORE returning, so the caller's immediate ``GET /api/runs/{run_id}``
+    is race-safe. The spawned ``_run_to_completion`` task drives the
+    generator to a terminal status under ``asyncio.shield`` — closing the
+    202 HTTP connection cannot cancel the run.
 
-    Precondition checks fire BEFORE the placeholder dispatch — no RunRow is
-    written when the suite is missing (404) or retired (409).
+    Precondition checks fire BEFORE dispatch — no RunRow is written when
+    the suite is missing (404) or retired (409).
 
     Parameters
     ----------
@@ -496,6 +500,9 @@ async def replay_suite(
         * 404 ``suite_not_found`` — no row matches ``suite_id``.
         * 409 ``suite_retired`` — suite exists but ``retired_at`` is set.
         * 429 — rate limit (5/min) exceeded.
+        * 503 ``run_orchestrator_unavailable`` — defensive guard surfaces
+          only if lifespan failed to register the orchestrator (matches the
+          ``routers/probes.py`` precedent).
     """
     # ---- Precondition: suite must exist + not be retired ----
     try:
@@ -506,38 +513,53 @@ async def replay_suite(
     if suite.retired_at is not None:
         raise HTTPException(status_code=409, detail="suite_retired")
 
-    # ---- Mint replay run_id + INSERT placeholder RunRow via WriteQueue ----
+    # ---- Resolve orchestrator (defensive — matches probes.py precedent) ----
+    orchestrator = getattr(request.app.state, "run_orchestrator", None)
+    if orchestrator is None:
+        # Surfaces only if lifespan failed to register the orchestrator
+        # (e.g., WriteQueue init failed). Symmetric with the probes router
+        # so observability dashboards can switch on a single reason code.
+        raise HTTPException(
+            status_code=503, detail="run_orchestrator_unavailable",
+        )
+
+    # ---- Mint replay run_id + dispatch ReplayRunGenerator ----
     run_id = uuid.uuid4().hex
     # Naive UTC for SQLite DateTime column compatibility (matches RunRow
     # column convention — see ``_seed_completed_probe_run`` test helper and
-    # ``services/run_orchestrator.py`` _create_row pattern).
+    # ``services/run_orchestrator.py`` _create_row pattern). The
+    # orchestrator's ``_create_row`` will use its own ``_utcnow()`` for the
+    # actual row write; the response timestamp is the caller-facing
+    # contract (microseconds-earlier — within the SQLite resolution
+    # tolerance accepted across the codebase).
     started_at = datetime.now(UTC).replace(tzinfo=None)
 
-    async def _persist_initial_run_row(db: AsyncSession) -> None:
-        """Writer-queue callback — INSERT the placeholder RunRow.
+    # ``RunRequest.payload`` carries the keys ``_create_row`` reads:
+    #   * ``suite_id``      — pinned to ``RunRow.suite_id`` (regression-alarm JOIN)
+    #   * ``project_id``    — denormalized project provenance from suite
+    #   * ``repo_full_name``— denormalized repo provenance from suite
+    # ``ReplayRunGenerator.run()`` reads ``suite_id`` + (optional)
+    # ``repo_full_name`` / ``project_id`` from the same payload, so a single
+    # source of truth flows through both the row INSERT and the generator
+    # body.
+    run_request = RunRequest(
+        mode="replay_run",
+        payload={
+            "suite_id": suite_id,
+            "project_id": suite.project_id,
+            "repo_full_name": suite.repo_full_name,
+        },
+    )
 
-        Runs on the writer engine. The placeholder row carries every column
-        the GC sweep needs to reconcile orphans (``mode='replay_run'``,
-        ``status='running'``, ``suite_id``) plus the provenance columns
-        (``project_id``, ``repo_full_name``) carried over from the suite.
-        """
-        row = RunRow(
-            id=run_id,
-            mode="replay_run",
-            status="running",
-            started_at=started_at,
-            suite_id=suite_id,
-            project_id=suite.project_id,
-            repo_full_name=suite.repo_full_name,
-        )
-        db.add(row)
-        await db.commit()
-
-    write_queue = request.app.state.write_queue
-    await write_queue.submit(
-        _persist_initial_run_row,
-        timeout=30,
-        operation_label="replay_run_create_initial",
+    # ``dispatch_async`` awaits the initial RunRow INSERT before returning,
+    # so the caller's immediate ``GET /api/runs/{run_id}`` is race-safe (spec
+    # §8 race-safety + §10 Cycle 8 OPERATE O1). The spawned background task
+    # runs under ``asyncio.shield`` — closing the 202 HTTP connection cannot
+    # cancel the replay.
+    await orchestrator.dispatch_async(
+        mode="replay_run",
+        request=run_request,
+        run_id=run_id,
     )
 
     # ---- Response headers + body ----
