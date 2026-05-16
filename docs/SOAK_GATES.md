@@ -505,6 +505,40 @@ Result: `task_type='creative'`, `domain='fiction'`, `intent='AI model aspiration
 - Frontend tests: 1901/1901 passed
 - 7 distinct task_types + 7 distinct domain labels exercised under RAISE
 
+### Day 4 supplementary continued — T2 surface coverage + Finding 15
+
+**Stage R probe** — exercised the T2 replay surface end-to-end (save-as-suite → replay → poll terminal status). Surfaced a real feature gap that had been masked by Cycle 8's docstring drift.
+
+**Finding 15 (HIGH)** — `POST /api/suites/{id}/replay` returned 202 but NEVER dispatched the generator (FIXED in this commit)
+
+`routers/suites.py::replay_suite` was shipped with the Cycle 5 GREEN-step placeholder dispatch in tact: it INSERTed a `RunRow(mode='replay_run', status='running', suite_id=...)` via `WriteQueue.submit()` and returned 202 immediately. The docstring explicitly said: *"NO generator spawn yet. Cycle 6 + Cycle 8 together land the real `dispatch_async` + `ReplayRunGenerator` registration."* Cycle 6 (`ReplayRunGenerator` + orchestrator extensions) and Cycle 8 (`dispatch_async` + 202+polling refactor) BOTH shipped and are marked completed in the plan, but the `replay_suite` router was never updated to call `dispatch_async`. The placeholder `_persist_initial_run_row` closure stayed in production.
+
+Live evidence: a replay kicked off at 2026-05-16T03:11:51 against suite `6e37f19e...` returned 202 with `run_id=182230c75dd4...`, then sat at `status='running'`, `prompts_generated=0` for 5.5+ minutes before the operator killed it. Backend log showed ONLY polling GET traffic for the run_id — zero LLM calls, zero generator events, zero `replay_run_persist` write-queue decisions. The `_gc_orphan_runs` sweep would have reconciled the orphan after 1h TTL, but the SuitesPanel UI in the meantime would show every replay button as a one-way trip to a stuck row.
+
+**Fix** at `backend/app/routers/suites.py`:
+- Removed the placeholder `_persist_initial_run_row` closure + direct `RunRow` INSERT.
+- Added `RunRequest` import and an `app.state.run_orchestrator` resolve guard (503 `run_orchestrator_unavailable`, mirrors the `probes.py` precedent).
+- Replaced the placeholder dispatch with `orchestrator.dispatch_async(mode='replay_run', request=RunRequest(...), run_id=run_id)` — the orchestrator's `_create_row` performs the same INSERT inside the writer closure and then spawns `_run_to_completion`, which drives `ReplayRunGenerator.run()` to a terminal status under `asyncio.shield`.
+- `RunRequest.payload` carries the keys both `_create_row` and `ReplayRunGenerator.run` read: `suite_id`, `project_id`, `repo_full_name`. Single source of truth.
+- Removed the unused `RunRow` + `AsyncSession` imports.
+
+**Regression coverage**: new `test_replay_dispatches_generator_via_run_orchestrator` test in `tests/test_routers_suites.py` asserts the router actually called the registered generator (proves dispatch_async wiring, not just the 202 response). Also added a new `_StubReplayGenerator` + `stub_run_orchestrator` fixture mirroring the `tests/test_probe_router.py` precedent. Updated Test 7 + Test 8 + Test 10 to wire the fixture; the existing `row.status == 'running'` assertion is relaxed to `row.status in {'running', 'completed'}` to accommodate the asyncio race window between dispatch_async returning and the spawned task completing the stub.
+
+**Live verification (post-fix, end-to-end)**: a fresh replay run kicked off at 2026-05-16T03:32:14 against the same suite `6e37f19e...` against the **fixed** code path completed successfully at 2026-05-16T03:37:20 — total wall-clock 5m05s for 3 snapshot prompts (~100s per prompt under the internal tier, real LLM work). Confirmed at every layer of evidence:
+- **Row state**: `status='completed'`, `prompts_generated=3`, `completed_at=2026-05-16T03:37:20.962677`.
+- **Taxonomy events** (`decisions-2026-05-16.jsonl`): `run_orchestrator.create_row[replay_run]` at `03:32:15.812690` (2ms after the 202 response — race-safe per spec §8: `dispatch_async` awaits `_create_row` before returning) + `replay_run_persist` at `03:37:20.964810` (the terminal persist callback completing).
+- **Per-prompt results**: 3 prompt_results in the row, all with `status='completed'`, full dimension scores, trace_ids, intent labels, and divergence flags — the same shape `compute_run_aggregate` produces for any other run substrate row.
+- **Backend log**: multiple `claude_cli complete_parsed` LLM-call entries spanning analyze/optimize/score phases for each of the 3 prompts (visible in `data/backend.log`).
+
+**Why this regression wasn't caught by Cycle 5 / Cycle 8 RED-GREEN tests**: the test asserted only `(1) 202 status code`, `(2) ReplayRunOut body shape`, and `(3) row exists in DB with `mode='replay_run'`. All three pass with EITHER the placeholder INSERT OR the real dispatch_async — the row is created in both paths. Nothing in the test suite exercised "did the generator actually run?" The new dispatch-assertion test closes that gap.
+
+**Cumulative Day 4 work (post-Finding 15)**:
+- 20 commits on PR (was 19 at Finding 14 close)
+- 15 named findings (2 HIGH + 4 MED + 7 LOW + 2 architectural improvements)
+- 0 audit-hook lines across all soak observation
+- Backend tests: 3745+ passed; new dispatch-assertion test added (`tests/test_routers_suites.py::test_replay_dispatches_generator_via_run_orchestrator`)
+- T2 replay surface verified end-to-end against live LLM provider (first time)
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
