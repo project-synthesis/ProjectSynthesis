@@ -701,6 +701,48 @@ POST /api/suites/6e37f19e6822433caf0d5e305539e00c/retire
 
 The replay history retention behavior is correct for v0.4.22's design intent: retire is a soft-delete (sets `retired_at` + `retired_reason`) so audit reviewers can later trace what prompts ran, when, and against which pipeline version. The hard-delete path would only fire if the operator later decides to purge audit history (out of scope for v0.4.22).
 
+### Day 4 supplementary close — full pre-release test sweep + MCP-side audit-hook coverage
+
+Final pre-release verification before entering the 43-hour calendar-wait window:
+
+**Full backend test sweep**:
+- 3749 non-integration tests PASS (5m24s runtime; `pytest -q --tb=line -m "not integration"`)
+- 7 integration tests PASS (separate run; `pytest -q -m integration`)
+- Total: **3756 / 3756 PASS, 0 failures, 79 skipped (platform/env-specific)**
+
+**Frontend test sweep**:
+- 1901 / 1901 vitest tests PASS (130 test files, ~2 min runtime)
+- svelte-check: 1104 files, 0 errors, 0 warnings, 0 files with problems
+
+**MCP-side audit-hook coverage** — earlier in the session the MCP session was broken; after operator `/mcp` reconnect, the MCP write path is now exercised:
+
+- `mcp__synthesis_mcp__synthesis_health` — read path, returned `status=healthy, provider=claude_cli, total_optimizations=25, avg_score=7.88`.
+- `mcp__synthesis_mcp__synthesis_history` (sort=overall_score desc, limit=3) — read path with pagination envelope, top 3 returned.
+- `mcp__synthesis_mcp__synthesis_match` — pattern-match read path returned `match_level='cluster'`, similarity 0.4846, cluster `Async Python Sqlite Blocking Diagnosis`, 8 meta_patterns + 3 cross_cluster_patterns. Full v0.4.4 ADR-007 Tier 1 response shape preserved.
+- `mcp__synthesis_mcp__synthesis_feedback` — **write path through MCP-process WriteQueue**, returned `feedback_id=53d21247-21fa-45f9-b6a2-6ef29a1c744d, strategy_affinity_updated=true`. Verified persisted via `GET /api/feedback?optimization_id=...` — the row is in the DB with the full comment, `rating='thumbs_up'`, `created_at=2026-05-16T04:42:05`.
+
+**MCP audit-hook sweep**: `grep -c "read-engine audit:|WriteOnReadEngineError" data/mcp.log` → **0**. The MCP-process WriteQueue routing is clean under RAISE; no cross-process drift since the v0.4.18 Foundation P3 substrate unification.
+
+**Final pre-release gate sheet**:
+
+| Gate | Result |
+|---|---|
+| Backend non-integration tests | 3749 / 3749 PASS |
+| Backend integration tests | 7 / 7 PASS |
+| Frontend vitest | 1901 / 1901 PASS |
+| svelte-check | 1104 files, 0 errors |
+| alembic check | exit 0 (no schema drift) |
+| ruff (backend) | clean |
+| Rebase dry-run vs origin/main | 84 commits, 0 conflicts |
+| PR #74 CI on latest commit | lint + claude-review + backend-integration + frontend SUCCESS |
+| REST-process audit-hook WARN | 0 |
+| MCP-process audit-hook WARN | 0 |
+| `WriteOnReadEngineError` raises | 0 |
+| Regression alarm | cleared after retire (`suites_in_alarm=0`) |
+| Orphan GC reconciliation | verified end-to-end (`status='failed'`, `error='orphaned (ttl exceeded)'`) |
+
+The branch is in **release-grade steady state**. Only the calendar gate remains.
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
