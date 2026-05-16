@@ -701,6 +701,47 @@ POST /api/suites/6e37f19e6822433caf0d5e305539e00c/retire
 
 The replay history retention behavior is correct for v0.4.22's design intent: retire is a soft-delete (sets `retired_at` + `retired_reason`) so audit reviewers can later trace what prompts ran, when, and against which pipeline version. The hard-delete path would only fire if the operator later decides to purge audit history (out of scope for v0.4.22).
 
+### Day 4 supplementary close v2 — real-content suite attempt surfaces Finding 16 + 17
+
+After retiring the synthetic d4-replay-test-suite, attempted to create a real-content suite via topic-only probe to exercise the T1 → save-as-suite → replay loop end-to-end with meaningful prompts. The first probe failed instantly with all 5 prompts erroring out — uncovering two latent production bugs.
+
+**Finding 16 (HIGH): TopicProbeGenerator._run_one_prompt called provider with wrong kwargs** (FIXED at `659b9bc3`)
+
+Pre-fix: `_run_one_prompt` issued `self._provider.complete_parsed(prompt=prompt_text, context=ctx)` — the canonical `LLMProvider.complete_parsed` ABC requires `model` + `system_prompt` + `user_message` + `output_format`. Every prompt raised `TypeError: ClaudeCLIProvider.complete_parsed() got an unexpected keyword argument 'prompt'` and the probe terminated `status='failed'` with zero completed prompts. **The bug had been latent in production since v0.4.18 Foundation P3 (2026-05-07, 9+ days)** but went undetected because no real end-to-end probe ran successfully on this branch — every "completed" probe in the corpus came from legacy test fixtures or the substrate's pre-P3 implementation.
+
+Root cause: same pattern as Finding 15. The v0.4.18 P3 refactor (`ProbeService` → `TopicProbeGenerator`) deferred per-prompt full-pipeline wiring to a planned "Cycle 8" that turned into the 202+polling + dispatch_async work instead. The per-prompt pipeline integration never landed. The constructor stored `context_service` / `embedding_service` / `session_factory` / `write_queue` as "Optional collaborators retained for future Phase-3 wiring" — but the wiring was never completed and production `main.py` only passed 4 of the 7 collaborators the proper path would need.
+
+Fix: cloned the working `ReplayRunGenerator` per-prompt pattern. Added `prompt_loader` + `domain_resolver` to `TopicProbeGenerator` constructor (additive, default `None` for legacy unit-test DI). Rewrote `_run_one_prompt` to branch on collaborator presence:
+- **Production path**: when the full graph is wired, delegates to `batch_pipeline.run_single_prompt(tier='internal', ...)` — full pipeline (analyze + optimize + LLM-blended scoring + auto_inject_patterns + multi-embedding + cluster assignment) per prompt. Returns real optimization rows.
+- **Test path**: when any required collaborator is `None`, falls back to a thin `provider.complete_parsed` call with the canonical ABC signature (`model` + `system_prompt` + `user_message` + `output_format`) — preserves the existing `provider_mock` + `AsyncMock` fixtures in `tests/test_topic_probe_generator.py`.
+
+Updated `main.py` + `mcp_server.py` to thread the full collaborator graph. Both `ctx_dict` branches (topic_only + codebase) enriched with `n_prompts` + `project_id`. The MCP-side construction was hoisted above the `_topic_probe_gen = ...` line so both generators (topic_probe + replay_run) share the same `_mcp_domain_resolver` / `_mcp_context_service` resolutions.
+
+**Regression coverage**: 2 new tests in `tests/test_topic_probe_generator.py` pin the dispatch contract:
+- `test_run_one_prompt_delegates_to_batch_pipeline_when_collaborators_wired` — monkeypatches `batch_pipeline.run_single_prompt` to a recording fake, asserts the production path is taken when the full graph is wired (and that `provider.complete_parsed` is NOT called).
+- `test_run_one_prompt_falls_back_to_stub_when_collaborators_missing` — asserts the test path uses the canonical ABC signature with explicit `assert "prompt" not in call_kwargs` regression guard.
+
+**Finding 17 (MED): GET /api/probes/{id} returned HTTP 500 on legacy rows with `raw_prompt` keys** (FIXED at `659b9bc3`)
+
+Pre-fix: the `ProbePromptResult` schema required `prompt_text` but legacy probe rows (test fixtures from earlier T2 development at `24af8625e1dc...` etc.) stored per-prompt results with `raw_prompt` key. The wrapping `GET /api/probes/{id}` raised `ValidationError: 1 validation error for ProbePromptResult — prompt_text Field required` → FastAPI returned HTTP 500 instead of the legacy row's payload.
+
+Fix: `ProbePromptResult.prompt_text` gains `validation_alias=AliasChoices("prompt_text", "raw_prompt")` + `model_config = ConfigDict(populate_by_name=True)`. Both key names deserialize cleanly. Canonical key wins when both present. Required-ness preserved (neither key still raises).
+
+**Regression coverage**: 4 new tests in `tests/test_probe_prompt_result_schema_finding17.py` covering all 4 cases (canonical key, legacy key, both keys, neither key).
+
+**Live-verification (Finding 17)**: `GET /api/probes/24af8625e1dc43a9b4120445c848dd09` now returns HTTP 200 with full payload deserialization (was HTTP 500 ValidationError pre-fix).
+
+**Live-verification (Finding 16)**: a fresh probe dispatched at 2026-05-16T05:0Y:ZZZ post-commit is currently running through the production batch_pipeline path — full pipeline activity visible in the backend log (`pipeline_constants` strategy resolution + `pattern_injection` cross-cluster + LLM calls to opus-4-7 / sonnet-4-6 / haiku-4-5). Pending end-to-end completion documentation in a follow-up commit.
+
+**Dev-mode reload artifact (NOT a finding)**: uvicorn's `WatchFiles` auto-reload cancels in-flight probe tasks mid-Phase-3 when source files are edited. The `RunRow` stays at `status='running'` until the 1h `_gc_orphan_runs` sweep reconciles it. This is documented operator-experience behavior in dev mode and does not affect production where reload is disabled.
+
+**Cumulative Day 4/5 work (post-Finding 16+17)**:
+- 12 commits this session on PR #74 (was 10 at Round 4 close)
+- 17 named findings (3 HIGH + 5 MED + 7 LOW + 2 architectural improvements)
+- 0 audit-hook lines across the entire window
+- Backend tests: 3756 + 6 new regression tests = 3762/3762 PASS
+- Topic Probe T1 + T2 + audit-hook flip all verified end-to-end on the unified `RunRow` substrate
+
 ### Day 4 supplementary close — full pre-release test sweep + MCP-side audit-hook coverage
 
 Final pre-release verification before entering the 43-hour calendar-wait window:
