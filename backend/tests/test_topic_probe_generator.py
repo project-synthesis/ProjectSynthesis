@@ -387,7 +387,11 @@ async def test_run_one_prompt_delegates_to_batch_pipeline_when_collaborators_wir
     class _FakePending:
         id = "opt-id-1"
         trace_id = "trace-1"
-        score_overall = 8.5
+        # Finding 19a: canonical attr on PendingOptimization is
+        # ``overall_score`` (NOT ``score_overall``). Pinning the right
+        # name regression-guards the score=None display bug.
+        overall_score = 8.5
+        task_type = "analysis"
         intent_label = "test intent"
         cluster_id = None
         cluster_label = None
