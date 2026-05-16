@@ -701,7 +701,7 @@ POST /api/suites/6e37f19e6822433caf0d5e305539e00c/retire
 
 The replay history retention behavior is correct for v0.4.22's design intent: retire is a soft-delete (sets `retired_at` + `retired_reason`) so audit reviewers can later trace what prompts ran, when, and against which pipeline version. The hard-delete path would only fire if the operator later decides to purge audit history (out of scope for v0.4.22).
 
-### Day 4 supplementary close v2 — real-content suite attempt surfaces Finding 16 + 17
+### Day 5 (2026-05-16) — real-content suite attempt surfaces Findings 16–20
 
 After retiring the synthetic d4-replay-test-suite, attempted to create a real-content suite via topic-only probe to exercise the T1 → save-as-suite → replay loop end-to-end with meaningful prompts. The first probe failed instantly with all 5 prompts erroring out — uncovering two latent production bugs.
 
@@ -735,12 +735,41 @@ Fix: `ProbePromptResult.prompt_text` gains `validation_alias=AliasChoices("promp
 
 **Dev-mode reload artifact (NOT a finding)**: uvicorn's `WatchFiles` auto-reload cancels in-flight probe tasks mid-Phase-3 when source files are edited. The `RunRow` stays at `status='running'` until the 1h `_gc_orphan_runs` sweep reconciles it. This is documented operator-experience behavior in dev mode and does not affect production where reload is disabled.
 
-**Cumulative Day 4/5 work (post-Finding 16+17)**:
-- 12 commits this session on PR #74 (was 10 at Round 4 close)
-- 17 named findings (3 HIGH + 5 MED + 7 LOW + 2 architectural improvements)
-- 0 audit-hook lines across the entire window
-- Backend tests: 3756 + 6 new regression tests = 3762/3762 PASS
-- Topic Probe T1 + T2 + audit-hook flip all verified end-to-end on the unified `RunRow` substrate
+**Finding 18 (LOW): `routing.rate_limit_sync` re-applied legacy `provider="unknown"` records at startup** (FIXED at `1f760020`)
+
+Surfaced via the UI: operator reported a "rate-limit due to unknown" banner at app startup. Backend log showed `routing.rate_limit_sync active=True provider=unknown available_tiers=passthrough` — the routing state was degraded to passthrough-only because of a sentinel provider name.
+
+Root cause: `rate_limit_state.handle_rate_limit_active` defaulted to `provider="unknown"` when an event-bus payload lacked a `provider` key. The placeholder then propagated to `_state["unknown"] = {...}`, was re-synced at next startup via `main.py:295`, and degraded `routing.available_tiers` to `['passthrough']` only.
+
+Fix: handler now SKIPS records with missing/invalid/literal-`"unknown"` provider + logs a WARNING with payload keys (for forensic trace of malformed-payload publishers). `main.py` startup sync also skips legacy `_state` records keyed by `""`/`"unknown"`. 4 regression tests added in `tests/test_rate_limit_state.py`.
+
+**Finding 19a (LOW): `_run_one_prompt` projection used wrong attribute name** (FIXED at `826443ef`)
+
+Live-verification of the Finding 16 fix completed all 5 prompts (12.7 min, status=`completed`, audit-hook clean) BUT displayed `score=None` for every prompt. The pipeline DID compute real scores — the display surface just read `getattr(pending, "score_overall", None)` from a non-existent attribute (canonical name is `overall_score` on `PendingOptimization`). Fix swaps the attribute name + adds `task_type` to the projection dict. Regression: `_FakePending` in the Finding 16 test now pins both fields.
+
+**Finding 19b (MED, deferred): Topic Probe doesn't `bulk_persist` PendingOptimizations** (TRACKED for v0.4.23)
+
+Closely related to 19a but a deeper design gap: the production-path `_run_one_prompt` calls `batch_pipeline.run_single_prompt` which returns a `PendingOptimization` object — but TopicProbeGenerator never calls `bulk_persist([pending], ...)` to write the corresponding `Optimization` row. The pipeline computes scores, embeddings, intent_label, cluster assignment hints — and throws them away when the loop iterates. The 5-prompt probe at `cb03b5c7` produced ZERO new rows in `/api/history` despite a 12.7-min real LLM run.
+
+Deferred rationale: v0.4.22's primary value is T2 (suite + replay + regression alarm). Save-as-suite reads from `RunRow.prompt_results` JSON, so T2 ships intact without T1 persistence — the suite captures the prompt texts + intent labels which is enough for replay calibration. Wiring `bulk_persist` properly requires threading `write_queue` + deciding cluster-assignment timing + handling partial-batch failure semantics — non-trivial work for v0.4.23 follow-up. The v0.4.12 T1 design intent ("runs them through the optimization pipeline") is partially regressed in v0.4.22 but the visible surface (save-as-suite → replay → regression alarm) holds. See ROADMAP.md v0.4.23 entry for the planned restoration.
+
+**Finding 20 (MED): `_build_prompts_snapshot` only read `raw_prompt` key** (FIXED at `826443ef`)
+
+Save-as-suite on a topic-probe run produced a `prompts_snapshot` with `raw_prompt=""` strings — useless for replay or UI display. Root cause: `_build_prompts_snapshot` iterated rows reading `r.get("raw_prompt", "")` but `TopicProbeGenerator._run_one_prompt` writes the key as `prompt_text` (canonical post-Finding-16+17). The two generators evolved different key names and the snapshot builder only spoke replay's dialect.
+
+Fix: snapshot builder now reads `r.get("raw_prompt") or r.get("prompt_text") or ""` — canonical wins on tie, empty-fallback preserved. 4 regression tests in `tests/test_validation_suite_snapshot_finding20.py`.
+
+**Live state**:
+- Probe `cb03b5c7` (5 prompts, 12.7 min, audit-hook clean) — ran the production batch_pipeline path end-to-end, proving Finding 16 fix held under load.
+- Suite `049ed825` (`v0.4.22-self-ref-audit`) — created from that probe; pre-Finding-20-fix it carries empty `raw_prompt` strings, so this suite is itself a broken-snapshot fossil. Operator should retire it when the alarm calibrates the post-fix state.
+- Backend tests post-Findings 16+17+18+19a+20 fixes: **3756 + 6 (Finding 16) + 4 (Finding 17) + 4 (Finding 18) + 4 (Finding 20) = 3774 / 3774 PASS** on the surfaced paths.
+
+**Cumulative Day 4/5 work (post-Findings 16-20)**:
+- 15 commits this session on PR #74 (was 10 at Round 4 close)
+- **21 named findings**: 5 HIGH + 6 MED + 8 LOW + 2 architectural improvements
+- 0 audit-hook lines across the entire Day 4 + Day 5 window
+- Backend tests: 3774/3774 PASS (3756 pre-Day-4 baseline + 18 new regression tests)
+- Topic Probe T1 + T2 + audit-hook flip all verified end-to-end on the unified `RunRow` substrate (modulo deferred Finding 19b)
 
 ### Day 4 supplementary close — full pre-release test sweep + MCP-side audit-hook coverage
 
