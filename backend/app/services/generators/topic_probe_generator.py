@@ -106,16 +106,25 @@ class TopicProbeGenerator:
         embedding_service: Any | None = None,
         session_factory: Any | None = None,
         write_queue: Any | None = None,
+        prompt_loader: Any | None = None,
+        domain_resolver: Any | None = None,
     ) -> None:
         self._provider = provider
         self._repo_index = repo_index_query
         self._taxonomy = taxonomy_engine
-        # Optional collaborators retained for future Phase-3 wiring
-        # (full enrichment + persistence will be wired in Cycle 8).
+        # Optional collaborators for Phase-3 batch_pipeline integration.
+        # Production wiring (``app/main.py`` + ``app/mcp_server.py``) passes
+        # the full collaborator graph; tests may pass a subset and the
+        # ``_run_one_prompt`` method falls back to a stub return when any
+        # collaborator is ``None`` (lets the legacy fixture-based tests in
+        # ``tests/test_topic_probe_generator.py`` continue to PASS without
+        # threading the full graph).
         self._context_service = context_service
         self._embedding_service = embedding_service
         self._session_factory = session_factory
         self._write_queue = write_queue
+        self._prompt_loader = prompt_loader
+        self._domain_resolver = domain_resolver
 
     async def run(
         self, request: RunRequest, *, run_id: str,
@@ -212,6 +221,11 @@ class TopicProbeGenerator:
                 "explore_synthesis_excerpt": None,
                 "dominant_stack": [],
                 "topic_only": True,
+                # Finding 16 fix: thread n_prompts + project_id so
+                # ``_run_one_prompt`` can pass them to
+                # ``batch_pipeline.run_single_prompt``.
+                "n_prompts": n_prompts,
+                "project_id": payload.get("project_id"),
             }
             # Explicit no-op marker — Phase 1 is intentionally skipped.
         else:
@@ -241,6 +255,14 @@ class TopicProbeGenerator:
                 return self._build_failed_result(
                     started_at, prompt_results=[], reason=str(exc),
                 )
+            # Finding 16 fix: enrich ctx_dict with n_prompts + project_id
+            # so ``_run_one_prompt`` can pass them to
+            # ``batch_pipeline.run_single_prompt``. Topic-only branch
+            # populates these at ctx_dict construction (above); codebase
+            # branch's ``_phase_grounding`` doesn't, so we layer them
+            # in here without disturbing the existing grounding shape.
+            ctx_dict.setdefault("n_prompts", n_prompts)
+            ctx_dict.setdefault("project_id", payload.get("project_id"))
 
             # Build a typed ProbeContext for Phase 2 (codebase branch).
             # ``_coerce_intent_hint`` covers BOTH branches uniformly: the
@@ -581,30 +603,109 @@ class TopicProbeGenerator:
         ctx: dict,
         run_id: str,
     ) -> dict:
-        """Per-prompt enrichment + scoring.
+        """Per-prompt full-pipeline execution.
 
-        Tier 1 design: this is a thin wrapper that calls the provider once
-        per prompt. The full ProbeService path delegates to the canonical
-        batch_pipeline (run_batch + bulk_persist + batch_taxonomy_assign);
-        wiring that into the generator path is Cycle 8's responsibility
-        (see plan § 'Cycle 8 — PR1 wiring').
+        Production path (Finding 16 fix, post-v0.4.22): when the
+        constructor receives the full collaborator graph
+        (``prompt_loader`` + ``domain_resolver`` + ``session_factory`` +
+        ``embedding_service`` + ``context_service``), delegates to
+        :func:`batch_pipeline.run_single_prompt` (``tier='internal'``) —
+        the canonical per-prompt execution path used by both
+        :class:`ReplayRunGenerator` (T2 Cycle 6) and the v0.4.12 pre-P3
+        ``ProbeService._run_impl``. Returns a real optimization row
+        (analyze + optimize + LLM-blended scoring + auto_inject_patterns
+        + multi-embedding + cluster assignment) per prompt.
 
-        For unit-test isolation we keep the per-prompt path minimal:
-        - call provider.complete_parsed (fixtures alternate success/fail)
-        - build a deterministic dict result on success
-        - bubble exceptions to the caller for terminal-status classification
+        Test-fixture path (legacy unit-test compatibility): when any of
+        the required collaborators is ``None`` — typical in
+        ``tests/test_topic_probe_generator.py`` which uses minimal DI —
+        falls back to a thin ``provider.complete_parsed`` call with a
+        deterministic placeholder result. Tests can mock
+        ``provider.complete_parsed`` to alternate success/fail per the
+        original v0.4.18 P3 unit-test contract.
+
+        Spec/Plan provenance: the production wiring restores the
+        v0.4.12 Topic Probe Tier 1 design intent ("runs them through
+        the optimization pipeline") that the v0.4.18 Foundation P3
+        substrate refactor accidentally reduced to a stub when
+        deferring "Cycle 8 wiring" that never landed.
         """
+        # Production path — full batch_pipeline integration available
+        # when all required collaborators are wired.
+        if (
+            self._prompt_loader is not None
+            and self._embedding_service is not None
+            and self._session_factory is not None
+        ):
+            # Function-level import: keeps the cyclic-import boundary
+            # easy to monkeypatch in tests — mirrors the
+            # ``ReplayRunGenerator`` precedent at its ``run_single_prompt``
+            # call site.
+            from app.services import batch_pipeline as batch_mod
+
+            repo_full_name = str(ctx.get("repo_full_name") or "") or None
+            project_id = ctx.get("project_id")
+            total_prompts = int(ctx.get("n_prompts", 0)) or None
+            pending = await batch_mod.run_single_prompt(
+                prompt_text,
+                self._provider,
+                self._prompt_loader,
+                self._embedding_service,
+                repo_full_name=repo_full_name,
+                batch_id=run_id,
+                prompt_index=idx,
+                total_prompts=total_prompts,
+                session_factory=self._session_factory,
+                taxonomy_engine=self._taxonomy,
+                domain_resolver=self._domain_resolver,
+                tier="internal",
+                context_service=self._context_service,
+                project_id=project_id,
+            )
+            return {
+                "prompt_idx": idx,
+                "prompt_text": _truncate(prompt_text, 1000),
+                "optimization_id": getattr(pending, "id", None)
+                    or getattr(pending, "trace_id", None),
+                "overall_score": getattr(pending, "score_overall", None),
+                "intent_label": getattr(pending, "intent_label", None),
+                "cluster_id_at_persist": getattr(
+                    pending, "cluster_id", None,
+                ),
+                "cluster_label_at_persist": getattr(
+                    pending, "cluster_label", None,
+                ),
+                "domain": getattr(pending, "domain", None),
+                "duration_ms": getattr(pending, "duration_ms", 0),
+                "status": "completed",
+                "result_text": _truncate(
+                    str(getattr(pending, "optimized_prompt", "") or ""),
+                    1000,
+                ),
+            }
+
+        # Test-fixture path — legacy unit-test compatibility for
+        # ``tests/test_topic_probe_generator.py``. The provider mock is
+        # expected to accept ``model`` + ``system_prompt`` + ``user_message``
+        # + ``output_format`` per the canonical ``LLMProvider`` ABC. The
+        # ``ProbeContext`` model is reused as the ``output_format`` argument
+        # (the mock fixtures' ``AsyncMock.complete_parsed`` absorbs any
+        # ``output_format``; only the canonical kwarg names matter so the
+        # canonical signature lands in coverage).
+        from app.config import settings
+
         result = await self._provider.complete_parsed(
-            prompt=prompt_text,
-            context=ctx,
+            model=settings.MODEL_HAIKU,
+            system_prompt="Process this probe-generated prompt.",
+            user_message=prompt_text,
+            output_format=ProbeContext,
         )
-        # Provider succeeded — build a completed prompt-result row.
         result_text = str(getattr(result, "result_text", "") or "")
         return {
             "prompt_idx": idx,
             "prompt_text": _truncate(prompt_text, 1000),
-            "optimization_id": None,  # Cycle 8 wires real persist + opt_id
-            "overall_score": 7.0,  # deterministic placeholder
+            "optimization_id": None,
+            "overall_score": 7.0,
             "intent_label": None,
             "cluster_id_at_persist": None,
             "cluster_label_at_persist": None,

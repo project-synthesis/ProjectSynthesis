@@ -1208,16 +1208,32 @@ async def lifespan(app: FastAPI):
             _routing.state.provider if _routing is not None else None
         )
         _taxonomy_engine = getattr(app.state, "taxonomy_engine", None)
+        # Hoisted collaborator resolutions: both TopicProbeGenerator
+        # (Finding 16 fix) and ReplayRunGenerator (T2 Cycle 6) need
+        # ``domain_resolver`` + ``context_service`` threaded in.
+        _domain_resolver = getattr(app.state, "domain_resolver", None)
+        _context_service = getattr(app.state, "context_service", None)
 
         # TopicProbeGenerator: provider + repo_index_query + taxonomy_engine
         # (positional). repo_index_query is None at the singleton level —
         # PR2 router shims construct a per-request RepoIndexQuery and pass
         # a request-bound generator into the orchestrator dispatch table.
+        # Finding 16 fix (post-v0.4.22): thread the full collaborator graph
+        # (prompt_loader / embedding_service / session_factory /
+        # context_service / domain_resolver) so ``_run_one_prompt`` can
+        # delegate to ``batch_pipeline.run_single_prompt`` — restoring
+        # the v0.4.12 T1 design intent that the v0.4.18 P3 refactor
+        # accidentally reduced to a stub.
         topic_probe_gen = TopicProbeGenerator(
             provider=_provider,
             repo_index_query=None,
             taxonomy_engine=_taxonomy_engine,
             write_queue=_wq,
+            prompt_loader=PromptLoader(PROMPTS_DIR),
+            embedding_service=EmbeddingService(),
+            session_factory=_async_sf,
+            context_service=_context_service,
+            domain_resolver=_domain_resolver,
         )
 
         # SeedAgentGenerator wraps the existing SeedOrchestrator; the
@@ -1237,8 +1253,9 @@ async def lifespan(app: FastAPI):
         # domain_resolver, context_service, write_queue — so each
         # replay row goes through the same enrichment + scoring contract
         # that the regular pipeline + batch seeding use.
-        _domain_resolver = getattr(app.state, "domain_resolver", None)
-        _context_service = getattr(app.state, "context_service", None)
+        # ``_domain_resolver`` + ``_context_service`` were hoisted above
+        # ``topic_probe_gen`` construction (Finding 16 fix) so both
+        # generators share the same resolutions.
         replay_run_gen = ReplayRunGenerator(
             provider=_provider,
             prompt_loader=PromptLoader(PROMPTS_DIR),

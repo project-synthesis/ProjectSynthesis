@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class ProbeContext(BaseModel):
@@ -115,9 +115,25 @@ class ProbeRunRequest(BaseModel):
 
 
 class ProbePromptResult(BaseModel):
-    """Per-prompt outcome captured by Phase 3 + Phase 5 reporting."""
+    """Per-prompt outcome captured by Phase 3 + Phase 5 reporting.
+
+    Finding 17 backward-compat: ``prompt_text`` accepts both ``prompt_text``
+    (current canonical key produced by ``TopicProbeGenerator._run_one_prompt``)
+    and ``raw_prompt`` (legacy key produced by pre-T2-Cycle-6 development
+    fixtures and the seed pipeline). ``populate_by_name=True`` lets external
+    callers continue to construct with ``prompt_text=`` keyword AND
+    JSON payloads to use either key on deserialization. Without this
+    flex, ``GET /api/probes/{id}`` returns HTTP 500 on legacy rows whose
+    ``prompt_results`` JSON column predates the canonical key.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
     prompt_idx: int
-    prompt_text: str  # truncated to 1000 chars
+    prompt_text: str = Field(
+        ...,
+        validation_alias=AliasChoices("prompt_text", "raw_prompt"),
+    )  # truncated to 1000 chars
     optimization_id: str | None = None
     overall_score: float | None = None
     intent_label: str | None = None
