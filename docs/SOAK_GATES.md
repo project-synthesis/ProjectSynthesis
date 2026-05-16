@@ -761,8 +761,10 @@ Fix: snapshot builder now reads `r.get("raw_prompt") or r.get("prompt_text") or 
 
 **Live state**:
 - Probe `cb03b5c7` (5 prompts, 12.7 min, audit-hook clean) — ran the production batch_pipeline path end-to-end, proving Finding 16 fix held under load.
-- Suite `049ed825` (`v0.4.22-self-ref-audit`) — created from that probe; pre-Finding-20-fix it carries empty `raw_prompt` strings, so this suite is itself a broken-snapshot fossil. Operator should retire it when the alarm calibrates the post-fix state.
+- Suite `049ed825` (`v0.4.22-self-ref-audit`) — created from that probe pre-Finding-20-fix; carries empty `raw_prompt` strings. **Retired at 06:10:51** with operator note documenting it as a fossil from before the snapshot-builder key-alias fix.
+- Suite `c0aec58b` (`v0.4.22-self-ref-audit-post-finding20`) — **re-saved from the SAME probe** after the Finding 20 fix landed. All 5 prompts_snapshot rows now carry the FULL audit-class prompt text ("Batch Pipeline Per-item Invariants", "Audit Hook Escalation Criteria", "Regression Alarm Threshold Calibration", "Agentic Exploration Batch Pipeline Integration", "Audit Instrumentation Write Queue Decoupling"). Finding 20 verified end-to-end + incidentally proves `save_as_suite` accepts multiple labels per source_run_id (multi-suite per probe is supported).
 - Backend tests post-Findings 16+17+18+19a+20 fixes: **3756 + 6 (Finding 16) + 4 (Finding 17) + 4 (Finding 18) + 4 (Finding 20) = 3774 / 3774 PASS** on the surfaced paths.
+- Final suite ecosystem: 1 ACTIVE (`c0aec58b` — clean real-content) + 3 RETIRED (audit trail preserved): D4 synthetic, Day 4 meta-test, Finding-20 fossil.
 
 **Cumulative Day 4/5 work (post-Findings 16-20)**:
 - 15 commits this session on PR #74 (was 10 at Round 4 close)
