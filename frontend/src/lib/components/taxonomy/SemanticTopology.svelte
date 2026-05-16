@@ -967,6 +967,15 @@
     if (beamPool) {
       renderer.scene.remove(beamPool.group);
     }
+    // Same protection for envelope pool (canon F19). The scene-clear `while`
+    // loop below indiscriminately removes every child; without this detach,
+    // envelopePool.group orphans permanently on the first rebuild and every
+    // subsequent acquire renders to nothing (state machine runs, mesh is in
+    // a group with no scene parent). Re-added at the matching beamPool re-add
+    // below so the lifecycle stays paired.
+    if (envelopePool) {
+      renderer.scene.remove(envelopePool.group);
+    }
 
     // Clear previous
     interaction?.clear();
@@ -1705,6 +1714,13 @@
     // Re-add beam pool to scene (protected from disposal above)
     if (beamPool) {
       renderer.scene.add(beamPool.group);
+    }
+    // Re-add envelope pool — paired with the detach above. Restores the
+    // scene parent so subsequent acquires render visibly. Active envelopes
+    // (still mid-attack/hold/decay) resume rendering on the next frame
+    // because their meshes never moved; only the parent group was reattached.
+    if (envelopePool) {
+      renderer.scene.add(envelopePool.group);
     }
 
     // Highlight survival on rebuild (canon F16). If a focusedNodeId exists,

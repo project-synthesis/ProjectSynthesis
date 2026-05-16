@@ -2489,6 +2489,60 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     );
   });
 
+  it('source: rebuildScene saves+restores envelopePool.group across the scene-clear (orphan-group regression)', () => {
+    // Operator-reported symptom: "the rest of the pattern graph only has the
+    // beam use all the proper and advanced effects then once it hits the node
+    // there is a lackluster deflating color change only instead of the full
+    // effect." Root cause: `rebuildScene` wipes every scene child via the
+    // `while (scene.children.length > 0)` loop, which removes envelopePool.group
+    // along with all node groups. beamPool.group is protected by an explicit
+    // `scene.remove(beamPool.group)` BEFORE the wipe and `scene.add(beamPool.group)`
+    // AFTER — envelopePool.group had no such pair, so after the first
+    // rebuildScene (fires on initial data load) the pool's meshes lived in an
+    // orphan group. `acquire()` still returned true and the state machine still
+    // ran, but the meshes rendered nothing because their parent group was no
+    // longer in the scene graph. The "lackluster deflating color change" the
+    // operator saw was the emissive flash alone — the envelope shell was
+    // invisible for every node clicked AFTER the first rebuild.
+    //
+    // Fix: mirror beamPool's save/restore around the scene wipe.
+    const src = _semTopSrc();
+    const rebuildIdx = src.indexOf('function rebuildScene(');
+    expect(rebuildIdx).toBeGreaterThan(0);
+    // rebuildScene is large (~760 lines, ~60K chars). Slice generously to
+    // cover both the save (top) and restore (bottom) anchors. The next
+    // top-level function in the source — `handleLodChange` — bounds the
+    // slice naturally, so anchor on its declaration if we encounter it
+    // earlier than the fixed 80K window.
+    const rawEnd = src.indexOf('function handleLodChange(', rebuildIdx);
+    const sliceEnd =
+      rawEnd > rebuildIdx ? rawEnd : Math.min(src.length, rebuildIdx + 80000);
+    const rebuildSlice = src.slice(rebuildIdx, sliceEnd);
+
+    // Save anchor: must remove envelopePool.group BEFORE the scene-clear traverse
+    // so the dispose loop doesn't free the pool's shared cluster/domain
+    // geometries.
+    const saveIdx = rebuildSlice.search(
+      /renderer[!?]?\.scene\.remove\(\s*envelopePool[!?]?\.group\s*\)/,
+    );
+    expect(saveIdx).toBeGreaterThan(0);
+
+    // Restore anchor: must re-add envelopePool.group AFTER the scene-clear
+    // traverse — mirrors the beamPool.group re-add at the end of rebuildScene.
+    const restoreIdx = rebuildSlice.indexOf(
+      'renderer.scene.add(envelopePool.group)',
+    );
+    expect(restoreIdx).toBeGreaterThan(0);
+
+    // Save MUST precede the scene-clear while-loop; restore MUST follow it.
+    const clearIdx = rebuildSlice.indexOf(
+      'while (renderer.scene.children.length > 0)',
+    );
+    expect(clearIdx).toBeGreaterThan(0);
+    expect(saveIdx).toBeLessThan(clearIdx);
+    expect(restoreIdx).toBeGreaterThan(clearIdx);
+  });
+
   it('source: click $effect fires beamPool.acquire with onImpact callback (causal-ordering fix)', () => {
     const src = _semTopSrc();
     // beamPool.acquire BeamConfig must include `onImpact:` field — the
