@@ -2977,4 +2977,42 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   });
 
 
+  it('source: engulfment gate clear is keyed off ACTUAL selection transitions, not every $effect re-fire (_prevSelectedId regression)', () => {
+    // Live-observed: operator reported "only one specific node gets the
+    // full effect" — specifically the 25-member DATABASE/MATURE cluster
+    // "SQLite pragma pool Reapplication Audit." Root cause: the selection
+    // $effect cleared `_selectionEngulfed` unconditionally on every
+    // re-trigger. The effect re-fires whenever any of its reactive deps
+    // change (sceneData rebuilds, focusedNodeId self-writes during the
+    // body, downstream store updates, etc.). During the ~700ms beam-
+    // travel window between click and impact, scene rebuilds are common
+    // (taxonomy events, store updates, etc.) — each one cleared the
+    // engulfment gate. Then when the beam impact landed and added the
+    // node back to the set, the NEXT effect re-fire cleared it again,
+    // turning off the idle pulse. The one cluster the operator saw work
+    // was selected during a quiescent scene period where no rebuilds
+    // happened between impact and the next idle-pulse frame.
+    //
+    // Fix: track `_prevSelectedId` and only clear when the selection
+    // actually changes (transition: A → B or A → null). Re-fires of the
+    // SAME selection preserve the gate.
+    const src = _semTopSrc();
+
+    // The previous-selection tracker must exist.
+    expect(src).toMatch(/let\s+_prevSelectedId\s*:\s*string\s*\|\s*null\s*=\s*null/);
+
+    // The clear inside the selection effect must be guarded by an
+    // inequality check against the previous selection.
+    expect(src).toMatch(
+      /if\s*\(\s*externalId\s*!==\s*_prevSelectedId\s*\)[\s\S]{0,200}_selectionEngulfed\.clear/,
+    );
+
+    // The previous-selection must be UPDATED inside the same conditional
+    // so the next re-fire's comparison reads the correct value.
+    expect(src).toMatch(
+      /if\s*\(\s*externalId\s*!==\s*_prevSelectedId\s*\)[\s\S]{0,200}_prevSelectedId\s*=\s*externalId/,
+    );
+  });
+
+
 });

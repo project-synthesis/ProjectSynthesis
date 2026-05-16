@@ -645,6 +645,14 @@
   // beam-travel (700ms) → impact → flash attack → hold → decay →
   // post-engulfment subtle idle pulse.
   const _selectionEngulfed: Set<string> = new Set();
+  // Previous-selection tracker so the selection $effect's engulfment-gate
+  // clear is keyed off ACTUAL selection-change transitions, not every
+  // reactive re-trigger of the effect (sceneData rebuilds, focusedNodeId
+  // self-writes, etc.). Without this, mid-flight scene rebuilds would
+  // clear `_selectionEngulfed` between the beam impact and the next
+  // idle-pulse frame — observed as "only one specific node gets the full
+  // effect" because only nodes selected during quiescent scenes survived.
+  let _prevSelectedId: string | null = null;
   let _sceneNodeMap: Map<string, import('./TopologyData').SceneNode> = new Map();
   let _prevNodeSizes: Map<string, number> = new Map();
   let _seedBatchActive = false;
@@ -2331,15 +2339,21 @@
   $effect(() => {
     const externalId = clustersStore.selectedClusterId;
 
-    // Clear the engulfment-gate flag on EVERY selection change (deselect OR
-    // switch). The next beam impact on the new selected node will re-add
-    // its id, gating the idle pulse to post-impact. Without this clear,
-    // switching from node A (engulfed) to node B would leave A's flag in
-    // the set — harmless for A (A is no longer selected so the
-    // isSelected gate fails) but the symbolic invariant "set holds at
-    // most the currently-selected node" is easier to audit if we clear
-    // proactively.
-    _selectionEngulfed.clear();
+    // Clear the engulfment-gate flag ONLY when the selection actually
+    // changes (deselect or switch to a different node). Pre-fix this
+    // cleared on every `$effect` re-trigger — including triggers from
+    // unrelated reactive deps like `sceneData` rebuilds during the
+    // ~700ms beam-travel window. The result was the operator-reported
+    // "only one specific node gets the full effect" symptom: that node
+    // happened to be selected during a quiescent scene period and its
+    // post-impact gate survived; other clicks landed mid-rebuild and
+    // had their gate cleared between impact and the next idle-pulse
+    // frame. `_prevSelectedId` makes the clear strictly transition-
+    // triggered so re-fires of the same selection preserve the gate.
+    if (externalId !== _prevSelectedId) {
+      _selectionEngulfed.clear();
+      _prevSelectedId = externalId;
+    }
 
     // Deselected — restore previous highlight + return to overview camera.
     // Borrow `_scratchVec3a` for the focusOn target — `focusOn` clones the
