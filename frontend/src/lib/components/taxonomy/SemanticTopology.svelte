@@ -613,6 +613,15 @@
   const _flashStates = new Map<string, {
     startTime: number;
     baselineEmissive: number;
+    // Attack-phase start value. Defaults to `max(currentEmissiveIntensity,
+    // baselineEmissive)` so the flash ramp climbs UP from whatever the
+    // current displayed value is (preventing the "dim flash" frame when
+    // the idle pulse had elevated emissive above baseline). On flash
+    // completion, the value lands at peak then decays back to baseline
+    // — the asymmetry between attack-start and decay-end is intentional
+    // and produces the operator-spec'd "star-forming" rise + fluid
+    // dissipation.
+    startIntensity: number;
     domainEmissive: THREE.Color;  // node brand color — applied to mat.emissive during burst
   }>();
   let _removeFlashUpdate: (() => void) | null = null;
@@ -628,6 +637,14 @@
   // camera back to distance 60 and overriding the user's current view.
   let _hasAutoFocused = false;
   let _beamNodeGroups: Map<string, THREE.Group> = new Map();
+  // Track which selected nodes have received their first beam impact. The
+  // idle ambient pulse (T3.4) only activates AFTER the first impact —
+  // pre-fix the pulse fired immediately on selection click, which the
+  // operator perceived as the engulfment glow appearing BEFORE the beam
+  // visually arrived. Engulfment now strictly follows beam impact:
+  // beam-travel (700ms) → impact → flash attack → hold → decay →
+  // post-engulfment subtle idle pulse.
+  const _selectionEngulfed: Set<string> = new Set();
   let _sceneNodeMap: Map<string, import('./TopologyData').SceneNode> = new Map();
   let _prevNodeSizes: Map<string, number> = new Map();
   let _seedBatchActive = false;
@@ -704,9 +721,25 @@
     // while the node is pulsing (idlePulse) will compound the pulse into the baseline.
     const trueBase = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
     const baseline = existing ? existing.baselineEmissive : trueBase;
+    // Anti-dip guard: capture the CURRENT displayed emissiveIntensity as
+    // the attack-phase start. If the idle pulse (or a prior incomplete
+    // flash) elevated the visible emissive above the data-driven
+    // baseline, the attack ramp should start FROM that elevated value
+    // and climb UP to the peak — NOT snap-cut back down to baseline
+    // first. Pre-fix the `_tickFlashStates` attack formula was
+    // `baselineEmissive + (peak - baselineEmissive) * ease` which dipped
+    // emissive to `baselineEmissive` on impact, producing the operator-
+    // observed "becomes flat when the beam hits" frame. New behavior:
+    // start from `attackStart = max(currentIntensity, baselineEmissive)`,
+    // ramp to peak. Reuses existing `startIntensity` field added to the
+    // state record.
+    const startIntensity = existing
+      ? existing.startIntensity
+      : Math.max(mat.emissiveIntensity, baseline);
     _flashStates.set(nodeId, {
       startTime: performance.now(),
       baselineEmissive: baseline,
+      startIntensity,
       domainEmissive: domainColor.clone(),
     });
     // Apply domain color immediately so there is no one-frame cyan blip at attack onset.
@@ -752,6 +785,14 @@
     // Pass the node's brand color so the emissive burst glows the domain hue,
     // not the highlight cyan that applyHighlight may have already set.
     flashEmissive(freshNode.id, envelopeColor);
+
+    // Mark this node as having received its first beam impact while
+    // selected. The T3.4 idle ambient pulse keys off this flag so it ONLY
+    // appears AFTER the engulfment moment, preventing the "engulfment
+    // glow visible before beam arrives" symptom that operator-reported.
+    if (clustersStore.selectedClusterId === freshNode.id) {
+      _selectionEngulfed.add(freshNode.id);
+    }
   }
 
   /**
@@ -794,10 +835,14 @@
       mat.emissive.copy(state.domainEmissive);
 
       if (elapsed < GLOW_ATTACK_MS) {
-        // Attack: cubic ease-out ramp baseline → peak.
+        // Attack: cubic ease-out ramp `startIntensity` → peak. Ramping from
+        // the current displayed value (captured at acquire time) — not the
+        // data-driven baseline — eliminates the operator-reported "becomes
+        // flat when the beam hits" dip when the idle pulse had already
+        // lifted emissive above baseline before impact.
         const t = elapsed / GLOW_ATTACK_MS;
         const ease = 1 - Math.pow(1 - t, 3);
-        mat.emissiveIntensity = state.baselineEmissive + (peak - state.baselineEmissive) * ease;
+        mat.emissiveIntensity = state.startIntensity + (peak - state.startIntensity) * ease;
       } else if (elapsed < GLOW_ATTACK_MS + GLOW_HOLD_MS) {
         // Hold: node radiates at full engulfment peak while beam is connected.
         mat.emissiveIntensity = peak;
@@ -1442,23 +1487,28 @@
         if (_flashStates.has(nodeId)) {
           // No-op — `_tickFlashStates` (which runs earlier in the per-frame
           // callback chain) already set the correct phase-driven value.
-        } else if (isSelected) {
-          // Idle ambient pulse on the selected node (canon T3.4). MUST cross
-          // the bloom threshold (UnrealBloomPass strength=1.5, threshold=0.85)
-          // for ALL clusters regardless of baseline so the selection feedback
-          // is visually consistent — operator-reported regression where only
-          // MATURE/domain nodes (baseline ~1.1) showed the continuous
-          // engulfment because their `baseEmissive + idlePulse` stayed above
-          // 0.85, while ACTIVE clusters (baseline ~0.5-0.6) stayed below
-          // bloom for ~half the pulse cycle and looked "dim/dead." Fix uses
-          // `Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR)` so the pulse
-          // is rooted at a luminance that always blooms, then adds the
-          // sin-wave delta on top — preserves the data-driven asymmetry for
-          // high-baseline mature/domain clusters (they still glow brighter
-          // because baseEmissive > floor) while restoring visibility for
-          // low-baseline active clusters.
+        } else if (isSelected && _selectionEngulfed.has(nodeId)) {
+          // POST-ENGULFMENT idle ambient pulse (canon T3.4). Only fires
+          // AFTER the first beam impact on the selected node — keyed off
+          // `_selectionEngulfed` which `_triggerBeamImpact` populates on
+          // impact. This enforces the operator-specified animation order:
+          //
+          //   T=0 (click)      → cyan highlight + beam fires from POV
+          //   T=0..700ms       → beam in flight, node at BASELINE (no glow)
+          //   T=700ms (impact) → engulfment burst (flash + envelope, 1380ms)
+          //   T=~2080ms+       → subtle post-engulfment indicator pulse
+          //
+          // The pulse range is DELIBERATELY subtle: [floor, floor+0.2] ≈
+          // [1.0, 1.2]. The flash peak (~2.2-2.7) remains the dominant
+          // visual moment — the post-engulfment pulse is a low-key
+          // selection indicator, not competition for the engulfment burst.
+          // SELECTION_EMISSIVE_FLOOR ≥ bloom threshold (0.85) + small
+          // margin so even ACTIVE clusters' baseline (~0.6) gets lifted
+          // to visible bloom. Mature/domain clusters with `baseEmissive`
+          // already > floor preserve their data-driven asymmetry via
+          // `Math.max`.
           const SELECTION_EMISSIVE_FLOOR = 1.0;
-          const idlePulse = Math.sin(_breathingTime * 0.4) * 0.3 + 0.5;
+          const idlePulse = Math.sin(_breathingTime * 0.4) * 0.1 + 0.1;
           mat.emissiveIntensity =
             Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR) + idlePulse;
         } else {
@@ -2280,6 +2330,16 @@
   // Sync external family selection → highlight node + tactile feedback (canon F18)
   $effect(() => {
     const externalId = clustersStore.selectedClusterId;
+
+    // Clear the engulfment-gate flag on EVERY selection change (deselect OR
+    // switch). The next beam impact on the new selected node will re-add
+    // its id, gating the idle pulse to post-impact. Without this clear,
+    // switching from node A (engulfed) to node B would leave A's flag in
+    // the set — harmless for A (A is no longer selected so the
+    // isSelected gate fails) but the symbolic invariant "set holds at
+    // most the currently-selected node" is easier to audit if we clear
+    // proactively.
+    _selectionEngulfed.clear();
 
     // Deselected — restore previous highlight + return to overview camera.
     // Borrow `_scratchVec3a` for the focusOn target — `focusOn` clones the

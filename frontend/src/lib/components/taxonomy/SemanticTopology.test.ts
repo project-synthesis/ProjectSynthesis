@@ -2798,7 +2798,7 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // that writes `mat.emissiveIntensity = ...` — the regression bug was
     // the blend-out write that decayed toward baseEmissive during attack.
     const flashBranchMatch = src.match(
-      /if \(_flashStates\.has\(nodeId\)\) \{([\s\S]*?)\} else if \(isSelected\)/,
+      /if \(_flashStates\.has\(nodeId\)\) \{([\s\S]*?)\} else if \(isSelected /,
     );
     expect(flashBranchMatch).not.toBeNull();
     const flashBranchBody = flashBranchMatch![1];
@@ -2831,9 +2831,12 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // visible baseline.
     const src = _semTopSrc();
 
-    // Locate the selection idle-pulse branch.
+    // Locate the post-engulfment idle-pulse branch. The branch is now
+    // gated on `_selectionEngulfed.has(nodeId)` so the pulse only fires
+    // AFTER the first beam impact on the selected node — matching the
+    // operator-spec'd engulfment-after-impact sequence.
     const selectionBranchMatch = src.match(
-      /\} else if \(isSelected\) \{([\s\S]*?)\} else \{/,
+      /\} else if \(isSelected && _selectionEngulfed\.has\(nodeId\)\) \{([\s\S]*?)\} else \{/,
     );
     expect(selectionBranchMatch).not.toBeNull();
     const body = selectionBranchMatch![1];
@@ -2884,6 +2887,92 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // variable.
     expect(body).toMatch(
       /envelopePool\?\.acquire\(\s*currentGroup\s*,\s*envelopeBaseScale\s*,/,
+    );
+  });
+
+
+  it('source: post-engulfment idle pulse is gated on `_selectionEngulfed.has(nodeId)` so the glow appears AFTER beam impact, not on click (Engulfment-Timing regression)', () => {
+    // Live-observed: operator reported "fully engulfs and triggers BEFORE the
+    // beam actually triggers and then becomes flat when the beam actually hits
+    // it." Root cause: the idle ambient pulse (canon T3.4) fired
+    // synchronously on selection click — `mat.emissiveIntensity =
+    // max(baseEmissive, SELECTION_EMISSIVE_FLOOR) + idlePulse` runs every
+    // frame the breathing loop sees `isSelected`. With the floor lifted to
+    // 1.0 it produced a visible bloomed glow IMMEDIATELY on click, before
+    // the beam had finished its 700ms POV→target travel. Then when the
+    // beam impacted and flashEmissive started the attack ramp from
+    // `baselineEmissive` (low data-driven value), the displayed emissive
+    // briefly DIPPED to the flat baseline — the operator-observed "becomes
+    // flat" frame.
+    //
+    // Fix: the post-engulfment idle pulse branch is now gated on
+    // `_selectionEngulfed.has(nodeId)`. The set is populated inside
+    // `_triggerBeamImpact` only when the impacted node matches
+    // `clustersStore.selectedClusterId`, and cleared on every selection
+    // change. So between click and impact (the 700ms beam-travel window)
+    // the breathing loop falls through to the `else` branch which sets
+    // emissive to `baseEmissive` (no pulse, no engulfment-class glow) —
+    // matching the operator-spec'd sequence: cyan highlight on click,
+    // beam in flight, engulfment moment only on impact.
+    const src = _semTopSrc();
+
+    // The flag must be declared at module/component scope.
+    expect(src).toMatch(/_selectionEngulfed[\s\S]{0,80}Set/);
+
+    // _triggerBeamImpact must populate the flag when the impacted node
+    // matches the current selection (the per-frame gate is keyed off this).
+    const triggerBody = src.match(
+      /function _triggerBeamImpact\([\s\S]*?\n  \}/,
+    );
+    expect(triggerBody).not.toBeNull();
+    expect(triggerBody![0]).toMatch(
+      /clustersStore\.selectedClusterId\s*===\s*freshNode\.id[\s\S]{0,80}_selectionEngulfed\.add/,
+    );
+
+    // The selection-change effect must clear the flag (so a new selection
+    // re-arms the gate and the operator sees the pre-impact baseline on
+    // every fresh click, not a stale engulfment from a prior selection).
+    const selectionEffect = src.match(
+      /const externalId = clustersStore\.selectedClusterId;[\s\S]*?_selectionEngulfed\.clear/,
+    );
+    expect(selectionEffect).not.toBeNull();
+
+    // The breathing-loop pulse branch must reference the gate.
+    expect(src).toMatch(
+      /\} else if \(isSelected && _selectionEngulfed\.has\(nodeId\)\) \{/,
+    );
+  });
+
+  it('source: flash attack ramps from `startIntensity` (current displayed value), not `baselineEmissive` — no dip when beam hits a node mid-pulse (Flash-Dip regression)', () => {
+    // Live-observed: operator reported "becomes flat when the beam actually
+    // hits it." Root cause: pre-fix the flash attack formula was
+    // `state.baselineEmissive + (peak - state.baselineEmissive) * ease`
+    // which produced an emissive ramp from `baselineEmissive` (the
+    // data-driven low value, e.g., 0.6 for ACTIVE clusters) up to peak.
+    // If the idle pulse had elevated `mat.emissiveIntensity` ABOVE baseline
+    // (which it does for selected nodes), the first frame of the attack
+    // phase reset the visible intensity DOWN to baseline before ramping
+    // up — producing a visible "dim" frame at the moment of impact.
+    //
+    // Fix: `flashEmissive` captures `mat.emissiveIntensity` at acquire
+    // time as `state.startIntensity = max(currentIntensity, baseline)`,
+    // and the attack-phase formula ramps from `startIntensity` → peak.
+    // The decay phase still ramps `peak` → `baselineEmissive` (so the
+    // post-engulfment value lands at the data-driven baseline, matching
+    // the operator-spec'd "fluidly dissipates" close).
+    const src = _semTopSrc();
+
+    // The state record must include `startIntensity`.
+    expect(src).toMatch(/startIntensity:\s*number/);
+
+    // flashEmissive must compute startIntensity from current emissive.
+    expect(src).toMatch(
+      /startIntensity[\s\S]{0,200}Math\.max\(\s*mat\.emissiveIntensity\s*,\s*baseline\s*\)/,
+    );
+
+    // _tickFlashStates attack-phase formula must use startIntensity.
+    expect(src).toMatch(
+      /mat\.emissiveIntensity\s*=\s*state\.startIntensity\s*\+\s*\(peak\s*-\s*state\.startIntensity\)\s*\*\s*ease/,
     );
   });
 
