@@ -667,7 +667,12 @@ class TopicProbeGenerator:
                 "prompt_text": _truncate(prompt_text, 1000),
                 "optimization_id": getattr(pending, "id", None)
                     or getattr(pending, "trace_id", None),
-                "overall_score": getattr(pending, "score_overall", None),
+                # Finding 19 fix: ``PendingOptimization.overall_score`` is the
+                # canonical attribute (NOT ``score_overall`` — that was a
+                # naming-direction inversion bug in the first Finding 16 fix
+                # that displayed ``score=None`` despite a real pipeline run).
+                "overall_score": getattr(pending, "overall_score", None),
+                "task_type": getattr(pending, "task_type", None),
                 "intent_label": getattr(pending, "intent_label", None),
                 "cluster_id_at_persist": getattr(
                     pending, "cluster_id", None,

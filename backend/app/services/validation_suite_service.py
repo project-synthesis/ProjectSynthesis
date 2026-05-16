@@ -161,7 +161,16 @@ def _build_prompts_snapshot(
     """
     return [
         {
-            "raw_prompt": r.get("raw_prompt", ""),
+            # Finding 20: ``ReplayRunGenerator`` writes ``raw_prompt``;
+            # ``TopicProbeGenerator`` writes ``prompt_text`` (canonical post
+            # Finding 16+17 fix). Read both keys with ``raw_prompt`` taking
+            # precedence so suites forked from EITHER generator carry real
+            # prompt content (not empty strings) in their snapshot — and
+            # downstream replays + UI prompt display + regression alarm
+            # calibration all see the real prompt text.
+            "raw_prompt": (
+                r.get("raw_prompt") or r.get("prompt_text") or ""
+            ),
             "intent_label": r.get("intent_label"),
             "original_optimization_id": r.get("optimization_id"),
         }
