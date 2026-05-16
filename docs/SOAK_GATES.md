@@ -653,6 +653,33 @@ Both unmapped at the DomainNode tier (no anchor cluster yet — they wait for Ph
 
 **Sub-domain emergence pipeline alive**: `audit-enforcement` qualifier passed both gates (consistency 0.6 > threshold 0.56, count 6 ≥ 5) — next Phase 5 cycle should promote it. The fully organic Haiku-vocabulary-driven emergence is producing real candidates from real traffic.
 
+### Day 4 supplementary continued — pre-release readiness audit + GC verification
+
+After domain-breadth round 4 closed, ran the pre-release readiness audit so we're ready to ship on calendar-gate open (2026-05-18).
+
+**Version state — consistent across all consumers**:
+- `version.json` → `0.4.22-dev`
+- `backend/app/_version.py` → `__version__ = "0.4.22-dev"` (sync'd)
+- `frontend/package.json` → `0.4.22` (npm-stripped by `sync-version.sh` per semver compliance)
+
+**Branch divergence — clean rebase path verified**:
+- 84 commits ahead of `origin/main` (the full T2 + audit-hook flip work)
+- 19 commits behind `origin/main` — all 3D taxonomy visual work (`frontend/src/lib/components/taxonomy/`: Pattern Graph Visuals V3 Tiers 1–3, plasma beam curation/engulfment glow, edge shaders, brand-guideline 3d-visualization doc updates)
+- File-intersection between "ours" (98 changed) and "theirs" (13 changed): **empty** — zero conflict surface.
+- **Dry-run rebase**: created `rebase-dryrun-d1f6cb9c` locally, `git rebase origin/main` succeeded across all 84 commits with **zero conflicts**. Post-rebase verification: `alembic check` exit 0 (no schema drift) + 122 critical-path tests pass (`test_routers_suites.py` + `test_audit_hook_full_t2_pipeline.py` + `test_audit_hook_passthrough_save.py` + `test_replay_run_generator.py` + `test_task_type_classifier.py` + `test_main_lifespan_no_ddl.py` + `test_main_lifespan_shared_singletons.py`). Dry-run branch deleted; original branch state restored.
+
+**Release-day plan** (executed when calendar gate opens 2026-05-18):
+1. `git fetch origin && git rebase origin/main` on `feature/probe-tier-2` (verified conflict-free above).
+2. Force-push the rebased branch (or rebase-merge via GitHub UI — equivalent outcome; matches the `feedback_pr_merge_strategy.md` preference for >20-commit PRs).
+3. Verify CI re-green on the rebased branch.
+4. Run `./scripts/release.sh` from `main` (strips `-dev`, syncs versions, commits, tags `v0.4.22`, pushes, drafts GitHub Release with the v0.4.22 changelog body, then bumps to `0.4.23-dev`).
+5. Post-ship: doc-sync the SHIPPED.md + ROADMAP.md entries; the audit-hook kill-switch revert path stays documented in `config.py` and SOAK_GATES.md for the first 7 days post-ship.
+
+**Finding 15 orphan GC reconciliation — verified end-to-end**:
+The stuck pre-fix replay row `182230c75dd4...` (created at `03:11:51` against the buggy `replay_suite` endpoint, status='running' forever pre-fix) was correctly reconciled by `_gc_orphan_runs` at `04:24:06` — exactly the safety net documented in CLAUDE.md "The orphan status='running' row is reconciled by the existing `_gc_orphan_runs` sweep within 1h." Final terminal state: `status='failed'`, `error='orphaned (ttl exceeded)'`, `completed_at=2026-05-16T04:24:06`. Log line: `INFO app.services.gc: GC: marked 1 orphan run_row rows as failed (status='running' past TTL=1h)`.
+
+The other replay row `f2b8f25f...` (post-fix completion, the one driving the alarm) stays at `status='completed'`. The regression alarm now correctly reads from a single terminal row, the GC fossil is cleaned, and the suite's `/replays` endpoint shows both rows in terminal state for operator inspection.
+
 ### Decision matrix
 
 Read column-by-column: first match wins.
