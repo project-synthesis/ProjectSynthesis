@@ -8,6 +8,7 @@
   import { buildSceneData, assignLodVisibility, buildNodeMap, computeHierarchicalOpacity, type SceneData, type SceneNode } from './TopologyData';
   import { TopologyInteraction } from './TopologyInteraction';
   import { TopologyLabels } from './TopologyLabels';
+  import { cleanupScene, reorderPersistentToBack } from './scene-cleanup';
   import { settleForces } from './TopologyWorker';
   import TopologyControls from './TopologyControls.svelte';
   import ActivityPanel from './ActivityPanel.svelte';
@@ -258,7 +259,9 @@
   function _syncTemplateRings(nodes: SceneNode[]): void {
     if (!_templateRingGroup) {
       _templateRingGroup = new THREE.Group();
-      _templateRingGroup.userData = { isTemplateRingGroup: true };
+      _templateRingGroup.userData.isTemplateRingGroup = true;
+      _templateRingGroup.userData.persistent = true;
+      if (renderer) renderer.scene.add(_templateRingGroup);
     }
     _templateRingWarnedThisRebuild = false;
 
@@ -963,20 +966,6 @@
   function rebuildScene(data: SceneData): void {
     if (!renderer) return;
 
-    // Temporarily remove beam pool from scene to protect it from disposal
-    if (beamPool) {
-      renderer.scene.remove(beamPool.group);
-    }
-    // Same protection for envelope pool (canon F19). The scene-clear `while`
-    // loop below indiscriminately removes every child; without this detach,
-    // envelopePool.group orphans permanently on the first rebuild and every
-    // subsequent acquire renders to nothing (state machine runs, mesh is in
-    // a group with no scene parent). Re-added at the matching beamPool re-add
-    // below so the lifecycle stays paired.
-    if (envelopePool) {
-      renderer.scene.remove(envelopePool.group);
-    }
-
     // Clear previous
     interaction?.clear();
     labels?.clear();  // disposes label sprites + textures
@@ -985,26 +974,11 @@
     _simScoreCache = null;
     _injWeightCache = null;
 
-    // Detach the readiness ring group from the scene BEFORE the scene-clear
-    // traverse so its meshes (which persist across rebuilds to keep tween
-    // state continuous) aren't disposed. Re-added in the ring-build pass.
     // Unsubscribe the billboard callback FIRST so it cannot fire against a
     // half-disposed mesh (use-after-free guard).
-    // Guard dispose() lookups: in some test environments THREE is mocked
-    // with minimal stubs where `mesh.geometry`/`material` may be null or
-    // lack a `dispose` method. Production renderers always have real
-    // THREE.js instances — these guards are defensive and cheap.
     _removeReadinessBillboard?.();
     _removeReadinessBillboard = null;
-    if (_readinessRingGroup) {
-      renderer.scene.remove(_readinessRingGroup);
-    }
 
-    // Detach the template ring group from the scene BEFORE the scene-clear traverse
-    // so pooled meshes survive across rebuilds without re-allocation.
-    if (_templateRingGroup) {
-      renderer.scene.remove(_templateRingGroup);
-    }
     // Ring survives only if the domain is still visible AND still carries a
     // readiness tier — matches the ring-build pass gate below, so LOD hides
     // rings implicitly (disposal preferred over hidden-mesh accumulation).
@@ -1019,28 +993,12 @@
       }
     }
 
-    // Dispose GPU resources before clearing scene.
-    // Track disposed geometries to avoid duplicate dispose on shared instances.
-    const disposedGeometries = new Set<THREE.BufferGeometry>();
-    renderer.scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) {
-        if (!disposedGeometries.has(obj.geometry)) {
-          obj.geometry.dispose();
-          disposedGeometries.add(obj.geometry);
-        }
-        if (Array.isArray(obj.material)) {
-          obj.material.forEach((m: THREE.Material) => m.dispose());
-        } else {
-          (obj.material as THREE.Material).dispose();
-        }
-      }
-      // Note: Sprites are already disposed by labels.clear() above
-    });
-
-    // Remove old scene children
-    while (renderer.scene.children.length > 0) {
-      renderer.scene.remove(renderer.scene.children[0]);
-    }
+    // One call replaces the manual save/restore + dispose-traverse + wipe-loop.
+    // Pool groups + lights + dust + ring groups survive automatically via their
+    // userData.persistent = true flag set at construction. Dispose-traverse
+    // type-coverage broadens to Mesh + LineSegments + Line + Points (closes the
+    // per-domain PointsMaterial leak documented in lifecycle-hardening spec §1).
+    cleanupScene(renderer.scene);
 
     // Build nodes — two distinct visual tiers:
     //
@@ -1229,10 +1187,9 @@
 
     // Template rings — sync after node-mesh loop so template ring and node color are
     // written in the same rebuildScene pass (satisfies same-frame sync).
+    // The group is added to the scene once inside the lazy `if (!_templateRingGroup)`
+    // block above; it survives subsequent rebuilds via userData.persistent.
     _syncTemplateRings(data.nodes);
-    if (_templateRingGroup && _templateRingById.size > 0) {
-      renderer.scene.add(_templateRingGroup);
-    }
 
     // Readiness rings — per-domain contour ring colored by composite tier.
     // Only for visible domain nodes with a resolved readinessTier (see
@@ -1242,7 +1199,9 @@
     const camera = renderer.camera;
     if (!_readinessRingGroup) {
       _readinessRingGroup = new THREE.Group();
-      _readinessRingGroup.userData = { isReadinessRingGroup: true };
+      _readinessRingGroup.userData.isReadinessRingGroup = true;
+      _readinessRingGroup.userData.persistent = true;
+      renderer.scene.add(_readinessRingGroup);
     }
     for (const node of data.nodes) {
       if (!node.visible) continue;
@@ -1283,10 +1242,9 @@
         tween: null,
       });
     }
-    // Re-attach the ring group (protected from the scene-clear traverse above).
-    if (_readinessRings.size > 0) {
-      renderer.scene.add(_readinessRingGroup);
-    }
+    // The readiness ring group is added to the scene once inside the lazy
+    // `if (!_readinessRingGroup)` block above; it survives subsequent
+    // rebuildScene cycles via userData.persistent.
 
     // Neural Dust — galaxy-style ambient backdrop (canon F10 + T3.1).
     // 3000-particle Points cloud uniformly distributed in 300^3 space.
@@ -1346,9 +1304,10 @@
         vertexColors: true,
       });
       _dustPoints = new THREE.Points(dustGeo, dustMat);
-      _dustPoints.userData = { isNeuralDust: true };
+      _dustPoints.userData.isNeuralDust = true;
+      _dustPoints.userData.persistent = true;
+      renderer.scene.add(_dustPoints);
     }
-    renderer.scene.add(_dustPoints);
 
     // Per-frame billboard — one callback iterates all rings, mirroring the
     // `_removeDomainRotation` pattern. OrbitControls rotates the camera
@@ -1688,7 +1647,8 @@
       for (const sprite of templateSprites) {
         sprite.visible = true;
       }
-      renderer.scene.add(labels.group);
+      // labels.group is one-time added in onMount and survives rebuildScene
+      // via userData.persistent (TopologyLabels constructor sets the flag).
     }
 
     // Build beam targeting map (node groups for beam target objects)
@@ -1711,17 +1671,10 @@
       }
     }
 
-    // Re-add beam pool to scene (protected from disposal above)
-    if (beamPool) {
-      renderer.scene.add(beamPool.group);
-    }
-    // Re-add envelope pool — paired with the detach above. Restores the
-    // scene parent so subsequent acquires render visibly. Active envelopes
-    // (still mid-attack/hold/decay) resume rendering on the next frame
-    // because their meshes never moved; only the parent group was reattached.
-    if (envelopePool) {
-      renderer.scene.add(envelopePool.group);
-    }
+    // beamPool.group and envelopePool.group are one-time added in onMount and
+    // survive rebuildScene via userData.persistent (set in their constructors).
+    // Active envelopes (still mid-attack/hold/decay) resume rendering on the
+    // next frame because their meshes never moved; the parent group never left.
 
     // Highlight survival on rebuild (canon F16). If a focusedNodeId exists,
     // re-apply the cyan highlight so it survives any async rebuildScene
@@ -1732,6 +1685,14 @@
     if (focusedNodeId) {
       applyHighlight(focusedNodeId);
     }
+
+    // Layer-ordering invariant: persistent direct children of the scene
+    // (pool wrappers, label wrapper, lazy ring/dust groups) sit at the
+    // BACK of `scene.children` so the domain cluster groups (ephemeral,
+    // rebuilt on each pass) appear FIRST. Preserves the pre-refactor
+    // ordering that `SemanticTopology.test.ts`'s dim-lockstep test reads
+    // via `groups[0]`. Idempotent + cheap (one O(n) pass per rebuild).
+    reorderPersistentToBack(renderer.scene);
   }
 
   function handleLodChange(tier: LODTier): void {
@@ -2426,6 +2387,7 @@
   onMount(() => {
     renderer = new TopologyRenderer(canvas);
     labels = new TopologyLabels();
+    renderer.scene.add(labels.group);
     interaction = new TopologyInteraction(renderer, canvas, {
       onNodeClick: handleNodeClick,
       onNodeHover: (id) => { hoveredNodeId = id; },

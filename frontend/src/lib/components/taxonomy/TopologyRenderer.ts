@@ -72,15 +72,18 @@ export class TopologyRenderer {
     //                      #06060c, intensity 0.2 — gives the dark void
     //                      a top-down organic feel.
     const ambient = new THREE.AmbientLight(0xffffff, 0.3);
+    ambient.userData.persistent = true;
     this.scene.add(ambient);
 
     const directional = new THREE.DirectionalLight(0xffffff, 0.7);
+    directional.userData.persistent = true;
     directional.position.set(5, 10, 5);
     directional.castShadow = true;
     directional.shadow.mapSize.set(1024, 1024);
     this.scene.add(directional);
 
     const hemisphere = new THREE.HemisphereLight(0x1a1a2e, 0x06060c, 0.2);
+    hemisphere.userData.persistent = true;
     this.scene.add(hemisphere);
 
     // Cinematic post-processing pipeline (canon F13). The 3D Pattern

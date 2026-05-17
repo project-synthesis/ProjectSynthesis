@@ -14,6 +14,7 @@ export class BeamPool {
 
   constructor() {
     this.group = new THREE.Group();
+    this.group.userData.persistent = true;
     this.group.name = 'beam-pool';
 
     for (let i = 0; i < POOL_SIZE; i++) {

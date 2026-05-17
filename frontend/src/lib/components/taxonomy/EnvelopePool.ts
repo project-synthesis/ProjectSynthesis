@@ -81,6 +81,7 @@ export class EnvelopePool {
 
   constructor() {
     this.group = new THREE.Group();
+    this.group.userData.persistent = true;
     this.group.name = 'envelope-pool';
 
     this._clusterGeo = new THREE.IcosahedronGeometry(1, 2);
