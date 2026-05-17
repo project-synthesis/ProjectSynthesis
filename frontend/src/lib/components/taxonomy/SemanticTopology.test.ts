@@ -2486,10 +2486,9 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(src).toMatch(/let\s+envelopePool\s*:\s*EnvelopePool\s*\|\s*null\s*=\s*null/);
   });
 
-  it('source: _removeEnvelopeUpdate canceller declared at module scope', () => {
-    const src = _semTopSrc();
-    expect(src).toMatch(/let\s+_removeEnvelopeUpdate\s*:\s*\(\(\)\s*=>\s*void\)\s*\|\s*null\s*=\s*null/);
-  });
+  // DELETED (Sub-project B / spec §5.2.2 M3): `_removeEnvelopeUpdate` symbol
+  // absorbed into `coordinator.dispose()`. Replacement coverage: cleanup-contract
+  // test #6 asserts `coordinator?.dispose()` appears in cleanup return.
 
   it('source: envelopePool constructed in onMount + group added to scene', () => {
     const src = _semTopSrc();
@@ -2497,12 +2496,14 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(src).toMatch(/renderer[!?]?\.scene\.add\(envelopePool[!?]?\.group\)/);
   });
 
-  it('source: envelopePool.update wired into a per-frame addAnimationCallback', () => {
+  it("source: envelopePool.update wired via coordinator.register('impact', ...)", () => {
     const src = _semTopSrc();
-    // Some addAnimationCallback registration mentions envelopePool.update,
-    // and the result is captured into _removeEnvelopeUpdate.
+    // Post-Sub-project B (spec §5.2.2 M3): envelope per-frame work is now
+    // registered through the AnimationCoordinator in the `impact` phase.
+    // Anchor on coordinator.register('impact', ...) call referencing
+    // `envelopePool.update`.
     expect(src).toMatch(
-      /_removeEnvelopeUpdate\s*=\s*renderer[!?]?\.addAnimationCallback\([\s\S]{0,300}envelopePool\?\.update/,
+      /coordinator\.register\(\s*['"]impact['"][\s\S]{0,300}envelopePool[?!]?\.update/,
     );
   });
 
@@ -2619,7 +2620,11 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // Brand color contract: domainEmissive drives burst; NO prevEmissive (stale if node deselected mid-glow).
     expect(src).toMatch(/domainEmissive\s*:\s*THREE\.Color/);
     expect(src).not.toMatch(/prevEmissive\s*:\s*THREE\.Color/);
-    expect(src).toMatch(/let\s+_removeFlashUpdate\s*:\s*\(\(\)\s*=>\s*void\)\s*\|\s*null\s*=\s*null/);
+    // DELETED (Sub-project B / spec §5.2.2 M3): `_removeFlashUpdate` module-scope
+    // symbol absorbed by `coordinator.dispose()`. Replacement coverage:
+    // cleanup-contract test #6 asserts `coordinator?.dispose()` appears in
+    // cleanup return; cleanup-contract test #4 pins flash registered via
+    // `coordinator.register('impact', ...)`.
   });
 
   it('source: flashEmissive takes domainColor arg + applies it immediately (no prevEmissive snapshot)', () => {
@@ -2657,14 +2662,17 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(src).toMatch(/mat\.emissive\.copy\(\s*state\.domainEmissive\s*\)/);
   });
 
-  it('source: _removeFlashUpdate registered via addAnimationCallback in onMount', () => {
+  it("source: _tickFlashStates wired via coordinator.register('impact', ...) in onMount", () => {
     const src = _semTopSrc();
+    // Post-Sub-project B (spec §5.2.2 M3): flash per-frame tick is registered
+    // through the AnimationCoordinator in the `impact` phase. The canceller
+    // symbol `_removeFlashUpdate` is absorbed into `coordinator.dispose()`.
     expect(src).toMatch(
-      /_removeFlashUpdate\s*=\s*renderer[!?]?\.addAnimationCallback\([\s\S]{0,300}_tickFlashStates/,
+      /coordinator\.register\(\s*['"]impact['"][\s\S]{0,300}_tickFlashStates/,
     );
   });
 
-  it('source: cleanup return invokes _removeFlashUpdate?.() before clearing _flashStates', () => {
+  it('source: cleanup return invokes coordinator?.dispose() before clearing _flashStates', () => {
     const src = _semTopSrc();
     const closeIdx = src.indexOf('</script>');
     const returnPattern = /return\s*\(\s*\)\s*=>\s*\{/g;
@@ -2683,11 +2691,14 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     }
     const cleanupBody = src.slice(lastReturnIdx, i - 1);
 
-    expect(cleanupBody).toMatch(/_removeFlashUpdate\?\.\(\)/);
+    // Post-Sub-project B (spec §5.2.2 M3): the `_removeFlashUpdate` symbol is
+    // absorbed into `coordinator.dispose()`. The cancel-before-clear ordering
+    // invariant survives: `coordinator?.dispose()` (which cancels the flash
+    // per-frame handler) must precede `_flashStates.clear()` so the tick can't
+    // read into a half-cleared map.
+    expect(cleanupBody).toMatch(/coordinator\?\.dispose\(\)/);
     expect(cleanupBody).toMatch(/_flashStates\.clear\(\)/);
-    // _removeFlashUpdate must be invoked BEFORE _flashStates.clear() so
-    // the per-frame tick can't read into a half-cleared map.
-    const cancelIdx = cleanupBody.indexOf('_removeFlashUpdate?.()');
+    const cancelIdx = cleanupBody.indexOf('coordinator?.dispose()');
     const clearIdx = cleanupBody.indexOf('_flashStates.clear()');
     expect(cancelIdx).toBeGreaterThan(-1);
     expect(clearIdx).toBeGreaterThan(-1);
@@ -2745,7 +2756,7 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     }
   });
 
-  it('source: cleanup return invokes _removeEnvelopeUpdate?.() and envelopePool?.dispose()', () => {
+  it('source: cleanup return calls coordinator?.dispose() + envelopePool?.dispose() + nulls envelopePool', () => {
     const src = _semTopSrc();
     // Locate the onMount cleanup return body.
     const closeIdx = src.indexOf('</script>');
@@ -2765,7 +2776,10 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     }
     const cleanupBody = src.slice(lastReturnIdx, i - 1);
 
-    expect(cleanupBody).toMatch(/_removeEnvelopeUpdate\?\.\(\)/);
+    // Post-Sub-project B (spec §5.2.2 M3): `_removeEnvelopeUpdate` symbol is
+    // absorbed into `coordinator.dispose()`; the pool-dispose-then-null pattern
+    // survives.
+    expect(cleanupBody).toMatch(/coordinator\?\.dispose\(\)/);
     expect(cleanupBody).toMatch(/envelopePool\?\.dispose\(\)/);
     // Pool reference nulled after dispose so subsequent disposals are no-ops.
     expect(cleanupBody).toMatch(/envelopePool\s*=\s*null/);
@@ -2798,11 +2812,12 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(src).toMatch(
       /if\s*\(\s*!\s*cached\s*\)\s*\{[\s\S]{0,4000}Start all nodes collapsed at origin/,
     );
-    // The formation animation registration (`_removeFormationAnim =
-    // renderer?.addAnimationCallback`) must be inside the same
-    // `!cached` branch.
+    // Post-Sub-project B (spec §5.2.2 M3): the formation animation registration
+    // (now `_removeFormationAnim = coordinator.register('ambient', ...)`) must
+    // be inside the same `!cached` branch. Formation runs in the `ambient`
+    // phase per spec §3.5.
     expect(src).toMatch(
-      /if\s*\(\s*!\s*cached\s*\)\s*\{[\s\S]{0,8000}_removeFormationAnim\s*=\s*renderer\?\.addAnimationCallback/,
+      /if\s*\(\s*!\s*cached\s*\)\s*\{[\s\S]{0,8000}removeFormation\s*=\s*coordinator\.register\(\s*['"]ambient['"][\s\S]{0,300}/,
     );
     // The else branch must set positions directly to settled values
     // (no animation, no collapse).

@@ -66,23 +66,12 @@ function extractCleanupBody(src: string): string {
 describe('Cleanup contract — canon animation cancellers', () => {
   test('all 10 canonical cancellers wired in cleanup body', () => {
     const cleanup = extractCleanupBody(readSemTopSource());
-    // Per canon F5/F8/F10/F19 + existing pre-canon cancellers. Every
-    // `addAnimationCallback` registration must have a matching invocation
-    // in the cleanup return.
+    // Post-Sub-project B: coordinator?.dispose() absorbs 8 unconditional cancellers;
+    // formation and readiness billboard remain conditional and survive.
     const required = [
-      // pre-canon (already wired)
-      'removeBeamUpdate()',
-      '_removeRingLodUpdate()',
-      '_removeFormationAnim?.()',
-      '_removeDomainRotation?.()',
-      '_removeReadinessBillboard?.()',
-      // canon F5/F8/F10
-      '_removeEdgeAnim?.()',
-      '_removeDustAnim?.()',
-      '_breathingAnim?.()',
-      // canon F19 (envelopement burst + emissive flash)
-      '_removeEnvelopeUpdate?.()',
-      '_removeFlashUpdate?.()',
+      'coordinator?.dispose()',         // absorbs 8 unconditional cancellers (Sub-project B)
+      '_removeFormationAnim?.()',       // conditional during entrance; retained
+      '_removeReadinessBillboard?.()',  // conditional when _readinessRings.size > 0; retained
     ];
     const missing = required.filter((sig) => !cleanup.includes(sig));
     expect(missing).toEqual([]);
@@ -342,5 +331,177 @@ describe('Lifecycle Hardening — source-grep contract (spec §5.2)', () => {
     expect(src).not.toMatch(/_releaseTemplateRing/);
     expect(src).not.toMatch(/disposeBeam/);
     expect(src).not.toMatch(/disposeEnvelope/);
+  });
+});
+
+// Append to cleanup-contract.test.ts — Sub-project B: Animation Coordinator
+// 10 source-grep assertions per spec §5.2.
+
+function readAnimationCoordinatorSrc(relPath: string): string {
+  const mod = import.meta.glob<string>(
+    [
+      './AnimationCoordinator.ts',
+      './SemanticTopology.svelte',
+      './TopologyRenderer.ts',
+    ],
+    { query: '?raw', import: 'default', eager: true },
+  );
+  const key = `./${relPath}`;
+  const src = mod[key];
+  if (typeof src !== 'string') throw new Error(`Source not found for ${key}`);
+  return src;
+}
+
+describe('Animation Coordinator — source-grep contract (spec §5.2)', () => {
+  // ── #1 ──
+  it('#1 — AnimationCoordinator.ts exports class + AnimationPhase + AnimationHandler + PHASE_ORDER', () => {
+    const src = readAnimationCoordinatorSrc('AnimationCoordinator.ts');
+    expect(src).toMatch(/export\s+class\s+AnimationCoordinator/);
+    expect(src).toMatch(/export\s+type\s+AnimationPhase/);
+    expect(src).toMatch(/export\s+type\s+AnimationHandler/);
+    // PHASE_ORDER is exactly the 5-phase tuple in canonical order
+    expect(src).toMatch(/PHASE_ORDER[\s\S]*?'impact'[\s\S]*?'physics'[\s\S]*?'breathing'[\s\S]*?'ambient'[\s\S]*?'camera'/);
+  });
+
+  // ── #2 ──
+  it('#2 — coordinator instantiation is AFTER renderer construction AND BEFORE first register call in onMount', () => {
+    const src = readAnimationCoordinatorSrc('SemanticTopology.svelte');
+    const onMountIdx = src.indexOf('onMount(() => {');
+    expect(onMountIdx).toBeGreaterThan(0);
+    const onMountSlice = src.slice(onMountIdx, onMountIdx + 8000);
+    const rendererPos = onMountSlice.search(/renderer\s*=\s*new\s+TopologyRenderer\(/);
+    const coordPos = onMountSlice.search(/coordinator\s*=\s*new\s+AnimationCoordinator\(/);
+    const firstRegPos = onMountSlice.search(/coordinator\.register\(/);
+    expect(rendererPos).toBeGreaterThan(-1);
+    expect(coordPos).toBeGreaterThan(-1);
+    expect(firstRegPos).toBeGreaterThan(-1);
+    expect(rendererPos).toBeLessThan(coordPos);
+    expect(coordPos).toBeLessThan(firstRegPos);
+  });
+
+  // ── #3 ──
+  it('#3 — SemanticTopology.svelte has ZERO direct renderer.addAnimationCallback calls', () => {
+    const src = readAnimationCoordinatorSrc('SemanticTopology.svelte');
+    expect(src).not.toMatch(/renderer\s*[!?]?\.addAnimationCallback\(/);
+  });
+
+  // ── #4 ──
+  it('#4 — impact-phase strict order: beam.update BEFORE envelope.update BEFORE _tickFlashStates', () => {
+    const src = readAnimationCoordinatorSrc('SemanticTopology.svelte');
+    const onMountIdx = src.indexOf('onMount(() => {');
+    const onMountSlice = src.slice(onMountIdx, onMountIdx + 8000);
+    const beamPos = onMountSlice.search(/coordinator\.register\(\s*['"]impact['"][\s\S]{0,200}beamPool[?!]?\.update/);
+    const envPos = onMountSlice.search(/coordinator\.register\(\s*['"]impact['"][\s\S]{0,200}envelopePool[?!]?\.update/);
+    const flashPos = onMountSlice.search(/coordinator\.register\(\s*['"]impact['"][\s\S]{0,200}_tickFlashStates/);
+    expect(beamPos).toBeGreaterThan(-1);
+    expect(envPos).toBeGreaterThan(-1);
+    expect(flashPos).toBeGreaterThan(-1);
+    expect(beamPos).toBeLessThan(envPos);
+    expect(envPos).toBeLessThan(flashPos);
+  });
+
+  // ── #5 ──
+  it('#5 — exactly 11 coordinator.register call sites distributed across rebuildScene (5), handleRecluster (1 formation), onMount (5)', () => {
+    const src = readAnimationCoordinatorSrc('SemanticTopology.svelte');
+    const totalMatches = src.match(/coordinator\.register\(/g);
+    expect(totalMatches?.length).toBe(11);
+
+    // Source order at HEAD 522701f8: rebuildScene (~966) → handleLodChange
+    // (~1692) → handleRecluster (~1767, contains formation registration) →
+    // onMount (~2381). Slice in source order, not assumed-presentation order.
+    const rebuildIdx = src.indexOf('function rebuildScene(');
+    const handleLodIdx = src.indexOf('function handleLodChange(');
+    const handleReclusterIdx = src.indexOf('async function handleRecluster(');
+    const onMountIdx = src.indexOf('onMount(() => {');
+    expect(rebuildIdx).toBeGreaterThan(0);
+    expect(handleLodIdx).toBeGreaterThan(rebuildIdx);
+    expect(handleReclusterIdx).toBeGreaterThan(handleLodIdx);
+    expect(onMountIdx).toBeGreaterThan(handleReclusterIdx);
+
+    // rebuildScene body: rebuildIdx → handleLodIdx (5 register calls expected)
+    const rebuildRegion = src.slice(rebuildIdx, handleLodIdx);
+    const rebuildCount = (rebuildRegion.match(/coordinator\.register\(/g) ?? []).length;
+    expect(rebuildCount).toBe(5);
+
+    // handleRecluster body: handleReclusterIdx → onMountIdx (1 register call = formation)
+    const handleReclusterRegion = src.slice(handleReclusterIdx, onMountIdx);
+    const handleReclusterCount = (handleReclusterRegion.match(/coordinator\.register\(/g) ?? []).length;
+    expect(handleReclusterCount).toBe(1);
+
+    // onMount body: onMountIdx → end of file (5 register calls expected)
+    const onMountRegion = src.slice(onMountIdx);
+    const onMountCount = (onMountRegion.match(/coordinator\.register\(/g) ?? []).length;
+    expect(onMountCount).toBe(5);
+  });
+
+  // ── #6 ──
+  it('#6 — cleanup return calls coordinator?.dispose(); does NOT contain absorbed cancellers (formation + readiness billboard retained)', () => {
+    const src = readAnimationCoordinatorSrc('SemanticTopology.svelte');
+    // Find cleanup return: search for the trailing `return () => {` near end of onMount
+    const cleanupIdx = src.lastIndexOf('return () => {');
+    expect(cleanupIdx).toBeGreaterThan(0);
+    const cleanupSlice = src.slice(cleanupIdx, cleanupIdx + 4000);
+    expect(cleanupSlice).toMatch(/coordinator\??\.dispose\(\)/);
+    // 8 absorbed cancellers must be gone
+    expect(cleanupSlice).not.toMatch(/_removeEnvelopeUpdate\?\.\(/);
+    expect(cleanupSlice).not.toMatch(/_removeFlashUpdate\?\.\(/);
+    expect(cleanupSlice).not.toMatch(/_removeRingLodUpdate\(/);
+    expect(cleanupSlice).not.toMatch(/_removeDomainRotation\?\.\(/);
+    expect(cleanupSlice).not.toMatch(/_removeEdgeAnim\?\.\(/);
+    expect(cleanupSlice).not.toMatch(/_removeDustAnim\?\.\(/);
+    expect(cleanupSlice).not.toMatch(/_breathingAnim\?\.\(/);
+    expect(cleanupSlice).not.toMatch(/removeBeamUpdate\(/);
+    // 2 conditional cancellers retained
+    expect(cleanupSlice).toMatch(/_removeFormationAnim\?\.\(/);
+    expect(cleanupSlice).toMatch(/_removeReadinessBillboard\?\.\(/);
+  });
+
+  // ── #7 ──
+  it('#7 — AnimationCoordinator._tick wraps each handler invocation in try/catch', () => {
+    const src = readAnimationCoordinatorSrc('AnimationCoordinator.ts');
+    const tickIdx = src.indexOf('private _tick()');
+    expect(tickIdx).toBeGreaterThan(-1);
+    const tickEnd = src.indexOf('\n  }', tickIdx); // method body ends at matching brace
+    const tickSlice = src.slice(tickIdx, tickEnd);
+    expect(tickSlice).toMatch(/try\s*\{/);
+    expect(tickSlice).toMatch(/catch\s*\(/);
+  });
+
+  // ── #8 ──
+  it('#8 — Anti-pattern: NO source file under taxonomy/ (except coordinator files + TopologyRenderer.test.ts) calls .addAnimationCallback', () => {
+    const mod = import.meta.glob<string>(
+      [
+        './*.ts',
+        './*.svelte',
+      ],
+      { query: '?raw', import: 'default', eager: true },
+    );
+    const exemptions = [
+      './AnimationCoordinator.ts',
+      './AnimationCoordinator.test.ts',
+      './AnimationCoordinator.integration.test.ts',
+      './TopologyRenderer.ts',
+      './TopologyRenderer.test.ts',
+    ];
+    for (const [path, src] of Object.entries(mod)) {
+      if (exemptions.includes(path)) continue;
+      if (typeof src !== 'string') continue;
+      expect(src, `${path} should not call .addAnimationCallback (only AnimationCoordinator does)`).not.toMatch(/\.addAnimationCallback\(/);
+    }
+  });
+
+  // ── #9 ──
+  it('#9 — AnimationCoordinator._tick body contains no per-frame allocations', () => {
+    const src = readAnimationCoordinatorSrc('AnimationCoordinator.ts');
+    const tickIdx = src.indexOf('private _tick()');
+    const tickEnd = src.indexOf('\n  }', tickIdx);
+    const tickSlice = src.slice(tickIdx, tickEnd);
+    expect(tickSlice).not.toMatch(/new\s+(Map|Array|Set|WeakSet|Vector\d|Color|Quaternion|Matrix\d)\b/);
+  });
+
+  // ── #10 ──
+  it('#10 — TopologyRenderer.addAnimationCallback signature unchanged: (cb: () => void) => () => void', () => {
+    const src = readAnimationCoordinatorSrc('TopologyRenderer.ts');
+    expect(src).toMatch(/addAnimationCallback\(cb:\s*\(\)\s*=>\s*void\)\s*:\s*\(\)\s*=>\s*void/);
   });
 });
