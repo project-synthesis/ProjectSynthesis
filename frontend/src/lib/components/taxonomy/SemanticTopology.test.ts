@@ -1635,7 +1635,7 @@ describe('SemanticTopology — readiness ring overlay', () => {
 
   it('attenuates ring opacity by renderer.lodTier each frame', async () => {
     // Task 9: LOD attenuation. The per-frame callback registered via
-    // `renderer.addAnimationCallback()` reads the public `renderer.lodTier`
+    // `coordinator.register('camera', ...)` reads the public `renderer.lodTier`
     // getter and composes opacity from four multiplicands:
     //   opacity = LOD_OPACITY[tier]
     //           * READINESS_RING_OPACITY_FACTOR
