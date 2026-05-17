@@ -5,7 +5,8 @@
 // "Spring Physics Constants" table — k=120, d=12, dt clamp 0.1, velocityFloor=1e-4.
 
 export interface ClusterPhysicsState {
-  baseScale: number;
+  baseScale: number;        // INTEGRATED scale (mutated by the spring each frame)
+  dataDrivenScale: number;  // CANONICAL scale from TopologyData (set by setBaseScale; cap anchor)
   targetScale: number;
   scaleVelocity: number;
   rippleIntensity: number;
@@ -19,30 +20,44 @@ const VELOCITY_FLOOR = 1e-4;       // below this, snap to target + zero velocity
 const RIPPLE_DECAY = 0.92;
 const RIPPLE_EPSILON = 0.001;
 
-// Per-cluster targetScale ceiling, as a multiple of baseScale. Each beam
-// impact adds ACCRETION_DELTA (0.02) to targetScale; without a cap, repeated
-// impacts (rapid clicks, optimization events bursting against the same domain,
-// seed-batch beams hitting the same cluster) accumulate without bound and the
-// cluster mesh balloons to many times its data-driven size. 2.0× lets a
-// cluster grow visibly responsive to interaction while bounding the worst
-// case at twice the underlying member-driven scale.
+// Per-cluster targetScale ceiling, as a multiple of the DATA-DRIVEN scale
+// (the canonical size from TopologyData, NOT the integrated spring-physics
+// baseScale which inflates as the cluster grows). Each beam impact adds
+// ACCRETION_DELTA (0.02) to targetScale; without an anchor-relative cap,
+// repeated impacts (rapid clicks, optimization events bursting against the
+// same domain, seed-batch beams hitting the same cluster) accumulate without
+// bound — and a cap relative to `state.baseScale` is moot because baseScale
+// grows alongside targetScale and the cap window keeps expanding. The cap
+// MUST reference `state.dataDrivenScale` (set by setBaseScale on each
+// rebuildScene from TopologyData's canonical size) so the ceiling stays
+// fixed regardless of how much accretion has occurred. 2.0× lets a cluster
+// grow visibly responsive to interaction while bounding the worst case at
+// twice the underlying member-driven scale.
 const MAX_ACCRETION_MULTIPLIER = 2.0;
 
 export class ClusterPhysics {
   private _states = new Map<string, ClusterPhysicsState>();
 
-  setBaseScale(nodeId: string, baseScale: number): void {
+  setBaseScale(nodeId: string, dataDrivenScale: number): void {
     const existing = this._states.get(nodeId);
     if (existing) {
-      existing.baseScale = baseScale;
-      const maxTarget = baseScale * MAX_ACCRETION_MULTIPLIER;
-      if (existing.targetScale < baseScale) {
-        existing.targetScale = baseScale;
+      // Record the canonical scale BEFORE adjusting the integrated baseScale —
+      // the cap math below references dataDrivenScale, not the spring-mutated
+      // baseScale, so the ceiling stays anchored to TopologyData's view of the
+      // cluster regardless of how much accretion the spring has chased.
+      existing.dataDrivenScale = dataDrivenScale;
+      existing.baseScale = dataDrivenScale;
+      const maxTarget = dataDrivenScale * MAX_ACCRETION_MULTIPLIER;
+      if (existing.targetScale < dataDrivenScale) {
+        existing.targetScale = dataDrivenScale;
       } else if (existing.targetScale > maxTarget) {
-        // Clamp any stale-inflated targetScale to the current cap. Defensive
-        // against (a) cap-tuning between releases lowering MAX_ACCRETION_MULTIPLIER,
-        // (b) data-driven baseScale shrinking on rebuild (e.g., cluster lost
-        // members) leaving an old targetScale above the new ceiling.
+        // Clamp any stale-inflated targetScale to the current cap. Catches
+        // (a) cap-tuning between releases lowering MAX_ACCRETION_MULTIPLIER,
+        // (b) data-driven scale shrinking on rebuild (e.g., cluster lost
+        //     members) leaving an old targetScale above the new ceiling,
+        // (c) state from the pre-cap-fix era surviving the upgrade in
+        //     production (the inflated `Observability Infrastructure` cluster
+        //     symptom that prompted this anchor fix).
         existing.targetScale = maxTarget;
       }
     }
@@ -53,22 +68,25 @@ export class ClusterPhysics {
     if (!state) {
       state = {
         baseScale: currentScale,
+        dataDrivenScale: currentScale,
         targetScale: currentScale,
         scaleVelocity: 0,
         rippleIntensity: 0,
       };
       this._states.set(nodeId, state);
     }
-    // Cap accretion at MAX_ACCRETION_MULTIPLIER × baseScale. Pre-fix: this was
-    // `state.targetScale += ACCRETION_DELTA;` with no upper bound — repeated
-    // impacts (rapid clicks, optimization events bursting against the same
-    // domain, seed-batch beams) accumulated without bound and ballooned the
-    // cluster mesh to many times its data-driven size. The cap preserves
-    // responsive elastic feedback for typical interaction (1–10 impacts) while
-    // bounding the worst case at twice baseScale.
+    // Cap accretion at MAX_ACCRETION_MULTIPLIER × DATA-DRIVEN scale (NOT the
+    // integrated baseScale). Pre-cap-fix this was `state.targetScale += 0.02`
+    // with no upper bound. The first cap-fix attempt (commit 78391862) used
+    // `state.baseScale * MAX_ACCRETION_MULTIPLIER` as the ceiling, but
+    // baseScale is the SPRING-INTEGRATED value — it grows along with targetScale
+    // and the cap window expanded indefinitely. Live symptom recurred (giant
+    // pink balloon on selected cluster). Anchoring the cap to `dataDrivenScale`
+    // (set by setBaseScale from TopologyData on each rebuildScene) keeps the
+    // ceiling fixed at 2× the canonical member-driven size.
     state.targetScale = Math.min(
       state.targetScale + ACCRETION_DELTA,
-      state.baseScale * MAX_ACCRETION_MULTIPLIER,
+      state.dataDrivenScale * MAX_ACCRETION_MULTIPLIER,
     );
     state.rippleIntensity = 1.0;
 

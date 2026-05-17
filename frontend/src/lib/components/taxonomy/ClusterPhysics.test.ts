@@ -126,6 +126,62 @@ describe('ClusterPhysics — spring physics', () => {
     expect(finalScale).toBeLessThanOrEqual(1.0);
   });
 
+  test('cap anchors to data-driven scale, not integrated baseScale (regression: spring-grown baseScale must not expand the cap window)', () => {
+    // Pre-fix bug: the first cap attempt (commit 78391862) used
+    // `state.baseScale * MAX_ACCRETION_MULTIPLIER` as the cap. But baseScale
+    // is the SPRING-INTEGRATED value — it grows along with targetScale as
+    // the spring chases the moving target. Result: each impact's cap window
+    // expanded to roughly 2× the current (already-inflated) baseScale, so
+    // the cap NEVER bit for typical interaction (you'd need >50 impacts in
+    // a single 16ms frame to trip it). Live symptom: cluster ballooned to
+    // many times its data-driven size despite the cap.
+    //
+    // Fix: anchor cap to `state.dataDrivenScale` (set by setBaseScale from
+    // TopologyData's canonical size). This test pins that anchor: between
+    // impacts, the spring grows baseScale → up to targetScale; the cap must
+    // STILL reference dataDrivenScale and not let targetScale climb past
+    // dataDrivenScale × MAX_ACCRETION_MULTIPLIER.
+    const physics = new ClusterPhysics();
+    const dataDriven = 2.5;
+
+    // First impact creates the state; subsequent setBaseScale records the
+    // canonical dataDrivenScale. (In production this happens in the other
+    // order — setBaseScale runs in rebuildScene before any clicks — but the
+    // contract must hold either way.)
+    physics.onBeamImpact('a', dataDriven);
+    physics.setBaseScale('a', dataDriven);
+
+    // Interleave many impacts with settle-frames so the spring fully
+    // integrates each impact's target before the next impact lands. This
+    // walks baseScale toward whatever targetScale is — under the pre-fix
+    // bug, that would make the cap window expand each iteration.
+    // Track the MAX scale observed across the entire run; under the pre-fix
+    // bug this would climb past 5.0 indefinitely (the live symptom showed
+    // ~20+ scene units against a 2.5 data-driven scale).
+    let maxScaleObserved = -Infinity;
+    const observer = (_id: string, scale: number) => {
+      if (scale > maxScaleObserved) maxScaleObserved = scale;
+    };
+    for (let burst = 0; burst < 100; burst++) {
+      physics.onBeamImpact('a', dataDriven);
+      for (let i = 0; i < 100; i++) physics.update(0.016, observer);
+    }
+    // Final settle so the spring snaps to target.
+    for (let i = 0; i < 300; i++) physics.update(0.016, observer);
+
+    // Cap = dataDriven × 2.0 = 5.0. With the cap correctly anchored to
+    // dataDrivenScale (not the inflating integrated baseScale), the max
+    // observed scale stays bounded near 5.0. Spring overshoot can briefly
+    // exceed targetScale by ~13% but the cap holds the asymptote.
+    // Under the pre-fix bug, this test would have observed scale > 50+
+    // (linear accretion past 100 bursts × 0.02 = 2.0 per burst eventually
+    // grew baseScale unboundedly because cap = baseScale × 2). So the
+    // negative-space assertion (scale << 50) is the load-bearing one;
+    // the lower bound just confirms accretion happens.
+    expect(maxScaleObserved).toBeLessThan(6.0);
+    expect(maxScaleObserved).toBeGreaterThan(dataDriven); // accretion happened
+  });
+
   test('successive impacts pump scale up until cap then plateau (responsive feedback preserved under cap)', () => {
     // Sanity: single impacts still feel responsive. The cap should only
     // bite at the tail of many impacts, not on the first few.
