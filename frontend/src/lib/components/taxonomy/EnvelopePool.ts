@@ -40,11 +40,15 @@ export const DECAY_MS = 680;
 
 /**
  * Peak envelope swell, multiplied with `baseScale` (the node fill size) to
- * compute the maximum plasma-skin radius. 1.28 is clearly visible at impact
- * — the engulfment reads as a decisive burst of plasma surrounding the node,
- * consistent with its status as the culmination of the beam journey.
+ * compute the maximum plasma-skin radius. Canon F19 mandates 1.18 — the
+ * visible plasma skin sits "just outside the cluster silhouette without
+ * overlapping neighbors" per `references/3d-visualization.md`. Higher values
+ * combined with the `ENVELOPE_MIN_SCALE` floor (now removed) produced a
+ * 10x-cluster-size balloon visual on click; the canon value here + raw
+ * `node.size` passed to `acquire()` restores the intended "engulf, don't
+ * dwarf" behavior.
  */
-export const PEAK_SWELL = 1.28;
+export const PEAK_SWELL = 1.18;
 
 export type NodeShape = 'cluster' | 'domain';
 type EnvelopeState = 'idle' | 'attack' | 'hold' | 'decay';

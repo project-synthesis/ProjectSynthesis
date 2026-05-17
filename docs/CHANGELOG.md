@@ -4,6 +4,10 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+
+- `frontend/src/lib/components/taxonomy/EnvelopePool.ts` + `SemanticTopology.svelte` — engulfment envelope (canon F19) no longer balloons every clicked cluster to ~10× its visual size. Two compounding canon violations: (1) `PEAK_SWELL` was tuned to `1.28` but canon F19 mandates `1.18` ("visible plasma skin sits just outside the cluster silhouette without overlapping neighbors"); (2) `_triggerBeamImpact` applied a `Math.max(freshNode.size, 8.0)` visibility floor before passing `baseScale` to `envelopePool.acquire`, but canon F19 code sample passes `node.size` directly with no floor. The floor was originally added to make engulfment visible on tiny ACTIVE clusters (3–5 members) where bloom on a small additive envelope barely registered; combined with the inflated `PEAK_SWELL` the envelope peaked at `8.0 × 1.28 = 10.24` screen units regardless of cluster size, producing a giant pink balloon on click that overwhelmed small clusters' silhouettes and visually contradicted the canon's "engulf, don't dwarf" framing. Fix restores both canon values: `PEAK_SWELL = 1.18`, raw `freshNode.size` passed to `acquire`. For very small clusters, bloom-pass parameters (`UnrealBloomPass.strength = 1.5`, threshold = 0.85) and the emissive ramp in `_tickFlashStates` provide visible feedback without inflating the envelope geometry. 80/80 envelope-related tests green; full taxonomy suite 477/477; svelte-check 0/0. Two source-pinning tests rewritten (anti-regression: floor constant must NOT exist; positive contract: `freshNode.size` passed directly).
+
 ## v0.4.23 — 2026-05-17
 
 ### Changed

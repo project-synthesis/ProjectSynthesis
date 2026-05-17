@@ -796,22 +796,19 @@
       clusterPhysics?.onBeamImpact(freshNode.id, freshNode.size);
     }
 
-    // Envelope visibility floor: the plasma engulfment's screen-space size
-    // scales linearly with `freshNode.size`. For tiny ACTIVE clusters
-    // (~3-5 members, `node.size` ~3), the envelope peaks at ~3.8 units —
-    // a small dot the UnrealBloomPass (radius 0.4 screen-space) barely
-    // bloomed, while large MATURE/domain clusters (size ~30+) produced
-    // the dramatic bloom-engulfment the operator expected. Operator
-    // perception: only DATABASE/MATURE clusters had the "advanced beam-
-    // impact follow-through with full bloom/glow"; ACTIVE clicks fired
-    // an invisible-scale envelope. Fix: floor `baseScale` at the
-    // ENVELOPE_MIN_SCALE so even single-member clusters get a visible
-    // bloomed shell. Mature clusters with `size > floor` keep their
-    // natural data-driven size and bloom even bigger (asymmetry preserved
-    // by `Math.max`, not eliminated).
-    const ENVELOPE_MIN_SCALE = 8.0;
-    const envelopeBaseScale = Math.max(freshNode.size, ENVELOPE_MIN_SCALE);
-    envelopePool?.acquire(currentGroup, envelopeBaseScale, shape, envelopeColor);
+    // Pass `freshNode.size` directly per canon F19 code sample at
+    // `references/3d-visualization.md:276`. The envelope is canonically
+    // sized to "engulf, not dwarf" the cluster — `PEAK_SWELL = 1.18` × the
+    // cluster's data-driven size keeps the visible plasma skin just outside
+    // the cluster silhouette without overlapping neighbors. A previous
+    // visibility-floor experiment combined with an inflated PEAK_SWELL
+    // value produced peak envelopes around ten screen units regardless of
+    // cluster size — a giant pink balloon on click that violated canon and
+    // overwhelmed small clusters' silhouettes. For very small clusters
+    // (3-5 members), bloom-pass parameters (`UnrealBloomPass.strength = 1.5`,
+    // threshold = 0.85) and the emissive ramp in `_tickFlashStates` provide
+    // visible feedback without inflating the geometry.
+    envelopePool?.acquire(currentGroup, freshNode.size, shape, envelopeColor);
     // Pass the node's brand color so the emissive burst glows the domain hue,
     // not the highlight cyan that applyHighlight may have already set.
     flashEmissive(freshNode.id, envelopeColor);

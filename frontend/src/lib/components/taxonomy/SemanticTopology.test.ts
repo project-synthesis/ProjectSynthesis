@@ -2910,40 +2910,43 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   });
 
 
-  it('source: _triggerBeamImpact applies ENVELOPE_MIN_SCALE floor so plasma engulfment is visibly bloomed for all clusters regardless of node.size (Envelope-Visibility regression)', () => {
-    // Live-observed: the engulfment effect on DATABASE/MATURE clusters showed
-    // a dramatic bloom-glow follow-through after beam impact, but ACTIVE
-    // clusters with low member count (node.size ~3-5) showed essentially
-    // nothing. Root cause: PEAK_SWELL = 1.28 in EnvelopePool means the
-    // envelope only scales 28% beyond baseScale = freshNode.size. For a
-    // 3-member cluster the envelope peaks at ~3.8 screen units — a small
-    // dot the UnrealBloomPass (radius 0.4 screen-space) barely bloomed.
-    // For a 33-member mature cluster (size ~30) the envelope peaks at ~38
-    // units, which produces the dramatic bloomed engulfment.
+  it('source: _triggerBeamImpact passes freshNode.size directly to envelope acquire (canon F19 — no MIN_SCALE floor that produced the 10x balloon)', () => {
+    // Canon F19 (.claude/skills/brand-guidelines/references/3d-visualization.md
+    // line 276): `envelopePool?.acquire(group, node.size, envelopeShape,
+    // color);` — pass the cluster's data-driven size verbatim. Line 294 of
+    // the canon mandates `PEAK_SWELL = 1.18` so the visible plasma skin
+    // sits "just outside the cluster silhouette without overlapping
+    // neighbors."
     //
-    // Fix: floor baseScale at ENVELOPE_MIN_SCALE so single/few-member
-    // clusters get a visible bloomed shell. Mature/domain clusters with
-    // size > floor preserve their natural data-driven scaling (via
-    // Math.max), preserving the asymmetry — they bloom bigger, not equal.
+    // Operator-reported regression: previously a `ENVELOPE_MIN_SCALE = 8.0`
+    // floor combined with `PEAK_SWELL = 1.28` produced peak envelope at
+    // 8 × 1.28 = ~10.24 screen units regardless of cluster size. On click
+    // every cluster appeared to balloon to ~10x its visual size — heavy
+    // bloom amplified the bright additive envelope into the giant pink
+    // balloon visible in screenshots. The floor was originally added for
+    // "tiny ACTIVE cluster visibility" but it violated canon and produced
+    // worse symptoms than the visibility issue it tried to solve.
+    //
+    // Canon-compliant behavior: pass `freshNode.size` directly. For tiny
+    // clusters, bloom-pass parameters (`UnrealBloomPass.strength = 1.5`,
+    // `threshold = 0.85`) and the emissive ramp in `_tickFlashStates`
+    // provide visible feedback without inflating the envelope geometry.
     const src = _semTopSrc();
 
-    // The floor constant must exist (named, not a magic number, so future
-    // edits don't accidentally regress the visibility floor).
     const triggerBody = src.match(
       /function _triggerBeamImpact\([\s\S]*?\n  \}/,
     );
     expect(triggerBody).not.toBeNull();
     const body = triggerBody![0];
 
-    expect(body).toMatch(/ENVELOPE_MIN_SCALE\s*=\s*8\.0/);
+    // Anti-regression: the floor constant must NOT exist.
+    expect(body).not.toMatch(/ENVELOPE_MIN_SCALE/);
+    expect(body).not.toMatch(/envelopeBaseScale\s*=/);
+    expect(body).not.toMatch(/Math\.max\(\s*freshNode\.size\s*,/);
+
+    // Positive contract: acquire() must pass the raw data-driven size.
     expect(body).toMatch(
-      /Math\.max\(\s*freshNode\.size\s*,\s*ENVELOPE_MIN_SCALE\s*\)/,
-    );
-    // The acquire() call must pass the FLOORED scale, not the raw size,
-    // so the regression can't be reintroduced by re-using the unfloored
-    // variable.
-    expect(body).toMatch(
-      /envelopePool\?\.acquire\(\s*currentGroup\s*,\s*envelopeBaseScale\s*,/,
+      /envelopePool\?\.acquire\(\s*currentGroup\s*,\s*freshNode\.size\s*,/,
     );
   });
 

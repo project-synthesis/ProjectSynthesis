@@ -47,8 +47,15 @@ describe('EnvelopePool — phase duration constants (canon F19)', () => {
     expect(DECAY_MS).toBe(680);
   });
 
-  test('PEAK_SWELL is 1.28 (clearly visible engulfment burst at impact)', () => {
-    expect(PEAK_SWELL).toBeCloseTo(1.28);
+  test('PEAK_SWELL is 1.18 (canon F19 — engulfs cluster without dwarfing it)', () => {
+    // Canon `.claude/skills/brand-guidelines/references/3d-visualization.md`
+    // F19: "Peak swell: PEAK_SWELL = 1.18 × node.size — visible plasma skin
+    // sits just outside the cluster silhouette without overlapping neighbors."
+    // A prior tuning of 1.28 combined with an `ENVELOPE_MIN_SCALE = 8.0`
+    // floor in `SemanticTopology._triggerBeamImpact` produced peak envelopes
+    // at ~10.24 screen units regardless of cluster size — the giant pink
+    // balloon on click that operators reported.
+    expect(PEAK_SWELL).toBeCloseTo(1.18);
   });
 
   test('total envelope lifecycle is 1380 ms (attack + hold spans beam sustain, decay spans beam terminate)', () => {
