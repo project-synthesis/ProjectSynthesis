@@ -197,6 +197,8 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 | `PointLight` | optional | hero focal | **Permitted** as a focal accent on the user-selected cluster only. Never as ambient atmosphere |
 | `SpotLight` | — | — | Banned. Cone falloff contradicts signal-over-noise — it emphasizes empty space rather than a data-bearing surface. (`halo` in this document is reserved for the F3 template indicator ring.) |
 
+**Persistence:** each light sets `userData.persistent = true` immediately after construction (per Persistence Contract) so they survive `rebuildScene` cycles. Pre-fix lights were orphaned every rebuild, breaking shadow map (F12) and matte cluster fill (F1 color channel) — see lifecycle-hardening spec §1.
+
 ### F12 — Shadow Map
 
 - `renderer.shadowMap.enabled = true`
@@ -204,6 +206,8 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - `DirectionalLight.shadow.mapSize.set(1024, 1024)` (2048 for hero scenes if perf budget allows)
 - Cluster meshes both `castShadow` AND `receiveShadow` for self-shadowing
 - *Source: `TopologyRenderer.ts` constructor + cluster fill block*
+
+**Lights persist across rebuilds:** the 3 lights set `userData.persistent = true` at construction (per F11 + Persistence Contract) so `cleanupScene` preserves them. Pre-fix `DirectionalLight.shadow.map` was created on first mount and orphaned on every subsequent `rebuildScene`, leaving self-shadowing non-functional.
 
 ### F13 — Post-Processing Pipeline
 
@@ -287,6 +291,8 @@ Layered impact effect — at the moment the F7 beam visually arrives at the clus
 - **Missing-target detection:** if `targetGroup` was attached at acquire time and has since lost its parent (e.g., `rebuildScene` disposed the cluster group), the envelope terminates gracefully on the next `update()` tick.
 - *Source: `EnvelopePool.ts`, `EnvelopeShader.ts`*
 
+**Persistence:** `EnvelopePool.group` sets `userData.persistent = true` in the constructor (per Persistence Contract). The pre-fix manual `scene.remove(envelopePool.group)` / `scene.add(envelopePool.group)` save/restore in `rebuildScene` is replaced by `cleanupScene`'s flag-aware detach/reattach.
+
 **Emissive Flash (`SemanticTopology.svelte` `flashEmissive` + `_tickFlashStates`):**
 - **Per-node `MeshStandardMaterial.emissiveIntensity` burst** at impact — internal glow that complements the additive plasma envelope.
 - **Lifecycle constants:** `FLASH_PEAK_MULTIPLIER = 4` (4× baseline), `FLASH_ATTACK_MS = 80` (cubic ease-out RAMP from baseline up to peak — replaces an earlier instant jump that read as a hard "thud" alongside the envelope swell), `FLASH_DECAY_MS = 280` (cubic ease-out back to baseline). Total: 360ms. `flashEmissive()` only stamps the start time + captures baseline; the per-frame tick handles every interpolation.
@@ -322,6 +328,43 @@ const Z_AXIS = new THREE.Vector3(0, 0, 1);
 | `new THREE.Color().setHSL(...)` per frame | `_scratchColor.setHSL(...)` |
 
 **Test-time enforcement:** `perf-budget.test.ts` wraps `THREE.Vector3` / `Color` / `Quaternion` / `Matrix4` constructors via `vi.mock('three', importOriginal)` selective re-export, runs `BeamPool.update` and `ClusterPhysics.update` for 100 simulated frames, asserts zero allocations.
+
+## Persistence Contract
+
+Any `THREE.Object3D` added as a direct child of `renderer.scene` that
+must survive a `rebuildScene` cycle sets `obj.userData.persistent = true`
+at construction. The `cleanupScene` helper in
+`frontend/src/lib/components/taxonomy/scene-cleanup.ts` reads this flag —
+flagged children are detached before the dispose traverse, ephemeral
+children's geometries + materials are disposed, the scene is cleared,
+and persistent children are reattached.
+
+Use **dot-assignment** (`obj.userData.persistent = true`) to preserve
+any other fields. Object-replacement (`obj.userData = { persistent: true }`)
+clobbers existing tags like `isNeuralDust` (F10) and is banned by
+`cleanup-contract.test.ts`.
+
+Currently persistent (registered via dot-assignment at construction):
+`BeamPool.group`, `EnvelopePool.group`, `TopologyLabels.group`,
+`AmbientLight`, `DirectionalLight`, `HemisphereLight`, `_dustPoints`,
+`_readinessRingGroup`, `_templateRingGroup`.
+
+The persistence flag applies **only to direct children of**
+`renderer.scene`. Children of persistent parent groups (e.g., individual
+readiness rings inside `_readinessRingGroup`) follow their own owner's
+disposal path.
+
+The dispose traverse in `cleanupScene` covers `Mesh`, `LineSegments`,
+`Line`, and `Points` — complementing (not duplicating) the renderer-level
+dispose pattern in `TopologyRenderer.dispose()`, which handles `Mesh +
+LineSegments + Points + Sprite + Light.shadow.map` on unmount. The two
+paths cover every geometry-owning class used in this directory: the
+helper adds `Line` (which the renderer omits) and intentionally omits
+`Sprite` (owned by `labels.clear()`) and `Light.shadow.map` (lights are
+persistent and live the component lifetime). The helper's coverage is
+broader than the pre-refactor rebuildScene traverse, which covered only
+`Mesh + LineSegments` and silently leaked the per-domain `PointsMaterial`
+glow cores (F2's vertex energy cores) every rebuild.
 
 ## Disposal Contract
 
