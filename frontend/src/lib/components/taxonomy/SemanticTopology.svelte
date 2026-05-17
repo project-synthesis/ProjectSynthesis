@@ -463,8 +463,9 @@
   //   F5 — hierarchical edges pulse (uTime uniform driven by _removeEdgeAnim)
   //   F8 — organic breathing oscillation on every cluster mesh + ring
   //   F10 — Neural Dust ambient particle backdrop (3000-point galaxy)
-  // All three callbacks are registered against renderer.addAnimationCallback
-  // and torn down by the cleanup return in onMount.
+  // All three callbacks are registered via coordinator.register('ambient' |
+  // 'breathing', ...) in rebuildScene and torn down by coordinator.dispose()
+  // in the unmount cleanup return (see canon "Animation Tick Ordering").
   let _edgeUniforms: Record<string, THREE.IUniform>[] = [];
   // _removeEdgeAnim, _removeDustAnim, _breathingAnim — per-rebuild unsubscribe
   // handles for the AnimationCoordinator-registered atmospheric callbacks
