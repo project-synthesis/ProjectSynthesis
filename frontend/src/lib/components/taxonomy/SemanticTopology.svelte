@@ -1726,8 +1726,9 @@
     //
     // The lightweight path: just toggle each existing mesh group's
     // .visible flag. The per-frame readiness-ring LOD opacity callback
-    // (_removeRingLodUpdate, line ~1884) already reads renderer.lodTier
-    // each frame, so ring opacity transitions automatically.
+    // (registered against the coordinator's camera phase in onMount)
+    // already reads renderer.lodTier each frame, so ring opacity
+    // transitions automatically.
     //
     // Full rebuildScene is only needed when a node became visible in
     // the new tier but has no mesh in nodeMeshes (e.g., a candidate
