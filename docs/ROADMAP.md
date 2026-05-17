@@ -2,7 +2,9 @@
 
 Living document tracking planned improvements. Items are prioritized but not scheduled. Each entry links to the relevant spec or ADR when available.
 
-**Snapshot:** v0.4.20 SHIPPED 2026-05-10 — Pattern Graph 3D canon F1–F19 (atmospheric/cinematic/tactile retrieval + new F19 plasma envelopement burst at beam impact + click-zoom click-flow stability) + GitHub Device Flow auth hotfix chain (silent infinite-poll trap + token-persistence 500). v0.4.18 SHIPPED 2026-05-09 — Foundation P3 substrate unification: `RunRow` ORM + `RunOrchestrator` service + `TopicProbeGenerator` + `SeedAgentGenerator` + lifespan-DDL consolidation + alembic drift cleanup. PR #70 merged on 95+ commits.
+**Snapshot:** v0.4.22 SHIPPED 2026-05-16 — Probe Tier 2 (save-as-suite + replay + UI + regression alarm) + audit-hook WARN→RAISE flip + 21 soak findings caught + addressed pre-ship. v0.4.20 SHIPPED 2026-05-10 — Pattern Graph 3D canon F1–F19 (atmospheric/cinematic/tactile retrieval + new F19 plasma envelopement burst at beam impact + click-zoom click-flow stability) + GitHub Device Flow auth hotfix chain (silent infinite-poll trap + token-persistence 500). v0.4.18 SHIPPED 2026-05-09 — Foundation P3 substrate unification: `RunRow` ORM + `RunOrchestrator` service + `TopicProbeGenerator` + `SeedAgentGenerator` + lifespan-DDL consolidation + alembic drift cleanup. PR #70 merged on 95+ commits.
+
+**Active program (Pattern Graph architecture hardening):** 6-sub-project refactor of `frontend/src/lib/components/taxonomy/` targeting `SemanticTopology.svelte`'s 2834-line monolith + 228-commit churn since 2026-02-01. Sub-project A (Lifecycle Hardening) actively brainstorming as of 2026-05-16. See "Pattern Graph architecture hardening" entry under Immediate for the full 6-sub-project breakdown (A→F, dependency-ordered).
 
 **Active foundation phase (zero-tech-debt prep for Probe T2-T4):**
 - ~~P1 SQLite-debt closure~~ — **SHIPPED v0.4.16 (2026-05-05)**: cold-path commit chunking (P1a) + `_bg_index`/`build_index` per-batch chunking (P1b)
@@ -66,6 +68,57 @@ With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate 
 **Prerequisites:** Signal-driven sub-domain discovery (shipped v0.3.25), LLM-generated qualifier vocabulary (shipped v0.3.32), taxonomy event observability (shipped v0.3.25), readiness telemetry + history (shipped v0.3.37–v0.3.38). Data infrastructure is complete — this is a frontend visualization and UX design challenge.
 
 **Files:** New `frontend/src/lib/components/taxonomy/TaxonomyObservatory.svelte`. Possibly new `backend/app/routers/taxonomy_insights.py` for aggregated steering suggestions. Possibly new `frontend/src/lib/stores/observatory.svelte.ts`.
+
+---
+
+### Pattern Graph architecture hardening — 6-sub-project refactor program
+**Status:** Sub-project A (Lifecycle Hardening) actively brainstorming as of 2026-05-16. Sub-projects B–F Planned, ordered by dependency.
+**Specs:** One spec + plan per sub-project under `docs/superpowers/specs/` and `docs/superpowers/plans/`. First spec lands at `docs/superpowers/specs/2026-05-16-lifecycle-hardening-design.md`.
+
+**Context:** The taxonomy / Pattern Graph 3D pipeline (`frontend/src/lib/components/taxonomy/`) has accumulated significant architectural debt since the v0.4.20 canon F1–F19 retrieval ship. Symptoms observed in code + commit history:
+
+- `SemanticTopology.svelte` is **2834 lines** with 23 top-level functions, 8 `$effect` blocks, and ~8 parallel state maps (`_flashStates`, `_selectionEngulfed`, `nodeMeshes`, `_beamNodeGroups`, `_sceneNodeMap`, `_readinessRings`, `_templateRingById`, `_nodePhaseOffsets`). The single function `rebuildScene` is 774 lines (file lines 963–1737).
+- **228 commits** to `frontend/src/lib/components/taxonomy/` since 2026-02-01. The log shows **5 sequential fixes for the same engulfment-burst bug** (`16ef8683` → `9f19b711` → `b8ac85c8` → `6a671bf2` → `025b0048`) and 5+ commits for race-condition workarounds (highlight survival on rebuild, click-zoom rebuild during focus animation, `_selectionEngulfed.clear()` gating, `envelopePool.group` orphan). High coupling → small changes cascade into long fix chains.
+- The 10+ per-frame animation callbacks register without an explicit ordering contract — `_tickFlashStates` MUST run before `_breathingAnim` else breathing overwrites the flash ramp; canon F19 idle-pulse MUST run after both — implicit coupling enforced by `addAnimationCallback` registration order alone.
+- Scene cleanup is indiscriminate (`while (renderer.scene.children.length > 0)`). Pools, lights, and dust survive only via manual save/restore boilerplate scattered across `rebuildScene`. Just shipped commit `025b0048` (envelope pool orphan-group fix) is the third manifestation of this bug class since v0.4.20; verification during the brainstorm surfaced that the 3 lights from `TopologyRenderer` are ALSO orphaned today, breaking canon F11/F12 (shadow map + matte base color invisible after first rebuild — the scene "looks lit" only because emissive + bloom carry the visual load).
+
+**Goal:** Bring the Pattern Graph code area to architectural parity with the backend's Foundation P3 work — clear module boundaries, single owner per state slice, explicit lifecycle contracts, automated audit gates against canon F1–F19. Each sub-project is independently shippable; PRs are sequenced by dependency, not parallelized, because they share the same module surface.
+
+**Sub-project phase ordering (dependency chain):**
+
+| # | Sub-project | Status | Depends on | Notes |
+|---|---|---|---|---|
+| **A** | **Lifecycle Hardening** — `userData.persistent = true` convention + extracted `cleanupScene` helper; fixes lights/dust/envelope orphan-group class of bugs. Canon F11/F12 (lights, shadows) compliance restored. Replaces ~30 lines of manual save/restore boilerplate with one flag-aware helper call. | **Active** (brainstorming 2026-05-16) | nothing | Smallest sub-project (~1 session). Immediate win. New file `scene-cleanup.ts` + tests; constructor edits to `BeamPool` / `EnvelopePool` / `TopologyLabels` / `TopologyRenderer`. |
+| **B** | **Animation Coordinator** — single per-frame tick with explicit ordered phases (physics → impact → breathing → ambient pulse → camera). Eliminates per-callback registration-order coupling. Phase ordering contract documented in `references/3d-visualization.md`. | **Planned** | A (lifecycle stable before tick pipeline migrates) | 1–2 sessions. ~10 separate `addAnimationCallback` registrations consolidate into one ordered pipeline. |
+| **C** | **Impact Coordinator** — single function chains beam → envelope → flash → physics → idle-pulse. Eliminates the 4 duplicate trigger sites (entrance burst, post-growth burst, optimization event, click selection). Canon F7 causal-ordering invariant enforced at source level by routing every site through the same coordinator. | **Planned** | A, B | 1–2 sessions. Today the chain is replicated 4× with subtle differences (e.g., entrance uses `kineticDisplacement=false`, others `true`). |
+| **D** | **Scene Builder Extraction** — split the 774-line `rebuildScene` into single-responsibility builder modules: `ClusterBuilder`, `DomainBuilder`, `EdgeBuilder` (hierarchical + similarity + injection), `RingBuilder` (readiness + template), `DustBuilder`. Each unit-testable in isolation. Diff-based rebuild (no full wipe) considered as a follow-on if the builder split makes the diff pattern tractable. | **Planned** | A, B, C | 2–3 sessions. Largest sub-project. Target: `SemanticTopology.svelte` < 800 lines, acting as a thin Svelte wrapper around builders + coordinators. |
+| **E** | **Selection State Machine** — wrap the 4–5 parallel selection-related maps (`_flashStates`, `_selectionEngulfed`, `_highlightedId`, `_prevSelectedId`, `focusedNodeId`) into a single `SelectionController` with explicit state-transition diagram. Eliminates the canon F16 highlight-survival hack (the hack is itself a race-condition workaround). | **Planned** | B, C (depends on impact + animation pipelines being stable) | 1–2 sessions. |
+| **F** | **Audit-as-Code** — automate the `.claude/skills/brand-guidelines/references/3d-visualization.md` F1–F19 audit checklist as a test gate. Every audit checklist line becomes either a source-grep test or a runtime contract test. Failing the audit = failing CI. Replaces today's manual audit-pass. | **Planned** | D (file structure stable so source-grep anchors are stable) | 1 session. |
+
+**Estimated total scope:** ~8–11 sessions across 6 PRs. Each sub-project ships independently with green tests + canon adherence.
+
+**Acceptance criteria (per-sub-project, must hold before merge):**
+
+1. All taxonomy vitest suites green (`npx vitest run src/lib/components/taxonomy/`)
+2. `svelte-check` clean (0 errors, 0 warnings)
+3. F1–F19 canon adherence preserved or improved — never regressed
+4. Per-frame allocation budget preserved (`perf-budget.test.ts` green)
+5. Disposal contract preserved (`cleanup-contract.test.ts` green)
+6. CHANGELOG entry under `## Unreleased > ### Changed` (architectural) or `### Fixed` (if surfacing a regression along the way)
+7. Sub-project-specific regression tests pinning the new contract
+
+**Program-level acceptance criteria (end of Sub-project F):**
+
+1. `SemanticTopology.svelte` reduced to < 800 lines (down from 2834)
+2. F1–F19 audit checklist passes as automated tests (no manual checkbox)
+3. Animation tick has documented phase ordering (no implicit registration-order coupling)
+4. Impact pipeline has a single source of truth (no duplicate beam-trigger sites)
+5. Lifecycle has zero indiscriminate scene wipes (every cleanup respects ownership)
+6. Selection state has a single owner (no parallel maps)
+
+**Visual fidelity contract:** refactor preserves all currently canon-compliant behavior verbatim. Canon violations surfaced during the work (e.g., the lights orphan in Sub-project A) are fixed in the sub-project that exposes them. Visual-feel improvements (timing, smoothness) are out of scope here and route to the existing [Pattern Graph visual feel calibration](#pattern-graph-visual-feel-calibration--spec-vs-feel-drift-sweep-across-canon-f1f19) Exploring entry.
+
+**Files (program-wide):** `frontend/src/lib/components/taxonomy/` everywhere. New modules per sub-project: `scene-cleanup.ts` (A), `AnimationCoordinator.ts` (B), `ImpactCoordinator.ts` (C), `ClusterBuilder.ts` / `DomainBuilder.ts` / `EdgeBuilder.ts` / `RingBuilder.ts` / `DustBuilder.ts` (D), `SelectionController.ts` (E), `audit-canon.test.ts` (F). Brand canon doc (`.claude/skills/brand-guidelines/references/3d-visualization.md`) updated alongside each sub-project's structural changes.
 
 ---
 
@@ -659,6 +712,7 @@ Two related findings tied at score 7.68 — both around event-logger correctness
 
 ### Pattern Graph visual feel calibration — spec-vs-feel drift sweep across canon F1–F19
 **Status:** Exploring
+**Related active program:** [Pattern Graph architecture hardening](#pattern-graph-architecture-hardening--6-sub-project-refactor-program) under Immediate covers the *architectural* axis (module boundaries, race conditions, lifecycle contracts). This entry covers the *visual-feel* axis (timing constants, smoothness, perceptual landing). The two are orthogonal and route work to each other as candidates surface (e.g., the hardening program may notice a timing value that reads wrong, log it here; this entry may notice an effect that's tangled across modules, log it there).
 **Context:** Reactive item surfaced during the Pattern Graph plasma envelopement work on `feature/restore-pattern-graph-canon` (commits `94aa799b → 64924994`, 2026-05-10). Cycle 1 of the F19 work shipped beam timing constants strictly aligned to the Data-as-Matter spec (`FIRING_MS = 300`, `TERMINATE_MS = 800`). All 327 taxonomy tests passed; svelte-check was clean. Live observation then surfaced that the impact "triggered way too soon and was not smooth enough." Re-tune to `FIRING_MS = 700` + a new `uHead` progressive-extension uniform (catenary visibly unfolds from origin toward target instead of fading in along its full length) + 220ms envelope attack + 80ms cubic-eased emissive flash ramp landed correctly. The spec value was visually wrong despite being the canonical written reference.
 
 The takeaway is a working principle now captured in `.claude/skills/brand-guidelines/references/3d-visualization.md` F7 + F19 documentation: **live visual review is ground truth for perceptual feel; spec values encode intent at one point in time and can drift from what reads correctly.** Tests passing ≠ feel correct; the test harness cannot validate UX feel, so future changes to any 3D timing/onset constant should be ready to iterate based on observed feedback.
