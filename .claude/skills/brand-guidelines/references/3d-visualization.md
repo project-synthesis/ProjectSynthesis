@@ -304,7 +304,7 @@ Layered impact effect — at the moment the F7 beam visually arrives at the clus
 - **Lifecycle constants:** `FLASH_PEAK_MULTIPLIER = 4` (4× baseline), `FLASH_ATTACK_MS = 80` (cubic ease-out RAMP from baseline up to peak — replaces an earlier instant jump that read as a hard "thud" alongside the envelope swell), `FLASH_DECAY_MS = 280` (cubic ease-out back to baseline). Total: 360ms. `flashEmissive()` only stamps the start time + captures baseline; the per-frame tick handles every interpolation.
 - **Baseline-capture pattern:** rapid re-fires during an active flash REUSE the prior `baselineEmissive` — preventing emissiveIntensity from locking at peak² (4×4 = 16×) when a re-click reads the inflated live value as the "baseline".
 - **State map:** `_flashStates: Map<string, { startTime: number; baselineEmissive: number }>` — tiny in steady state (only nodes recently impacted).
-- **Cleanup:** `_removeFlashUpdate?.()` invoked BEFORE `_flashStates.clear()` (so a late-firing tick can't read a half-cleared map); each active flash's baseline is restored to the underlying material before the map is cleared (so a remount doesn't inherit inflated emissive).
+- **Cleanup:** `coordinator?.dispose()` invoked BEFORE `_flashStates.clear()` (so a late-firing tick can't read a half-cleared map); each active flash's baseline is restored to the underlying material before the map is cleared (so a remount doesn't inherit inflated emissive). The impact-phase flash handler is absorbed by `coordinator.dispose()` per the Animation Tick Ordering section (the pre-coordinator `_removeFlashUpdate?.()` symbol no longer exists).
 
 **Causal-ordering invariant (with F7):** every F19 reaction fires from the beam's `onImpact` callback. Synchronous calls inside the click `$effect` (and the entrance + post-growth burst sites) are forbidden — the beam takes ~700ms (`FIRING_MS`) to travel, so a synchronous ripple/envelope/flash would precede beam arrival.
 
@@ -513,7 +513,7 @@ Run through each numbered feature. **The implementation passes if every line bel
 - [ ] `_breathingAnim` borrows `_scratchVec3a` for `mesh.scale.lerp` (not `new THREE.Vector3()`)
 - [ ] Coordinator + 2 conditional cancellers wired in cleanup return (`coordinator.dispose()` + `_removeFormationAnim?.()` + `_removeReadinessBillboard?.()`)
 - [ ] `envelopePool?.dispose()` invoked + reference nulled in cleanup return
-- [ ] `_flashStates.clear()` happens AFTER `_removeFlashUpdate?.()` (so a half-cleared map can't be read by a late-firing tick); each active flash's baseline restored before the map is cleared
+- [ ] `_flashStates.clear()` happens AFTER `coordinator?.dispose()` (so a half-cleared map can't be read by a late-firing tick); each active flash's baseline restored before the map is cleared
 - [ ] All disposables drained (geometries, materials, textures, lights' shadow maps)
 - [ ] `composer.dispose()` + each pass disposed
 - [ ] `renderer.dispose()` + `renderer.forceContextLoss()`
