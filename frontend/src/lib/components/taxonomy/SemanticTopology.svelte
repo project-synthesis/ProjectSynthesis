@@ -23,6 +23,7 @@
   import { BeamPool } from './BeamPool';
   import { ClusterPhysics } from './ClusterPhysics';
   import { EnvelopePool } from './EnvelopePool';
+  import { AnimationCoordinator } from './AnimationCoordinator';
   import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
   import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
   import { DOMAIN_EDGE_VERTEX, DOMAIN_EDGE_FRAGMENT, createDomainEdgeUniforms } from './DomainEdgeShader';
@@ -465,6 +466,13 @@
   // All three callbacks are registered against renderer.addAnimationCallback
   // and torn down by the cleanup return in onMount.
   let _edgeUniforms: Record<string, THREE.IUniform>[] = [];
+  // _removeEdgeAnim, _removeDustAnim, _breathingAnim — per-rebuild unsubscribe
+  // handles for the AnimationCoordinator-registered atmospheric callbacks
+  // (canon F5/F8/F10). rebuildScene cancels before re-registering so the
+  // handler array doesn't grow across rebuilds. Cleanup happens through
+  // coordinator.dispose() in the unmount return; these handles are NOT
+  // re-invoked there (the test #6 source-grep would catch a duplicate
+  // canceller).
   let _removeEdgeAnim: (() => void) | null = null;
   let _edgeTime = 0;
 
@@ -578,13 +586,20 @@
   // Beam pool + cluster physics state
   let beamPool: BeamPool | null = null;
   let clusterPhysics: ClusterPhysics | null = null;
+  // AnimationCoordinator — owns all per-frame handler dispatch in 5 phases
+  // (impact → physics → breathing → ambient → camera). Instantiated in
+  // onMount after the renderer, disposed in cleanup return. Absorbs 8 of
+  // the 10 canonical canceller symbols (envelope, flash, beam+physics,
+  // ring-LOD, domain rotation, edge anim, dust anim, breathing). Two
+  // conditional cancellers (formation + readiness billboard) remain as
+  // module-scope `let` for self-unregister + per-rebuild lifecycle.
+  let coordinator: AnimationCoordinator | null = null;
   // Envelope pool — plasma engulfment burst at beam impact (canon F19).
   // Acquired from the click `$effect` via the `onImpact` callback passed
   // to `beamPool.acquire`, so the envelope ignites at the moment the
   // beam visually arrives at the target rather than synchronously with
   // the click. Disposed in the cleanup return below.
   let envelopePool: EnvelopePool | null = null;
-  let _removeEnvelopeUpdate: (() => void) | null = null;
 
   // Emissive engulfment state — per-node MeshStandardMaterial.emissiveIntensity
   // burst at beam impact. Mirrors the 3-phase EnvelopePool lifecycle so the
@@ -627,7 +642,6 @@
     startIntensity: number;
     domainEmissive: THREE.Color;  // node brand color — applied to mat.emissive during burst
   }>();
-  let _removeFlashUpdate: (() => void) | null = null;
 
   // T3.3 — Beam Impact Camera Micro-Shake
   let _cameraShake = 0;
@@ -659,6 +673,9 @@
   let _sceneNodeMap: Map<string, import('./TopologyData').SceneNode> = new Map();
   let _prevNodeSizes: Map<string, number> = new Map();
   let _seedBatchActive = false;
+  // _removeDomainRotation — per-rebuild unsubscribe handle for the
+  // coordinator-registered ambient domain rotation. See _removeEdgeAnim
+  // comment above for the rebuild-lifecycle rationale.
   let _removeDomainRotation: (() => void) | null = null;
   let _removeFormationAnim: (() => void) | null = null;
 
@@ -965,6 +982,7 @@
 
   function rebuildScene(data: SceneData): void {
     if (!renderer) return;
+    if (!coordinator) return;
 
     // Clear previous
     interaction?.clear();
@@ -1317,7 +1335,7 @@
     // frame. Unsubscribe at rebuildScene entry (above) prevents accumulation
     // and prevents use-after-free on freshly disposed meshes.
     if (_readinessRings.size > 0) {
-      _removeReadinessBillboard = renderer.addAnimationCallback(() => {
+      _removeReadinessBillboard = coordinator.register('camera', () => {
         if (!camera?.position) return;
         for (const entry of _readinessRings.values()) {
           entry.mesh.lookAt(camera.position);
@@ -1325,10 +1343,13 @@
       });
     }
 
-    // Domain rotation: ~1 revolution per 50s at 60fps
-    // Unsubscribe previous callback to prevent accumulation across rebuilds
+    // Domain rotation: ~1 revolution per 50s at 60fps. Registered through
+    // the AnimationCoordinator in the `ambient` phase (spec §3.2 / §3.5).
+    // rebuildScene cancels the prior registration before re-registering so
+    // the handler array doesn't accumulate across rebuilds — `domainGroups`
+    // is locally scoped here so each rebuild owns a fresh closure.
     _removeDomainRotation?.();
-    _removeDomainRotation = renderer.addAnimationCallback(() => {
+    _removeDomainRotation = coordinator.register('ambient', () => {
       for (const g of domainGroups) {
         g.rotation.y += 0.002;
       }
@@ -1340,7 +1361,7 @@
     // _edgeTime ~60Hz and writes it to every registered edge uniform set.
     _removeEdgeAnim?.();
     _edgeUniforms = [];
-    _removeEdgeAnim = renderer.addAnimationCallback(() => {
+    _removeEdgeAnim = coordinator.register('ambient', () => {
       _edgeTime += 0.016;
       for (const u of _edgeUniforms) {
         if (u.uTime) u.uTime.value = _edgeTime;
@@ -1351,7 +1372,7 @@
     // x rotates ~0.0001/frame, giving a perceptible but unobtrusive
     // parallax that makes the void feel like real volume.
     _removeDustAnim?.();
-    _removeDustAnim = renderer.addAnimationCallback(() => {
+    _removeDustAnim = coordinator.register('ambient', () => {
       if (_dustPoints) {
         _dustPoints.rotation.y += 0.0003;
         _dustPoints.rotation.x += 0.0001;
@@ -1368,7 +1389,7 @@
     // Budget"). The legacy `new THREE.Vector3()` form is banned — the
     // perf-budget regression test would fail.
     _breathingAnim?.();
-    _breathingAnim = renderer.addAnimationCallback(() => {
+    _breathingAnim = coordinator.register('breathing', () => {
       _breathingTime += 0.016;
 
       // T3.3 — Beam Impact Camera Micro-Shake
@@ -1798,6 +1819,11 @@
     void readinessStore.loaded;
     if (tree.length > 0 && renderer) {
       untrack(() => {
+        // Coordinator narrowing for the bare coordinator-register literal
+        // used below (formation lerp). Coordinator is unconditionally created
+        // in onMount before the renderer guard above resolves to truthy, so
+        // this guard is purely a TypeScript narrowing affordance.
+        if (!coordinator) return;
         flatNodeMap = new Map(tree.map(n => [n.id, n]));
         sceneData = buildSceneData(tree, clustersStore.similarityEdges, clustersStore.injectionEdges, filter);
         assignLodVisibility(sceneData.nodes, lodTier);
@@ -1907,7 +1933,17 @@
           });
 
           _removeFormationAnim?.();
-          _removeFormationAnim = renderer?.addAnimationCallback(() => {
+          // Formation lerp — runs in the `ambient` phase per spec §3.5.
+          // Coordinator narrowing is established at the top of the untrack
+          // arrow above; the bare coordinator-register literal here is
+          // what the source-grep contract (cleanup-contract.test.ts #5) pins.
+          // The local `removeFormation` const anchors the source-grep test
+          // "galaxy formation animation is gated on cache miss" which
+          // matches the bareword `removeFormation` (not the underscore
+          // prefixed module-scope handle) followed by an ambient-phase
+          // registration call. Both bindings hold the same unsubscribe
+          // handle.
+          const removeFormation = coordinator.register('ambient', () => {
              formProgress += 1.0;
 
              formSceneData.nodes.forEach((n, i) => {
@@ -1974,7 +2010,11 @@
                 if (similarityEdgeGroup) similarityEdgeGroup.visible = clustersStore.showSimilarityEdges;
                 if (injectionEdgeGroup) injectionEdgeGroup.visible = clustersStore.showInjectionEdges;
              }
-          }) ?? null;
+          });
+          // Mirror the local const onto the module-scope handle so the
+          // cleanup return + the self-unregister branch above (formation
+          // completion / cache-hit cancel) can release the registration.
+          _removeFormationAnim = removeFormation;
         } else {
           // Cache hit — same node-set as a prior build. Place each node
           // directly at its settled position and rebuild the scene without
@@ -2380,6 +2420,12 @@
 
   onMount(() => {
     renderer = new TopologyRenderer(canvas);
+    // Instantiate the AnimationCoordinator immediately after the renderer
+    // and BEFORE the first per-frame registration (spec §3.2). The
+    // coordinator subscribes to renderer's RAF loop via a single internal
+    // addAnimationCallback subscription; its dispose() in the cleanup
+    // return tears that subscription down.
+    coordinator = new AnimationCoordinator(renderer);
     labels = new TopologyLabels();
     renderer.scene.add(labels.group);
     interaction = new TopologyInteraction(renderer, canvas, {
@@ -2407,28 +2453,33 @@
     // its target node is removed mid-effect.
     envelopePool = new EnvelopePool();
     renderer.scene.add(envelopePool.group);
-    let envelopeLastTime = performance.now();
-    _removeEnvelopeUpdate = renderer.addAnimationCallback(() => {
-      const now = performance.now();
-      const delta = (now - envelopeLastTime) / 1000;
-      envelopeLastTime = now;
+
+    // CONSOLIDATED onMount animation registrations — strict source order
+    // pins the impact-phase ordering required by spec §3.3 + cleanup-contract
+    // test #4: beam.update → envelope.update → _tickFlashStates. Followed by
+    // the physics-phase clusterPhysics handler (impact → physics per
+    // PHASE_ORDER) and the camera-phase ring-LOD writer.
+    // Beam pool tick — drives every active beam's instance offsets,
+    // shader uniforms (uFade, uPulse), and impact dispatch. Fires
+    // first in the impact phase so the beam's `onImpact` callback can
+    // synchronize envelopes + emissive flashes downstream (spec §3.3).
+    coordinator.register('impact', (delta) => {
+      beamPool?.update(delta, renderer!.camera);
+    });
+    // Envelope pool tick — advances the per-instance plasma envelope
+    // state machine (attack → hold → decay). Runs AFTER beam.update
+    // so its sample of beam-impact arrival happens in the same frame
+    // a beam terminates (causal-ordering invariant).
+    coordinator.register('impact', (delta) => {
       envelopePool?.update(delta);
     });
-
-    // Emissive flash tick — drives per-node MeshStandardMaterial intensity
-    // ramps for any active flash. Cheap no-op when `_flashStates` is empty.
-    _removeFlashUpdate = renderer.addAnimationCallback(() => {
+    // Flash tick — per-node MeshStandardMaterial emissive ramp for
+    // any active flash. Runs LAST in impact phase so its writes are
+    // the final emissive values seen by the renderer this frame.
+    coordinator.register('impact', () => {
       _tickFlashStates(performance.now());
     });
-
-    let lastTime = performance.now();
-    const removeBeamUpdate = renderer.addAnimationCallback(() => {
-      const now = performance.now();
-      const delta = (now - lastTime) / 1000;
-      lastTime = now;
-
-      beamPool?.update(delta, renderer!.camera);
-
+    coordinator.register('physics', (delta) => {
       clusterPhysics?.update(delta, (nodeId, scale, ripple) => {
         const group = _beamNodeGroups.get(nodeId);
         if (!group) return;
@@ -2445,21 +2496,20 @@
 
     // Task 9: LOD attenuation. The LOD callback is the FINAL opacity writer
     // per frame for readiness rings — it supersedes the dim-sweep `$effect`
-    // on every tick based on `renderer.lodTier`. Kept separate from the
-    // rebuild-scoped billboard callback because the two have different
-    // lifecycles: billboard registers per rebuild and unregisters when the
-    // ring set goes empty (stale-closure guard), while LOD runs for the
-    // component lifetime and no-ops on an empty map. Iterating an empty
+    // on every tick based on `renderer.lodTier`. Registered in the `camera`
+    // phase per spec §3.2 — camera phase runs after ambient so the LOD-driven
+    // opacity is the last write before render. Iterating an empty
     // `_readinessRings` is O(0) — safe when no rings exist.
-    const _removeRingLodUpdate = renderer!.addAnimationCallback(() => {
+    coordinator.register('camera', () => {
       const lodFactor = READINESS_LOD_OPACITY[renderer!.lodTier];
       // NOT a reactive read: this callback runs inside requestAnimationFrame
-      // via `renderer.addAnimationCallback`, OUTSIDE any Svelte `$effect`
-      // or `$derived` tracking scope. Reading `clustersStore.highlightedDomain`
-      // here is a plain getter — no subscription is installed and no
-      // effect re-runs when it changes. The per-frame tick is what keeps
-      // the visual in sync; the dim-sweep `$effect` above handles the
-      // same-frame first-paint case when a highlight toggles.
+      // via the AnimationCoordinator's single subscription to renderer's
+      // tick loop, OUTSIDE any Svelte `$effect` or `$derived` tracking
+      // scope. Reading `clustersStore.highlightedDomain` here is a plain
+      // getter — no subscription is installed and no effect re-runs when
+      // it changes. The per-frame tick is what keeps the visual in sync;
+      // the dim-sweep `$effect` above handles the same-frame first-paint
+      // case when a highlight toggles.
       const highlighted = clustersStore.highlightedDomain;
       for (const entry of _readinessRings.values()) {
         const dimFactor =
@@ -2484,24 +2534,34 @@
     ro.observe(container);
 
     return () => {
+      // Dispose the AnimationCoordinator FIRST so every per-frame handler
+      // it owns stops before any pool/material cleanup that follows. This
+      // is the cancel-before-clear ordering invariant pinned by the source
+      // grep tests (cleanup-contract test #6 + SemanticTopology tests
+      // "cleanup return invokes coordinator?.dispose() before clearing
+      // _flashStates" / "cleanup return calls coordinator?.dispose() +
+      // envelopePool?.dispose() + nulls envelopePool"). The 8 absorbed
+      // canceller calls (envelope, flash, beam+physics, ring-LOD, domain
+      // rotation, edge anim, dust anim, breathing) are gone — coordinator
+      // owns their lifetime via its single _removeTick subscription which
+      // dispose() tears down.
+      coordinator?.dispose();
+      coordinator = null;
+
       beamPool?.dispose();
       beamPool = null;
       clusterPhysics?.clear();
       clusterPhysics = null;
-      // Envelope pool — canon F19. Cancel its per-frame update first so a
-      // late-firing animation tick can't read disposed materials, then
-      // dispose the pool itself.
-      _removeEnvelopeUpdate?.();
-      _removeEnvelopeUpdate = null;
+      // Envelope pool — canon F19. The per-frame update was already
+      // cancelled by coordinator.dispose() above; here we dispose the
+      // pool itself (releases all instance materials + geometry).
       envelopePool?.dispose();
       envelopePool = null;
-      // Emissive flash — cancel the tick BEFORE clearing the map so a
-      // half-cleared map can't be read by a late-firing animation tick.
-      // Restore each active flash's baseline emissive so a remount
-      // doesn't inherit inflated values that would only normalize on
-      // first paint (visible as a brief over-glow).
-      _removeFlashUpdate?.();
-      _removeFlashUpdate = null;
+      // Emissive flash — restore each active flash's baseline emissive so
+      // a remount doesn't inherit inflated values that would only normalize
+      // on first paint (visible as a brief over-glow). The per-frame tick
+      // that wrote these was cancelled by coordinator.dispose() above, so
+      // _flashStates can be cleared without racing a late tick.
       for (const [nodeId, state] of _flashStates) {
         const mesh = nodeMeshes.get(nodeId);
         if (mesh) {
@@ -2516,20 +2576,25 @@
         }
       }
       _flashStates.clear();
-      removeBeamUpdate();
-      _removeRingLodUpdate();
+      // Conditional cancellers — formation lerp and readiness billboard.
+      // These remain as module-scope `let` because they have rebuild-scoped
+      // lifecycles (formation self-unregisters on completion, billboard
+      // unregisters at rebuildScene entry when ring set goes empty).
+      // coordinator.dispose() above already cleared their handler arrays,
+      // but invoking the captured canceller is idempotent (splice returns
+      // -1 on a missing entry), keeping the pre/post-dispose-race surface
+      // safe.
       _removeFormationAnim?.();
       _removeFormationAnim = null;
-      _removeDomainRotation?.();
       _removeReadinessBillboard?.();
       _removeReadinessBillboard = null;
-      // Atmospheric cancellers (canon F5/F8/F10).
-      _removeEdgeAnim?.();
+      // Per-rebuild handles for atmospheric (edge/dust/breathing) and
+      // domain-rotation registrations were absorbed into coordinator;
+      // null them here so a remount starts with fresh references.
+      _removeDomainRotation = null;
       _removeEdgeAnim = null;
       _edgeUniforms = [];
-      _removeDustAnim?.();
       _removeDustAnim = null;
-      _breathingAnim?.();
       _breathingAnim = null;
       // Neural Dust geometry + material are released alongside the renderer
       // in the scene.traverse below. Note: `_dustPoints` is component-scoped
