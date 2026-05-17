@@ -993,11 +993,13 @@
       }
     }
 
-    // One call replaces the manual save/restore + dispose-traverse + wipe-loop.
-    // Pool groups + lights + dust + ring groups survive automatically via their
-    // userData.persistent = true flag set at construction. Dispose-traverse
-    // type-coverage broadens to Mesh + LineSegments + Line + Points (closes the
-    // per-domain PointsMaterial leak documented in lifecycle-hardening spec §1).
+    // `cleanupScene` detaches every child tagged `userData.persistent = true`,
+    // disposes ephemeral geometry-owners (Mesh + LineSegments + Line + Points),
+    // wipes ephemeral children, then reattaches the persistent set. Pool groups +
+    // lights + dust + ring groups survive automatically via their persistent flag
+    // set at construction. Type-coverage spans Mesh + LineSegments + Line + Points
+    // (closes the per-domain PointsMaterial leak documented in lifecycle-hardening
+    // spec §1). Contract canon: `scene-cleanup.ts` header + spec §2 rev-9.
     cleanupScene(renderer.scene);
 
     // Build nodes — two distinct visual tiers:
