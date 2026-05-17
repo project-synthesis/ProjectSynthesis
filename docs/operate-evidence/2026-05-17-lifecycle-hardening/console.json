@@ -1,0 +1,22 @@
+[
+  {
+    "type": "exception",
+    "text": "Uncaught :: SyntaxError: Invalid regular expression flags"
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connecting..."
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connected."
+  },
+  {
+    "type": "log:error",
+    "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  },
+  {
+    "type": "exception",
+    "text": "Uncaught :: NotFoundError: Failed to execute 'setPointerCapture' on 'Element': No active pointer with the given id is found.\n    at OrbitControls.onPointerDown (http://localhost:5199/node_modules/.vite/deps/three_addons_controls_OrbitControls__js.js?v=a1e6ef31:716:21)\n    at <anonymous>:32:11\n    at Array.forEach (<anonymous>)\n    at <anonymous>:28:67\n    at <anonymous>:40:5"
+  }
+]
