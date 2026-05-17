@@ -6,6 +6,7 @@
 //
 // Spec: docs/superpowers/specs/2026-05-16-lifecycle-hardening-design.md §5.1
 import { describe, it, expect, vi } from 'vitest';
+import type * as THREE from 'three';
 import { cleanupScene } from './scene-cleanup';
 
 // Minimal THREE.js mock — matches the convention used in other taxonomy tests
