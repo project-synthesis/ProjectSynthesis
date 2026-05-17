@@ -27,23 +27,24 @@
 
 import type { TopologyRenderer } from './TopologyRenderer';
 
-export type AnimationPhase =
-  | 'impact'
-  | 'physics'
-  | 'breathing'
-  | 'ambient'
-  | 'camera';
-
-export type AnimationHandler = (delta: number) => void;
-
-/** Fixed phase ordering — see brand canon "Animation Tick Ordering". */
-const PHASE_ORDER: readonly AnimationPhase[] = [
+/**
+ * Fixed phase ordering — see brand canon "Animation Tick Ordering".
+ *
+ * The runtime tuple is the single source of truth; `AnimationPhase` is
+ * derived from it so the union type cannot drift away from the iteration
+ * order. Adding a phase here is a one-line change.
+ */
+const PHASE_ORDER = [
   'impact',
   'physics',
   'breathing',
   'ambient',
   'camera',
 ] as const;
+
+export type AnimationPhase = (typeof PHASE_ORDER)[number];
+
+export type AnimationHandler = (delta: number) => void;
 
 export class AnimationCoordinator {
   private _phases: Map<AnimationPhase, AnimationHandler[]>;
