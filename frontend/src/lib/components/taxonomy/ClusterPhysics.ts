@@ -19,6 +19,15 @@ const VELOCITY_FLOOR = 1e-4;       // below this, snap to target + zero velocity
 const RIPPLE_DECAY = 0.92;
 const RIPPLE_EPSILON = 0.001;
 
+// Per-cluster targetScale ceiling, as a multiple of baseScale. Each beam
+// impact adds ACCRETION_DELTA (0.02) to targetScale; without a cap, repeated
+// impacts (rapid clicks, optimization events bursting against the same domain,
+// seed-batch beams hitting the same cluster) accumulate without bound and the
+// cluster mesh balloons to many times its data-driven size. 2.0× lets a
+// cluster grow visibly responsive to interaction while bounding the worst
+// case at twice the underlying member-driven scale.
+const MAX_ACCRETION_MULTIPLIER = 2.0;
+
 export class ClusterPhysics {
   private _states = new Map<string, ClusterPhysicsState>();
 
@@ -26,8 +35,15 @@ export class ClusterPhysics {
     const existing = this._states.get(nodeId);
     if (existing) {
       existing.baseScale = baseScale;
+      const maxTarget = baseScale * MAX_ACCRETION_MULTIPLIER;
       if (existing.targetScale < baseScale) {
         existing.targetScale = baseScale;
+      } else if (existing.targetScale > maxTarget) {
+        // Clamp any stale-inflated targetScale to the current cap. Defensive
+        // against (a) cap-tuning between releases lowering MAX_ACCRETION_MULTIPLIER,
+        // (b) data-driven baseScale shrinking on rebuild (e.g., cluster lost
+        // members) leaving an old targetScale above the new ceiling.
+        existing.targetScale = maxTarget;
       }
     }
   }
@@ -43,7 +59,17 @@ export class ClusterPhysics {
       };
       this._states.set(nodeId, state);
     }
-    state.targetScale += ACCRETION_DELTA;
+    // Cap accretion at MAX_ACCRETION_MULTIPLIER × baseScale. Pre-fix: this was
+    // `state.targetScale += ACCRETION_DELTA;` with no upper bound — repeated
+    // impacts (rapid clicks, optimization events bursting against the same
+    // domain, seed-batch beams) accumulated without bound and ballooned the
+    // cluster mesh to many times its data-driven size. The cap preserves
+    // responsive elastic feedback for typical interaction (1–10 impacts) while
+    // bounding the worst case at twice baseScale.
+    state.targetScale = Math.min(
+      state.targetScale + ACCRETION_DELTA,
+      state.baseScale * MAX_ACCRETION_MULTIPLIER,
+    );
     state.rippleIntensity = 1.0;
 
     // T3.3 — Trigger camera micro-shake
