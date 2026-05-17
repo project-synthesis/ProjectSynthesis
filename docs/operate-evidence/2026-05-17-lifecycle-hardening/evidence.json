@@ -1,0 +1,3062 @@
+{
+  "events": [
+    {
+      "t": 1778997912309,
+      "label": "measurement_1_renderer_introspection_pre_rebuild",
+      "data": {
+        "scenesCount": 1,
+        "sceneAddsTotal": 92,
+        "bestSceneChildrenCount": 86,
+        "childSummary": [
+          {
+            "type": "AmbientLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "lightIntensity": 0.3,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "DirectionalLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": true,
+            "receiveShadow": false,
+            "childCount": 0,
+            "lightIntensity": 0.7,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "HemisphereLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "lightIntensity": 0.2,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 74,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 10,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 10,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "isTemplateRingGroup",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 7,
+            "userDataKeys": [
+              "isReadinessRingGroup",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Points",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": false,
+            "isPoints": true,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "isNeuralDust",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 5,
+            "userDataKeys": [
+              "isInterClusterEdgeGroup"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 63,
+            "userDataKeys": [
+              "isSimilarityEdge"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 18,
+            "userDataKeys": [
+              "isInjectionEdge"
+            ]
+          }
+        ],
+        "lightChildren": [
+          {
+            "type": "AmbientLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "lightIntensity": 0.3,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "DirectionalLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": true,
+            "receiveShadow": false,
+            "childCount": 0,
+            "lightIntensity": 0.7,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "HemisphereLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "lightIntensity": 0.2,
+            "userDataKeys": [
+              "persistent"
+            ]
+          }
+        ],
+        "persistentChildren": [
+          {
+            "type": "AmbientLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "lightIntensity": 0.3,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "DirectionalLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": true,
+            "receiveShadow": false,
+            "childCount": 0,
+            "lightIntensity": 0.7,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "HemisphereLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "lightIntensity": 0.2,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 74,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 10,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 10,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "isTemplateRingGroup",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 7,
+            "userDataKeys": [
+              "isReadinessRingGroup",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Points",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": false,
+            "isPoints": true,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "isNeuralDust",
+              "persistent"
+            ]
+          }
+        ],
+        "lightsPersistent": true
+      }
+    },
+    {
+      "t": 1778997912311,
+      "label": "measurement_1b_cluster_mesh_shadows_pre_rebuild",
+      "data": {
+        "meshTotal": 165,
+        "shadowCasters": 74,
+        "shadowReceivers": 74,
+        "shadowBoth": 74,
+        "sample": [
+          {
+            "name": "",
+            "type": "Mesh",
+            "castShadow": false,
+            "receiveShadow": false,
+            "parentType": "Group"
+          },
+          {
+            "name": "",
+            "type": "Mesh",
+            "castShadow": false,
+            "receiveShadow": false,
+            "parentType": "Group"
+          },
+          {
+            "name": "",
+            "type": "Mesh",
+            "castShadow": false,
+            "receiveShadow": false,
+            "parentType": "Group"
+          },
+          {
+            "name": "",
+            "type": "Mesh",
+            "castShadow": false,
+            "receiveShadow": false,
+            "parentType": "Group"
+          },
+          {
+            "name": "",
+            "type": "Mesh",
+            "castShadow": false,
+            "receiveShadow": false,
+            "parentType": "Group"
+          }
+        ]
+      }
+    },
+    {
+      "t": 1778997915634,
+      "label": "canvas_png_before_rebuild",
+      "data": {
+        "bytes": 421388,
+        "source": "Page.captureScreenshot"
+      }
+    },
+    {
+      "t": 1778997916932,
+      "label": "measurement_2_pixel_signal_pre_rebuild",
+      "data": {
+        "totalPixels": 907236,
+        "nonBackgroundPixels": 907236,
+        "nonBgFraction": 1,
+        "avgR": 0,
+        "avgG": 0,
+        "avgB": 0
+      }
+    },
+    {
+      "t": 1778997921658,
+      "label": "measurement_3_renderer_introspection_post_rebuild",
+      "data": {
+        "bestSceneChildrenCount": 86,
+        "addsTotal": 264,
+        "addsAtRebuildTrigger": 92,
+        "addsBetweenToggles": 178,
+        "childrenCountAtTrigger": 86,
+        "newAddsSinceRebuild": 172,
+        "childSummary": [
+          {
+            "type": "AmbientLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "DirectionalLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": true,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "HemisphereLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 74,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 10,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 10,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "isTemplateRingGroup",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 7,
+            "userDataKeys": [
+              "isReadinessRingGroup",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Points",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": false,
+            "isPoints": true,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "isNeuralDust",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 2,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 3,
+            "userDataKeys": [
+              "isStructural",
+              "isSubDomain"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 5,
+            "userDataKeys": [
+              "isInterClusterEdgeGroup"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 63,
+            "userDataKeys": [
+              "isSimilarityEdge"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": false,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 18,
+            "userDataKeys": [
+              "isInjectionEdge"
+            ]
+          }
+        ],
+        "lightChildren": [
+          {
+            "type": "AmbientLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "DirectionalLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": true,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "HemisphereLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "persistent"
+            ]
+          }
+        ],
+        "persistentChildren": [
+          {
+            "type": "AmbientLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "DirectionalLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": true,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "HemisphereLight",
+            "isMesh": false,
+            "isLight": true,
+            "isGroup": false,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 74,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 10,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 10,
+            "userDataKeys": [
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "isTemplateRingGroup",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Group",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": true,
+            "isPoints": false,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 7,
+            "userDataKeys": [
+              "isReadinessRingGroup",
+              "persistent"
+            ]
+          },
+          {
+            "type": "Points",
+            "isMesh": false,
+            "isLight": false,
+            "isGroup": false,
+            "isPoints": true,
+            "persistent": true,
+            "castShadow": false,
+            "receiveShadow": false,
+            "childCount": 0,
+            "userDataKeys": [
+              "isNeuralDust",
+              "persistent"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "t": 1778997925941,
+      "label": "canvas_png_after_rebuild",
+      "data": {
+        "bytes": 420930,
+        "source": "Page.captureScreenshot"
+      }
+    },
+    {
+      "t": 1778997925942,
+      "label": "measurement_4_pixel_signal_post_rebuild",
+      "data": {
+        "note": "Page.captureScreenshot used; toDataURL on WebGL canvas is blank without preserveDrawingBuffer"
+      }
+    },
+    {
+      "t": 1778997925949,
+      "label": "measurement_5_beam_click_attempt",
+      "data": {
+        "targetType": "Mesh",
+        "targetUserData": [
+          "isClusterFill",
+          "baseEmissive",
+          "nodeId"
+        ],
+        "targetWorldPos": {
+          "x": -2.9122214317321777,
+          "y": 8.33135986328125,
+          "z": -1.2894480228424072
+        },
+        "synthClickAt": {
+          "cx": 798,
+          "cy": 458.5
+        }
+      }
+    },
+    {
+      "t": 1778997926754,
+      "label": "measurement_5b_beam_envelope_state",
+      "data": {
+        "beamsAndEnvelopes": []
+      }
+    }
+  ],
+  "findings": {}
+}
