@@ -1,0 +1,478 @@
+{
+  "events": [
+    {
+      "t": 1779056477718,
+      "label": "chrome_spawn",
+      "data": {
+        "pid": 1469518,
+        "args": [
+          "--remote-debugging-port=9225",
+          "--user-data-dir=/tmp/chrome-operate-b10-1779056477713",
+          "--headless=new",
+          "--no-sandbox"
+        ]
+      }
+    },
+    {
+      "t": 1779056478261,
+      "label": "chrome_ready",
+      "data": {
+        "browser": "Chrome/148.0.7778.167"
+      }
+    },
+    {
+      "t": 1779056478316,
+      "label": "nav_start",
+      "data": {
+        "url": "http://localhost:5199/app"
+      }
+    },
+    {
+      "t": 1779056478536,
+      "label": "page_loaded",
+      "data": {}
+    },
+    {
+      "t": 1779056480545,
+      "label": "modal_dismiss_attempt",
+      "data": {
+        "value": {
+          "dismissed": null
+        }
+      }
+    },
+    {
+      "t": 1779056481088,
+      "label": "clusters_tab_attempt",
+      "data": {
+        "value": {
+          "clicked": true,
+          "label": "Clusters"
+        }
+      }
+    },
+    {
+      "t": 1779056482629,
+      "label": "mindmap_open_attempt",
+      "data": {
+        "value": {
+          "opened": true,
+          "label": "Open pattern mindmap"
+        }
+      }
+    },
+    {
+      "t": 1779056486133,
+      "label": "handle_check",
+      "data": {
+        "value": {
+          "coordinator": "object",
+          "renderer": "object",
+          "dust": "function",
+          "nodeMeshes": "function",
+          "beamPool": "function",
+          "envelopePool": "function",
+          "coordinatorCtor": "AnimationCoordinator",
+          "pageURL": "http://localhost:5199/app",
+          "canvasCount": 1
+        }
+      }
+    },
+    {
+      "t": 1779056486134,
+      "label": "measurement_1_coordinator_instantiated",
+      "data": {
+        "value": {
+          "ok": true,
+          "constructor": "AnimationCoordinator",
+          "hasRegister": true,
+          "hasDispose": true,
+          "phaseKeys": [
+            "impact",
+            "physics",
+            "breathing",
+            "ambient",
+            "camera"
+          ],
+          "expectedPhases": [
+            "impact",
+            "physics",
+            "breathing",
+            "ambient",
+            "camera"
+          ],
+          "phaseMatch": true,
+          "handlerCounts": {
+            "impact": 3,
+            "physics": 1,
+            "breathing": 1,
+            "ambient": 4,
+            "camera": 2
+          },
+          "passed": true
+        }
+      }
+    },
+    {
+      "t": 1779056527924,
+      "label": "measurement_2_tick_rate",
+      "data": {
+        "value": {
+          "ok": true,
+          "tickCount": 119,
+          "frameCount": 120,
+          "elapsedSec": 41.7885,
+          "fps": 2.871603431566101,
+          "ticksPerSec": 2.8476734029697166,
+          "passed": true
+        }
+      }
+    },
+    {
+      "t": 1779056532002,
+      "label": "measurement_3_phase_order",
+      "data": {
+        "value": {
+          "ok": true,
+          "sampleLen": 50,
+          "firstFive": [
+            "impact",
+            "physics",
+            "breathing",
+            "ambient",
+            "camera"
+          ],
+          "expected": [
+            "impact",
+            "physics",
+            "breathing",
+            "ambient",
+            "camera"
+          ],
+          "orderMatch": true,
+          "periodicMatches": 10,
+          "periodicChecks": 10,
+          "passed": true
+        }
+      }
+    },
+    {
+      "t": 1779056533679,
+      "label": "measurement_4_click_beam_envelope",
+      "data": {
+        "value": {
+          "ok": true,
+          "targetId": "5affd01b-467e-40eb-badc-b112f8670a70",
+          "nodeCount": 74,
+          "preStates": [
+            "idle",
+            "idle",
+            "idle",
+            "idle",
+            "idle",
+            "idle",
+            "idle",
+            "idle",
+            "idle",
+            "idle"
+          ],
+          "acquireState": "firing",
+          "finalState": "terminate",
+          "stateProgression": [
+            {
+              "t": 0,
+              "state": "firing"
+            },
+            {
+              "t": 821,
+              "state": "sustain"
+            },
+            {
+              "t": 1674,
+              "state": "terminate"
+            }
+          ],
+          "impactFired": true,
+          "beamGroupChildren": 10,
+          "envelopeGroupChildren": 10,
+          "envelopeVisible": true,
+          "passed": true
+        }
+      }
+    },
+    {
+      "t": 1779056547936,
+      "label": "measurement_5_breathing",
+      "data": {
+        "value": {
+          "ok": true,
+          "totalSamples": 30,
+          "sampledNodes": 5,
+          "stats": [
+            {
+              "id": "5affd01b-467e-40eb-badc-b112f8670a70",
+              "min": 0.851431245891241,
+              "max": 0.8591185987104977,
+              "amplitude": 0.007687352819256699,
+              "mean": 0.8557367616042929,
+              "sampleCount": 30
+            },
+            {
+              "id": "b0f06540-3235-45b3-aaee-bf098e46b543",
+              "min": 0.6027079646873461,
+              "max": 0.6093763035381751,
+              "amplitude": 0.006668338850828959,
+              "mean": 0.6062896306367028,
+              "sampleCount": 30
+            },
+            {
+              "id": "1eb4f22f-e50e-4ac6-bb18-f3ecf402b7c1",
+              "min": 0.5998571251173881,
+              "max": 0.6073916562837894,
+              "amplitude": 0.007534531166401348,
+              "mean": 0.6037728513086537,
+              "sampleCount": 30
+            },
+            {
+              "id": "765d478f-0767-4b2d-b256-cd9b23a0baad",
+              "min": 0.6109596209718489,
+              "max": 0.6117005396295356,
+              "amplitude": 0.0007409186576867732,
+              "mean": 0.6114491955988498,
+              "sampleCount": 30
+            },
+            {
+              "id": "e9fda71b-c1a2-48b0-b6bc-163af8a2f5c2",
+              "min": 0.9032962086454943,
+              "max": 0.914681007603691,
+              "amplitude": 0.011384798958196662,
+              "mean": 0.9092061608388602,
+              "sampleCount": 30
+            }
+          ],
+          "maxAmplitude": 0.011384798958196662,
+          "passed": true
+        }
+      }
+    },
+    {
+      "t": 1779056559959,
+      "label": "measurement_6_dust_drift",
+      "data": {
+        "value": {
+          "ok": true,
+          "sampleCount": 30,
+          "firstY": 0.05070000000000019,
+          "lastY": 0.05940000000000024,
+          "firstX": 0.016899999999999953,
+          "lastX": 0.019799999999999936,
+          "yDelta": 0.008700000000000048,
+          "xDelta": 0.0028999999999999825,
+          "yAdvanced": true,
+          "xAdvanced": true,
+          "passed": true
+        }
+      }
+    },
+    {
+      "t": 1779056559970,
+      "label": "modal_dismiss_post",
+      "data": {
+        "value": {
+          "dismissed": "GOT IT"
+        }
+      }
+    },
+    {
+      "t": 1779056560775,
+      "label": "modal_dismiss_post2",
+      "data": {
+        "value": {
+          "dismissed2": "GOT IT"
+        }
+      }
+    },
+    {
+      "t": 1779056563825,
+      "label": "screenshot",
+      "data": {
+        "path": "page-pattern-graph.png",
+        "sizeKB": 280
+      }
+    }
+  ],
+  "summary": {
+    "m1_coordinator": {
+      "value": {
+        "ok": true,
+        "constructor": "AnimationCoordinator",
+        "hasRegister": true,
+        "hasDispose": true,
+        "phaseKeys": [
+          "impact",
+          "physics",
+          "breathing",
+          "ambient",
+          "camera"
+        ],
+        "expectedPhases": [
+          "impact",
+          "physics",
+          "breathing",
+          "ambient",
+          "camera"
+        ],
+        "phaseMatch": true,
+        "handlerCounts": {
+          "impact": 3,
+          "physics": 1,
+          "breathing": 1,
+          "ambient": 4,
+          "camera": 2
+        },
+        "passed": true
+      }
+    },
+    "m2_tick": {
+      "value": {
+        "ok": true,
+        "tickCount": 119,
+        "frameCount": 120,
+        "elapsedSec": 41.7885,
+        "fps": 2.871603431566101,
+        "ticksPerSec": 2.8476734029697166,
+        "passed": true
+      }
+    },
+    "m3_phase_order": {
+      "value": {
+        "ok": true,
+        "sampleLen": 50,
+        "firstFive": [
+          "impact",
+          "physics",
+          "breathing",
+          "ambient",
+          "camera"
+        ],
+        "expected": [
+          "impact",
+          "physics",
+          "breathing",
+          "ambient",
+          "camera"
+        ],
+        "orderMatch": true,
+        "periodicMatches": 10,
+        "periodicChecks": 10,
+        "passed": true
+      }
+    },
+    "m4_beam": {
+      "value": {
+        "ok": true,
+        "targetId": "5affd01b-467e-40eb-badc-b112f8670a70",
+        "nodeCount": 74,
+        "preStates": [
+          "idle",
+          "idle",
+          "idle",
+          "idle",
+          "idle",
+          "idle",
+          "idle",
+          "idle",
+          "idle",
+          "idle"
+        ],
+        "acquireState": "firing",
+        "finalState": "terminate",
+        "stateProgression": [
+          {
+            "t": 0,
+            "state": "firing"
+          },
+          {
+            "t": 821,
+            "state": "sustain"
+          },
+          {
+            "t": 1674,
+            "state": "terminate"
+          }
+        ],
+        "impactFired": true,
+        "beamGroupChildren": 10,
+        "envelopeGroupChildren": 10,
+        "envelopeVisible": true,
+        "passed": true
+      }
+    },
+    "m5_breathing": {
+      "value": {
+        "ok": true,
+        "totalSamples": 30,
+        "sampledNodes": 5,
+        "stats": [
+          {
+            "id": "5affd01b-467e-40eb-badc-b112f8670a70",
+            "min": 0.851431245891241,
+            "max": 0.8591185987104977,
+            "amplitude": 0.007687352819256699,
+            "mean": 0.8557367616042929,
+            "sampleCount": 30
+          },
+          {
+            "id": "b0f06540-3235-45b3-aaee-bf098e46b543",
+            "min": 0.6027079646873461,
+            "max": 0.6093763035381751,
+            "amplitude": 0.006668338850828959,
+            "mean": 0.6062896306367028,
+            "sampleCount": 30
+          },
+          {
+            "id": "1eb4f22f-e50e-4ac6-bb18-f3ecf402b7c1",
+            "min": 0.5998571251173881,
+            "max": 0.6073916562837894,
+            "amplitude": 0.007534531166401348,
+            "mean": 0.6037728513086537,
+            "sampleCount": 30
+          },
+          {
+            "id": "765d478f-0767-4b2d-b256-cd9b23a0baad",
+            "min": 0.6109596209718489,
+            "max": 0.6117005396295356,
+            "amplitude": 0.0007409186576867732,
+            "mean": 0.6114491955988498,
+            "sampleCount": 30
+          },
+          {
+            "id": "e9fda71b-c1a2-48b0-b6bc-163af8a2f5c2",
+            "min": 0.9032962086454943,
+            "max": 0.914681007603691,
+            "amplitude": 0.011384798958196662,
+            "mean": 0.9092061608388602,
+            "sampleCount": 30
+          }
+        ],
+        "maxAmplitude": 0.011384798958196662,
+        "passed": true
+      }
+    },
+    "m6_dust": {
+      "value": {
+        "ok": true,
+        "sampleCount": 30,
+        "firstY": 0.05070000000000019,
+        "lastY": 0.05940000000000024,
+        "firstX": 0.016899999999999953,
+        "lastX": 0.019799999999999936,
+        "yDelta": 0.008700000000000048,
+        "xDelta": 0.0028999999999999825,
+        "yAdvanced": true,
+        "xAdvanced": true,
+        "passed": true
+      }
+    }
+  }
+}

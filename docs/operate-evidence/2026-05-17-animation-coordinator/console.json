@@ -1,0 +1,12 @@
+[
+  {
+    "t": 1779056478778,
+    "type": "debug",
+    "text": "[vite] connecting..."
+  },
+  {
+    "t": 1779056478803,
+    "type": "debug",
+    "text": "[vite] connected."
+  }
+]
