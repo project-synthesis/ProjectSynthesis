@@ -96,13 +96,18 @@ export class AnimationCoordinator {
    * exceptions so one throwing handler does not kill the chain.
    *
    * Mid-tick mutation semantics:
-   *   - register mid-tick: new handler's invocation timing is V8-defined
-   *     (implementation-detail; do not rely on it).
+   *   - register mid-tick: deferred to NEXT tick. Per-phase handler array
+   *     length is snapshotted (`const len`) at iteration start; a handler
+   *     registered for the SAME phase during iteration is NOT called this
+   *     tick. The dual bound `i < len && i < handlers.length` also guards
+   *     self-unregister (splice shrinks the array under us).
    *   - dispose mid-tick: _disposed is checked between each handler call;
    *     handlers in subsequent phases (and remaining handlers in the
    *     current phase) do NOT run this tick.
    *
-   * Zero per-frame allocation: no `new` inside this body.
+   * Zero per-frame allocation: no `new` inside this body. Index-based
+   * loop with captured-length number primitive — no iterator objects,
+   * no snapshot arrays.
    */
   private _tick(): void {
     if (this._disposed) return;
@@ -112,10 +117,11 @@ export class AnimationCoordinator {
     for (const phase of PHASE_ORDER) {
       const handlers = this._phases.get(phase);
       if (!handlers) continue;
-      for (const h of handlers) {
+      const len = handlers.length;
+      for (let i = 0; i < len && i < handlers.length; i++) {
         if (this._disposed) return;
         try {
-          h(delta);
+          handlers[i](delta);
         } catch (e) {
           // eslint-disable-next-line no-console
           console.error(
