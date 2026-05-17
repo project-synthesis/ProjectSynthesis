@@ -129,6 +129,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 
 ### F7 — Plasma Beam Tactile Feedback
 
+- **Phase:** impact (within-phase order STRICT — see Animation Tick Ordering).
 - **BeamPool:** 10 pre-allocated `PlasmaBeam` instances (high-water mark, no per-frame allocation)
 - **Origin:** NDC `(0, -1, -0.99)` unprojected to world → "FPS weapon viewport" origin (center-bottom of the camera frustum, on the near plane)
 - **Trigger:** cluster selection (external selection from sidebar OR `handleNodeClick`)
@@ -144,6 +145,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 
 ### F8 — Organic Breathing Oscillation
 
+- **Phase:** breathing (after physics phase to read spring-set baseline; after impact phase's flash to avoid emissive overwrites — see Animation Tick Ordering).
 - **Per-frame callback:** `_breathingAnim`
 - **Time accumulator:** `_breathingTime += 0.016` per frame (~60fps)
 - **Per-node phase offset:** `_nodePhaseOffsets: Map<string, number>` populated during `rebuildScene` via a deterministic string hash of the node ID mapped to `[0, 2π]`. Each cluster oscillates at the same frequency but with a unique phase shift, so the colony reads as organic rather than a synchronized grid.
@@ -155,6 +157,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 
 ### F9 — Spring Physics on Cluster Scale (Beam Impact Accretion)
 
+- **Phase:** physics (after impact phase so onImpact's targetScale changes integrate same-frame — see Animation Tick Ordering).
 - **Module:** `ClusterPhysics.ts`
 - **State per cluster:** `{ baseScale, targetScale, scaleVelocity, rippleIntensity }`
 - **Constants:** `k = 120.0` (tension), `d = 12.0` (damping), `dt clamp = 0.1s`, `velocityFloor = 1e-4`
@@ -174,6 +177,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 
 ### F10 — Neural Dust (Galaxy Backdrop)
 
+- **Phase:** ambient (decoupled from interactive pipeline — see Animation Tick Ordering).
 - **Geometry:** `BufferGeometry` with 3000-vertex `Float32Array(DUST_COUNT * 3)`
 - **Position distribution:** `(Math.random() - 0.5) * 300` per axis — uniform in 300³ cube centered at origin
 - **Material:** `PointsMaterial`
@@ -277,6 +281,8 @@ beamPool.acquire(group, {
 
 ### F19 — Envelopement Burst at Beam Impact
 
+**Phase:** impact (envelope + flash both registered in impact phase after beam — see Animation Tick Ordering).
+
 Layered impact effect — at the moment the F7 beam visually arrives at the cluster, the node briefly engulfs in a plasma "skin" that smoothly dissipates to reveal the base node. Combined with the per-node `MeshStandardMaterial` emissive flash, the node reads as both internally energized AND externally engulfed.
 
 **EnvelopePool (`EnvelopePool.ts`):**
@@ -328,6 +334,54 @@ const Z_AXIS = new THREE.Vector3(0, 0, 1);
 | `new THREE.Color().setHSL(...)` per frame | `_scratchColor.setHSL(...)` |
 
 **Test-time enforcement:** `perf-budget.test.ts` wraps `THREE.Vector3` / `Color` / `Quaternion` / `Matrix4` constructors via `vi.mock('three', importOriginal)` selective re-export, runs `BeamPool.update` and `ClusterPhysics.update` for 100 simulated frames, asserts zero allocations.
+
+## Animation Tick Ordering
+
+Per-frame animation work in the 3D Pattern Graph runs through a single
+`AnimationCoordinator` instance (one per `SemanticTopology` mount). The
+coordinator owns the single per-frame callback registered via
+`renderer.addAnimationCallback(() => this._tick())` and dispatches to
+handlers in a fixed 5-phase order:
+
+| Order | Phase | Responsibility |
+|---|---|---|
+| 1 | `impact` | F7 beam.update → F19 envelope.update → F19 flash.update (within-phase order STRICT) |
+| 2 | `physics` | F9 clusterPhysics.update |
+| 3 | `breathing` | F8 organic breathing oscillation + camera-shake decay |
+| 4 | `ambient` | F5 edge pulse, F10 dust drift, domain rotation, formation entrance (conditional) |
+| 5 | `camera` | F4 readiness billboard `lookAt(camera.position)`, readiness LOD opacity sweep |
+
+**Rationale.** `impact` runs first because `beam.update` fires `onImpact`
+synchronously, mutating `clusterPhysics.targetScale` (F9), acquiring new
+envelopes (F19), and stamping new flash states (F19). Within `impact`, beam
+must run BEFORE envelope + flash so this frame's new state advances same-frame.
+`physics` runs after `impact` so the new `targetScale` integrates on the
+same frame the beam arrived (zero-latency spring response). `breathing`
+modulates `mesh.scale` after physics writes the spring-set baseline; it also
+reads `_flashStates` to skip emissive overwrites (without this read +
+the run-after-flash order, breathing overwrites the F19 attack ramp — the
+very regression this section's invariant exists to prevent). `ambient` runs after the interactive
+pipeline because it's decoupled. `camera` runs last so billboard `lookAt`
++ LOD opacity reflect the latest mesh state for this frame before
+`composer.render()`.
+
+**Within-phase ordering.** Most phases run handlers in registration order
+(FIFO). For `impact`, the strict beam → envelope → flash order is
+load-bearing and pinned by source-grep test in `cleanup-contract.test.ts`.
+Other phases tolerate registration-order changes without visible regression.
+
+**Coordinator construction happens once in `SemanticTopology.svelte` onMount**,
+after `renderer = new TopologyRenderer(canvas)` and before the first
+`coordinator.register(...)` call (relative ordering only — no fixed line
+offset). All onMount + rebuildScene per-frame work goes through
+`coordinator.register(phase, handler)`; the return value is an unsubscribe
+function (mirrors the original `addAnimationCallback` API for conditional
+registrations like formation entrance + readiness billboard).
+
+**Per-frame allocation budget.** The coordinator's `_tick` allocates zero
+per-frame objects — `delta` is a number, `PHASE_ORDER` is a compile-time
+constant readonly tuple, handler arrays are pre-allocated at construction.
+See "Per-Frame Allocation Budget" above.
 
 ## Persistence Contract
 
@@ -387,16 +441,9 @@ Every GPU resource reaches a `dispose()` call from cleanup.
 
 | Canceller | Purpose |
 |---|---|
-| `removeBeamUpdate` | `BeamPool.update` per-frame |
-| `_removeRingLodUpdate` | LOD-attenuated readiness ring opacity |
-| `_removeFormationAnim?.()` | Formation animation lerp toward settled positions |
-| `_removeDomainRotation?.()` | Domain group y-rotation (~50s/rev) |
-| `_removeReadinessBillboard?.()` | Per-frame `lookAt(camera.position)` on rings |
-| `_removeEdgeAnim?.()` | Edge shader `uTime` pulse |
-| `_removeDustAnim?.()` | Neural Dust slow rotation |
-| `_breathingAnim?.()` | Per-frame organic breathing oscillation |
-| `_removeEnvelopeUpdate?.()` | F19 plasma envelope state-machine tick |
-| `_removeFlashUpdate?.()` | F19 emissive flash per-frame restore |
+| `coordinator.dispose()` | Cancels all unconditional per-frame work via AnimationCoordinator (replaces removeBeamUpdate, _removeRingLodUpdate, _removeDomainRotation, _removeEdgeAnim, _removeDustAnim, _breathingAnim, _removeEnvelopeUpdate, _removeFlashUpdate); per Animation Tick Ordering section. |
+| `_removeFormationAnim?.()` | Formation animation lerp toward settled positions (conditional during entrance) |
+| `_removeReadinessBillboard?.()` | Per-frame `lookAt(camera.position)` on rings (conditional when `_readinessRings.size > 0`) |
 
 **Required pool drains in cleanup:**
 
@@ -464,7 +511,7 @@ Run through each numbered feature. **The implementation passes if every line bel
 ### Performance + lifecycle
 - [ ] Module-level scratch table declared (`_scratchVec3a`, `_scratchQuat`, `_scratchColor`, `Z_AXIS`)
 - [ ] `_breathingAnim` borrows `_scratchVec3a` for `mesh.scale.lerp` (not `new THREE.Vector3()`)
-- [ ] All 10 cancellers wired in cleanup return (Disposal Contract list above — includes F19 `_removeEnvelopeUpdate?.()` + `_removeFlashUpdate?.()`)
+- [ ] Coordinator + 2 conditional cancellers wired in cleanup return (`coordinator.dispose()` + `_removeFormationAnim?.()` + `_removeReadinessBillboard?.()`)
 - [ ] `envelopePool?.dispose()` invoked + reference nulled in cleanup return
 - [ ] `_flashStates.clear()` happens AFTER `_removeFlashUpdate?.()` (so a half-cleared map can't be read by a late-firing tick); each active flash's baseline restored before the map is cleared
 - [ ] All disposables drained (geometries, materials, textures, lights' shadow maps)
