@@ -63,15 +63,18 @@ vi.mock('three', () => {
   // properties TopologyRenderer assigns (`position.set`, `castShadow`,
   // `shadow.mapSize.set`).
   class AmbientLight {
+    userData: Record<string, unknown> = {};
     constructor(public color: number, public intensity: number) {}
   }
   class DirectionalLight {
+    userData: Record<string, unknown> = {};
     position = { set: vi.fn() };
     castShadow = false;
     shadow = { mapSize: { set: vi.fn() } };
     constructor(public color: number, public intensity: number) {}
   }
   class HemisphereLight {
+    userData: Record<string, unknown> = {};
     constructor(
       public skyColor: number,
       public groundColor: number,
