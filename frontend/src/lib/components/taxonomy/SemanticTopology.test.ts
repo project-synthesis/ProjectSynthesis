@@ -1082,11 +1082,19 @@ describe('SemanticTopology — readiness ring overlay', () => {
     // negative in the assertion.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const GroupClass = (THREE as any).Group;
-    const groups = sceneChildren.filter((c: any) => c instanceof GroupClass) as Array<{
+    const groups = sceneChildren.filter((c: any) =>
+      c instanceof GroupClass && c.userData?.isStructural === true,
+    ) as Array<{
       userData: { isStructural?: boolean };
+      position: { x: number };
       children: Array<{ material: { opacity: number } }>;
     }>;
-    const d1Group = groups[0];
+    // d1 is at position [0,0,0]; d2 at [5,0,0]. Pick d1 by its x-coordinate
+    // rather than relying on scene.children insertion order — domain groups
+    // carry userData.isStructural = true (SemanticTopology.svelte:1041) but
+    // their relative order in scene.children is implementation-detail and
+    // no longer guaranteed after the userData.persistent refactor.
+    const d1Group = groups.find((g) => g.position.x === 0) ?? groups[0];
     const d1Fill = d1Group.children[0];
     const fillBaseOpacity = d1Fill.material.opacity; // = 1 * 0.9 = 0.9
 

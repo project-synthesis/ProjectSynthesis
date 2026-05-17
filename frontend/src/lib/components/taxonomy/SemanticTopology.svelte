@@ -8,7 +8,7 @@
   import { buildSceneData, assignLodVisibility, buildNodeMap, computeHierarchicalOpacity, type SceneData, type SceneNode } from './TopologyData';
   import { TopologyInteraction } from './TopologyInteraction';
   import { TopologyLabels } from './TopologyLabels';
-  import { cleanupScene, reorderPersistentToBack } from './scene-cleanup';
+  import { cleanupScene } from './scene-cleanup';
   import { settleForces } from './TopologyWorker';
   import TopologyControls from './TopologyControls.svelte';
   import ActivityPanel from './ActivityPanel.svelte';
@@ -1685,14 +1685,6 @@
     if (focusedNodeId) {
       applyHighlight(focusedNodeId);
     }
-
-    // Layer-ordering invariant: persistent direct children of the scene
-    // (pool wrappers, label wrapper, lazy ring/dust groups) sit at the
-    // BACK of `scene.children` so the domain cluster groups (ephemeral,
-    // rebuilt on each pass) appear FIRST. Preserves the pre-refactor
-    // ordering that `SemanticTopology.test.ts`'s dim-lockstep test reads
-    // via `groups[0]`. Idempotent + cheap (one O(n) pass per rebuild).
-    reorderPersistentToBack(renderer.scene);
   }
 
   function handleLodChange(tier: LODTier): void {
