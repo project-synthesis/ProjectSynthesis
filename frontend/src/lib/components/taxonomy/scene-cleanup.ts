@@ -23,9 +23,9 @@
 //   - WeakSet dedup for shared geometries + WeakSet protection for
 //     persistent-shared geometries + materials.
 //   - Use DOT-ASSIGNMENT to set the flag (obj.userData.persistent = true);
-//     object-replacement (userData = { persistent: true }) is banned
-//     by cleanup-contract.test.ts because it clobbers other userData
-//     fields like F10's `isNeuralDust`.
+//     object-replacement of userData (assigning a new literal containing the
+//     persistent key) is banned by cleanup-contract.test.ts because it
+//     clobbers other userData fields like F10's `isNeuralDust`.
 //   - Helper coverage `Mesh + LineSegments + Line + Points`
 //     COMPLEMENTS the renderer-level dispose at
 //     `TopologyRenderer.ts:247-271` which handles
@@ -102,31 +102,88 @@ function disposeGeometryOwner(
  * `userData.persistent = true`. Disposes geometries + materials of
  * ephemeral Mesh/LineSegments/Line/Points before removal.
  *
+ * Persistent children keep their original `scene.children` position; only
+ * ephemerals are removed. This preserves any downstream test/visual
+ * assumption about layer ordering (e.g., the readiness-ring dim-lockstep
+ * test pins `groups[0] === firstDomainGroup` and would break if persistent
+ * pool groups were reattached to the head/tail of `scene.children`).
+ *
  * Call from `rebuildScene` in place of the manual scene.remove(...) +
  * dispose-traverse + `while (children > 0)` + scene.add(...) dance.
  */
 export function cleanupScene(scene: THREE.Scene): void {
-  // 1. Detach persistent children.
+  // 1. Partition direct children: persistent stay in place, ephemerals get
+  //    disposed + removed. Walk a snapshot of the children array because
+  //    we'll mutate it below.
+  const directChildren = scene.children.slice();
   const persistent: THREE.Object3D[] = [];
-  for (const child of scene.children) {
+  const ephemeral: THREE.Object3D[] = [];
+  for (const child of directChildren) {
     if (child.userData?.persistent === true) persistent.push(child);
+    else ephemeral.push(child);
   }
-  for (const p of persistent) scene.remove(p);
 
   // 2. Pre-seed protection sets so shared geometries/materials referenced
-  //    by both persistent + ephemeral children survive the traverse.
+  //    by both persistent + ephemeral children survive the dispose pass.
+  //    Persistent groups are treated as opaque containers — their direct
+  //    geometry+material refs are protected (covers the common case of
+  //    pool groups whose root references the shared resource).
   const disposedGeo = new WeakSet<THREE.BufferGeometry>();
   const protectedMat = new WeakSet<THREE.Material>();
   for (const p of persistent) seedPersistentProtection(p, disposedGeo, protectedMat);
 
-  // 3. Dispose remaining (ephemeral) geometry-owners.
+  // 3. Dispose ephemeral geometry-owners. Walk via the scene's own
+  //    `traverse` for parity with the prior implementation, but skip any
+  //    descendants of persistent direct children by checking ancestry via
+  //    the userData.persistent flag at the scene-direct-child level.
+  //    Implementation note: a top-level persistent child's descendants
+  //    don't carry the flag themselves; we identify them by Set membership.
+  const persistentSet = new Set<THREE.Object3D>(persistent);
   scene.traverse((obj) => {
-    if (isGeometryOwner(obj)) disposeGeometryOwner(obj, disposedGeo, protectedMat);
+    if (persistentSet.has(obj as THREE.Object3D)) return; // skip persistent root
+    // Check if any ancestor is in persistentSet (covers descendants of
+    // persistent groups). Walks up via .parent which exists on real
+    // THREE.Object3D and on most test mocks (added by Group.add()).
+    let p: THREE.Object3D | null | undefined = (obj as THREE.Object3D).parent;
+    while (p) {
+      if (persistentSet.has(p)) return;
+      p = p.parent;
+    }
+    if (isGeometryOwner(obj as THREE.Object3D)) {
+      disposeGeometryOwner(
+        obj as THREE.Mesh | THREE.LineSegments | THREE.Line | THREE.Points,
+        disposedGeo,
+        protectedMat,
+      );
+    }
   });
 
-  // 4. Remove all remaining (ephemeral) children.
-  while (scene.children.length > 0) scene.remove(scene.children[0]);
+  // 4. Remove ephemeral direct children. Persistent children keep their
+  //    original positions in `scene.children`.
+  for (const e of ephemeral) scene.remove(e);
+}
 
-  // 5. Reattach persistent children.
-  for (const p of persistent) scene.add(p);
+/**
+ * Move every persistent direct child of `scene` to the END of
+ * `scene.children`, in their original relative order. Idempotent.
+ *
+ * Call from `rebuildScene` AFTER all new ephemeral children have been
+ * added. Restores the layer ordering invariant that pre-existing tests
+ * (notably the dim-lockstep test in `SemanticTopology.test.ts`) expect:
+ * domain cluster groups appear before pool/wrapper groups in
+ * `scene.children`.
+ *
+ * Why this isn't part of `cleanupScene`: cleanupScene runs at the START
+ * of rebuildScene (before new ephemerals are added), so a "move to end"
+ * there would have nothing to move past. The reorder must happen AFTER
+ * the rebuild populates the new ephemeral set.
+ */
+export function reorderPersistentToBack(scene: THREE.Scene): void {
+  const persistent = scene.children.filter(
+    (c) => c.userData?.persistent === true,
+  );
+  for (const p of persistent) {
+    scene.remove(p);
+    scene.add(p);
+  }
 }

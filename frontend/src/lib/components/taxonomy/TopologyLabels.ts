@@ -12,7 +12,11 @@ const FONT = '24px monospace';
 const MAX_CACHE = 500;
 
 export class TopologyLabels {
-  private _group = new THREE.Group();
+  private _group = (() => {
+    const g = new THREE.Group();
+    g.userData.persistent = true;
+    return g;
+  })();
   private _cache = new Map<string, THREE.Sprite>();
   private _lruOrder: string[] = [];
 
