@@ -801,3 +801,209 @@ describe('Impact Coordinator — source-grep contract (spec §5.2)', () => {
     expect(breathingBody).toMatch(/impactCoordinator(?:\?\.|\!\.|\.)isEngulfed\s*\(/);
   });
 });
+
+// ── Sub-project D source-grep contract (spec §5.2 #1-#16) ──────
+
+const builderSourceMap = import.meta.glob<string>(
+  [
+    './builders/BuilderContext.ts',
+    './builders/SceneBuilder.ts',
+    './builders/ClusterBuilder.ts',
+    './builders/DomainBuilder.ts',
+    './builders/EdgeBuilder.ts',
+    './builders/RingBuilder.ts',
+    './builders/DustBuilder.ts',
+  ],
+  { query: '?raw', import: 'default', eager: true },
+);
+
+function readBuilderSource(name: string): string {
+  const key = `./builders/${name}`;
+  const content = builderSourceMap[key];
+  if (typeof content !== 'string') {
+    throw new Error(`cleanup-contract: ${key} not found in builder glob map`);
+  }
+  return content;
+}
+
+function extractRebuildSceneBody(src: string): string {
+  // Locate `function rebuildScene(` then walk forward, balancing braces,
+  // to extract the body slice. Mirror of extractCleanupBody but anchored
+  // on rebuildScene's opening brace.
+  const fnMatch = src.match(/function\s+rebuildScene\s*\([^)]*\)\s*:\s*[^{]+\{/);
+  if (!fnMatch || fnMatch.index === undefined) {
+    throw new Error('cleanup-contract: rebuildScene function not found');
+  }
+  const start = fnMatch.index + fnMatch[0].length;
+  let depth = 1;
+  let i = start;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    i++;
+  }
+  return src.slice(start, i - 1);
+}
+
+describe('Cleanup contract — Sub-project D scene-builder extraction (spec §5.2)', () => {
+  // ── #1 ──
+  test('#1 — BuilderContext.ts exports BuilderContext interface + createBuilderContext factory', () => {
+    const src = readBuilderSource('BuilderContext.ts');
+    expect(src).toMatch(/export\s+interface\s+BuilderContext\s*\{/);
+    expect(src).toMatch(/export\s+function\s+createBuilderContext\s*\(/);
+  });
+
+  // ── #2 ──
+  test('#2 — SceneBuilder.ts exports SceneBuilder interface with build + dispose methods', () => {
+    const src = readBuilderSource('SceneBuilder.ts');
+    expect(src).toMatch(/export\s+interface\s+SceneBuilder\s*\{/);
+    expect(src).toMatch(/build\s*\(\s*data:\s*SceneData/);
+    expect(src).toMatch(/dispose\s*\(\s*\)\s*:\s*void/);
+  });
+
+  // ── #3 ──
+  test('#3 — All 5 builder files exist + export their class', () => {
+    const expected: Array<[string, RegExp]> = [
+      ['ClusterBuilder.ts', /export\s+class\s+ClusterBuilder/],
+      ['DomainBuilder.ts', /export\s+class\s+DomainBuilder/],
+      ['EdgeBuilder.ts', /export\s+class\s+EdgeBuilder/],
+      ['RingBuilder.ts', /export\s+class\s+RingBuilder/],
+      ['DustBuilder.ts', /export\s+class\s+DustBuilder/],
+    ];
+    for (const [name, pattern] of expected) {
+      const src = readBuilderSource(name);
+      expect(src).toMatch(pattern);
+    }
+  });
+
+  // ── #4 ──
+  test('#4 — rebuildScene body contains 5 builder .build( calls in cluster → domain → edge → ring → dust order', () => {
+    const body = extractRebuildSceneBody(readSemTopSource());
+    const clusterPos = body.indexOf('clusterBuilder.build');
+    const domainPos = body.indexOf('domainBuilder.build');
+    const edgePos = body.indexOf('edgeBuilder.build');
+    const ringPos = body.indexOf('ringBuilder.build');
+    const dustPos = body.indexOf('dustBuilder.build');
+    expect(clusterPos).toBeGreaterThan(-1);
+    expect(domainPos).toBeGreaterThan(clusterPos);
+    expect(edgePos).toBeGreaterThan(domainPos);
+    expect(ringPos).toBeGreaterThan(edgePos);
+    expect(dustPos).toBeGreaterThan(ringPos);
+  });
+
+  // ── #5 ──
+  test('#5 — rebuildScene body is < 150 LOC', () => {
+    const body = extractRebuildSceneBody(readSemTopSource());
+    const lines = body.split('\n').filter((l) => l.trim().length > 0 && !l.trim().startsWith('//'));
+    expect(lines.length).toBeLessThan(150);
+  });
+
+  // ── #6 ──
+  test('#6 — SemanticTopology.svelte total LOC < 750', () => {
+    const src = readSemTopSource();
+    const lines = src.split('\n');
+    expect(lines.length).toBeLessThan(750);
+  });
+
+  // ── #7 ──
+  test('#7 — SemanticTopology.svelte does NOT contain inline cluster-mesh construction (new THREE.IcosahedronGeometry)', () => {
+    const src = readSemTopSource();
+    expect(src).not.toMatch(/new\s+THREE\.IcosahedronGeometry\s*\(/);
+  });
+
+  // ── #8 ──
+  test('#8 — SemanticTopology.svelte does NOT contain inline domain-mesh construction (new THREE.DodecahedronGeometry)', () => {
+    const src = readSemTopSource();
+    expect(src).not.toMatch(/new\s+THREE\.DodecahedronGeometry\s*\(/);
+  });
+
+  // ── #9 ──
+  test('#9 — SemanticTopology.svelte does NOT contain inline edge construction LineSegments for catenary/similarity/injection', () => {
+    const src = readSemTopSource();
+    // The hierarchicalGroup + similarityEdgeGroup + injectionEdgeGroup
+    // declarations should be gone post-migration.
+    expect(src).not.toMatch(/hierarchicalGroup\s*=\s*new\s+THREE\.Group/);
+    expect(src).not.toMatch(/similarityEdgeGroup\s*=\s*buildEdgeGroup/);
+    expect(src).not.toMatch(/injectionEdgeGroup\s*=\s*buildEdgeGroup/);
+  });
+
+  // ── #10 ──
+  test('#10 — SemanticTopology.svelte does NOT contain _templateRingPool / _freeTemplateRings / _templateRingById / _templateRingPoolSet', () => {
+    const src = readSemTopSource();
+    expect(src).not.toMatch(/_templateRingPool\b/);
+    expect(src).not.toMatch(/_freeTemplateRings\b/);
+    expect(src).not.toMatch(/_templateRingById\b/);
+    expect(src).not.toMatch(/_templateRingPoolSet\b/);
+  });
+
+  // ── #11 ──
+  test('#11 — SemanticTopology.svelte does NOT contain _dustPoints declaration (migrated to DustBuilder)', () => {
+    const src = readSemTopSource();
+    // `let _dustPoints` OR `const _dustPoints` declarations gone.
+    expect(src).not.toMatch(/(?:let|const)\s+_dustPoints\b/);
+  });
+
+  // ── #12 ──
+  test('#12 — Builder construction in onMount happens AFTER renderer + AnimationCoordinator + ImpactCoordinator', () => {
+    const src = readSemTopSource();
+    const rendererPos = src.indexOf('renderer = new TopologyRenderer');
+    const acPos = src.indexOf('coordinator = new AnimationCoordinator');
+    const icPos = src.indexOf('impactCoordinator = new ImpactCoordinator');
+    const cbPos = src.indexOf('clusterBuilder = new ClusterBuilder');
+    expect(rendererPos).toBeGreaterThan(-1);
+    expect(acPos).toBeGreaterThan(rendererPos);
+    expect(icPos).toBeGreaterThan(acPos);
+    expect(cbPos).toBeGreaterThan(icPos);
+  });
+
+  // ── #13 ──
+  test('#13 — Cleanup return invokes all 5 builder .dispose() calls', () => {
+    const cleanup = extractCleanupBody(readSemTopSource());
+    expect(cleanup).toMatch(/clusterBuilder\??\.dispose\s*\(/);
+    expect(cleanup).toMatch(/domainBuilder\??\.dispose\s*\(/);
+    expect(cleanup).toMatch(/edgeBuilder\??\.dispose\s*\(/);
+    expect(cleanup).toMatch(/ringBuilder\??\.dispose\s*\(/);
+    expect(cleanup).toMatch(/dustBuilder\??\.dispose\s*\(/);
+  });
+
+  // ── #14 ──
+  test('#14 — userData.persistent = true set in RingBuilder + DustBuilder construction (scoped to builders/)', () => {
+    const ring = readBuilderSource('RingBuilder.ts');
+    const dust = readBuilderSource('DustBuilder.ts');
+    expect(ring).toMatch(/userData[.:]\s*\{[^}]*persistent:\s*true|userData\.persistent\s*=\s*true/s);
+    expect(dust).toMatch(/userData\.persistent\s*=\s*true|persistent:\s*true/);
+  });
+
+  // ── #15 ──
+  test('#15 — F1-F19 canon entries reference new builder file paths (scoped to 3d-visualization.md)', async () => {
+    // 3d-visualization.md is a sibling file in .claude/; read via fs in
+    // Node test environment. The brand canon update lands in Cycle 6
+    // INTEGRATE (Task 29); this test is queued failing here until then.
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    // Vitest runs from `frontend/`; canon file lives at the repo root in
+    // `.claude/skills/brand-guidelines/references/3d-visualization.md`.
+    const repoRoot = path.resolve(process.cwd(), '..');
+    const canonPath = path.join(
+      repoRoot,
+      '.claude/skills/brand-guidelines/references/3d-visualization.md',
+    );
+    const md = await fs.readFile(canonPath, 'utf8');
+    expect(md).toMatch(/ClusterBuilder\.ts/);
+    expect(md).toMatch(/DomainBuilder\.ts/);
+    expect(md).toMatch(/EdgeBuilder\.ts/);
+    expect(md).toMatch(/RingBuilder\.ts/);
+    expect(md).toMatch(/DustBuilder\.ts/);
+  });
+
+  // ── #16 ──
+  test('#16 — SemanticTopology.svelte PRESERVES module-level accumulators _breathingTime, _edgeTime, _cameraShake, _nodePhaseOffsets', () => {
+    const src = readSemTopSource();
+    // Per-frame accumulator state — must remain at module scope.
+    expect(src).toMatch(/let\s+_breathingTime\b/);
+    expect(src).toMatch(/let\s+_edgeTime\b/);
+    expect(src).toMatch(/let\s+_cameraShake\b/);
+    expect(src).toMatch(/let\s+_nodePhaseOffsets\b|const\s+_nodePhaseOffsets\b/);
+  });
+});
