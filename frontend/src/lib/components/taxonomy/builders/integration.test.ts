@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import * as THREE from 'three';
 import { ClusterBuilder } from './ClusterBuilder';
 import { DomainBuilder } from './DomainBuilder';
+import { EdgeBuilder } from './EdgeBuilder';
 import { createBuilderContext, type BuilderContext } from './BuilderContext';
 import type { SceneData, SceneNode } from '../TopologyData';
 
@@ -139,5 +140,81 @@ describe('builders/integration — Cycle 2 domain sequences', () => {
     expect(ctx.beamNodeGroups.has('d1')).toBe(true);
     expect(ctx.beamNodeGroups.has('p1')).toBe(true);
     expect(ctx.beamNodeGroups.has('c1')).toBe(false);
+  });
+});
+
+describe('builders/integration — Cycle 3 edge sequences', () => {
+  let scene: THREE.Scene;
+  let ctx: BuilderContext;
+
+  beforeEach(() => {
+    scene = new THREE.Scene();
+    ctx = createBuilderContext();
+  });
+
+  it('Cycle-3-A: EdgeBuilder reads ctx.sceneNodeMap to position hierarchical edges (3 nodes + 2 hier edges → 1 merged bucket)', () => {
+    const dom = makeNode('d1', { state: 'domain' });
+    const c1 = makeNode('c1', { state: 'active', position: [5, 0, 0] });
+    const c2 = makeNode('c2', { state: 'active', position: [-5, 0, 0] });
+    const data = {
+      nodes: [dom, c1, c2],
+      edges: [
+        { from: 'd1', to: 'c1', type: 'hierarchical' },
+        { from: 'd1', to: 'c2', type: 'hierarchical' },
+      ],
+    } as unknown as SceneData;
+    for (const n of data.nodes) ctx.sceneNodeMap.set(n.id, n);
+    new ClusterBuilder(null).build(data, scene, ctx);
+    new DomainBuilder(null).build(data, scene, ctx);
+    new EdgeBuilder().build(data, scene, ctx);
+    const hierGroup = scene.children.find(
+      (c) => (c as THREE.Group).userData?.isInterClusterEdgeGroup === true,
+    ) as THREE.Group;
+    expect(hierGroup).toBeDefined();
+    // Both child edges live inside hierGroup, bucketed by parent d1.
+    expect(hierGroup.children.length).toBe(1); // one merged bucket per parent
+  });
+
+  it('Cycle-3-B: F5 uniforms array contains BOTH domain-edge AND hierarchical-edge records', () => {
+    const dom = makeNode('d1', { state: 'domain' });
+    const c1 = makeNode('c1', { state: 'active', position: [5, 0, 0] });
+    const data = {
+      nodes: [dom, c1],
+      edges: [{ from: 'd1', to: 'c1', type: 'hierarchical' }],
+    } as unknown as SceneData;
+    for (const n of data.nodes) ctx.sceneNodeMap.set(n.id, n);
+    new ClusterBuilder(null).build(data, scene, ctx);
+    new DomainBuilder(null).build(data, scene, ctx); // pushes 1 domain-edge uniform
+    new EdgeBuilder().build(data, scene, ctx); // pushes 1 hierarchical bucket uniform
+    expect(ctx.edgeUniforms.length).toBe(2);
+    for (const u of ctx.edgeUniforms) {
+      expect(u.uTime).toBeDefined();
+      expect((u.uTime as THREE.IUniform).value).toBeDefined();
+    }
+  });
+
+  it('Cycle-3-C: edge ephemeral-flag — no userData.persistent on any of the 3 sub-groups', () => {
+    const c1 = makeNode('c1', { state: 'active' });
+    const c2 = makeNode('c2', { state: 'active', position: [5, 0, 0] });
+    const dom = makeNode('d1', { state: 'domain', position: [10, 0, 0] });
+    const data = {
+      nodes: [c1, c2, dom],
+      edges: [
+        { from: 'c1', to: 'c2', type: 'similarity' },
+        { from: 'd1', to: 'c1', type: 'hierarchical' },
+        { from: 'd1', to: 'c1', type: 'injection' },
+      ],
+    } as unknown as SceneData;
+    for (const n of data.nodes) ctx.sceneNodeMap.set(n.id, n);
+    new ClusterBuilder(null).build(data, scene, ctx);
+    new DomainBuilder(null).build(data, scene, ctx);
+    new EdgeBuilder().build(data, scene, ctx);
+    // Walk scene children — none of the edge sub-groups have userData.persistent.
+    for (const child of scene.children) {
+      const u = (child as THREE.Group).userData ?? {};
+      if (u.isInterClusterEdgeGroup || u.isSimilarityEdge || u.isInjectionEdge) {
+        expect(u.persistent).not.toBe(true);
+      }
+    }
   });
 });
