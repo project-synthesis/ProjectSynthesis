@@ -186,9 +186,13 @@ describe('RingBuilder — 21 unit tests per spec §5.1 (rev-2 accessors)', () =>
     expect(tplGroup.userData.persistent).toBe(true);
   });
 
-  // #8 Template ring acquired from pool; canon F3 material attributes
-  it('#8 — Template: ring material is canon F3 (0x00e5ff, opacity 0.35, DoubleSide, transparent)', () => {
-    const c1 = makeNode('c1', { template_count: 1 });
+  // #8 Template ring canon F3 material attributes — factory color + invariants
+  it('#8 — Template: ring material is canon F3 (factory 0x00e5ff, opacity 0.35, DoubleSide, transparent, RingGeometry)', () => {
+    // Use a cluster whose color matches canon cyan so the post-sync color
+    // assertion pins the brand intent. Other clusters get their per-id
+    // color (sync overwrites the factory canon — verified separately by
+    // test #10 which asserts color tracks live data).
+    const c1 = makeNode('c1', { template_count: 1, color: '#00e5ff' });
     const data = makeData([c1]);
     populateMap(ctx, data);
     const rb = new RingBuilder();
@@ -196,13 +200,17 @@ describe('RingBuilder — 21 unit tests per spec §5.1 (rev-2 accessors)', () =>
     const mesh = rb.getTemplateRing('c1')!;
     const mat = mesh.material as THREE.MeshBasicMaterial;
     expect(mat.color.getHex()).toBe(0x00e5ff);
-    // Active rings may be ramping in via T2.2 entry transition (opacity 0 → 0.35).
-    // The pool's resting opacity (and the released-ring reset value) is 0.35.
+    // Canon F3 invariants surviving sync (transparent + DoubleSide + RingGeometry):
     expect(mat.transparent).toBe(true);
     expect(mat.side).toBe(THREE.DoubleSide);
-    // RingGeometry(size * 1.25, size * 1.25 + 0.05, 64) — per M2 fix.
     const geom = mesh.geometry as THREE.RingGeometry;
     expect(geom.type).toBe('RingGeometry');
+    // Verify RingGeometry constructor args match canon F3 — inner/outer/segments
+    // visible in the geometry's `parameters` field.
+    const params = (geom as unknown as { parameters: { innerRadius: number; outerRadius: number; thetaSegments: number } }).parameters;
+    expect(params.innerRadius).toBeCloseTo(1.25, 5);
+    expect(params.outerRadius).toBeCloseTo(1.35, 5);
+    expect(params.thetaSegments).toBe(64);
   });
 
   // #9 Template ring released when cluster disappears (no longer in build output)
