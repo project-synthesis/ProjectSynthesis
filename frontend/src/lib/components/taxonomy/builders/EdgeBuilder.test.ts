@@ -101,10 +101,18 @@ describe('EdgeBuilder — 15 unit tests per spec §5.1', () => {
     //            = (2.5, 0, 0.75) + (2.5, 0, 0)
     //            = (5.0, 0, 0.75)
     // Test asserts (5, 0, 0.75) ±0.01.
-    const from = makeNode('A', { position: [0, 0, 0] });
-    const to = makeNode('B', { state: 'domain', position: [10, 0, 0] });
-    const data = makeData([from, to], [{ from: 'B', to: 'A', type: 'hierarchical' }]);
-    const ctx = buildClusterAndDomainCtx(from, to, scene);
+    //
+    // DEVIATION from spec §5.1 #2 literal: the spec fixture used
+    // `{ from: 'B', to: 'A' }` (parent='B') which after endpoint
+    // resolution feeds the catenary `start=(10,0,0), end=(0,0,0)` —
+    // the OPPOSITE direction of the docstring math. The fix flips
+    // the edge so the catenary input matches the docstring
+    // `start=(0,0,0), end=(10,0,0)`; the resulting +0.75 mid-vertex
+    // is the spec rev-3 intent. Submitted upstream.
+    const a = makeNode('A', { position: [0, 0, 0] });
+    const b = makeNode('B', { state: 'domain', position: [10, 0, 0] });
+    const data = makeData([a, b], [{ from: 'A', to: 'B', type: 'hierarchical' }]);
+    const ctx = buildClusterAndDomainCtx(a, b, scene);
     new EdgeBuilder().build(data, scene, ctx);
     const hierGroup = scene.children.find(
       (c) => (c as THREE.Group).userData?.isInterClusterEdgeGroup,
