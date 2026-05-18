@@ -166,92 +166,10 @@ export class RingBuilder implements SceneBuilder {
    */
   build(data: SceneData, scene: THREE.Scene, _ctx: BuilderContext): void {
     if (this._disposed) return;
-
-    // ── 1. Lazy construct + flag persistence ──
-    if (!this._readinessRingGroup) {
-      this._readinessRingGroup = new THREE.Group();
-      this._readinessRingGroup.userData.isReadinessRingGroup = true;
-      this._readinessRingGroup.userData.persistent = true;
-    }
-    if (this._readinessRingGroup.parent !== scene) {
-      scene.add(this._readinessRingGroup);
-    }
-    if (!this._templateRingGroup) {
-      this._templateRingGroup = new THREE.Group();
-      this._templateRingGroup.userData.isTemplateRingGroup = true;
-      this._templateRingGroup.userData.persistent = true;
-    }
-    if (this._templateRingGroup.parent !== scene) {
-      scene.add(this._templateRingGroup);
-    }
-
-    // ── 2. Prune readiness entries whose owning node disappeared/changed ──
-    // Mirrors the orchestrator pre-cleanup block (~lines 957-969 at HEAD
-    // d79f3dee); migrated here per spec §3.6 NOTE because the registry
-    // lives in this builder.
-    const currentDomainIds = new Set(
-      data.nodes.filter((n) => n.visible && hasReadinessRing(n)).map((n) => n.id),
-    );
-    for (const [id, entry] of [...this._readinessRings]) {
-      if (!currentDomainIds.has(id)) {
-        RingBuilder._disposeRingEntry(entry);
-        this._readinessRingGroup.remove(entry.mesh);
-        this._readinessRings.delete(id);
-      }
-    }
-
-    // ── 3. Template ring sync — release missing, acquire new ──
+    this._lazyConstructPersistentGroups(scene);
+    this._pruneReadinessRings(data.nodes);
     this._syncTemplateRings(data.nodes);
-
-    // ── 4. Build / update readiness rings ──
-    for (const node of data.nodes) {
-      if (!node.visible) continue;
-      if (!hasReadinessRing(node)) continue;
-      // hasReadinessRing guarantees readinessTier is defined.
-      const tier = node.readinessTier!;
-      const existing = this._readinessRings.get(node.id);
-      if (existing) {
-        // Update-in-place. Tier / size drift handling is intentionally
-        // omitted here — the breathing handler + LOD callback in
-        // SemanticTopology.svelte own the per-frame ring reconciliation
-        // (color tween + size drift). The build pass only writes the
-        // position + opacity baseline; consumers can read the latest
-        // fields via getReadinessRing(id).
-        existing.mesh.position.set(...node.position);
-        existing.lastTier = tier;
-        existing.lastSize = node.size;
-        existing.domain = node.domain;
-        existing.nodeOpacity = node.opacity;
-        continue;
-      }
-      const radius = node.size * READINESS_RING_RADIUS_FACTOR;
-      const geom = new THREE.RingGeometry(
-        radius,
-        radius + READINESS_RING_THICKNESS,
-        READINESS_RING_SEGMENTS,
-      );
-      const color = readinessTierColor(tier);
-      const mat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(color),
-        transparent: true,
-        opacity: node.opacity * READINESS_RING_OPACITY_FACTOR,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      });
-      const mesh = new THREE.Mesh(geom, mat);
-      mesh.position.set(...node.position);
-      mesh.userData = { kind: 'readiness_ring', nodeId: node.id };
-      this._readinessRingGroup.add(mesh);
-      this._readinessRings.set(node.id, {
-        mesh,
-        material: mat,
-        lastTier: tier,
-        lastSize: node.size,
-        domain: node.domain,
-        nodeOpacity: node.opacity,
-        tween: null,
-      });
-    }
+    this._syncReadinessRings(data.nodes);
   }
 
   /**
@@ -271,38 +189,23 @@ export class RingBuilder implements SceneBuilder {
     if (this._disposed) return;
     this._disposed = true;
 
-    // Cancel any in-flight tweens + dispose GPU resources before
-    // detaching the parent groups (avoids RAF write-after-free).
+    // Cancel in-flight tweens + dispose readiness GPU resources before
+    // detaching the parent group (avoids RAF write-after-free against a
+    // disposed material).
     for (const [, entry] of this._readinessRings) {
       RingBuilder._disposeRingEntry(entry);
     }
     this._readinessRings.clear();
 
-    // Detach persistent groups from their parents. Clear children so
-    // any subsequent traverse finds nothing.
-    if (this._readinessRingGroup?.parent) {
-      this._readinessRingGroup.parent.remove(this._readinessRingGroup);
-    }
-    if (this._readinessRingGroup) {
-      // Remove all children so the group is empty post-dispose.
-      while (this._readinessRingGroup.children.length > 0) {
-        this._readinessRingGroup.remove(this._readinessRingGroup.children[0]);
-      }
-    }
-    if (this._templateRingGroup?.parent) {
-      this._templateRingGroup.parent.remove(this._templateRingGroup);
-    }
-    if (this._templateRingGroup) {
-      // Remove every pool mesh from the template group + dispose
-      // geometry/material. The pool mesh objects themselves are kept
-      // in `_templateRingPool` only for length-counting symmetry but
-      // are no longer attached to any scene object.
-      while (this._templateRingGroup.children.length > 0) {
-        this._templateRingGroup.remove(this._templateRingGroup.children[0]);
-      }
-    }
+    // Detach + clear the readiness group; persistent flag keeps it
+    // alive across rebuilds, but dispose is the only path that breaks
+    // that contract.
+    RingBuilder._detachPersistentGroup(this._readinessRingGroup);
+    this._readinessRingGroup = null;
 
-    // Dispose every pool mesh's GPU resources.
+    // Dispose every pool mesh's GPU resources + drop from any parent.
+    // The template-ring group reference is then detached too — its
+    // children were the pool meshes, which the loop has already removed.
     for (const mesh of this._templateRingPool) {
       if (mesh.parent) mesh.parent.remove(mesh);
       if (typeof (mesh.geometry as THREE.BufferGeometry)?.dispose === 'function') {
@@ -311,6 +214,8 @@ export class RingBuilder implements SceneBuilder {
       const mat = mesh.material as THREE.MeshBasicMaterial;
       if (typeof mat?.dispose === 'function') mat.dispose();
     }
+    RingBuilder._detachPersistentGroup(this._templateRingGroup);
+    this._templateRingGroup = null;
 
     // Clear pool state.
     this._templateRingPool.length = 0;
@@ -391,6 +296,95 @@ export class RingBuilder implements SceneBuilder {
   }
 
   // ── Internal helpers ──
+
+  /**
+   * Lazy-construct both persistent parent groups on first build and tag
+   * them `userData.persistent = true` so the Sub-project A `cleanupScene`
+   * skips them across rebuilds. Re-attach to `scene` if they were
+   * detached (e.g. after `dispose()` + reconstruct — though normally a
+   * disposed builder is replaced rather than reused).
+   *
+   * @param scene - Target THREE.Scene the persistent groups attach to.
+   */
+  private _lazyConstructPersistentGroups(scene: THREE.Scene): void {
+    if (!this._readinessRingGroup) {
+      this._readinessRingGroup = new THREE.Group();
+      this._readinessRingGroup.userData.isReadinessRingGroup = true;
+      this._readinessRingGroup.userData.persistent = true;
+    }
+    if (this._readinessRingGroup.parent !== scene) {
+      scene.add(this._readinessRingGroup);
+    }
+    if (!this._templateRingGroup) {
+      this._templateRingGroup = new THREE.Group();
+      this._templateRingGroup.userData.isTemplateRingGroup = true;
+      this._templateRingGroup.userData.persistent = true;
+    }
+    if (this._templateRingGroup.parent !== scene) {
+      scene.add(this._templateRingGroup);
+    }
+  }
+
+  /**
+   * Drop readiness-ring entries whose owning domain disappeared, lost
+   * its readinessTier, or became hidden. Disposes the GPU resources of
+   * each pruned entry before removing the mesh from the parent group so
+   * the renderer never holds a reference to a freed material.
+   *
+   * Mirrors the orchestrator pre-cleanup block (~lines 957-969 at HEAD
+   * d79f3dee); migrated here per spec §3.6 NOTE because the registry
+   * lives in this builder.
+   *
+   * @param nodes - All SceneData nodes for this rebuild.
+   */
+  private _pruneReadinessRings(nodes: SceneNode[]): void {
+    if (!this._readinessRingGroup) return; // Defensive — build() lazy-inits first.
+    const currentDomainIds = new Set(
+      nodes.filter((n) => n.visible && hasReadinessRing(n)).map((n) => n.id),
+    );
+    for (const [id, entry] of [...this._readinessRings]) {
+      if (!currentDomainIds.has(id)) {
+        RingBuilder._disposeRingEntry(entry);
+        this._readinessRingGroup.remove(entry.mesh);
+        this._readinessRings.delete(id);
+      }
+    }
+  }
+
+  /**
+   * Build / update one readiness ring per visible structural node with a
+   * tier. Existing entries are updated in place — the build pass only
+   * writes the position + tier/size/domain/opacity baseline; the
+   * per-frame breathing + LOD callbacks in SemanticTopology.svelte own
+   * color-tween + size-drift reconciliation (consumers read the latest
+   * fields via `getReadinessRing(id)`).
+   *
+   * Mirrors `_syncTemplateRings` shape (reconcile-then-build) for
+   * cross-pass parity inside `build()`.
+   *
+   * @param nodes - All SceneData nodes for this rebuild.
+   */
+  private _syncReadinessRings(nodes: SceneNode[]): void {
+    if (!this._readinessRingGroup) return;
+    for (const node of nodes) {
+      if (!node.visible) continue;
+      if (!hasReadinessRing(node)) continue;
+      // hasReadinessRing guarantees readinessTier is defined.
+      const tier = node.readinessTier!;
+      const existing = this._readinessRings.get(node.id);
+      if (existing) {
+        existing.mesh.position.set(...node.position);
+        existing.lastTier = tier;
+        existing.lastSize = node.size;
+        existing.domain = node.domain;
+        existing.nodeOpacity = node.opacity;
+        continue;
+      }
+      const entry = RingBuilder._buildReadinessRingEntry(node, tier);
+      this._readinessRingGroup.add(entry.mesh);
+      this._readinessRings.set(node.id, entry);
+    }
+  }
 
   /**
    * Reconcile template-ring meshes against the current cluster set: release
@@ -521,6 +515,52 @@ export class RingBuilder implements SceneBuilder {
   }
 
   /**
+   * Construct one F4 readiness ring entry — `RingGeometry` sized to
+   * `node.size * READINESS_RING_RADIUS_FACTOR` + 1px thickness,
+   * `MeshBasicMaterial` colored per tier with `node.opacity *
+   * READINESS_RING_OPACITY_FACTOR` opacity, `DoubleSide` so the ring
+   * reads from below the dome.
+   *
+   * Pure factory — kept static for cross-builder pattern parity with
+   * {@link ClusterBuilder._computeEmissive} +
+   * {@link DomainBuilder._buildUniqueVertexGeometry}.
+   *
+   * @param node - The structural node owning the ring.
+   * @param tier - The composite readiness tier driving the color.
+   * @returns A populated `ReadinessRingEntry` ready to insert.
+   */
+  private static _buildReadinessRingEntry(
+    node: SceneNode,
+    tier: ReadinessTier,
+  ): ReadinessRingEntry {
+    const radius = node.size * READINESS_RING_RADIUS_FACTOR;
+    const geom = new THREE.RingGeometry(
+      radius,
+      radius + READINESS_RING_THICKNESS,
+      READINESS_RING_SEGMENTS,
+    );
+    const mat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(readinessTierColor(tier)),
+      transparent: true,
+      opacity: node.opacity * READINESS_RING_OPACITY_FACTOR,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.set(...node.position);
+    mesh.userData = { kind: 'readiness_ring', nodeId: node.id };
+    return {
+      mesh,
+      material: mat,
+      lastTier: tier,
+      lastSize: node.size,
+      domain: node.domain,
+      nodeOpacity: node.opacity,
+      tween: null,
+    };
+  }
+
+  /**
    * Construct one F3 template ring mesh (canon F3 — cyan 1px contour
    * around templated clusters). The geometry is unit-sized; positioning
    * + per-cluster color writes happen at acquire time.
@@ -569,5 +609,23 @@ export class RingBuilder implements SceneBuilder {
     if (typeof entry.material?.dispose === 'function') {
       entry.material.dispose();
     }
+  }
+
+  /**
+   * Detach a persistent parent group from its scene parent + empty its
+   * children list. The group's `userData.persistent` flag stays set —
+   * dispose is the only legitimate path that breaks the persistence
+   * contract (per spec §3.5 + Sub-project A flag-pattern).
+   *
+   * No-op if the group is `null`. Children are drained in a loop because
+   * `THREE.Group.children` is a live array — splicing while iterating
+   * would skip every other entry.
+   *
+   * @param group - The persistent group to detach + empty (or null).
+   */
+  private static _detachPersistentGroup(group: THREE.Group | null): void {
+    if (!group) return;
+    if (group.parent) group.parent.remove(group);
+    while (group.children.length > 0) group.remove(group.children[0]);
   }
 }
