@@ -15,7 +15,7 @@
 import { describe, expect, test } from 'vitest';
 
 const sourceMap = import.meta.glob<string>(
-  ['./SemanticTopology.svelte', './ClusterPhysics.ts'],
+  ['./SemanticTopology.svelte', './ClusterPhysics.ts', './ImpactCoordinator.ts'],
   { query: '?raw', import: 'default', eager: true },
 );
 
@@ -94,14 +94,17 @@ describe('T3.4 — Idle Ambient Energy Pulse', () => {
     expect(src).toMatch(/const\s+isSelected\s*=\s*.* === nodeId/);
   });
 
-  test('breathing callback computes slow sine wave for idle pulse', () => {
-    const src = read('SemanticTopology.svelte');
-    // Period should be slower than the 1.5 multiplier used for breathing
-    expect(src).toMatch(/Math\.sin\(\s*_breathingTime\s*\*\s*0\.[2-8]\s*\)/);
+  test('idle pulse computes slow sine wave (post-Sub-project-C: extracted to ImpactCoordinator._tick)', () => {
+    const src = read('ImpactCoordinator.ts');
+    // Period should be slower than the 1.5 multiplier used for breathing.
+    // Post-Sub-project-C the pulse accumulator is `_pulseTime` (real-time
+    // delta-driven) instead of `_breathingTime` (fixed-step). Frequency
+    // multiplier stays in the [0.2, 0.8] band.
+    expect(src).toMatch(/Math\.sin\(\s*this\._pulseTime\s*\*\s*0\.[2-8]\s*\)/);
   });
 
-  test('idle pulse adds to the target emissiveIntensity', () => {
-    const src = read('SemanticTopology.svelte');
-    expect(src).toMatch(/emissiveIntensity\s*=\s*.*idlePulse/);
+  test('idle pulse adds to the target emissiveIntensity (post-Sub-project-C: in ImpactCoordinator._tick)', () => {
+    const src = read('ImpactCoordinator.ts');
+    expect(src).toMatch(/emissiveIntensity\s*=\s*[\s\S]*?idlePulse/);
   });
 });
