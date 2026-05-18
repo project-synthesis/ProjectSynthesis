@@ -429,6 +429,7 @@ Every GPU resource reaches a `dispose()` call from cleanup.
 
 | Canceller | Purpose |
 |---|---|
+| `impactCoordinator.dispose()` | **MUST run first** — cancels the F7→F19→F9 chain (4 trigger sites route through `impactCoordinator.fire(...)`) + the impact-phase T3.4 idle ambient pulse handler. Disposing first short-circuits any in-flight RAF-driven `_tick` before AnimationCoordinator tears down. Per Sub-project C spec acceptance #10. |
 | `coordinator.dispose()` | Cancels all unconditional per-frame work via AnimationCoordinator (replaces removeBeamUpdate, _removeRingLodUpdate, _removeDomainRotation, _removeEdgeAnim, _removeDustAnim, _breathingAnim, _removeEnvelopeUpdate, _removeFlashUpdate); per Animation Tick Ordering section. |
 | `_removeFormationAnim?.()` | Formation animation lerp toward settled positions (conditional during entrance) |
 | `_removeReadinessBillboard?.()` | Per-frame `lookAt(camera.position)` on rings (conditional when `_readinessRings.size > 0`) |
@@ -491,16 +492,16 @@ Run through each numbered feature. **The implementation passes if every line bel
 - [ ] **F16**: `applyHighlight(focusedNodeId)` at end of `rebuildScene`
 - [ ] **F16**: `applyHighlight` flips both `color` AND `emissive`
 - [ ] **F17**: `_hasAutoFocused` guard — bird's-eye-view zoom runs exactly once per lifecycle
-- [ ] **F18**: external selection wraps `clusterPhysics.onBeamImpact` (and the F19 envelope + flash) inside the `beamPool.acquire(...)` config's `onImpact` callback — never synchronously alongside `acquire()`
+- [ ] **F18**: external selection routes through `impactCoordinator.fire({ trigger: 'click', node, group })` — the coordinator's `fire()` body wraps `clusterPhysics.onBeamImpact` (and the F19 envelope + flash) inside the `beamPool.acquire(...)` config's `onImpact` callback. Selection-engulfment tracked internally; canonical read is `impactCoordinator.isEngulfed(id)`. Synchronous F19 reactions at the call site are forbidden — pinned by source-grep test #6.
 - [ ] **F19**: `EnvelopePool` constructed in `onMount`; envelope geometry shape literals match `node.state === 'domain' ? 'domain' : 'cluster'`
 - [ ] **F19**: `flashEmissive` uses baseline-capture pattern — rapid re-fires reuse prior `baselineEmissive`
-- [ ] **F19**: causal-ordering invariant — every `beamPool.acquire(...)` site (click `$effect`, entrance materialization burst, post-growth burst) wires `clusterPhysics.onBeamImpact` (and envelope/flash) inside `onImpact: () =>`, never synchronously alongside `acquire()`
+- [ ] **F19**: causal-ordering invariant enforced at source level — every `impactCoordinator.fire({...})` site (click selection, entrance materialization burst, post-growth burst, optimization event) routes through the coordinator's `fire()` body, which wires `clusterPhysics.onBeamImpact` + `envelopePool.acquire` + `flashEmissive(...)` inside an `onImpact: () =>` callback, never synchronously alongside `beamPool.acquire()`. Per Sub-project C source-grep test #6: ZERO matches for those three reaction patterns outside `ImpactCoordinator.ts` (modulo the `function flashEmissive(` declaration carveout)
 - [ ] All four impact trigger sites (entrance burst, post-growth burst, optimization event, click selection) route through ImpactCoordinator.fire(...) — pinned by source-grep test #5 in cleanup-contract.test.ts.
 
 ### Performance + lifecycle
 - [ ] Module-level scratch table declared (`_scratchVec3a`, `_scratchQuat`, `_scratchColor`, `Z_AXIS`)
 - [ ] `_breathingAnim` borrows `_scratchVec3a` for `mesh.scale.lerp` (not `new THREE.Vector3()`)
-- [ ] Coordinator + 2 conditional cancellers wired in cleanup return (`coordinator.dispose()` + `_removeFormationAnim?.()` + `_removeReadinessBillboard?.()`)
+- [ ] Coordinators + 2 conditional cancellers wired in cleanup return in order: `impactCoordinator?.dispose()` FIRST (Sub-project C), then `coordinator?.dispose()` (Sub-project B AnimationCoordinator), then `_removeFormationAnim?.()` + `_removeReadinessBillboard?.()` (Sub-project A conditional)
 - [ ] `envelopePool?.dispose()` invoked + reference nulled in cleanup return
 - [ ] `_flashStates.clear()` happens AFTER `coordinator?.dispose()` (so a half-cleared map can't be read by a late-firing tick); each active flash's baseline restored before the map is cleared
 - [ ] All disposables drained (geometries, materials, textures, lights' shadow maps)
