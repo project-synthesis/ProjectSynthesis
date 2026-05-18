@@ -176,47 +176,76 @@ export class DustBuilder implements SceneBuilder {
     const tint = new THREE.Color();
 
     for (let i = 0; i < DUST_COUNT; i++) {
+      const baseIndex = i * 3;
       const x = (Math.random() - 0.5) * (DUST_HALF_EXTENT * 2);
       const y = (Math.random() - 0.5) * (DUST_HALF_EXTENT * 2);
       const z = (Math.random() - 0.5) * (DUST_HALF_EXTENT * 2);
-      positions[i * 3] = x;
-      positions[i * 3 + 1] = y;
-      positions[i * 3 + 2] = z;
+      positions[baseIndex] = x;
+      positions[baseIndex + 1] = y;
+      positions[baseIndex + 2] = z;
 
-      // T3.1 nearest-anchor color lookup. If there are no anchors, the
-      // fallback blue is used verbatim. Distance attenuation lerps toward
-      // the fallback color so the cloud's foreground tint fades to cool
-      // blue in unanchored space.
-      let nearestDistSq = Infinity;
-      let nearestColorStr: string | null = null;
-      for (const anchor of anchors) {
-        const dx = x - anchor.position[0];
-        const dy = y - anchor.position[1];
-        const dz = z - anchor.position[2];
-        const distSq = dx * dx + dy * dy + dz * dz;
-        if (distSq < nearestDistSq) {
-          nearestDistSq = distSq;
-          nearestColorStr = anchor.color;
-        }
-      }
-
-      if (nearestColorStr === null) {
-        colors[i * 3] = fallbackColor.r;
-        colors[i * 3 + 1] = fallbackColor.g;
-        colors[i * 3 + 2] = fallbackColor.b;
-      } else {
-        tint.set(nearestColorStr);
-        const dist = Math.sqrt(nearestDistSq);
-        const t = Math.min(Math.max((dist - DUST_LERP_INNER_RADIUS) / DUST_LERP_RAMP, 0), 1);
-        tint.lerp(fallbackColor, t);
-        colors[i * 3] = tint.r;
-        colors[i * 3 + 1] = tint.g;
-        colors[i * 3 + 2] = tint.b;
-      }
+      // T3.1 nearest-anchor color lookup + distance-attenuated lerp toward
+      // the canonical fallback blue. Returns the source color verbatim
+      // when no anchors exist (rev-2 Mi3).
+      DustBuilder._computeVertexColor(x, y, z, anchors, fallbackColor, tint);
+      colors[baseIndex] = tint.r;
+      colors[baseIndex + 1] = tint.g;
+      colors[baseIndex + 2] = tint.b;
     }
 
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     return geometry;
+  }
+
+  /**
+   * Compute the T3.1 vertex-color tint for a single dust position. Writes
+   * the result into `out` (pre-allocated by the caller; reusing a single
+   * `THREE.Color` across the 3000-vertex loop avoids 3000 per-build
+   * allocations).
+   *
+   * Algorithm:
+   *   1. Find the closest `state === 'domain'` anchor by squared distance.
+   *   2. If no anchors exist, copy the fallback color into `out` and return.
+   *   3. Otherwise, lerp from the anchor's hue toward the fallback with
+   *      `t = clamp((dist - DUST_LERP_INNER_RADIUS) / DUST_LERP_RAMP, 0, 1)`.
+   *      Inside the inner radius the anchor color wins; beyond
+   *      `INNER + RAMP` the fallback wins; in between, smooth ramp.
+   *
+   * @param x - Vertex world-space X coordinate.
+   * @param y - Vertex world-space Y coordinate.
+   * @param z - Vertex world-space Z coordinate.
+   * @param anchors - Pre-filtered list of structural domain anchors.
+   * @param fallbackColor - The canon T3.1 fallback hue (0x88ccff).
+   * @param out - Output color (mutated in place — caller pre-allocates).
+   */
+  private static _computeVertexColor(
+    x: number,
+    y: number,
+    z: number,
+    anchors: readonly { position: readonly [number, number, number] | number[]; color: string }[],
+    fallbackColor: THREE.Color,
+    out: THREE.Color,
+  ): void {
+    let nearestDistSq = Infinity;
+    let nearestColorStr: string | null = null;
+    for (const anchor of anchors) {
+      const dx = x - anchor.position[0];
+      const dy = y - anchor.position[1];
+      const dz = z - anchor.position[2];
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq < nearestDistSq) {
+        nearestDistSq = distSq;
+        nearestColorStr = anchor.color;
+      }
+    }
+    if (nearestColorStr === null) {
+      out.copy(fallbackColor);
+      return;
+    }
+    out.set(nearestColorStr);
+    const dist = Math.sqrt(nearestDistSq);
+    const t = Math.min(Math.max((dist - DUST_LERP_INNER_RADIUS) / DUST_LERP_RAMP, 0), 1);
+    out.lerp(fallbackColor, t);
   }
 }
