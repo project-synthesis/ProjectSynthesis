@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { ClusterBuilder } from './ClusterBuilder';
 import { DomainBuilder } from './DomainBuilder';
 import { EdgeBuilder } from './EdgeBuilder';
+import { RingBuilder } from './RingBuilder';
 import { createBuilderContext, type BuilderContext } from './BuilderContext';
 import type { SceneData, SceneNode } from '../TopologyData';
 
@@ -216,5 +217,137 @@ describe('builders/integration — Cycle 3 edge sequences', () => {
         expect(u.persistent).not.toBe(true);
       }
     }
+  });
+});
+
+describe('builders/integration — Cycle 4 ring sequences', () => {
+  let scene: THREE.Scene;
+  let ctx: BuilderContext;
+
+  beforeEach(() => {
+    scene = new THREE.Scene();
+    ctx = createBuilderContext();
+  });
+
+  // INT-ring-1: persistent flags survive multiple builds
+  it('INT-ring-1: persistent flags + scene attachment survive multiple builds', () => {
+    const rb = new RingBuilder();
+    // Build #1: a domain with a tier + a templated cluster.
+    const dom1 = makeNode('d1', { state: 'domain', readinessTier: 'healthy' });
+    const tpl1 = makeNode('c1', { state: 'active', template_count: 2 });
+    const data1: SceneData = { nodes: [dom1, tpl1], edges: [] } as SceneData;
+    for (const n of data1.nodes) ctx.sceneNodeMap.set(n.id, n);
+    rb.build(data1, scene, ctx);
+    const ringGroup = scene.children.find(
+      (c) => (c as THREE.Group).userData?.isReadinessRingGroup === true,
+    ) as THREE.Group;
+    const tplGroup = scene.children.find(
+      (c) => (c as THREE.Group).userData?.isTemplateRingGroup === true,
+    ) as THREE.Group;
+    expect(ringGroup).toBeDefined();
+    expect(tplGroup).toBeDefined();
+    expect(ringGroup.userData.persistent).toBe(true);
+    expect(tplGroup.userData.persistent).toBe(true);
+    expect(ringGroup.parent).toBe(scene);
+    expect(tplGroup.parent).toBe(scene);
+    const initialRingGroupUuid = ringGroup.uuid;
+    const initialTplGroupUuid = tplGroup.uuid;
+
+    // Build #2: different ids — persistent groups must remain attached
+    // (no detach/re-add), same group instances reused.
+    const dom2 = makeNode('d2', { state: 'domain', readinessTier: 'critical' });
+    const tpl2 = makeNode('c2', { state: 'active', template_count: 1 });
+    const ctx2 = createBuilderContext();
+    const data2: SceneData = { nodes: [dom2, tpl2], edges: [] } as SceneData;
+    for (const n of data2.nodes) ctx2.sceneNodeMap.set(n.id, n);
+    rb.build(data2, scene, ctx2);
+    expect(ringGroup.uuid).toBe(initialRingGroupUuid);
+    expect(tplGroup.uuid).toBe(initialTplGroupUuid);
+    expect(ringGroup.parent).toBe(scene);
+    expect(tplGroup.parent).toBe(scene);
+
+    // Build #3: empty data — persistent groups still attached, both
+    // entries pruned, pool returns to free list.
+    const ctx3 = createBuilderContext();
+    rb.build({ nodes: [], edges: [] } as SceneData, scene, ctx3);
+    expect(ringGroup.parent).toBe(scene);
+    expect(tplGroup.parent).toBe(scene);
+    expect(rb.readinessRingCount()).toBe(0);
+  });
+
+  // INT-ring-2: pool high-water-mark cap behavior
+  it('INT-ring-2: pool high-water mark caps at TEMPLATE_RING_POOL_MAX + emits one warn per rebuild', () => {
+    const rb = new RingBuilder();
+    const originalWarn = console.warn;
+    let warnCount = 0;
+    console.warn = (..._args: unknown[]) => {
+      warnCount++;
+    };
+    try {
+      // Allocate > MAX (500) templated clusters in a single build.
+      const overflowNodes: SceneNode[] = [];
+      for (let i = 0; i < 600; i++) {
+        overflowNodes.push(makeNode(`c${i}`, { state: 'active', template_count: 1 }));
+      }
+      const data: SceneData = { nodes: overflowNodes, edges: [] } as SceneData;
+      for (const n of data.nodes) ctx.sceneNodeMap.set(n.id, n);
+      rb.build(data, scene, ctx);
+      // Pool size never exceeds the cap (500).
+      const size = (rb as unknown as { templateRingPoolSize(): number }).templateRingPoolSize();
+      expect(size).toBe(500);
+      // Exactly one warn fired this rebuild.
+      expect(warnCount).toBe(1);
+
+      // Second rebuild also overflowing — warn resets to 0 per rebuild,
+      // fires exactly once.
+      warnCount = 0;
+      const ctx2 = createBuilderContext();
+      const second: SceneNode[] = [];
+      for (let i = 0; i < 600; i++) {
+        second.push(makeNode(`x${i}`, { state: 'active', template_count: 1 }));
+      }
+      for (const n of second) ctx2.sceneNodeMap.set(n.id, n);
+      rb.build({ nodes: second, edges: [] } as SceneData, scene, ctx2);
+      expect(warnCount).toBe(1);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  // INT-ring-3: dispose removes persistent groups from scene
+  it('INT-ring-3: dispose detaches both persistent groups from scene + idempotent', () => {
+    const rb = new RingBuilder();
+    const dom = makeNode('d1', { state: 'domain', readinessTier: 'warming' });
+    const tpl = makeNode('c1', { state: 'active', template_count: 1 });
+    const data: SceneData = { nodes: [dom, tpl], edges: [] } as SceneData;
+    for (const n of data.nodes) ctx.sceneNodeMap.set(n.id, n);
+    rb.build(data, scene, ctx);
+    // Pre-state: scene contains both ring groups.
+    const persistentChildrenBefore = scene.children.filter(
+      (c) =>
+        (c as THREE.Group).userData?.isReadinessRingGroup === true ||
+        (c as THREE.Group).userData?.isTemplateRingGroup === true,
+    );
+    expect(persistentChildrenBefore.length).toBe(2);
+
+    rb.dispose();
+    // Post-state: neither ring group is attached to scene.
+    const persistentChildrenAfter = scene.children.filter(
+      (c) =>
+        (c as THREE.Group).userData?.isReadinessRingGroup === true ||
+        (c as THREE.Group).userData?.isTemplateRingGroup === true,
+    );
+    expect(persistentChildrenAfter.length).toBe(0);
+    // No template-ring meshes anywhere in the scene tree.
+    let poolMeshes = 0;
+    scene.traverse((obj) => {
+      if (obj.userData?.kind === 'template_ring') poolMeshes++;
+    });
+    expect(poolMeshes).toBe(0);
+
+    // Idempotent — second dispose is a no-op.
+    expect(() => rb.dispose()).not.toThrow();
+    expect(rb.readinessRingCount()).toBe(0);
+    expect(rb.readinessRingIds()).toEqual([]);
   });
 });
