@@ -683,6 +683,13 @@ describe('Impact Coordinator — source-grep contract (spec §5.2)', () => {
       ],
       { query: '?raw', import: 'default', eager: true },
     );
+    // Production-code scope per spec §3.3 ("zero matches for the canonical
+    // F19 reaction call patterns"). Test files that legitimately exercise
+    // the underlying classes directly (`physics.onBeamImpact(...)`,
+    // `envelopePool.acquire(...)`) or that embed these patterns as regex
+    // string literals for OTHER source-grep contracts are not in scope —
+    // F7 is a runtime production-code invariant, not a syntactic ban on
+    // referencing the method names anywhere in the taxonomy/ tree.
     const exemptions = [
       './ImpactCoordinator.ts',
       './ImpactCoordinator.test.ts',
@@ -690,6 +697,8 @@ describe('Impact Coordinator — source-grep contract (spec §5.2)', () => {
     ];
     for (const [path, src] of Object.entries(mod)) {
       if (exemptions.includes(path)) continue;
+      // Skip all `.test.ts` files (production-code scope per the comment above).
+      if (/\.test\.ts$/.test(path)) continue;
       if (typeof src !== 'string') continue;
       // `(?:\?\.|\.)\s*onBeamImpact\s*\(` — kinetic-shake call outside coordinator
       expect(src, `${path} should not call .onBeamImpact( (only ImpactCoordinator does)`).not.toMatch(

@@ -2357,10 +2357,12 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(src).toMatch(/_hasPlayedEntrance\s*=\s*true/);
     // Filter to domain nodes (entrance burst targets domain anchors only).
     expect(src).toMatch(/state\s*===\s*['"]domain['"]/);
-    // Acquires from beam pool with staggered setTimeout.
-    expect(src).toMatch(/setTimeout\([\s\S]*?beamPool\.acquire/);
-    // Tactile feedback per beam.
-    expect(src).toMatch(/clusterPhysics\?\.onBeamImpact/);
+    // Post-Sub-project-C: the entrance burst routes through
+    // `impactCoordinator.fire(...)` with `trigger: 'entrance'` from inside
+    // a staggered setTimeout block. The preset table owns the tactile
+    // feedback (kineticDisplacement) per TRIGGER_PRESETS.entrance.
+    expect(src).toMatch(/setTimeout\([\s\S]*?impactCoordinator[?!]?\.fire/);
+    expect(src).toMatch(/impactCoordinator[?!]?\.fire\(\s*\{[\s\S]*?trigger\s*:\s*['"]entrance['"]/);
   });
 
   // Source-grep gates for the rest of the SSE → beam wiring chain.
@@ -2399,9 +2401,11 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     const src = _semTopSrc();
     // Instead of waiting for a post-rebuild growth check, single optimize
     // fires a beam immediately on the event to provide real-time synthesis feel.
+    // Post-Sub-project-C the immediate beam routes through
+    // `impactCoordinator.fire(...)` with `trigger: 'optimization'`.
     expect(src).toMatch(/targetDomain\s*=\s*detail\.domain\s*\?\s*parsePrimaryDomain\(detail\.domain\)\s*:\s*['"]general['"]/);
     expect(src).toMatch(/targetNode\s*=\s*sceneData\?\.nodes\.find/);
-    expect(src).toMatch(/beamPool\.acquire\(/);
+    expect(src).toMatch(/impactCoordinator[?!]?\.fire\(\s*\{[\s\S]*?trigger\s*:\s*['"]optimization['"]/);
   });
 
   it('source: snapshot writes _prevNodeSizes from current scene node sizes during seed batch', () => {
@@ -2422,13 +2426,25 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   });
 
   it('source: seed-batch path uses bigger radius + longer sustain than single-optimize', () => {
+    // Post-Sub-project-C: the radius multiplier + base sustain knobs live
+    // in `TRIGGER_PRESETS['post-growth']` inside ImpactCoordinator.ts (the
+    // single source of trigger semantics). SemanticTopology fires the
+    // trigger; the preset table owns the values. Assert both the
+    // SemanticTopology fire-site uses the 'post-growth' trigger AND the
+    // preset table has the expected magic numbers (thicknessMultiplier:
+    // 2.0 + sustainMs: 3500).
     const src = _semTopSrc();
-    // Per Data-as-Matter spec § Trigger Mapping: batch seed beams are
-    // visually distinct (thicker, longer-lived) to convey the higher
-    // throughput. The post-growth wiring (now exclusive to seed batches)
-    // explicitly scales radius by 2.0 and sets base sustain to 3500.
-    expect(src).toMatch(/radius:\s*nodeRadius\s*\*\s*2\.0/);
-    expect(src).toMatch(/sustainMs:\s*3500\s*\+\s*\(/);
+    expect(src).toMatch(/impactCoordinator[?!]?\.fire\(\s*\{[\s\S]*?trigger\s*:\s*['"]post-growth['"]/);
+    const mod = import.meta.glob<string>(['./ImpactCoordinator.ts'], {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    });
+    const impactSrc = mod['./ImpactCoordinator.ts'];
+    expect(typeof impactSrc).toBe('string');
+    // Preset entry shape: thickness 2.0 + sustain 3500 (with sizeFactorSustainBonus).
+    expect(impactSrc).toMatch(/['"]post-growth['"]\s*:\s*\{[\s\S]*?thicknessMultiplier\s*:\s*2\.0/);
+    expect(impactSrc).toMatch(/['"]post-growth['"]\s*:\s*\{[\s\S]*?sustainMs\s*:\s*3500/);
   });
 
   it('source: growth-detection filters to domain-only nodes (documented design call)', () => {
@@ -2532,13 +2548,16 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(slice).not.toMatch(/^\s*renderer\.scene\.add\(\s*envelopePool\.group\s*\)/m);
   });
 
-  it('source: click $effect fires beamPool.acquire with onImpact callback (causal-ordering fix)', () => {
+  it('source: click $effect fires impactCoordinator.fire with click trigger (causal-ordering fix)', () => {
     const src = _semTopSrc();
-    // beamPool.acquire BeamConfig must include `onImpact:` field — the
-    // single anchor for synchronizing every impact reaction to beam
-    // arrival. Match across the click selectedClusterId effect site.
+    // Post-Sub-project-C: the click selection $effect routes through
+    // `impactCoordinator.fire({ trigger: 'click', ... })` (canon F7 + F18
+    // + F19 causal-ordering). The coordinator's onImpact callback fires
+    // every F19 reaction synchronously with beam arrival; SemanticTopology
+    // no longer touches beamPool.acquire directly. Equivalent end-to-end
+    // coverage: ImpactCoordinator.test.ts §5.1 #6 (click preset semantics).
     expect(src).toMatch(
-      /beamPool\.acquire\(\s*group\s*,\s*\{[\s\S]{0,400}onImpact\s*:\s*\(\)\s*=>/,
+      /impactCoordinator[?!]?\.fire\(\s*\{[\s\S]*?trigger\s*:\s*['"]click['"]/,
     );
   });
 
@@ -2573,13 +2592,14 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(effectStart).toBeGreaterThan(0);
     const effectBody = src.slice(effectStart, effectStart + 4000);
 
-    // Within the body up to the beamPool.acquire call, there must be NO
-    // standalone `clusterPhysics?.onBeamImpact(...)` invocation. After the
-    // fix, that call lives only inside the `onImpact:` arrow body.
-    const acquireIdx = effectBody.indexOf('beamPool.acquire');
-    expect(acquireIdx).toBeGreaterThan(0);
-    const preAcquire = effectBody.slice(0, acquireIdx);
-    expect(preAcquire).not.toMatch(/clusterPhysics\?\.onBeamImpact/);
+    // Post-Sub-project-C: the effect routes through impactCoordinator.fire
+    // (the coordinator's onImpact callback owns the F19 kinetic-shake
+    // call). The effect body itself must NEVER call clusterPhysics
+    // synchronously — that would precede beam arrival by ~700ms.
+    const fireIdx = effectBody.indexOf('impactCoordinator');
+    expect(fireIdx).toBeGreaterThan(0);
+    const preFire = effectBody.slice(0, fireIdx);
+    expect(preFire).not.toMatch(/clusterPhysics[?!]?\.onBeamImpact/);
   });
 
   // DELETED (Sub-project C / spec §5.3 M3 Row 2): `source: onImpact callback
@@ -2736,25 +2756,25 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     );
   });
 
-  it('source: every beamPool.acquire site wires onImpact (canon F7 universal causal-ordering invariant)', () => {
+  it('source: every impactCoordinator.fire site routes through coordinator (canon F7 universal causal-ordering invariant)', () => {
     const src = _semTopSrc();
-    // Canon F7 invariant — every impact reaction fires from `onImpact`,
-    // never synchronously with `acquire()`. Three call sites today:
-    //   1. Click `$effect` — selection beam (the canonical click path)
-    //   2. Entrance materialization burst — staggered domain beams on mount
-    //   3. Post-growth burst — beams when domains grow (post-optimize/seed)
-    //
-    // Locate every `beamPool.acquire(` call site and confirm each one's
-    // BeamConfig object literal contains an `onImpact:` field. Without
-    // this, a future refactor could regress one site silently and the
-    // anti-causal ordering bug returns at that site only — invisible to
-    // the click-effect-specific regression tests above.
-    const acquirePattern = /beamPool\.acquire\(\s*[^,]+,\s*\{([\s\S]*?)\}\s*,/g;
-    const matches = Array.from(src.matchAll(acquirePattern));
-    expect(matches.length).toBeGreaterThanOrEqual(3);
+    // Canon F7 invariant — every impact reaction fires from inside the
+    // coordinator's onImpact callback, never synchronously with
+    // beamPool.acquire. Post-Sub-project-C, SemanticTopology has ZERO
+    // direct beamPool.acquire calls (cleanup-contract test #3); every
+    // beam trigger routes through `impactCoordinator.fire({...})`. Four
+    // call sites today (entrance, post-growth, optimization, click) —
+    // each must include a `trigger:` field that the coordinator's preset
+    // table dispatches on. Without this universal indirection, a future
+    // refactor could regress one site silently and re-introduce
+    // anti-causal ordering at that site only — invisible to the
+    // click-effect-specific regression tests above.
+    const firePattern = /impactCoordinator[?!]?\.fire\(\s*\{([\s\S]*?)\}\s*\)/g;
+    const matches = Array.from(src.matchAll(firePattern));
+    expect(matches.length).toBeGreaterThanOrEqual(4);
     for (const match of matches) {
       const configBody = match[1];
-      expect(configBody, `beamPool.acquire site missing onImpact field — anti-causal ordering risk\n${match[0]}`).toMatch(/onImpact\s*:/);
+      expect(configBody, `impactCoordinator.fire site missing trigger field — preset dispatch risk\n${match[0]}`).toMatch(/trigger\s*:/);
     }
   });
 
@@ -2856,8 +2876,12 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // The `if (_flashStates.has(nodeId))` block must NOT contain any line
     // that writes `mat.emissiveIntensity = ...` — the regression bug was
     // the blend-out write that decayed toward baseEmissive during attack.
+    // Post-Sub-project-C: the second branch now checks
+    // `impactCoordinator?.isEngulfed(nodeId)` (the coordinator owns the
+    // engulfment-marker set + the T3.4 idle pulse); the regex anchor
+    // updates accordingly. See cleanup-contract.test.ts §Impact #8 + #12.
     const flashBranchMatch = src.match(
-      /if \(_flashStates\.has\(nodeId\)\) \{([\s\S]*?)\} else if \(isSelected /,
+      /if \(_flashStates\.has\(nodeId\)\) \{([\s\S]*?)\} else if \(impactCoordinator/,
     );
     expect(flashBranchMatch).not.toBeNull();
     const flashBranchBody = flashBranchMatch![1];

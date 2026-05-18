@@ -24,6 +24,7 @@
   import { ClusterPhysics } from './ClusterPhysics';
   import { EnvelopePool } from './EnvelopePool';
   import { AnimationCoordinator } from './AnimationCoordinator';
+  import { ImpactCoordinator } from './ImpactCoordinator';
   import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
   import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
   import { DOMAIN_EDGE_VERTEX, DOMAIN_EDGE_FRAGMENT, createDomainEdgeUniforms } from './DomainEdgeShader';
@@ -597,11 +598,19 @@
   // module-scope `let` for self-unregister + per-rebuild lifecycle.
   let coordinator: AnimationCoordinator | null = null;
   // Envelope pool — plasma engulfment burst at beam impact (canon F19).
-  // Acquired from the click `$effect` via the `onImpact` callback passed
-  // to `beamPool.acquire`, so the envelope ignites at the moment the
-  // beam visually arrives at the target rather than synchronously with
-  // the click. Disposed in the cleanup return below.
+  // Acquired inside the ImpactCoordinator's `fire(...)` onImpact callback
+  // (post-Sub-project-C) so the envelope ignites at the moment the beam
+  // visually arrives at the target rather than synchronously with the
+  // click. Disposed in the cleanup return below.
   let envelopePool: EnvelopePool | null = null;
+  // Impact coordinator — Sub-project C single source for the canon
+  // F7→F19→F9 impact chain. Owns the engulfment-marker set + the T3.4
+  // idle ambient pulse. All 4 trigger sites (entrance, post-growth,
+  // optimization, click) route through the coordinator's fire method;
+  // the previous module-scope helper for the beam-impact router is
+  // gone. Instantiated in onMount after beam/envelope/physics pools,
+  // disposed FIRST in the cleanup return per spec acceptance #10.
+  let impactCoordinator: ImpactCoordinator | null = null;
 
   // Emissive engulfment state — per-node MeshStandardMaterial.emissiveIntensity
   // burst at beam impact. Mirrors the 3-phase EnvelopePool lifecycle so the
@@ -656,21 +665,16 @@
   // camera back to distance 60 and overriding the user's current view.
   let _hasAutoFocused = false;
   let _beamNodeGroups: Map<string, THREE.Group> = new Map();
-  // Track which selected nodes have received their first beam impact. The
-  // idle ambient pulse (T3.4) only activates AFTER the first impact —
-  // pre-fix the pulse fired immediately on selection click, which the
-  // operator perceived as the engulfment glow appearing BEFORE the beam
-  // visually arrived. Engulfment now strictly follows beam impact:
-  // beam-travel (700ms) → impact → flash attack → hold → decay →
-  // post-engulfment subtle idle pulse.
-  const _selectionEngulfed: Set<string> = new Set();
   // Previous-selection tracker so the selection $effect's engulfment-gate
   // clear is keyed off ACTUAL selection-change transitions, not every
   // reactive re-trigger of the effect (sceneData rebuilds, focusedNodeId
   // self-writes, etc.). Without this, mid-flight scene rebuilds would
-  // clear `_selectionEngulfed` between the beam impact and the next
+  // clear the engulfment marker set between the beam impact and the next
   // idle-pulse frame — observed as "only one specific node gets the full
   // effect" because only nodes selected during quiescent scenes survived.
+  // Post-Sub-project-C the engulfment-marker set itself lives on the
+  // ImpactCoordinator (see `impactCoordinator.clearEngulfed()`); this
+  // module-scope tracker stays per spec §4.3 (Sub-project E absorbs it later).
   let _prevSelectedId: string | null = null;
   let _sceneNodeMap: Map<string, import('./TopologyData').SceneNode> = new Map();
   let _prevNodeSizes: Map<string, number> = new Map();
@@ -774,52 +778,6 @@
     });
     // Apply domain color immediately so there is no one-frame cyan blip at attack onset.
     mat.emissive.copy(domainColor);
-  }
-
-  /**
-   * Universal router for curated beam impact effects.
-   * Dynamically fetches fresh references from the scene map to prevent
-   * stale closures from killing the effects if the scene rebuilt mid-flight
-   * (e.g. from an optimization or seed event updating the data store).
-   */
-  function _triggerBeamImpact(
-    staleNode: SceneNode,
-    staleGroup: THREE.Group,
-    kineticDisplacement: boolean,
-  ): void {
-    const freshNode = _sceneNodeMap.get(staleNode.id) ?? staleNode;
-    const currentGroup = _beamNodeGroups.get(freshNode.id) ?? staleGroup;
-    const envelopeColor = new THREE.Color(freshNode.color);
-    const shape = freshNode.state === 'domain' ? 'domain' : 'cluster';
-
-    if (kineticDisplacement) {
-      clusterPhysics?.onBeamImpact(freshNode.id, freshNode.size);
-    }
-
-    // Pass `freshNode.size` directly per canon F19 code sample at
-    // `references/3d-visualization.md:276`. The envelope is canonically
-    // sized to "engulf, not dwarf" the cluster — `PEAK_SWELL = 1.18` × the
-    // cluster's data-driven size keeps the visible plasma skin just outside
-    // the cluster silhouette without overlapping neighbors. A previous
-    // visibility-floor experiment combined with an inflated PEAK_SWELL
-    // value produced peak envelopes around ten screen units regardless of
-    // cluster size — a giant pink balloon on click that violated canon and
-    // overwhelmed small clusters' silhouettes. For very small clusters
-    // (3-5 members), bloom-pass parameters (`UnrealBloomPass.strength = 1.5`,
-    // threshold = 0.85) and the emissive ramp in `_tickFlashStates` provide
-    // visible feedback without inflating the geometry.
-    envelopePool?.acquire(currentGroup, freshNode.size, shape, envelopeColor);
-    // Pass the node's brand color so the emissive burst glows the domain hue,
-    // not the highlight cyan that applyHighlight may have already set.
-    flashEmissive(freshNode.id, envelopeColor);
-
-    // Mark this node as having received its first beam impact while
-    // selected. The T3.4 idle ambient pulse keys off this flag so it ONLY
-    // appears AFTER the engulfment moment, preventing the "engulfment
-    // glow visible before beam arrives" symptom that operator-reported.
-    if (clustersStore.selectedClusterId === freshNode.id) {
-      _selectionEngulfed.add(freshNode.id);
-    }
   }
 
   /**
@@ -1485,30 +1443,16 @@
         if (_flashStates.has(nodeId)) {
           // No-op — `_tickFlashStates` (which runs earlier in the per-frame
           // callback chain) already set the correct phase-driven value.
-        } else if (isSelected && _selectionEngulfed.has(nodeId)) {
-          // POST-ENGULFMENT idle ambient pulse (canon T3.4). Only fires
-          // AFTER the first beam impact on the selected node — keyed off
-          // `_selectionEngulfed` which `_triggerBeamImpact` populates on
-          // impact. This enforces the operator-specified animation order:
-          //
-          //   T=0 (click)      → cyan highlight + beam fires from POV
-          //   T=0..700ms       → beam in flight, node at BASELINE (no glow)
-          //   T=700ms (impact) → engulfment burst (flash + envelope, 1380ms)
-          //   T=~2080ms+       → subtle post-engulfment indicator pulse
-          //
-          // The pulse range is DELIBERATELY subtle: [floor, floor+0.2] ≈
-          // [1.0, 1.2]. The flash peak (~2.2-2.7) remains the dominant
-          // visual moment — the post-engulfment pulse is a low-key
-          // selection indicator, not competition for the engulfment burst.
-          // SELECTION_EMISSIVE_FLOOR ≥ bloom threshold (0.85) + small
-          // margin so even ACTIVE clusters' baseline (~0.6) gets lifted
-          // to visible bloom. Mature/domain clusters with `baseEmissive`
-          // already > floor preserve their data-driven asymmetry via
-          // `Math.max`.
-          const SELECTION_EMISSIVE_FLOOR = 1.0;
-          const idlePulse = Math.sin(_breathingTime * 0.4) * 0.1 + 0.1;
-          mat.emissiveIntensity =
-            Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR) + idlePulse;
+        } else if (impactCoordinator?.isEngulfed(nodeId) && isSelected) {
+          // No-op — `ImpactCoordinator._tick` (registered in the impact
+          // phase, which runs BEFORE breathing per PHASE_ORDER) owns the
+          // post-engulfment idle ambient pulse (canon T3.4) for the
+          // engulfed-selected node. This guard is load-bearing per spec
+          // §3.4 (paired with cleanup-contract.test.ts #8 negative and #12
+          // positive). Without it, the bare `else { = baseEmissive }`
+          // below would overwrite the impact-phase pulse the coordinator
+          // just wrote, producing a flat selection state. Equivalent
+          // runtime coverage: ImpactCoordinator.test.ts §5.1 #17.
         } else {
           // Ensure unselected nodes remain at base emissive intensity
           mat.emissiveIntensity = baseEmissive;
@@ -2082,26 +2026,12 @@
           sorted.forEach((node, i) => {
             setTimeout(() => {
               const group = _beamNodeGroups.get(node.id);
-              if (!group || !beamPool || !renderer) return;
-              
-              // Scale aesthetics by node size dynamically
-              const sizeFactor = Math.min(Math.max(node.size / 50, 0.5), 3.0);
-              
-              beamPool.acquire(group, {
-                color: new THREE.Color(node.color), // Exact color of target node
-                radius: node.size * 0.04 * sizeFactor,           // Scales dynamically with node size
-                sustainMs: 1500 + (sizeFactor * 500), // Linger longer for bigger domains
-                // Canon F7 causal-ordering invariant — every impact reaction
-                // fires from `onImpact`, never synchronously with `acquire`.
-                // The cluster shouldn't ripple before the materialization beam
-                // visually arrives, regardless of trigger (click, sidebar
-                // selection, or this entrance burst).
-                onImpact: () => {
-                  // Purely visual materialization — envelope + emissive glow,
-                  // no kinetic displacement shake so the scene settles quietly.
-                  _triggerBeamImpact(node, group, false);
-                },
-              }, renderer.camera);
+              if (!group || !impactCoordinator) return;
+
+              // Spec §5.3 M3 Row 1 — entrance burst routes through the
+              // coordinator. TRIGGER_PRESETS.entrance owns sustainMs +
+              // sizeFactor scaling + kineticDisplacement=false.
+              impactCoordinator.fire({ trigger: 'entrance', node, group });
             }, i * 150);
           });
         }
@@ -2118,21 +2048,11 @@
               const group = _beamNodeGroups.get(node.id);
               if (group) {
                 setTimeout(() => {
-                  if (!beamPool || !renderer) return;
-                  
-                  const sizeFactor = Math.min(Math.max(node.size / 50, 0.5), 3.0);
-                  const nodeRadius = node.size * 0.04 * sizeFactor;
-                  
-                  beamPool.acquire(group, {
-                    color: new THREE.Color(node.color),
-                    radius: nodeRadius * 2.0, // seed batch beams are thicker
-                    sustainMs: 3500 + (sizeFactor * 500), // seed batch beams sustain longer
-                    // Canon F7 causal-ordering invariant — see entrance
-                    // burst above. Post-growth bursts (post-optimization
-                    // or post-seed) follow the same rule: ripple syncs
-                    // to beam arrival, not to acquire time.
-                    onImpact: () => _triggerBeamImpact(node, group, true),
-                  }, renderer.camera);
+                  if (!impactCoordinator) return;
+                  // Spec §5.3 M3 Row 1 — post-growth burst routes through the
+                  // coordinator. TRIGGER_PRESETS['post-growth'] owns the
+                  // thickness multiplier + extended sustain + kineticDisplacement=true.
+                  impactCoordinator.fire({ trigger: 'post-growth', node, group });
                 }, firedCount * 120);
                 firedCount++;
               }
@@ -2175,16 +2095,13 @@
       const targetDomain = detail.domain ? parsePrimaryDomain(detail.domain) : 'general';
       const targetNode = sceneData?.nodes.find(n => n.state === 'domain' && n.domain === targetDomain);
       
-      if (targetNode && beamPool && renderer) {
+      if (targetNode && impactCoordinator) {
         const group = _beamNodeGroups.get(targetNode.id);
         if (group) {
-          const sizeFactor = Math.min(Math.max(targetNode.size / 50, 0.5), 3.0);
-          beamPool.acquire(group, {
-            color: new THREE.Color(targetNode.color),
-            radius: targetNode.size * 0.04 * sizeFactor,
-            sustainMs: 800, // per Data-as-Matter spec: 300ms fire, 800ms sustain
-            onImpact: () => _triggerBeamImpact(targetNode, group, true),
-          }, renderer.camera);
+          // Spec §5.3 M3 Row 1 — optimization event routes through the
+          // coordinator. TRIGGER_PRESETS.optimization owns the
+          // fixed sustain + kineticDisplacement=true (Data-as-Matter spec).
+          impactCoordinator.fire({ trigger: 'optimization', node: targetNode, group });
         }
       }
     }
@@ -2362,7 +2279,7 @@
     // frame. `_prevSelectedId` makes the clear strictly transition-
     // triggered so re-fires of the same selection preserve the gate.
     if (externalId !== _prevSelectedId) {
-      _selectionEngulfed.clear();
+      impactCoordinator?.clearEngulfed();
       _prevSelectedId = externalId;
     }
 
@@ -2399,21 +2316,14 @@
     // `acquire()` was a pre-existing anti-causal-ordering bug: the beam
     // takes `FIRING_MS` (~700ms) to travel from FPS-weapon NDC origin to the cluster,
     // so the cluster used to ripple BEFORE being hit.
-    if (beamPool) {
+    if (impactCoordinator) {
       const group = _beamNodeGroups.get(node.id);
       if (group) {
-        // BeamConfig.color must be a fresh Color per acquire — cannot borrow
-        // `_scratchColor` because it would be re-mutated before beam release.
-        beamPool.acquire(
-          group,
-          {
-            color: new THREE.Color(node.color),
-            radius: Math.max(node.size * 0.04, 0.1),
-            sustainMs: 800, // short, sharp injection burst
-            onImpact: () => _triggerBeamImpact(node, group, false),
-          },
-          renderer.camera,
-        );
+        // Spec §5.3 M3 Row 1 — click selection routes through the
+        // coordinator. TRIGGER_PRESETS.click owns the radius floor +
+        // marksEngulfed=true (populates the coordinator's engulfment-marker
+        // set for the T3.4 idle pulse).
+        impactCoordinator.fire({ trigger: 'click', node, group });
       }
     }
   });
@@ -2453,6 +2363,27 @@
     // its target node is removed mid-effect.
     envelopePool = new EnvelopePool();
     renderer.scene.add(envelopePool.group);
+
+    // Instantiate the ImpactCoordinator AFTER all its dependencies are
+    // constructed AND BEFORE the first impact-phase registration so the
+    // coordinator can claim its slot in the impact phase before any other
+    // handler. The coordinator owns the engulfment-marker set + the T3.4
+    // idle pulse; all 4 trigger sites route through the coordinator's
+    // fire method.
+    // Spec §6.1 acceptance #3 + canon F7 source-level enforcement.
+    impactCoordinator = new ImpactCoordinator({
+      beamPool,
+      envelopePool,
+      clusterPhysics,
+      flashEmissive,
+      getSceneNode: (id) => _sceneNodeMap.get(id),
+      getBeamGroup: (id) => _beamNodeGroups.get(id),
+      getNodeMesh: (id) => nodeMeshes.get(id),
+      getSelectedId: () => clustersStore.selectedClusterId,
+      isFlashActive: (id) => _flashStates.has(id),
+      renderer,
+      animationCoordinator: coordinator,
+    });
 
     // CONSOLIDATED onMount animation registrations — strict source order
     // pins the impact-phase ordering required by spec §3.3 + cleanup-contract
@@ -2534,7 +2465,15 @@
     ro.observe(container);
 
     return () => {
-      // Dispose the AnimationCoordinator FIRST so every per-frame handler
+      // Sub-project C: impactCoordinator MUST dispose first so its
+      // `_disposed` flag short-circuits any subsequent RAF-driven `_tick`
+      // from the still-alive AnimationCoordinator. Reversed order is also
+      // race-safe per Sub-project B's lenient-on-disposed contract, but
+      // spec acceptance #10 (cleanup-contract.test.ts §Impact #10) pins
+      // this explicit order for Sub-project E future-compatibility.
+      impactCoordinator?.dispose();
+      impactCoordinator = null;
+      // Dispose the AnimationCoordinator next so every per-frame handler
       // it owns stops before any pool/material cleanup that follows. This
       // is the cancel-before-clear ordering invariant pinned by the source
       // grep tests (cleanup-contract test #6 + SemanticTopology tests
