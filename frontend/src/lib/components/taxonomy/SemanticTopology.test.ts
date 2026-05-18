@@ -2542,23 +2542,27 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     );
   });
 
-  it('source: entrance materialization beams wire onImpact to _triggerBeamImpact (all domains get full engulfment)', () => {
+  it('source: entrance materialization beams route through impactCoordinator.fire with trigger: "entrance" (spec §5.3 M3 Row 1 — anchor moved from _triggerBeamImpact helper to coordinator fire site)', () => {
     const src = _semTopSrc();
-    // Regression guard: the entrance burst fired beams at every domain node
-    // but had an empty onImpact callback, so only nodes that were subsequently
-    // clicked or hit by an optimization event ever got the plasma envelope +
-    // emissive glow. Fix: the entrance onImpact calls _triggerBeamImpact with
-    // kineticDisplacement=false (no shake, purely visual).
+    // Regression guard: pre-Sub-project-C the entrance burst either had an
+    // empty onImpact callback (only clicked/optimized clusters got the
+    // plasma envelope + emissive glow) OR fired through the
+    // `_triggerBeamImpact` helper. Post-Sub-project-C the entrance burst
+    // routes through `impactCoordinator.fire(...)` with `trigger: 'entrance'`
+    // — the preset table owns the kineticDisplacement=false + sustainMs +
+    // sizeFactor knobs (TRIGGER_PRESETS.entrance in ImpactCoordinator.ts).
+    // Equivalent runtime coverage: ImpactCoordinator.test.ts §5.1 #3
+    // (entrance preset semantics).
     const entranceStart = src.indexOf('_hasPlayedEntrance = true');
     expect(entranceStart).toBeGreaterThan(0);
     // Slice ~2000 chars from that anchor — covers the forEach setTimeout block.
     const entranceSlice = src.slice(entranceStart, entranceStart + 2000);
-    // _triggerBeamImpact must appear inside the entrance onImpact body.
-    expect(entranceSlice).toMatch(/_triggerBeamImpact\(\s*node\s*,\s*group\s*,\s*false\s*\)/);
-    // Kinetic displacement must be FALSE for entrance (no camera shake on materialization).
-    const triggerMatch = entranceSlice.match(/_triggerBeamImpact\(\s*node\s*,\s*group\s*,\s*(true|false)\s*\)/);
-    expect(triggerMatch).not.toBeNull();
-    expect(triggerMatch![1]).toBe('false');
+    // The fire(...) call with trigger: 'entrance' must appear inside the
+    // entrance setTimeout body. Use a [\s\S] regex so JSDoc/whitespace
+    // between `fire(` and the `trigger:` field doesn't trip the match.
+    expect(entranceSlice).toMatch(
+      /impactCoordinator[?!]?\.fire\(\s*\{[\s\S]*?trigger\s*:\s*['"]entrance['"]/,
+    );
   });
 
   it('source: clusterPhysics.onBeamImpact is NOT called synchronously inside the click $effect', () => {
@@ -2578,28 +2582,26 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(preAcquire).not.toMatch(/clusterPhysics\?\.onBeamImpact/);
   });
 
-  it('source: onImpact callback body fires envelopePool.acquire + flashEmissive (passive inspection, no kinetic shake)', () => {
-    const src = _semTopSrc();
-    // Scope the search to the click selection $effect (anchored on the
-    // "Sync external family selection" comment). Multiple `onImpact`
-    // callbacks exist in the source — entrance materialization burst,
-    // post-growth burst, and this click effect. We want THIS one, which
-    // is the comprehensive impact pipeline (ripple + envelope + flash).
-    const effectStart = src.indexOf('Sync external family selection');
-    expect(effectStart).toBeGreaterThan(0);
-    const effectSlice = src.slice(effectStart, effectStart + 4000);
-    // Find the onImpact arrow within the click effect's slice.
-    const onImpactRel = effectSlice.search(/onImpact\s*:\s*\(\)\s*=>\s*_triggerBeamImpact/);
-    expect(onImpactRel).toBeGreaterThan(0);
-    const onImpactBody = effectSlice.slice(onImpactRel, onImpactRel + 200);
+  // DELETED (Sub-project C / spec §5.3 M3 Row 2): `source: onImpact callback
+  // body fires envelopePool.acquire + flashEmissive (passive inspection, no
+  // kinetic shake)`. The `_triggerBeamImpact` helper is gone; the onImpact
+  // chain end-to-end coverage moves to ImpactCoordinator.test.ts §5.1 #3
+  // (entrance preset — onImpact does NOT fire clusterPhysics.onBeamImpact),
+  // #8 (onImpact F7 causal-order — physics → envelope → flash → engulfed),
+  // and #13 (envelope acquired with raw freshNode.size, no floor).
 
-    expect(onImpactBody).toMatch(/_triggerBeamImpact\(\s*node\s*,\s*group\s*,\s*false\s*\)/);
-  });
-
-  it('source: envelope shape literal — "domain" for state==="domain", else "cluster" — lives in _triggerBeamImpact', () => {
-    const src = _semTopSrc();
-    // Shape selection now lives inside _triggerBeamImpact (the DRY helper),
-    // not duplicated at each call site. The ternary assigns to `shape`.
+  it('source: envelope shape literal — "domain" for state==="domain", else "cluster" — lives in ImpactCoordinator.fire onImpact body (spec §5.3 M3 Row 3 — anchor moved from _triggerBeamImpact to coordinator)', () => {
+    // Shape selection now lives inside ImpactCoordinator.ts's `fire(...)`
+    // body (the DRY single-source helper post-Sub-project-C), not in the
+    // deleted `_triggerBeamImpact` helper. The ternary assigns to `shape`
+    // before the onImpact callback closes over it.
+    const mod = import.meta.glob<string>(['./ImpactCoordinator.ts'], {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    });
+    const src = mod['./ImpactCoordinator.ts'];
+    expect(typeof src).toBe('string');
     expect(src).toMatch(
       /freshNode\.state\s*===\s*['"]domain['"]\s*\?\s*['"]domain['"]\s*:\s*['"]cluster['"]/,
     );
@@ -2868,49 +2870,67 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   });
 
 
-  it('source: selection idle pulse uses SELECTION_EMISSIVE_FLOOR so the pulse crosses bloom threshold for ALL clusters (Engulfment-Visibility regression)', () => {
-    // Live-observed: even after the flash-override fix landed, the user reported
-    // only MATURE/database clusters showed the continuous engulfment glow on
-    // selection. Root cause: the IDLE PULSE for selected nodes (NOT the flash)
-    // is what produces the sustained breathing effect the operator perceives
-    // as "the engulfment." Pre-fix the formula was
-    // `baseEmissive + Math.sin(...) * 0.2 + 0.2` (range [base, base+0.4]).
-    // For MATURE clusters with baseEmissive ~1.1 this stayed above the
-    // UnrealBloomPass threshold (0.85) for the entire pulse cycle. For ACTIVE
-    // clusters with baseEmissive ~0.5-0.6 the pulse only crossed bloom near
-    // its peak and sat sub-bloom most of the cycle — producing a visually
-    // dead selection state.
+  it('source: selection idle pulse uses SELECTION_EMISSIVE_FLOOR via Math.max in ImpactCoordinator._tick (spec §5.3 M3 Row 4 — anchor moved from breathing handler to coordinator _tick body)', () => {
+    // Live-observed pre-fix: even after the flash-override fix landed, only
+    // MATURE/database clusters showed the continuous engulfment glow on
+    // selection. Root cause: the IDLE PULSE for selected nodes (NOT the
+    // flash) is what produces the sustained breathing effect. Pre-fix the
+    // formula was `baseEmissive + Math.sin(...) * 0.2 + 0.2` (range
+    // [base, base+0.4]). For MATURE clusters with baseEmissive ~1.1 this
+    // stayed above the UnrealBloomPass threshold (0.85) for the entire
+    // pulse cycle. For ACTIVE clusters with baseEmissive ~0.5-0.6 the
+    // pulse only crossed bloom near its peak and sat sub-bloom most of
+    // the cycle — producing a visually dead selection state.
     //
     // Fix: root the pulse at `Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR)`
-    // where the floor is >= the bloom threshold + margin (1.0). Then the
-    // sin-wave delta is added on top. Mature clusters with baseEmissive > floor
-    // preserve their data-driven asymmetry; active clusters get lifted to a
-    // visible baseline.
-    const src = _semTopSrc();
+    // where the floor is >= the bloom threshold + margin (1.0). The named
+    // constant is exported from ImpactCoordinator.ts so future editors
+    // can't regress it to a magic number.
+    //
+    // Post-Sub-project-C: this anchor lives in `ImpactCoordinator._tick(...)`.
+    // The breathing handler retains a guard branch (no-op body) so the bare
+    // `else { = baseEmissive }` does NOT overwrite the coordinator's write;
+    // that guard is pinned by cleanup-contract.test.ts test #12. Equivalent
+    // runtime coverage: ImpactCoordinator.test.ts §5.1 #17.
+    const mod = import.meta.glob<string>(['./ImpactCoordinator.ts'], {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    });
+    const src = mod['./ImpactCoordinator.ts'];
+    expect(typeof src).toBe('string');
 
-    // Locate the post-engulfment idle-pulse branch. The branch is now
-    // gated on `_selectionEngulfed.has(nodeId)` so the pulse only fires
-    // AFTER the first beam impact on the selected node — matching the
-    // operator-spec'd engulfment-after-impact sequence.
-    const selectionBranchMatch = src.match(
-      /\} else if \(isSelected && _selectionEngulfed\.has\(nodeId\)\) \{([\s\S]*?)\} else \{/,
-    );
-    expect(selectionBranchMatch).not.toBeNull();
-    const body = selectionBranchMatch![1];
+    // Extract the _tick(...) method body via a brace-balanced slice from
+    // the header through the matching close. Anchored on the signature
+    // shape that Cycle 1 GREEN landed.
+    const headerRegex = /private\s+_tick\s*\(\s*delta\s*:\s*number\s*\)\s*:\s*void\s*\{/;
+    const m = headerRegex.exec(src as string);
+    expect(m).not.toBeNull();
+    const openIdx = m!.index + m![0].length - 1;
+    let depth = 1;
+    let i = openIdx + 1;
+    while (i < (src as string).length && depth > 0) {
+      const ch = (src as string)[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      i++;
+    }
+    const tickBody = (src as string).slice(openIdx + 1, i - 1);
 
-    // The floor constant must exist (named, not a magic number, so future
-    // editors don't regress it).
-    expect(body).toMatch(/SELECTION_EMISSIVE_FLOOR\s*=\s*1\.0/);
+    // The named floor must be referenced (not a magic 1.0 literal) inside
+    // _tick. The export is at module scope, so a bare `SELECTION_EMISSIVE_FLOOR`
+    // identifier appears inside the body.
+    expect(tickBody).toMatch(/SELECTION_EMISSIVE_FLOOR/);
 
     // The floor must be USED via Math.max against baseEmissive so the lift
     // is conditional (mature clusters preserved at their natural baseline).
-    expect(body).toMatch(
+    expect(tickBody).toMatch(
       /Math\.max\(\s*baseEmissive\s*,\s*SELECTION_EMISSIVE_FLOOR\s*\)/,
     );
   });
 
 
-  it('source: _triggerBeamImpact passes freshNode.size directly to envelope acquire (canon F19 — no MIN_SCALE floor that produced the 10x balloon)', () => {
+  it('source: ImpactCoordinator.fire onImpact body passes freshNode.size directly to envelopePool.acquire (canon F19 — no MIN_SCALE floor that produced the 10x balloon) (spec §5.3 M3 Row 5 — anchor moved from _triggerBeamImpact helper to coordinator)', () => {
     // Canon F19 (.claude/skills/brand-guidelines/references/3d-visualization.md
     // line 276): `envelopePool?.acquire(group, node.size, envelopeShape,
     // color);` — pass the cluster's data-driven size verbatim. Line 294 of
@@ -2927,79 +2947,125 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // "tiny ACTIVE cluster visibility" but it violated canon and produced
     // worse symptoms than the visibility issue it tried to solve.
     //
-    // Canon-compliant behavior: pass `freshNode.size` directly. For tiny
-    // clusters, bloom-pass parameters (`UnrealBloomPass.strength = 1.5`,
-    // `threshold = 0.85`) and the emissive ramp in `_tickFlashStates`
-    // provide visible feedback without inflating the envelope geometry.
-    const src = _semTopSrc();
+    // Canon-compliant behavior: pass `freshNode.size` directly. Post-Sub-
+    // project-C the canonical acquire site lives inside
+    // `ImpactCoordinator.fire(...)`'s `onImpact` callback body — the
+    // `_triggerBeamImpact` helper is gone.
+    const mod = import.meta.glob<string>(['./ImpactCoordinator.ts'], {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    });
+    const src = mod['./ImpactCoordinator.ts'];
+    expect(typeof src).toBe('string');
 
-    const triggerBody = src.match(
-      /function _triggerBeamImpact\([\s\S]*?\n  \}/,
+    // Extract the `fire(request: ImpactRequest): void { ... }` body via a
+    // brace-balanced slice from the header through the matching close.
+    const headerRegex = /\bfire\s*\(\s*request\s*:\s*ImpactRequest\s*\)\s*:\s*void\s*\{/;
+    const m = headerRegex.exec(src as string);
+    expect(m).not.toBeNull();
+    const openIdx = m!.index + m![0].length - 1;
+    let depth = 1;
+    let i = openIdx + 1;
+    while (i < (src as string).length && depth > 0) {
+      const ch = (src as string)[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      i++;
+    }
+    const fireBody = (src as string).slice(openIdx + 1, i - 1);
+
+    // Positive contract: envelopePool.acquire(currentGroup, freshNode.size, ...)
+    // appears in the onImpact body. The coordinator uses `.acquire(` directly
+    // (no optional-chain) because the dep is non-null inside the closure.
+    expect(fireBody).toMatch(
+      /envelopePool[?!]?\.acquire\(\s*currentGroup\s*,\s*freshNode\.size\s*,/,
     );
-    expect(triggerBody).not.toBeNull();
-    const body = triggerBody![0];
 
-    // Anti-regression: the floor constant must NOT exist.
-    expect(body).not.toMatch(/ENVELOPE_MIN_SCALE/);
-    expect(body).not.toMatch(/envelopeBaseScale\s*=/);
-    expect(body).not.toMatch(/Math\.max\(\s*freshNode\.size\s*,/);
+    // Anti-regression (whole file): the floor constant must NOT appear
+    // anywhere in ImpactCoordinator.ts. Pre-balloon-fix the helper used
+    // `ENVELOPE_MIN_SCALE = 8.0`; the canonical post-fix source has zero
+    // mentions of that symbol.
+    expect(src as string).not.toMatch(/ENVELOPE_MIN_SCALE/);
 
-    // Positive contract: acquire() must pass the raw data-driven size.
-    expect(body).toMatch(
-      /envelopePool\?\.acquire\(\s*currentGroup\s*,\s*freshNode\.size\s*,/,
-    );
+    // Anti-regression (fire body only): no `Math.max(freshNode.size, ...)`
+    // inside the coordinator's onImpact body — the freshly-resolved size
+    // is passed verbatim. (Note: SELECTION_EMISSIVE_FLOOR uses
+    // `Math.max(baseEmissive, ...)` inside `_tick`, which is unrelated
+    // and lives in a different method — scoping to `fireBody` prevents
+    // a false positive.)
+    expect(fireBody).not.toMatch(/Math\.max\(\s*freshNode\.size\s*,/);
   });
 
 
-  it('source: post-engulfment idle pulse is gated on `_selectionEngulfed.has(nodeId)` so the glow appears AFTER beam impact, not on click (Engulfment-Timing regression)', () => {
-    // Live-observed: operator reported "fully engulfs and triggers BEFORE the
-    // beam actually triggers and then becomes flat when the beam actually hits
-    // it." Root cause: the idle ambient pulse (canon T3.4) fired
-    // synchronously on selection click — `mat.emissiveIntensity =
-    // max(baseEmissive, SELECTION_EMISSIVE_FLOOR) + idlePulse` runs every
-    // frame the breathing loop sees `isSelected`. With the floor lifted to
+  it('source: post-engulfment idle pulse is gated on isEngulfed + isFlashActive in ImpactCoordinator._tick (Engulfment-Timing regression) (spec §5.3 M3 Row 6 — anchor moved from breathing handler to coordinator _tick body)', () => {
+    // Live-observed pre-fix: operator reported "fully engulfs and triggers
+    // BEFORE the beam actually triggers and then becomes flat when the beam
+    // actually hits it." Root cause: the idle ambient pulse (canon T3.4)
+    // fired synchronously on selection click — `mat.emissiveIntensity =
+    // max(baseEmissive, SELECTION_EMISSIVE_FLOOR) + idlePulse` ran every
+    // frame the breathing loop saw `isSelected`. With the floor lifted to
     // 1.0 it produced a visible bloomed glow IMMEDIATELY on click, before
-    // the beam had finished its 700ms POV→target travel. Then when the
-    // beam impacted and flashEmissive started the attack ramp from
-    // `baselineEmissive` (low data-driven value), the displayed emissive
-    // briefly DIPPED to the flat baseline — the operator-observed "becomes
-    // flat" frame.
+    // the beam had finished its 700ms POV→target travel.
     //
-    // Fix: the post-engulfment idle pulse branch is now gated on
-    // `_selectionEngulfed.has(nodeId)`. The set is populated inside
-    // `_triggerBeamImpact` only when the impacted node matches
-    // `clustersStore.selectedClusterId`, and cleared on every selection
-    // change. So between click and impact (the 700ms beam-travel window)
-    // the breathing loop falls through to the `else` branch which sets
-    // emissive to `baseEmissive` (no pulse, no engulfment-class glow) —
-    // matching the operator-spec'd sequence: cyan highlight on click,
-    // beam in flight, engulfment moment only on impact.
-    const src = _semTopSrc();
+    // Fix: the post-engulfment idle pulse is gated on the engulfed-set
+    // membership. The set is populated inside the coordinator's onImpact
+    // callback when `preset.marksEngulfed === true` (click trigger only),
+    // and cleared on every selection change via `clearEngulfed()`. The
+    // mid-flash protection (`isFlashActive(...)` skip) prevents the pulse
+    // from competing with `_tickFlashStates`'s attack/hold/decay ramp.
+    //
+    // Post-Sub-project-C: this anchor lives in `ImpactCoordinator._tick(...)`.
+    // The two guards are read via getter callbacks (`isEngulfed` is the
+    // public method on the coordinator itself; `isFlashActive` is a dep
+    // callback wired by SemanticTopology to `(id) => _flashStates.has(id)`
+    // per spec §3.1 M2 + M6). Equivalent runtime coverage:
+    // ImpactCoordinator.test.ts §5.1 #15 (non-engulfed skip), #17 (writes
+    // the formula on engulfed-selected), #18 (flash-active skip).
+    const mod = import.meta.glob<string>(['./ImpactCoordinator.ts'], {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    });
+    const src = mod['./ImpactCoordinator.ts'];
+    expect(typeof src).toBe('string');
 
-    // The flag must be declared at module/component scope.
-    expect(src).toMatch(/_selectionEngulfed[\s\S]{0,80}Set/);
+    const headerRegex = /private\s+_tick\s*\(\s*delta\s*:\s*number\s*\)\s*:\s*void\s*\{/;
+    const m = headerRegex.exec(src as string);
+    expect(m).not.toBeNull();
+    const openIdx = m!.index + m![0].length - 1;
+    let depth = 1;
+    let i = openIdx + 1;
+    while (i < (src as string).length && depth > 0) {
+      const ch = (src as string)[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      i++;
+    }
+    const tickBody = (src as string).slice(openIdx + 1, i - 1);
 
-    // _triggerBeamImpact must populate the flag when the impacted node
-    // matches the current selection (the per-frame gate is keyed off this).
-    const triggerBody = src.match(
-      /function _triggerBeamImpact\([\s\S]*?\n  \}/,
+    // (a) Engulfed guard: `if (... !this.isEngulfed(selectedId)) return;`
+    // The full coordinator pattern wraps the engulfed check with a
+    // null-selectedId short-circuit; permit either an inline negation
+    // or a separate guard line.
+    expect(tickBody).toMatch(
+      /if\s*\([^)]*!\s*this\.isEngulfed\s*\(\s*selectedId\s*\)[^)]*\)\s*return/,
     );
-    expect(triggerBody).not.toBeNull();
-    expect(triggerBody![0]).toMatch(
-      /clustersStore\.selectedClusterId\s*===\s*freshNode\.id[\s\S]{0,80}_selectionEngulfed\.add/,
+
+    // (b) Flash-active skip via the getter callback dep (M2 + M6 wiring).
+    // The coordinator reads `this._deps.isFlashActive(selectedId)` and
+    // returns when true, so the flash ramp owns the emissive during its
+    // active window.
+    expect(tickBody).toMatch(
+      /this\._deps\.isFlashActive\s*\(\s*selectedId\s*\)/,
     );
 
-    // The selection-change effect must clear the flag (so a new selection
-    // re-arms the gate and the operator sees the pre-impact baseline on
-    // every fresh click, not a stale engulfment from a prior selection).
-    const selectionEffect = src.match(
-      /const externalId = clustersStore\.selectedClusterId;[\s\S]*?_selectionEngulfed\.clear/,
-    );
-    expect(selectionEffect).not.toBeNull();
-
-    // The breathing-loop pulse branch must reference the gate.
-    expect(src).toMatch(
-      /\} else if \(isSelected && _selectionEngulfed\.has\(nodeId\)\) \{/,
+    // (c) The body writes mat.emissiveIntensity and references the pulse
+    // formula shape — `Math.sin(this._pulseTime * 0.4) * 0.1 + 0.1`
+    // produces the [floor, floor+0.2] range pinned by canon T3.4.
+    expect(tickBody).toMatch(/mat\.emissiveIntensity\s*=/);
+    expect(tickBody).toMatch(
+      /Math\.sin\(\s*this\._pulseTime\s*\*\s*0\.4\s*\)\s*\*\s*0\.1\s*\+\s*0\.1/,
     );
   });
 
@@ -3037,34 +3103,31 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   });
 
 
-  it('source: engulfment gate clear is keyed off ACTUAL selection transitions, not every $effect re-fire (_prevSelectedId regression)', () => {
-    // Live-observed: operator reported "only one specific node gets the
-    // full effect" — specifically the 25-member DATABASE/MATURE cluster
-    // "SQLite pragma pool Reapplication Audit." Root cause: the selection
-    // $effect cleared `_selectionEngulfed` unconditionally on every
-    // re-trigger. The effect re-fires whenever any of its reactive deps
-    // change (sceneData rebuilds, focusedNodeId self-writes during the
-    // body, downstream store updates, etc.). During the ~700ms beam-
-    // travel window between click and impact, scene rebuilds are common
-    // (taxonomy events, store updates, etc.) — each one cleared the
-    // engulfment gate. Then when the beam impact landed and added the
-    // node back to the set, the NEXT effect re-fire cleared it again,
-    // turning off the idle pulse. The one cluster the operator saw work
-    // was selected during a quiescent scene period where no rebuilds
-    // happened between impact and the next idle-pulse frame.
+  it('source: engulfment gate clear is keyed off ACTUAL selection transitions via impactCoordinator?.clearEngulfed() (_prevSelectedId regression) (spec §5.3 M3 Row 7 — anchor migrated from _selectionEngulfed.clear to coordinator.clearEngulfed)', () => {
+    // Live-observed pre-fix: operator reported "only one specific node gets
+    // the full effect." Root cause: the selection $effect cleared the
+    // engulfed set unconditionally on every re-trigger. The effect re-fires
+    // whenever any of its reactive deps change (sceneData rebuilds,
+    // focusedNodeId self-writes during the body, downstream store updates,
+    // etc.). During the ~700ms beam-travel window between click and impact,
+    // scene rebuilds are common — each one cleared the engulfment gate.
     //
-    // Fix: track `_prevSelectedId` and only clear when the selection
-    // actually changes (transition: A → B or A → null). Re-fires of the
-    // SAME selection preserve the gate.
+    // Fix: track `_prevSelectedId` and only clear when the selection actually
+    // changes (transition: A → B or A → null). Re-fires of the SAME
+    // selection preserve the gate. Post-Sub-project-C the clear routes
+    // through `impactCoordinator?.clearEngulfed()` (the coordinator owns
+    // `_selectionEngulfed`); `_prevSelectedId` STAYS in SemanticTopology
+    // per spec §4.3 (Sub-project E absorbs it later).
     const src = _semTopSrc();
 
-    // The previous-selection tracker must exist.
+    // The previous-selection tracker must exist (stays per §4.3).
     expect(src).toMatch(/let\s+_prevSelectedId\s*:\s*string\s*\|\s*null\s*=\s*null/);
 
     // The clear inside the selection effect must be guarded by an
-    // inequality check against the previous selection.
+    // inequality check against the previous selection AND route through
+    // the coordinator's clearEngulfed() method.
     expect(src).toMatch(
-      /if\s*\(\s*externalId\s*!==\s*_prevSelectedId\s*\)[\s\S]{0,200}_selectionEngulfed\.clear/,
+      /if\s*\(\s*externalId\s*!==\s*_prevSelectedId\s*\)[\s\S]{0,200}impactCoordinator[?!]?\.clearEngulfed\s*\(\s*\)/,
     );
 
     // The previous-selection must be UPDATED inside the same conditional
@@ -3072,6 +3135,11 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(src).toMatch(
       /if\s*\(\s*externalId\s*!==\s*_prevSelectedId\s*\)[\s\S]{0,200}_prevSelectedId\s*=\s*externalId/,
     );
+
+    // Anti-regression: `_selectionEngulfed.clear()` must NOT appear in
+    // SemanticTopology.svelte. The symbol is fully migrated to the
+    // coordinator per spec §4.3.
+    expect(src).not.toMatch(/_selectionEngulfed\.clear/);
   });
 
 

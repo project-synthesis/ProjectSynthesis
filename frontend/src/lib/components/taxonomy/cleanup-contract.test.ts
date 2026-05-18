@@ -505,3 +505,290 @@ describe('Animation Coordinator — source-grep contract (spec §5.2)', () => {
     expect(src).toMatch(/addAnimationCallback\(cb:\s*\(\)\s*=>\s*void\)\s*:\s*\(\)\s*=>\s*void/);
   });
 });
+
+// Append to cleanup-contract.test.ts — Sub-project C: Impact Coordinator
+// 12 source-grep assertions per spec §5.2 (#1–#12).
+//
+// Tests #1–#2 + #11 pin the coordinator class file itself and PASS at HEAD
+// (coordinator-side state already implemented in Cycle 1 GREEN).
+// Tests #3–#10 + #12 pin SemanticTopology.svelte migration state and FAIL
+// at HEAD (Cycle 2 GREEN's job to satisfy).
+
+function readImpactCoordinatorSrc(relPath: string): string {
+  const mod = import.meta.glob<string>(
+    [
+      './ImpactCoordinator.ts',
+      './SemanticTopology.svelte',
+    ],
+    { query: '?raw', import: 'default', eager: true },
+  );
+  const key = `./${relPath}`;
+  const src = mod[key];
+  if (typeof src !== 'string') throw new Error(`Source not found for ${key}`);
+  return src;
+}
+
+/**
+ * Brace-balanced slice of the breathing-phase callback body in
+ * SemanticTopology.svelte. Locates `coordinator.register('breathing',`
+ * then walks forward balancing `{`/`}` to find the matching close of
+ * the callback's body. Returns the body slice (excluding the outer
+ * `() => { ... }` braces) so source-grep regexes scope to just the
+ * breathing-handler logic and don't pick up `coordinator.register`
+ * argument noise.
+ *
+ * Scope-specific per spec §5.2 #8 + #12: both tests scope to the
+ * breathing-phase callback body, not the full source.
+ */
+function extractBreathingHandlerBody(src: string): string {
+  const anchor = "coordinator.register('breathing',";
+  const anchorIdx = src.indexOf(anchor);
+  if (anchorIdx < 0) {
+    throw new Error('extractBreathingHandlerBody: anchor not found');
+  }
+  // Walk forward to the `{` opening the arrow-function body. The
+  // callback shape is `() => { ... }`, so the first `{` after the
+  // arrow is the body open.
+  const arrowIdx = src.indexOf('=>', anchorIdx);
+  if (arrowIdx < 0) {
+    throw new Error('extractBreathingHandlerBody: arrow not found');
+  }
+  const openIdx = src.indexOf('{', arrowIdx);
+  if (openIdx < 0) {
+    throw new Error('extractBreathingHandlerBody: body { not found');
+  }
+  let depth = 1;
+  let i = openIdx + 1;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    i++;
+  }
+  return src.slice(openIdx + 1, i - 1);
+}
+
+/**
+ * Brace-balanced slice of a top-level method body in
+ * `ImpactCoordinator.ts`. Used to extract `fire(...)` and `_tick(...)`
+ * bodies for source-grep assertions that pin per-method invariants
+ * (e.g., zero per-frame allocations in `_tick`, envelope literal
+ * shape in the `onImpact` block inside `fire`).
+ *
+ * Anchors on a regex matching the method signature header (e.g.
+ * `/fire\(request: ImpactRequest\): void \{/`). Returns the body
+ * slice (excluding the outer braces).
+ */
+function extractMethodBody(src: string, headerRegex: RegExp): string {
+  const m = headerRegex.exec(src);
+  if (!m) throw new Error(`extractMethodBody: header not found for ${headerRegex}`);
+  // The header regex must include the opening `{`. Slice from one
+  // past the `{` and walk forward balancing braces.
+  const openIdx = m.index + m[0].length - 1;
+  if (src[openIdx] !== '{') {
+    throw new Error(`extractMethodBody: header regex did not end at {`);
+  }
+  let depth = 1;
+  let i = openIdx + 1;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    i++;
+  }
+  return src.slice(openIdx + 1, i - 1);
+}
+
+describe('Impact Coordinator — source-grep contract (spec §5.2)', () => {
+  // ── #1 ──
+  it('#1 — ImpactCoordinator.ts exports class + Trigger type + TRIGGER_PRESETS + SELECTION_EMISSIVE_FLOOR', () => {
+    const src = readImpactCoordinatorSrc('ImpactCoordinator.ts');
+    expect(src).toMatch(/export\s+class\s+ImpactCoordinator/);
+    expect(src).toMatch(/export\s+type\s+Trigger\s*=/);
+    expect(src).toMatch(/export\s+const\s+TRIGGER_PRESETS/);
+    expect(src).toMatch(/export\s+const\s+SELECTION_EMISSIVE_FLOOR/);
+  });
+
+  // ── #2 ──
+  it('#2 — TRIGGER_PRESETS has exactly 4 entries (entrance, post-growth, optimization, click)', () => {
+    const src = readImpactCoordinatorSrc('ImpactCoordinator.ts');
+    // Locate the TRIGGER_PRESETS const declaration body.
+    const presetsHeader = /export\s+const\s+TRIGGER_PRESETS[^=]*=\s*\{/;
+    const m = presetsHeader.exec(src);
+    expect(m).not.toBeNull();
+    // Slice the object literal body (brace-balanced from the opening `{`).
+    const openIdx = m!.index + m![0].length - 1;
+    let depth = 1;
+    let i = openIdx + 1;
+    while (i < src.length && depth > 0) {
+      const ch = src[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      i++;
+    }
+    const body = src.slice(openIdx + 1, i - 1);
+    // Trigger union has 4 members; assert all 4 keys appear as top-level
+    // property names. `'post-growth'` must be quoted because of the hyphen.
+    expect(body).toMatch(/\bentrance\s*:/);
+    expect(body).toMatch(/['"]post-growth['"]\s*:/);
+    expect(body).toMatch(/\boptimization\s*:/);
+    expect(body).toMatch(/\bclick\s*:/);
+    // Anti-regression: no 5th key. Count top-level property declarations
+    // (lines like `<key>:` at indent depth 1 in the body) — accept exactly
+    // 4. Counting via regex matches on a depth-0 walk avoids miscounting
+    // nested property keys inside each preset's TriggerPreset literal.
+    let topLevelKeys = 0;
+    let d = 0;
+    for (let j = 0; j < body.length; j++) {
+      const ch = body[j];
+      if (ch === '{') d++;
+      else if (ch === '}') d--;
+      else if (d === 0 && ch === ':') {
+        // Look back: a property key is an identifier or quoted string
+        // ending just before this colon. Skip whitespace.
+        let k = j - 1;
+        while (k > 0 && /\s/.test(body[k])) k--;
+        const before = body.slice(Math.max(0, k - 30), k + 1);
+        if (/[\w'"]$/.test(before)) topLevelKeys++;
+      }
+    }
+    expect(topLevelKeys).toBe(4);
+  });
+
+  // ── #3 ──
+  it('#3 — SemanticTopology.svelte has ZERO beamPool.acquire( calls (coordinator owns)', () => {
+    const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
+    expect(src).not.toMatch(/beamPool[?!]?\.acquire\(/);
+  });
+
+  // ── #4 ──
+  it('#4 — SemanticTopology.svelte has ZERO _triggerBeamImpact references (helper removed)', () => {
+    const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
+    expect(src).not.toMatch(/_triggerBeamImpact/);
+  });
+
+  // ── #5 ──
+  it('#5 — SemanticTopology.svelte has EXACTLY 4 impactCoordinator.fire( calls (one per trigger site)', () => {
+    const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
+    const matches = src.match(/impactCoordinator[?!]?\.fire\(/g);
+    expect(matches?.length).toBe(4);
+  });
+
+  // ── #6 ──
+  it('#6 — F7 causal-ordering invariant: across taxonomy/ source files (except ImpactCoordinator + its tests), ZERO matches for onBeamImpact, envelope-scoped acquire, or flashEmissive invocation', () => {
+    const mod = import.meta.glob<string>(
+      [
+        './*.ts',
+        './*.svelte',
+      ],
+      { query: '?raw', import: 'default', eager: true },
+    );
+    const exemptions = [
+      './ImpactCoordinator.ts',
+      './ImpactCoordinator.test.ts',
+      './ImpactCoordinator.integration.test.ts',
+    ];
+    for (const [path, src] of Object.entries(mod)) {
+      if (exemptions.includes(path)) continue;
+      if (typeof src !== 'string') continue;
+      // `(?:\?\.|\.)\s*onBeamImpact\s*\(` — kinetic-shake call outside coordinator
+      expect(src, `${path} should not call .onBeamImpact( (only ImpactCoordinator does)`).not.toMatch(
+        /(?:\?\.|\.)\s*onBeamImpact\s*\(/,
+      );
+      // Envelope-scoped `(?:\?\.|\.)\s*acquire\s*\(` — invoked only on envelopePool.
+      // We grep for `envelopePool[?!]?\.acquire\(` since the broader `\.acquire\(`
+      // pattern would also match the legitimate `beamPool.acquire(` migration
+      // inside the coordinator file. Keep this canonical-pattern-aligned.
+      expect(src, `${path} should not call envelopePool.acquire( (only ImpactCoordinator does)`).not.toMatch(
+        /envelopePool[?!]?\.acquire\s*\(/,
+      );
+      // `\bflashEmissive\s*\(` — the function declaration site lives in
+      // SemanticTopology.svelte and stays per §2 OUT (Sub-project E will
+      // absorb flash state). Carve out the declaration before the scan so
+      // the assertion only catches INVOCATIONS, not the declaration itself.
+      const stripped = src.replace(/function\s+flashEmissive\s*\(/g, 'function FLASH_DECL_CARVEOUT(');
+      expect(stripped, `${path} should not call flashEmissive( (only ImpactCoordinator does; the declaration site is carved out)`).not.toMatch(
+        /\bflashEmissive\s*\(/,
+      );
+    }
+  });
+
+  // ── #7 ──
+  it('#7 — SemanticTopology.svelte has ZERO _selectionEngulfed references (symbol absorbed by coordinator)', () => {
+    const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
+    expect(src).not.toMatch(/_selectionEngulfed/);
+  });
+
+  // ── #8 ──
+  it('#8 — Breathing handler does NOT contain _selectionEngulfed.has (T3.4 pulse extracted to coordinator)', () => {
+    const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
+    const breathingBody = extractBreathingHandlerBody(src);
+    expect(breathingBody).not.toMatch(/_selectionEngulfed\.has/);
+  });
+
+  // ── #9 ──
+  it('#9 — ImpactCoordinator construction in onMount happens AFTER renderer + AnimationCoordinator + beamPool + envelopePool + clusterPhysics', () => {
+    const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
+    const onMountIdx = src.indexOf('onMount(() => {');
+    expect(onMountIdx).toBeGreaterThan(0);
+    const onMountSlice = src.slice(onMountIdx, onMountIdx + 12000);
+
+    const rendererPos = onMountSlice.search(/renderer\s*=\s*new\s+TopologyRenderer\(/);
+    const coordPos = onMountSlice.search(/coordinator\s*=\s*new\s+AnimationCoordinator\(/);
+    const beamPos = onMountSlice.search(/beamPool\s*=\s*new\s+BeamPool\(/);
+    const envPos = onMountSlice.search(/envelopePool\s*=\s*new\s+EnvelopePool\(/);
+    const physicsPos = onMountSlice.search(/clusterPhysics\s*=\s*new\s+ClusterPhysics\(/);
+    const impactPos = onMountSlice.search(/impactCoordinator\s*=\s*new\s+ImpactCoordinator\(/);
+
+    expect(rendererPos).toBeGreaterThan(-1);
+    expect(coordPos).toBeGreaterThan(-1);
+    expect(beamPos).toBeGreaterThan(-1);
+    expect(envPos).toBeGreaterThan(-1);
+    expect(physicsPos).toBeGreaterThan(-1);
+    expect(impactPos).toBeGreaterThan(-1);
+
+    expect(rendererPos).toBeLessThan(impactPos);
+    expect(coordPos).toBeLessThan(impactPos);
+    expect(beamPos).toBeLessThan(impactPos);
+    expect(envPos).toBeLessThan(impactPos);
+    expect(physicsPos).toBeLessThan(impactPos);
+  });
+
+  // ── #10 ──
+  it('#10 — Cleanup return invokes impactCoordinator?.dispose() BEFORE coordinator?.dispose() AND BEFORE pool disposes', () => {
+    const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
+    const cleanupIdx = src.lastIndexOf('return () => {');
+    expect(cleanupIdx).toBeGreaterThan(0);
+    const cleanupSlice = src.slice(cleanupIdx, cleanupIdx + 4000);
+
+    const impactDisposePos = cleanupSlice.search(/impactCoordinator[?!]?\.dispose\(\)/);
+    const animDisposePos = cleanupSlice.search(/(?<!impact)coordinator[?!]?\.dispose\(\)/);
+    const beamDisposePos = cleanupSlice.search(/beamPool[?!]?\.dispose\(\)/);
+    const envDisposePos = cleanupSlice.search(/envelopePool[?!]?\.dispose\(\)/);
+
+    expect(impactDisposePos).toBeGreaterThan(-1);
+    expect(animDisposePos).toBeGreaterThan(-1);
+    expect(beamDisposePos).toBeGreaterThan(-1);
+    expect(envDisposePos).toBeGreaterThan(-1);
+
+    expect(impactDisposePos).toBeLessThan(animDisposePos);
+    expect(impactDisposePos).toBeLessThan(beamDisposePos);
+    expect(impactDisposePos).toBeLessThan(envDisposePos);
+  });
+
+  // ── #11 ──
+  it('#11 — ImpactCoordinator._tick body contains zero per-frame allocations', () => {
+    const src = readImpactCoordinatorSrc('ImpactCoordinator.ts');
+    const tickBody = extractMethodBody(src, /private\s+_tick\s*\(\s*delta\s*:\s*number\s*\)\s*:\s*void\s*\{/);
+    expect(tickBody).not.toMatch(/new\s+(Map|Array|Set|WeakSet|Vector\d|Color|Quaternion|Matrix\d)\b/);
+  });
+
+  // ── #12 ──
+  it('#12 — Breathing handler retains an impactCoordinator.isEngulfed guard (positive — paired with #8 negative; per spec §3.4 phase-ordering hazard)', () => {
+    const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
+    const breathingBody = extractBreathingHandlerBody(src);
+    // Permit `impactCoordinator?.isEngulfed(`, `impactCoordinator!.isEngulfed(`,
+    // or `impactCoordinator.isEngulfed(` — the guard exists in any of these forms.
+    expect(breathingBody).toMatch(/impactCoordinator(?:\?\.|\!\.|\.)isEngulfed\s*\(/);
+  });
+});
