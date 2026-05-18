@@ -141,7 +141,8 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Color:** target cluster's `domain hex`
 - **Radius:** `Math.max(node.size * 0.04, 0.1)`
 - **`onImpact` callback** (canonical anchor point, `BeamConfig.onImpact?: () => void`): fires EXACTLY ONCE at the firing→sustain edge — i.e., when the catenary curve has fully extended and the beam visually impacts the target. All click-impact reactions (cluster physics ripple, plasma envelopement, emissive flash) wire through this callback so they synchronize to actual beam arrival rather than firing synchronously with `acquire()`. **Causal-ordering invariant: every impact reaction MUST fire from `onImpact`, never synchronously with `acquire()`** — otherwise the cluster reacts before the beam arrives.
-- *Source: `BeamPool.ts`, `PlasmaBeam.ts`, `BeamShader.ts`*
+- **Canonical trigger:** `ImpactCoordinator.fire({ trigger, node, group })` (`frontend/src/lib/components/taxonomy/ImpactCoordinator.ts`) is the single entry point for all four impact-trigger sites (entrance burst, post-growth burst, optimization event, click selection). Per-trigger parameters live in `TRIGGER_PRESETS` keyed by `Trigger` ('entrance' | 'post-growth' | 'optimization' | 'click'). The coordinator's `fire()` body constructs the `BeamConfig` (including `onImpact`) and calls `beamPool.acquire(...)` exactly once — every impact reaction (F9 ripple + accretion, F19 envelope, F19 flash) appears inside the coordinator's `onImpact` body. The causal-ordering invariant is enforced at source level by source-grep test #6 in `frontend/src/lib/components/taxonomy/cleanup-contract.test.ts` — zero matches for `clusterPhysics.onBeamImpact(`, `envelopePool.acquire(`, `flashEmissive(` outside the coordinator (modulo the `function flashEmissive(` declaration carveout, which stays in `SemanticTopology.svelte` pending Sub-project E).
+- *Source: `ImpactCoordinator.ts`, `BeamPool.ts`, `PlasmaBeam.ts`, `BeamShader.ts`*
 
 ### F8 — Organic Breathing Oscillation
 
@@ -264,20 +265,7 @@ A module-level `_hasAutoFocused: boolean` guard ensures the bird's-eye-view "fra
 
 ### F18 — Tactile Feedback on External Selection
 
-When `clustersStore.selectedClusterId` changes via the sidebar (NOT a click on the canvas), the `$effect` watching it fires the same tactile feedback pipeline as a direct click. **All impact reactions wire through the beam's `onImpact` callback** (canon F7) so they synchronize to actual beam arrival — never synchronously with `beamPool.acquire(...)`:
-
-```ts
-beamPool.acquire(group, {
-  color: envelopeColor,
-  radius: Math.max(node.size * 0.04, 0.1),
-  sustainMs: 800,
-  onImpact: () => {
-    clusterPhysics?.onBeamImpact(node.id, node.size);              // F9 ripple + accretion
-    envelopePool?.acquire(group, node.size, envelopeShape, color); // F19 plasma engulfment
-    flashEmissive(node.id);                                        // F19 emissive flash
-  },
-}, camera);
-```
+When `clustersStore.selectedClusterId` changes via the sidebar (NOT a click on the canvas), the `$effect` watching it fires the same tactile feedback pipeline as a direct click — both route through `impactCoordinator.fire({ trigger: 'click', node, group })` (canon F7 canonical trigger). The coordinator's `onImpact` body wires the F9 ripple, F19 envelope, and F19 flash — see `frontend/src/lib/components/taxonomy/ImpactCoordinator.ts`. After the beam impact, the selected node's id is tracked in the coordinator's internal `_selectionEngulfed: Set<string>`; the canonical read is `impactCoordinator.isEngulfed(id)`. The breathing handler in `SemanticTopology.svelte` reads this via a no-op middle branch (`else if (impactCoordinator?.isEngulfed(nodeId) && isSelected) { /* no-op */ }`) so the coordinator's impact-phase `_tick` owns the post-engulfment idle ambient pulse (T3.4) without being overwritten by the bare-else `mat.emissiveIntensity = baseEmissive` reset.
 
 ### F19 — Envelopement Burst at Beam Impact
 
@@ -306,7 +294,7 @@ Layered impact effect — at the moment the F7 beam visually arrives at the clus
 - **State map:** `_flashStates: Map<string, { startTime: number; baselineEmissive: number }>` — tiny in steady state (only nodes recently impacted).
 - **Cleanup:** `coordinator?.dispose()` invoked BEFORE `_flashStates.clear()` (so a late-firing tick can't read a half-cleared map); each active flash's baseline is restored to the underlying material before the map is cleared (so a remount doesn't inherit inflated emissive). The impact-phase flash handler is absorbed by `coordinator.dispose()` per the Animation Tick Ordering section (the pre-coordinator `_removeFlashUpdate?.()` symbol no longer exists).
 
-**Causal-ordering invariant (with F7):** every F19 reaction fires from the beam's `onImpact` callback. Synchronous calls inside the click `$effect` (and the entrance + post-growth burst sites) are forbidden — the beam takes ~700ms (`FIRING_MS`) to travel, so a synchronous ripple/envelope/flash would precede beam arrival.
+**Causal-ordering invariant (with F7):** every F19 reaction fires from the beam's `onImpact` callback. Synchronous calls inside the click `$effect` (and the entrance + post-growth burst sites) are forbidden — the beam takes ~700ms (`FIRING_MS`) to travel, so a synchronous ripple/envelope/flash would precede beam arrival. **Canonical trigger:** `ImpactCoordinator.fire({ trigger, node, group })` owns every impact site. The envelope is acquired inside the coordinator's `onImpact` body with the raw `freshNode.size` (no floor) — the coordinator looks up the latest node by id from the scene-node map before passing it to `envelopePool.acquire(...)`, so the peak swell tracks any in-flight size changes from `clusterPhysics.onBeamImpact()` that fired earlier in the same impact-phase callback chain.
 
 ## Per-Frame Allocation Budget
 
@@ -507,6 +495,7 @@ Run through each numbered feature. **The implementation passes if every line bel
 - [ ] **F19**: `EnvelopePool` constructed in `onMount`; envelope geometry shape literals match `node.state === 'domain' ? 'domain' : 'cluster'`
 - [ ] **F19**: `flashEmissive` uses baseline-capture pattern — rapid re-fires reuse prior `baselineEmissive`
 - [ ] **F19**: causal-ordering invariant — every `beamPool.acquire(...)` site (click `$effect`, entrance materialization burst, post-growth burst) wires `clusterPhysics.onBeamImpact` (and envelope/flash) inside `onImpact: () =>`, never synchronously alongside `acquire()`
+- [ ] All four impact trigger sites (entrance burst, post-growth burst, optimization event, click selection) route through ImpactCoordinator.fire(...) — pinned by source-grep test #5 in cleanup-contract.test.ts.
 
 ### Performance + lifecycle
 - [ ] Module-level scratch table declared (`_scratchVec3a`, `_scratchQuat`, `_scratchColor`, `Z_AXIS`)
