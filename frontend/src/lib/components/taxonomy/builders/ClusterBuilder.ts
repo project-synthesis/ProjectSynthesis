@@ -24,7 +24,7 @@
 // Spec: docs/superpowers/specs/2026-05-17-scene-builder-extraction-design.md
 
 import * as THREE from 'three';
-import type { SceneData } from '../TopologyData';
+import type { SceneData, SceneNode } from '../TopologyData';
 import type { SceneBuilder } from './SceneBuilder';
 import type { BuilderContext } from './BuilderContext';
 import type { TopologyInteraction } from '../TopologyInteraction';
@@ -37,6 +37,30 @@ import {
 /** F1 hero member count — at this count, base emissive saturates at 1.4. */
 const HERO_MEMBER_COUNT = 50;
 
+/**
+ * Result of the F1 emissive computation for a cluster node — used by
+ * {@link ClusterBuilder._computeEmissive} to bundle the lerped emissive
+ * colour with its final intensity so the build loop assigns both atomically.
+ */
+interface EmissiveResult {
+  color: THREE.Color;
+  intensity: number;
+}
+
+/**
+ * Builds per-cluster THREE.Group instances (Icosahedron fill + ripple
+ * wireframe) and wires them into the shared {@link BuilderContext}. Splits
+ * the cluster branch out of the legacy unified `for (const node of
+ * data.nodes)` loop per spec §3.3 M2.
+ *
+ * Lifecycle:
+ *   - Shared geometries (`_fillGeo`, `_wireGeo`) constructed once in
+ *     the constructor and reused across rebuilds.
+ *   - `build()` runs per scene rebuild; produces ephemeral groups that
+ *     `cleanupScene` (Sub-project A) disposes at the start of the next
+ *     rebuild — no `userData.persistent` flag set.
+ *   - `dispose()` releases the shared geometries on component unmount.
+ */
 export class ClusterBuilder implements SceneBuilder {
   // Shared cluster geometries — constructed once per ClusterBuilder
   // lifetime (NOT per-build) to avoid per-rebuild geometry allocation.
@@ -58,6 +82,31 @@ export class ClusterBuilder implements SceneBuilder {
     wireBase.dispose();
   }
 
+  /**
+   * Iterate visible non-structural nodes in `data.nodes`, construct one
+   * ephemeral cluster group per node, and write the shared state every
+   * downstream consumer (edge builder, ring builder, breathing handler,
+   * impact coordinator) reads. Structural nodes (`state === 'domain' ||
+   * state === 'project'`) are skipped — those belong to DomainBuilder.
+   *
+   * Idempotent across rebuilds ONLY when `cleanupScene` runs between
+   * invocations; back-to-back `build` calls without cleanup duplicate
+   * groups in the scene (see ClusterBuilder.test.ts #10 for the
+   * orchestrator invariant pin).
+   *
+   * Writes to `ctx`:
+   *   - `nodeMeshes[node.id]`             → fill Mesh (canon F1 cluster sphere)
+   *   - `beamNodeGroups[node.id]`         → parent THREE.Group
+   *   - `clusterShaderMaterials[node.id]` → wire ShaderMaterial (F5 + F19)
+   *   - `nodePhaseOffsets[node.id]`       → T1.1 breathing desync phase
+   *
+   * Side effects:
+   *   - `this._interaction?.registerNode(node.id, fill, node)`
+   *
+   * @param data  - Topology snapshot whose `nodes` drive the build loop.
+   * @param scene - Target THREE.Scene the cluster groups are appended to.
+   * @param ctx   - Shared per-rebuild context the builder mutates.
+   */
   build(data: SceneData, scene: THREE.Scene, ctx: BuilderContext): void {
     if (this._disposed) return;
     for (const node of data.nodes) {
@@ -77,24 +126,8 @@ export class ClusterBuilder implements SceneBuilder {
         fillScalar *= 0.7 + 0.3 * Math.min(1, Math.max(0, node.avgScore / 10));
       }
 
-      // Canon F1 emissive intensity. memberCount=1 → 0.6 (base),
-      // memberCount=50+ → 1.4 (hero), clamped.
-      const baseEmissiveIntensity =
-        0.6 + 0.8 * Math.min(1, Math.max(0, (node.memberCount - 1) / (HERO_MEMBER_COUNT - 1)));
-
-      // T1.2 — Coherence-driven color temperature: lerp emissive toward white.
-      const coherenceBoost = 0.1 * node.coherence;
-      const emissiveColor = new THREE.Color(node.color);
-      if (coherenceBoost > 0) {
-        emissiveColor.lerp(new THREE.Color(0xffffff), coherenceBoost * 0.3);
-      }
-
-      // T2.1 — Score-driven emissive modulation.
-      const scoreModifier =
-        node.avgScore != null
-          ? 0.85 + 0.15 * Math.min(1, Math.max(0, node.avgScore / 10))
-          : 1.0;
-      const emissiveIntensity = baseEmissiveIntensity * (1.0 + coherenceBoost) * scoreModifier;
+      const { color: emissiveColor, intensity: emissiveIntensity } =
+        ClusterBuilder._computeEmissive(node);
 
       const fillMat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(node.color).multiplyScalar(fillScalar),
@@ -106,11 +139,7 @@ export class ClusterBuilder implements SceneBuilder {
         opacity: node.opacity * 0.9,
       });
 
-      // T1.1 — Deterministic phase offset for desynchronized breathing.
-      // Simple hash: sum of char codes mod 1000, mapped to [0, 2π].
-      let hash = 0;
-      for (let ci = 0; ci < node.id.length; ci++) hash += node.id.charCodeAt(ci);
-      ctx.nodePhaseOffsets.set(node.id, ((hash % 1000) / 1000) * Math.PI * 2);
+      ctx.nodePhaseOffsets.set(node.id, ClusterBuilder._computePhaseOffset(node.id));
 
       const fill = new THREE.Mesh(this._fillGeo, fillMat);
       // Self-shadowing: clusters cast + receive shadows under the directional
@@ -148,10 +177,69 @@ export class ClusterBuilder implements SceneBuilder {
     }
   }
 
+  /**
+   * Release the shared cluster geometries. Idempotent — subsequent calls
+   * no-op. After `dispose()`, `build()` short-circuits without mutating
+   * the scene or ctx.
+   */
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
     this._fillGeo.dispose();
     this._wireGeo.dispose();
+  }
+
+  /**
+   * Compute the canon F1 emissive colour + intensity for a cluster node.
+   * Combines three signals:
+   *   - Base intensity from memberCount: 1 → 0.6, 50+ → 1.4 (clamped).
+   *   - T1.2 coherence boost: lerps emissive 3% toward white at coherence=1
+   *     and adds a 10% intensity multiplier at coherence=1.
+   *   - T2.1 score modulation: avgScore=10 → ×1.0, avgScore=0 → ×0.85.
+   *
+   * Pure function — kept static so the build loop reads as the sequence
+   * of scene mutations it is, with one call-site for the emissive math.
+   *
+   * @param node - The cluster node whose F1 emissive is being computed.
+   * @returns Bundled emissive colour (possibly lerped toward white) +
+   *   final intensity scalar applied to {@link THREE.MeshStandardMaterial}.
+   */
+  private static _computeEmissive(node: SceneNode): EmissiveResult {
+    // Canon F1 emissive intensity. memberCount=1 → 0.6 (base),
+    // memberCount=50+ → 1.4 (hero), clamped.
+    const baseEmissiveIntensity =
+      0.6 + 0.8 * Math.min(1, Math.max(0, (node.memberCount - 1) / (HERO_MEMBER_COUNT - 1)));
+
+    // T1.2 — Coherence-driven color temperature: lerp emissive toward white.
+    const coherenceBoost = 0.1 * node.coherence;
+    const color = new THREE.Color(node.color);
+    if (coherenceBoost > 0) {
+      color.lerp(new THREE.Color(0xffffff), coherenceBoost * 0.3);
+    }
+
+    // T2.1 — Score-driven emissive modulation.
+    const scoreModifier =
+      node.avgScore != null
+        ? 0.85 + 0.15 * Math.min(1, Math.max(0, node.avgScore / 10))
+        : 1.0;
+    const intensity = baseEmissiveIntensity * (1.0 + coherenceBoost) * scoreModifier;
+
+    return { color, intensity };
+  }
+
+  /**
+   * Canon T1.1 deterministic phase offset for desynchronized organic
+   * breathing. Sum-of-char-codes hash modulo 1000 mapped to [0, 2π].
+   *
+   * Deterministic across rebuilds for the same node id so breathing
+   * desync stays stable as topology updates redraw the scene.
+   *
+   * @param id - Node id whose phase offset is being computed.
+   * @returns Phase offset in radians, [0, 2π).
+   */
+  private static _computePhaseOffset(id: string): number {
+    let hash = 0;
+    for (let ci = 0; ci < id.length; ci++) hash += id.charCodeAt(ci);
+    return ((hash % 1000) / 1000) * Math.PI * 2;
   }
 }
