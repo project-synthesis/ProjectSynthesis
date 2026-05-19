@@ -67,6 +67,28 @@ const TEMPLATE_RING_OUTER_RADIUS = 1.35;
 /** Template ring segments — canon F3. */
 const TEMPLATE_RING_SEGMENTS = 64;
 
+/** Canon F3 — entry tween duration: 400ms cubic ease-in on acquire. */
+const ENTRY_DURATION_MS = 400;
+/** Canon F3 — exit tween duration: 300ms cubic ease-out on release. */
+const EXIT_DURATION_MS = 300;
+
+/**
+ * Cubic ease-in for the F3 entry tween (`t * t * t`) — slow start, fast
+ * finish. Read `t` as normalized elapsed/duration in `[0, 1]`.
+ */
+function easeInCubic(t: number): number {
+  return t * t * t;
+}
+
+/**
+ * Cubic ease-out for the F3 exit tween (`1 - (1 - t)^3`) — fast start,
+ * slow finish. Matches the codebase pattern from EnvelopePool.ts /
+ * FlashController.ts (form `1 - Math.pow(1 - t, 3)`).
+ */
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
 /**
  * Per-domain readiness ring registry entry. Public so callers (e.g. the
  * breathing handler in SemanticTopology.svelte) can read entry fields after
@@ -131,6 +153,13 @@ export class RingBuilder implements SceneBuilder {
   private readonly _freeTemplateRings: THREE.Mesh[] = [];
   private readonly _templateRingById: Map<string, THREE.Mesh> = new Map();
   private _templateRingWarnedThisRebuild = false;
+
+  // ── Canon F3 entry/exit transitions ──
+  // Per-mesh tween state (RAF handle + cancel closure). Tween advances
+  // `material.opacity` 0 → resting (entry, easeInCubic, 400ms) or
+  // resting → 0 (exit, easeOutCubic, 300ms). If acquire/release flips
+  // mid-tween, the previous tween is cancelled before the new one starts.
+  private readonly _templateRingTweens: Map<THREE.Mesh, { cancel(): void }> = new Map();
 
   // ── Readiness ring registry ──
   private readonly _readinessRings: Map<string, ReadinessRingEntry> = new Map();
@@ -197,6 +226,16 @@ export class RingBuilder implements SceneBuilder {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+
+    // Cancel in-flight template-ring entry/exit tweens BEFORE we touch
+    // the meshes / materials (RAF callbacks would write opacity to a
+    // disposed material otherwise). The cancel() closures unregister
+    // themselves from `_templateRingTweens`, so we snapshot into a list
+    // before iterating.
+    for (const handle of [...this._templateRingTweens.values()]) {
+      handle.cancel();
+    }
+    this._templateRingTweens.clear();
 
     // Cancel in-flight tweens + dispose readiness GPU resources before
     // detaching the parent group (avoids RAF write-after-free against a
@@ -498,10 +537,17 @@ export class RingBuilder implements SceneBuilder {
    * `_templateRingPoolSet`, so they cannot be returned to the pool on
    * release — they're disposed when their cluster disappears.
    *
+   * Starts the canon F3 entry tween (400ms cubic ease-in via
+   * `easeInCubic`) on the returned mesh — opacity ramps 0 → resting
+   * over `ENTRY_DURATION_MS`. Any prior tween on the same mesh is
+   * cancelled.
+   *
    * @returns A ready-to-attach template ring mesh.
    */
   private _acquireTemplateRing(): THREE.Mesh {
-    return this._freeTemplateRings.pop() ?? RingBuilder._createTemplateRingMesh();
+    const mesh = this._freeTemplateRings.pop() ?? RingBuilder._createTemplateRingMesh();
+    this._startEntryTween(mesh);
+    return mesh;
   }
 
   /**
@@ -509,18 +555,123 @@ export class RingBuilder implements SceneBuilder {
    * member) and detach from its parent group. Reset visual state so the
    * next acquire starts from a clean baseline.
    *
+   * Starts the canon F3 exit tween (300ms cubic ease-out via
+   * `easeOutCubic`) on the mesh — opacity ramps current → 0 over
+   * `EXIT_DURATION_MS` while the mesh sits in the pool. Pool return is
+   * synchronous so the next rebuild can reuse the slot without waiting
+   * for the tween. Any prior tween on the same mesh is cancelled.
+   *
    * @param cid  - Cluster id whose ring is being released.
    * @param mesh - The ring mesh to release.
    */
   private _releaseTemplateRing(cid: string, mesh: THREE.Mesh): void {
     // Reset visual state for reuse.
     const mat = mesh.material as THREE.MeshBasicMaterial;
+    // Kick off the exit tween BEFORE we flip `visible = false` so the
+    // tween can read the starting opacity. The tween writes opacity in
+    // place; final visual state is the same (mesh hidden + opacity 0).
+    this._startExitTween(mesh);
     mat.opacity = TEMPLATE_RING_RESTING_OPACITY;
     mesh.scale.setScalar(1.0);
     mesh.visible = false;
     if (mesh.parent) mesh.parent.remove(mesh);
     this._templateRingById.delete(cid);
     if (this._templateRingPoolSet.has(mesh)) this._freeTemplateRings.push(mesh);
+  }
+
+  /**
+   * Start (or restart) the canon F3 entry tween on `mesh` — opacity
+   * ramps 0 → `TEMPLATE_RING_RESTING_OPACITY` over `ENTRY_DURATION_MS`
+   * using `easeInCubic`. Drops any prior in-flight tween for the same
+   * mesh before starting.
+   *
+   * Implemented as a RAF-driven inline tween (no AnimationCoordinator
+   * dependency) so the builder remains standalone. Tween handle stored
+   * in `_templateRingTweens` so `dispose()` and subsequent
+   * acquire/release calls can cancel it cleanly.
+   *
+   * @param mesh - Template ring mesh to animate.
+   */
+  private _startEntryTween(mesh: THREE.Mesh): void {
+    this._templateRingTweens.get(mesh)?.cancel();
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    mat.opacity = 0;
+    const start = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    let cancelled = false;
+    let rafId: number | null = null;
+    const step = (): void => {
+      if (cancelled) return;
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      const t = Math.min(1, (now - start) / ENTRY_DURATION_MS);
+      mat.opacity = easeInCubic(t) * TEMPLATE_RING_RESTING_OPACITY;
+      if (t < 1 && typeof requestAnimationFrame === 'function') {
+        rafId = requestAnimationFrame(step);
+      } else {
+        this._templateRingTweens.delete(mesh);
+      }
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      rafId = requestAnimationFrame(step);
+    } else {
+      // JSDOM / SSR fallback — snap to resting opacity immediately so
+      // tests + non-DOM environments see a consistent final state.
+      mat.opacity = TEMPLATE_RING_RESTING_OPACITY;
+    }
+    this._templateRingTweens.set(mesh, {
+      cancel: () => {
+        cancelled = true;
+        if (rafId !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(rafId);
+        }
+        this._templateRingTweens.delete(mesh);
+      },
+    });
+  }
+
+  /**
+   * Start (or restart) the canon F3 exit tween on `mesh` — opacity
+   * ramps current → 0 over `EXIT_DURATION_MS` using `easeOutCubic`.
+   * Drops any prior in-flight tween for the same mesh before starting.
+   *
+   * Pool return is performed synchronously by the caller; this tween
+   * only animates the opacity write while the mesh is invisible in the
+   * pool. Final mesh state matches the synchronous-release contract
+   * (opacity reset to `TEMPLATE_RING_RESTING_OPACITY` by the caller
+   * AFTER the tween starts — the tween captures the prior value as
+   * its starting point).
+   *
+   * @param mesh - Template ring mesh to animate.
+   */
+  private _startExitTween(mesh: THREE.Mesh): void {
+    this._templateRingTweens.get(mesh)?.cancel();
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    const startOpacity = mat.opacity;
+    const start = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    let cancelled = false;
+    let rafId: number | null = null;
+    const step = (): void => {
+      if (cancelled) return;
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      const t = Math.min(1, (now - start) / EXIT_DURATION_MS);
+      mat.opacity = startOpacity * (1 - easeOutCubic(t));
+      if (t < 1 && typeof requestAnimationFrame === 'function') {
+        rafId = requestAnimationFrame(step);
+      } else {
+        this._templateRingTweens.delete(mesh);
+      }
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      rafId = requestAnimationFrame(step);
+    }
+    this._templateRingTweens.set(mesh, {
+      cancel: () => {
+        cancelled = true;
+        if (rafId !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(rafId);
+        }
+        this._templateRingTweens.delete(mesh);
+      },
+    });
   }
 
   /**

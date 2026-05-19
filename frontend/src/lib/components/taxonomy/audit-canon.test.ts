@@ -366,14 +366,17 @@ describe('F8 — Breathing Animation', () => {
     expectInSource(src, /_nodePhaseOffsets\.get\(\s*nodeId\s*\)/);
   });
 
-  it('F8: hover amplifies breathing to ±12%', () => {
+  it('F8: hover amplifies breathing to ±10%', () => {
     const src = readSrc('SemanticTopology.svelte');
-    // Canon: hover amplifies breathing to ±12%. Source ref:
-    // SemanticTopology.svelte:625 (`hoverAmplification = isHovered ? 1.12 : ...`).
+    // Canon (updated Cycle 1 GREEN — Type-D adjudication): hover amplifies
+    // breathing to ±10%. Source ref: SemanticTopology.svelte:625
+    // (`hoverAmplification = isHovered ? 1.1 : ...`). Earlier canon line
+    // said ±12% (1.12) but the shipped source ships 1.1; canon updated
+    // to match per spec §4.2.1 user-adjudication.
     // Anchor on the canonical hover-amplification expression itself —
-    // `hoverAmplification = isHovered ? 1.12 : ...` — to avoid matching
-    // unrelated `0.12` literals (e.g., the camera-shake cap at line 1336).
-    expectInSource(src, /hoverAmplification\s*=\s*isHovered\s*\?\s*1\.12\b/);
+    // `hoverAmplification = isHovered ? 1.1 : ...` — to avoid matching
+    // unrelated `0.1` literals.
+    expectInSource(src, /hoverAmplification\s*=\s*isHovered\s*\?\s*1\.1\b/);
   });
 
   it('F8: hover proximity field — clusters within 8 units', () => {
