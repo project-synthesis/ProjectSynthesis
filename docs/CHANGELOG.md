@@ -4,6 +4,19 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Changed
+
+- Scene construction in `frontend/src/lib/components/taxonomy/SemanticTopology.svelte` routed through 5 `SceneBuilder` instances under `frontend/src/lib/components/taxonomy/builders/` (Sub-project D of the Pattern Graph architecture hardening program). The 774-line monolithic `rebuildScene` body collapses to a 144-LOC orchestrator that delegates to `ClusterBuilder` → `DomainBuilder` → `EdgeBuilder` → `RingBuilder` → `DustBuilder` in fixed source order. `SemanticTopology.svelte` total line count drops from 2794 to 2028 (-766 LOC of inline cluster/domain/edge/ring/dust construction).
+- Per-rebuild state flows through a typed `BuilderContext` interface (`builders/BuilderContext.ts`) explicitly passed to each `build(data, scene, ctx)` call. Module-level state (`nodeMeshes`, `_beamNodeGroups`, `_edgeUniforms`, `_nodePhaseOffsets`, `_clusterShaderMaterials`) is reassigned from ctx after every builder completes; per-frame handlers read the module-level refs on the next RAF tick — race-free.
+- `ImpactCoordinator`'s physics handler reads `ctx.clusterShaderMaterials.get(nodeId)` (via the module-level `_clusterShaderMaterials` sync) to mutate ripple uniforms, replacing the prior `group.children[1]` index walk. Integration test INT-6 (`builders/integration.test.ts`) pins the wiring; the architecture improvement is locked at source level.
+- The per-frame breathing handler reads `RingBuilder.getReadinessRing(id)` + `RingBuilder.getTemplateRing(id)` accessors instead of importing internal `_readinessRings` / `_templateRingById` maps. Sub-project C's T3.4 phase-ordering hazard guard preserved (the `_flashStates.has(nodeId)` no-op + the `impactCoordinator?.isEngulfed(nodeId) && isSelected` no-op).
+- `EdgeBuilder` gains `getSimilarityGroup()` / `getInjectionGroup()` accessors so the visibility-toggle `$effect`s (`clustersStore.showSimilarityEdges` / `showInjectionEdges`) reach the current group reference without walking the scene.
+- The breathing-phase callback body extracted into a `_advanceBreathing` private helper for orchestrator LOC compression (the `rebuildScene` body now satisfies the < 150 LOC ceiling).
+- Brand canon `references/3d-visualization.md` gains a "Scene Builder Ownership" section near the Persistence Contract; canon entries F1, F2, F3, F4, F5, F6, F8, F10 source citations migrate from `SemanticTopology.svelte:NNN` line anchors to the appropriate builder file path. Audit Checklist gains a "Scene construction routes through 5 SceneBuilder instances in cluster → domain → edge → ring → dust order" line.
+- Per-frame accumulator state (`_breathingTime`, `_edgeTime`, `_cameraShake`, `_nodePhaseOffsets`) remains at module scope in `SemanticTopology.svelte` — builders own per-rebuild ephemeral state, not per-frame accumulators.
+
+[16 source-grep contract assertions in `cleanup-contract.test.ts` pin the migration structurally; 73 per-builder unit tests + 6 integration cases provide the runtime safety net; `RingBuilder` re-publishes the `__semTopTemplateRingPool` dev hook each build so the runtime pool tests continue to observe high-water-mark + retention. Three readiness-ring runtime tests (tier-tween cancellation, rapid-tier-change color preservation, size-drift geometry rebuild) and the T2.2 template ring entry/exit transition source-grep tests are deferred to a follow-on cycle — the implementer scoped tier-tween + size-drift rebuild + RAF-driven transitions out of `RingBuilder` as visual polish to be restored either inside the builder or in the orchestrator breathing handler.]
+
 ## v0.4.24 — 2026-05-17
 
 ### Changed
