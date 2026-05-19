@@ -4,6 +4,10 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Changed
+
+- **Audit-as-code (Sub-project F):** introduces `frontend/src/lib/components/taxonomy/audit-canon.test.ts` (53 tests, one per canon checklist line in `.claude/skills/brand-guidelines/references/3d-visualization.md`) and `_canon-coverage.test.ts` (meta-test parsing the canon markdown to verify every `- [ ] **F<N>**: ...` line maps to a test). Source-grep ~80% (material recipes, constants, signatures, source-level invariants); runtime ~20% (composer dispose, dispose-chain ordering). Helpers extracted: `readSrc`, `stripComments`, `expectMaterialRecipe`, `expectConstantValue`, `expectInSource`. Canon doc `## Audit Checklist` section gains a header sentence documenting the audit-as-code enforcement; `## Acceptance for changes` section gains a workflow paragraph mandating canon-and-test updates land in the same commit. F3 `RingBuilder.ts` gains `ENTRY_DURATION_MS = 400` + `EXIT_DURATION_MS = 300` cubic-ease entry/exit tween machinery for template ring acquire/release (Type-C source fix to satisfy canon F3). Canon F8 line corrected from ±12% to ±10% to match shipped source (Type-D canon update). Folded into the existing `test` CI check — failing audit = failing CI. Final closure of the Pattern Graph hardening program (Sub-projects A, B, C, D, E, F all shipped).
+
 ## v0.4.26 — 2026-05-19
 
 ### Changed
