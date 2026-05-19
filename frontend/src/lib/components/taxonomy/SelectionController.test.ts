@@ -265,6 +265,24 @@ describe('SelectionController', () => {
     expect(h.sc.selectedId).toBeNull();
   });
 
+  it('10b. select(otherId) from focused: cancel-via-idle → focusing (B1, direct focused → idle pin)', () => {
+    // Adjacency-coverage closure: spec §3.1 lists `focused → idle` with two
+    // triggers — `deselect()` (covered by #11 via select(null)) and
+    // `select(otherNodeId)` cancel-via-idle. Tests #8 / #9 pin cancel-via-idle
+    // from engulfed / impacting; this test pins the focused → idle leg of the
+    // cancel-via-idle path explicitly.
+    const h = makeHarness();
+    driveToFocused(h, 'n1');
+    expect(h.sc.state).toBe('focused');
+    h.meshes.set('n2', makeMesh(0.6));
+    h.sceneNodes.set('n2', makeSceneNode('n2'));
+    h.groups.set('n2', new THREE.Group());
+    h.sc.select('n2');
+    // Cancel-via-idle: focused → idle → focusing.
+    expect(h.sc.state).toBe('focusing');
+    expect(h.sc.selectedId).toBe('n2');
+  });
+
   it('11. select(null) is equivalent to deselect()', () => {
     const h = makeHarness();
     driveToFocused(h, 'n1');
