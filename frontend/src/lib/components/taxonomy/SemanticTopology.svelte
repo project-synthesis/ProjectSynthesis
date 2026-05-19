@@ -1365,7 +1365,6 @@
       flashEmissive: (id, color) => selectionController?.flash(id, color),
       getSceneNode: (id) => _sceneNodeMap.get(id),
       getBeamGroup: (id) => _beamNodeGroups.get(id),
-      getNodeMesh: (id) => nodeMeshes.get(id),
       renderer,
       animationCoordinator: coordinator,
       // Patched immediately below — TS visibility on `_deps` requires a cast.
@@ -1383,10 +1382,6 @@
       getNodeMesh: (id) => nodeMeshes.get(id),
       getSceneNode: (id) => _sceneNodeMap.get(id),
       getBeamGroup: (id) => _beamNodeGroups.get(id),
-      getBaseEmissive: (id) => {
-        const mesh = nodeMeshes.get(id);
-        return mesh ? (mesh.userData.baseEmissive as number | undefined) : undefined;
-      },
       highlightColor: HIGHLIGHT_COLOR,
     });
 

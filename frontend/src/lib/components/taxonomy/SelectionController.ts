@@ -51,7 +51,6 @@ export interface SelectionControllerDeps {
   getNodeMesh: (id: string) => THREE.Mesh | undefined;
   getSceneNode: (id: string) => SceneNode | undefined;
   getBeamGroup: (id: string) => THREE.Group | undefined;
-  getBaseEmissive: (id: string) => number | undefined;
   highlightColor: number;
 }
 

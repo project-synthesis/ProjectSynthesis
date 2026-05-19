@@ -122,7 +122,6 @@ function makeIntegrationHarness(opts?: { highlightColor?: number }) {
     getNodeMesh: (id) => meshes.get(id),
     getSceneNode: (id) => sceneNodes.get(id),
     getBeamGroup: (id) => groups.get(id),
-    getBaseEmissive: (id) => meshes.get(id)?.userData.baseEmissive as number | undefined,
     highlightColor: opts?.highlightColor ?? 0x00ffff,
   });
   return { sc, coord, renderer, ic, meshes, sceneNodes, groups };

@@ -132,17 +132,17 @@ export interface ImpactCoordinatorDeps {
   envelopePool: EnvelopePool;
   clusterPhysics: ClusterPhysics;
   /**
-   * Stays inline in SemanticTopology (per §2 OUT) pending Sub-project E's
-   * FlashController extraction. The coordinator's onImpact body calls this
-   * via `deps.flashEmissive(nodeId, color)`.
+   * Adapter routes to `SelectionController.flash` (which delegates to its
+   * internal FlashController). The coordinator's onImpact body calls this
+   * via `deps.flashEmissive(nodeId, color)`. SemanticTopology.svelte wires
+   * this as `(id, color) => selectionController?.flash(id, color)` per the
+   * thunked-dep pattern at spec §3.5.
    */
   flashEmissive: (nodeId: string, color: THREE.Color) => void;
   /** Looks up the freshest SceneNode by id (sceneData may have changed mid-flight). Returns undefined for unknown ids — fire() falls back to request.node. */
   getSceneNode: (id: string) => SceneNode | undefined;
   /** Looks up the current group by id (rebuildScene may have replaced it). Returns undefined for unknown ids — fire() falls back to request.group. */
   getBeamGroup: (id: string) => THREE.Group | undefined;
-  /** Looks up the current node mesh by id (kept for future T3.4 needs in IC; current GREEN no longer reads it). */
-  getNodeMesh: (id: string) => THREE.Mesh | undefined;
   renderer: TopologyRenderer;
   animationCoordinator: AnimationCoordinator;
   /**

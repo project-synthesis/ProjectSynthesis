@@ -84,7 +84,6 @@ function makeHarness(opts?: { highlightColor?: number }) {
   const meshes = new Map<string, THREE.Mesh>();
   const sceneNodes = new Map<string, SceneNode>();
   const groups = new Map<string, THREE.Group>();
-  const baseEmissive = new Map<string, number>();
   const sc = new SelectionController({
     renderer,
     animationCoordinator: coord,
@@ -92,10 +91,9 @@ function makeHarness(opts?: { highlightColor?: number }) {
     getNodeMesh: (id) => meshes.get(id),
     getSceneNode: (id) => sceneNodes.get(id),
     getBeamGroup: (id) => groups.get(id),
-    getBaseEmissive: (id) => baseEmissive.get(id),
     highlightColor: opts?.highlightColor ?? 0x00ffff,
   });
-  return { sc, coord, renderer, ic, meshes, sceneNodes, groups, baseEmissive };
+  return { sc, coord, renderer, ic, meshes, sceneNodes, groups };
 }
 
 /** Drive SC fully into 'focused' state: register fixtures, select, invoke onComplete. */
