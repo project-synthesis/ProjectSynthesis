@@ -9,10 +9,29 @@
 import * as THREE from 'three';
 import type { AnimationCoordinator } from './AnimationCoordinator';
 
+/**
+ * Per-node flash bookkeeping captured at flash-acquire time.
+ *
+ * Each field is invariant for the lifetime of a single flash (a refire on an
+ * active flash overwrites `startTime` + `domainEmissive` but preserves
+ * `baselineEmissive` + `startIntensity` per F19/B6).
+ */
 export interface FlashState {
+  /** `performance.now()` timestamp at acquire/refire — drives the 1380ms
+   *  attack/hold/decay envelope in `_tick`. */
   startTime: number;
+  /** Data-driven floor sourced from `mesh.userData.baseEmissive` — the value
+   *  `emissiveIntensity` must return to once decay completes (F19). NOT the
+   *  displayed `mat.emissiveIntensity` at acquire-time, which may have been
+   *  inflated by the idle pulse. */
   baselineEmissive: number;
+  /** The displayed `mat.emissiveIntensity` at acquire-time — the attack ramps
+   *  UP from this value to `peak`, preventing a "dim flash" frame when the
+   *  idle pulse had already elevated emissive above baseline (B6). */
   startIntensity: number;
+  /** Domain (or highlight) emissive color used for the duration of attack +
+   *  hold + decay. Cloned at acquire-time so the caller can mutate the source
+   *  without disturbing the in-flight flash. */
   domainEmissive: THREE.Color;
 }
 
@@ -38,6 +57,36 @@ export interface FlashControllerDeps {
   isHighlighted: (id: string) => boolean;
 }
 
+/**
+ * FlashController — per-node emissive flash state machine.
+ *
+ * Lifecycle:
+ *   1. Construction registers a tick callback on the supplied
+ *      `AnimationCoordinator` under the `'impact'` channel. The tick runs
+ *      every frame the coordinator drives.
+ *   2. `flash(nodeId, color)` stamps a new flash (or refires an active one)
+ *      and immediately writes the domain emissive color to the material so
+ *      there is no one-frame blip before the next tick.
+ *   3. `_tick(now)` walks all active flashes each frame, advancing
+ *      attack → hold → decay → cleanup. Cleanup decides the resting color
+ *      via the live `isHighlighted` check (B10) so highlighted nodes land at
+ *      cyan and non-highlighted nodes return to their domain color.
+ *   4. `dispose()` unregisters the tick, restores each active node's
+ *      baseline emissive (with live-checked color), and clears the state map.
+ *      Idempotent: subsequent calls are no-ops.
+ *
+ * Invariants:
+ *   - F19 baseline continuity: `baselineEmissive` is captured ONCE from
+ *     `userData.baseEmissive` at first acquire and preserved across refires.
+ *   - B6 mid-flash continuity: `startIntensity` is captured ONCE at first
+ *     acquire so the attack ramps from the current displayed value, never
+ *     causing a downward jump.
+ *   - B9 dispose-restore: every node tracked at dispose-time has its
+ *     baseline restored — no orphaned inflated emissive on teardown.
+ *   - B10 cleanup-color: cleanup color is decided by a LIVE
+ *     `isHighlighted` query, not a captured value, so a node selected mid-
+ *     flash lands at HIGHLIGHT_COLOR.
+ */
 export class FlashController {
   private _deps: FlashControllerDeps;
   private _states: Map<string, FlashState> = new Map();
@@ -51,6 +100,23 @@ export class FlashController {
     );
   }
 
+  /**
+   * Stamp a new flash on the node OR refire an active one (preserving
+   * baseline + startIntensity per F19 + B6).
+   *
+   * The real source captures the true baseline from `userData.baseEmissive`
+   * (NOT `mat.emissiveIntensity`) — the idle pulse may have inflated the
+   * displayed emissive, but `userData.baseEmissive` is the data-driven floor.
+   *
+   * `startIntensity` is captured at acquire-time so the attack ramps UP
+   * from whatever the current displayed value is — preventing the "dim flash"
+   * frame when the idle pulse had already elevated emissive above baseline.
+   *
+   * The domain emissive color is written immediately via `mat.emissive.copy`
+   * to prevent a one-frame blip before the next tick paints the same color.
+   *
+   * No-op if disposed or the node mesh is not currently resolvable.
+   */
   flash(nodeId: string, color: THREE.Color): void {
     if (this._disposed) return;
     const mesh = this._deps.getNodeMesh(nodeId);
@@ -71,10 +137,25 @@ export class FlashController {
     mat.emissive.copy(color);
   }
 
+  /** True if a flash state is currently registered for this node. */
   isActive(nodeId: string): boolean {
     return this._states.has(nodeId);
   }
 
+  /**
+   * Tear down the controller and restore baseline emissive on every tracked
+   * node (F19 dispose-restore semantics — B9).
+   *
+   * For each active flash:
+   *   - Resolves the mesh (skips silently if it has been removed).
+   *   - Writes the cleanup color via a LIVE `isHighlighted` check —
+   *     highlighted nodes land at HIGHLIGHT_COLOR, others at their captured
+   *     domain emissive.
+   *   - Restores `emissiveIntensity` to the captured baseline.
+   *
+   * Unregisters the tick callback and clears the state map. Idempotent —
+   * subsequent calls return without side effects.
+   */
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
@@ -95,6 +176,27 @@ export class FlashController {
     this._states.clear();
   }
 
+  /**
+   * Per-frame tick — advances every active flash through the 1380ms envelope.
+   *
+   * Branches:
+   *   1. **Mesh gone** — silently drop the state (the node was removed mid-
+   *      flash; no material to restore).
+   *   2. **Cleanup** (`elapsed >= GLOW_TOTAL_MS`) — write cleanup color via
+   *      live `isHighlighted` query (B10), restore baseline emissive, delete
+   *      state. The live check ensures a node selected mid-flash lands at
+   *      HIGHLIGHT_COLOR, not its captured domain color.
+   *   3. **Attack** (`elapsed < GLOW_ATTACK_MS`) — cubic ease-out ramp from
+   *      `startIntensity` up to `baselineEmissive + GLOW_PEAK_DELTA`. Using
+   *      `startIntensity` (not `baselineEmissive`) preserves F19 mid-flash
+   *      continuity — the attack always ramps from the current displayed
+   *      value, never causing a downward jump on refire (B6).
+   *   4. **Hold** (`elapsed < attack + hold`) — pinned at peak.
+   *   5. **Decay** — cubic ease-out from peak back down to baseline.
+   *
+   * Domain color is written every active frame so an external mutation of
+   * `mat.emissive` between ticks does not leak through.
+   */
   private _tick(now: number): void {
     if (this._disposed) return;
     if (this._states.size === 0) return;
