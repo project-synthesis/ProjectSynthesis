@@ -27,7 +27,22 @@ export type SelectionState =
   | 'engulfed';
 
 const GLOW_TOTAL_MS = 1380;
+
+// Module-scope scratch vector (m1): re-used by `select()` fallback target when
+// the node mesh is not yet built. Hoisted to avoid per-call allocation under
+// rapid selection flicks.
 const _scratchVec3 = new THREE.Vector3();
+
+// Module-scope adjacency table for the selection state machine. Each key lists
+// the legal successor states. Hoisted from inside `isLegalTransition` so the
+// object literal is not re-allocated on every `_transition` call.
+const ADJ: Record<SelectionState, SelectionState[]> = {
+  idle: ['focusing'],
+  focusing: ['focused', 'idle'],
+  focused: ['impacting', 'idle'],
+  impacting: ['engulfed', 'idle'],
+  engulfed: ['focusing', 'idle'],
+};
 
 export interface SelectionControllerDeps {
   renderer: TopologyRenderer;
@@ -67,13 +82,43 @@ export class SelectionController {
     );
   }
 
+  /** Current selection state. One of `idle`, `focusing`, `focused`, `impacting`, `engulfed`. */
   get state(): SelectionState { return this._state; }
+
+  /** Currently-selected cluster id, or `null` if idle. */
   get selectedId(): string | null { return this._selectedId; }
 
+  /**
+   * True if the node received its first 'click' impact since selection.
+   * Set by `onImpact`; cleared by `select` (cancel-via-idle path) and
+   * `dispose`. The engulfed set is per-selection scope — re-selecting the
+   * same id after deselect clears it.
+   */
   isEngulfed(nodeId: string): boolean {
     return this._engulfedSet.has(nodeId);
   }
 
+  /**
+   * Begin selection. Cancels any in-flight transition via the cancel-via-idle
+   * pattern (program-context §513), then transitions to `focusing`. Passing
+   * `null` transitions to `idle` (equivalent to `deselect()`).
+   *
+   * Side effects:
+   *   - Clears engulfed-set + pulse time
+   *   - Applies highlight (BOTH color + emissive swap to `highlightColor` per F16,
+   *     and restores the previous-selected mesh on switch)
+   *   - Invokes `renderer.focusOn(target, undefined, undefined, onComplete)` —
+   *     the 4-arg form so the focus-tween done-callback drives the
+   *     focusing → focused transition
+   *   - Fires `impactCoordinator.fire({trigger:'click', node, group})` when
+   *     `sceneNode` + beam-group both resolve (skipped silently otherwise)
+   *
+   * Edge cases:
+   *   - Same-id calls are no-ops (idempotent).
+   *   - Lenient on disposed: no-op after `dispose()`.
+   *   - When the node mesh is not yet built, the focus target falls back to
+   *     `_scratchVec3.set(0, 0, 0)` (module-scope; no allocation).
+   */
   select(nodeId: string | null): void {
     if (this._disposed) return;
     if (nodeId === this._selectedId) return;
@@ -118,10 +163,28 @@ export class SelectionController {
     }
   }
 
+  /** Clear selection. Identical to `select(null)` — provided for clarity at call sites. */
   deselect(): void {
     this.select(null);
   }
 
+  /**
+   * Called by ImpactCoordinator's onImpact callback when a 'click' beam arrives
+   * at the selected cluster. Transitions `focused` → `impacting` + adds the
+   * node to the engulfed set + starts the decay timer for the eventual
+   * `impacting` → `engulfed` transition (B3, GLOW_TOTAL_MS = 1380 ms).
+   *
+   * No-op if:
+   *   - `nodeId !== _selectedId` (race-safe — stale beam from prior selection
+   *     does not corrupt state)
+   *   - `_state !== 'focused'` (already past the impact window, or focus tween
+   *     not done yet)
+   *   - disposed
+   *
+   * The decay timer self-cancels (re-checks `_state` + `_selectedId` + disposed)
+   * before firing the engulfed transition, so a `select(other)` mid-decay
+   * leaves no zombie transition.
+   */
   onImpact(nodeId: string): void {
     if (this._disposed) return;
     if (nodeId !== this._selectedId) return;
@@ -138,6 +201,17 @@ export class SelectionController {
     }, GLOW_TOTAL_MS);
   }
 
+  /**
+   * Called by the orchestrator AFTER `rebuildScene` completes. Clears stale
+   * `_highlightedId` / `_highlightedColor` snapshots (the old mesh refs were
+   * disposed by the rebuild) then re-applies the highlight to the rebuilt
+   * selected mesh.
+   *
+   * Replaces the canon F16 highlight-survival hack at the end of
+   * `rebuildScene` with a deterministic, single-callsite handoff.
+   *
+   * No-op if disposed or `_selectedId === null`.
+   */
   afterRebuild(): void {
     if (this._disposed) return;
     if (this._selectedId === null) return;
@@ -146,15 +220,30 @@ export class SelectionController {
     this._applyHighlight(this._selectedId);
   }
 
+  /** Delegate to `FlashController.flash()`. Lenient on disposed. */
   flash(nodeId: string, color: THREE.Color): void {
     if (this._disposed) return;
     this._flash.flash(nodeId, color);
   }
 
+  /** True if FlashController currently has an active flash state for this node. */
   isFlashActive(nodeId: string): boolean {
     return this._flash.isActive(nodeId);
   }
 
+  /**
+   * Tear down. Idempotent — a second call is a no-op.
+   *
+   * Side effects:
+   *   - Cancels the impact-phase tick registration (AnimationCoordinator)
+   *   - Clears any pending decay timer
+   *   - Disposes the inner FlashController
+   *   - Clears all internal state (engulfed set, highlight snapshots,
+   *     selected/previous ids)
+   *
+   * Subsequent calls to `select`, `onImpact`, `flash`, `afterRebuild` are all
+   * no-ops (lenient on disposed).
+   */
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
@@ -171,6 +260,11 @@ export class SelectionController {
 
   // ── Private ───────────────────────────────────────────────────────
 
+  /**
+   * Transition guard. Throws in dev mode (`import.meta.env.DEV`) if `next` is
+   * not a legal successor of `_state` per the module-scope `ADJ` table; in
+   * production, console.warns and leaves `_state` unchanged.
+   */
   private _transition(next: SelectionState): void {
     if (!isLegalTransition(this._state, next)) {
       const msg = `[SelectionController] illegal transition: ${this._state} → ${next}`;
@@ -181,12 +275,31 @@ export class SelectionController {
     this._state = next;
   }
 
+  /**
+   * Camera focus-tween done-callback. Transitions `focusing` → `focused`.
+   * No-op if disposed or the state already moved away from `focusing`
+   * (cancel-via-idle path — `select(other)` raced the tween).
+   */
   private _onFocusAnimationComplete(): void {
     if (this._disposed) return;
     if (this._state !== 'focusing') return;
     this._transition('focused');
   }
 
+  /**
+   * Apply the F16 highlight to `nodeId`'s mesh.
+   *
+   * Sequence:
+   *   - If a different mesh is currently highlighted, restore its previously
+   *     snapshotted color + emissive (the dual-restore branch of B5).
+   *   - Snapshot the new mesh's `color.getHex()` into `_highlightedColor`
+   *     (B4 snapshot — single source of truth for restoration).
+   *   - Dual swap to `highlightColor`: BOTH `mat.color` AND `mat.emissive`
+   *     (the F16 dual-swap rule).
+   *
+   * If `getNodeMesh(nodeId)` returns undefined (mesh not yet built), nulls
+   * out the snapshots — `afterRebuild()` will retry once meshes exist.
+   */
   private _applyHighlight(nodeId: string): void {
     if (this._highlightedId && this._highlightedId !== nodeId) {
       const prevMesh = this._deps.getNodeMesh(this._highlightedId);
@@ -209,6 +322,12 @@ export class SelectionController {
     mat.emissive.setHex(this._deps.highlightColor);
   }
 
+  /**
+   * Restore the snapshotted color + emissive on the currently-highlighted
+   * mesh (B5 dual restore), then null out the highlight snapshots. No-op if
+   * nothing is currently highlighted. Mesh-missing is tolerated (snapshots
+   * are still cleared) so a disposed mesh does not strand state.
+   */
   private _clearHighlight(): void {
     if (this._highlightedId === null) return;
     const mesh = this._deps.getNodeMesh(this._highlightedId);
@@ -221,6 +340,7 @@ export class SelectionController {
     this._highlightedColor = null;
   }
 
+  /** Cancel any pending `impacting → engulfed` decay timer. Safe to call when none is set. */
   private _clearPendingDecay(): void {
     if (this._decayTimer !== null) {
       clearTimeout(this._decayTimer);
@@ -228,6 +348,24 @@ export class SelectionController {
     }
   }
 
+  /**
+   * Per-frame tick for the post-impact idle pulse (T3.4 — soft breathing on
+   * the engulfed cluster while the user dwells on it).
+   *
+   * Early-returns guard the hot path against doing any work when the pulse
+   * is not visible:
+   *   - disposed
+   *   - state !== 'engulfed' (only pulses post-decay-timer)
+   *   - no selection
+   *   - flash currently active (flash owns emissiveIntensity — yielding
+   *     prevents the pulse from clobbering the flash envelope)
+   *   - mesh not yet built
+   *
+   * Emissive floor: `Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR)` keeps
+   * the dim-side of the pulse above the bloom-pass threshold so the cluster
+   * never visually drops out under bloom-headroom edge cases (F-canon dim-pop
+   * guard).
+   */
   private _tickIdlePulse(delta: number): void {
     if (this._disposed) return;
     if (this._state !== 'engulfed') return;
@@ -246,12 +384,5 @@ export class SelectionController {
 export const SELECTION_EMISSIVE_FLOOR = 1.0;
 
 function isLegalTransition(from: SelectionState, to: SelectionState): boolean {
-  const ADJ: Record<SelectionState, SelectionState[]> = {
-    idle: ['focusing'],
-    focusing: ['focused', 'idle'],
-    focused: ['impacting', 'idle'],
-    impacting: ['engulfed', 'idle'],
-    engulfed: ['focusing', 'idle'],
-  };
   return ADJ[from].includes(to);
 }
