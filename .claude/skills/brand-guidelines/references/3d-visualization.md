@@ -573,3 +573,5 @@ A change to the 3D Pattern Graph is acceptable if **either**:
 2. It adds a new canonical feature, in which case **this document is updated** alongside the code so the audit checklist stays comprehensive.
 
 A change is **NOT** acceptable if it removes a canonical feature without an explicit update to this document AND user approval. The 3D Pattern Graph is its own medium — it does not bend to 2D-UI rules absent a user-driven redirection.
+
+**Audit-as-code workflow** (Sub-project F, since v0.4.27): Adding a new canonical feature requires updating BOTH this document AND `frontend/src/lib/components/taxonomy/audit-canon.test.ts` in the same commit. The `_canon-coverage.test.ts` meta-test catches the omission at CI time. If a refactor breaks a source-grep anchor, the failing test message references the canon line being enforced — reviewers then decide: fix the code (preferred, Type-C) or update the canon doc (with explicit user adjudication, Type-D).
