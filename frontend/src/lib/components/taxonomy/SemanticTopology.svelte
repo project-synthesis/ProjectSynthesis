@@ -25,6 +25,7 @@
   import { EnvelopePool } from './EnvelopePool';
   import { AnimationCoordinator } from './AnimationCoordinator';
   import { ImpactCoordinator } from './ImpactCoordinator';
+  import { SelectionController } from './SelectionController';
   // Sub-project D — 5 single-responsibility builders + typed context.
   // Each builder implements SceneBuilder (build + dispose); shared per-
   // rebuild state flows through BuilderContext explicitly.
@@ -73,7 +74,8 @@
   // Resolved at module level to avoid per-frame allocations.
   // Sub-project D — EDGE_COLOR / SIMILARITY_EDGE_COLOR / INJECTION_EDGE_COLOR
   // were consumed only by the deleted buildEdgeGroup helper; EdgeBuilder.ts
-  // owns its own copies now. HIGHLIGHT_COLOR remains for applyHighlight.
+  // owns its own copies now. HIGHLIGHT_COLOR is now passed to
+  // SelectionController as the `highlightColor` dep (Sub-project E).
   const HIGHLIGHT_COLOR = parseInt(HIGHLIGHT_COLOR_HEX.replace('#', ''), 16);
 
   // Sub-project D — Ring radius/thickness/segments constants migrated
@@ -145,7 +147,10 @@
   let sceneData = $state<SceneData | null>(null);
 
   let lodTier = $state<LODTier>('far');
-  let focusedNodeId = $state<string | null>(null);
+  // Sub-project E — the prior focused-node $state migrated into
+  // SelectionController's private `_selectedId` field. Reads route through
+  // `selectionController?.selectedId`; writes happen exclusively inside
+  // `SC.select(...)`.
   let hoveredNodeId = $state<string | null>(null);
   let seedModalOpen = $state(false);
 
@@ -248,48 +253,19 @@
   // gone. Instantiated in onMount after beam/envelope/physics pools,
   // disposed FIRST in the cleanup return per spec acceptance #10.
   let impactCoordinator: ImpactCoordinator | null = null;
+  // Sub-project E — selection state machine. Owns highlight target +
+  // color snapshot + engulfed-set + flash states (via FlashController).
+  // Constructed AFTER ImpactCoordinator (the SC depends on IC for click
+  // routing) with IC's `selectionController` dep patched post-construction
+  // — see the thunked-dep pattern below in onMount.
+  let selectionController: SelectionController | null = null;
 
-  // Emissive engulfment state — per-node MeshStandardMaterial.emissiveIntensity
-  // burst at beam impact. Mirrors the 3-phase EnvelopePool lifecycle so the
-  // inner glow (emissive) and outer plasma skin (envelope) rise, hold, and
-  // dissolve as one continuous effect — the node is engulfed from both inside
-  // and outside simultaneously.
-  //
-  // Timeline (matches EnvelopePool exactly):
-  //   attack (120ms): cubic ease-out ramp baseline → peak (avoids jarring jump)
-  //   hold   (580ms): sustained at peak — node glows while beam is connected
-  //   decay  (680ms): cubic ease-out decay peak → baseline — dissolves with beam
-  // Total: 1380ms (= ATTACK_MS + HOLD_MS + DECAY_MS from EnvelopePool.ts)
-  const GLOW_ATTACK_MS = 120;
-  const GLOW_HOLD_MS = 580;
-  const GLOW_DECAY_MS = 680;
-  const GLOW_TOTAL_MS = GLOW_ATTACK_MS + GLOW_HOLD_MS + GLOW_DECAY_MS; // 1380ms
-  // Additive delta on top of the node's baseline emissive.
-  // Additive (not multiplicative) to stay within the bloom pass's designed
-  // headroom: a 4× multiplier on a high-score cluster (base ~1.4) would reach
-  // 5.6 — deep into white-out territory. An absolute delta of +1.6 gives
-  // a strong surge on domains (0.4→2.0) and a decisive punch on clusters
-  // (0.6→2.2) without overdriving the bloom pass.
-  const GLOW_PEAK_DELTA = 1.6;
-  // Domain emissive color is stored per-glow so the burst always fires in the
-  // node's brand color even if the highlight system has swapped mat.emissive to
-  // HIGHLIGHT_COLOR (neon cyan). On completion, the correct emissive is decided
-  // by a live _highlightedId check — NOT a prevEmissive snapshot, which would be
-  // stale if the user switched nodes during the 1380ms glow window.
-  const _flashStates = new Map<string, {
-    startTime: number;
-    baselineEmissive: number;
-    // Attack-phase start value. Defaults to `max(currentEmissiveIntensity,
-    // baselineEmissive)` so the flash ramp climbs UP from whatever the
-    // current displayed value is (preventing the "dim flash" frame when
-    // the idle pulse had elevated emissive above baseline). On flash
-    // completion, the value lands at peak then decays back to baseline
-    // — the asymmetry between attack-start and decay-end is intentional
-    // and produces the operator-spec'd "star-forming" rise + fluid
-    // dissipation.
-    startIntensity: number;
-    domainEmissive: THREE.Color;  // node brand color — applied to mat.emissive during burst
-  }>();
+  // Sub-project E — flash state map + timing constants migrated to
+  // FlashController.ts. FlashState shape (`startTime, baselineEmissive,
+  // startIntensity, domainEmissive`) is preserved verbatim; the 3-phase
+  // attack/hold/decay timing (120/580/680ms, total 1380ms, +1.6 additive
+  // peak delta) is now FC-private. The lifecycle that matches EnvelopePool
+  // exactly is unchanged; only ownership moved.
 
   // T3.3 — Beam Impact Camera Micro-Shake
   let _cameraShake = 0;
@@ -302,17 +278,11 @@
   // camera back to distance 60 and overriding the user's current view.
   let _hasAutoFocused = false;
   let _beamNodeGroups: Map<string, THREE.Group> = new Map();
-  // Previous-selection tracker so the selection $effect's engulfment-gate
-  // clear is keyed off ACTUAL selection-change transitions, not every
-  // reactive re-trigger of the effect (sceneData rebuilds, focusedNodeId
-  // self-writes, etc.). Without this, mid-flight scene rebuilds would
-  // clear the engulfment marker set between the beam impact and the next
-  // idle-pulse frame — observed as "only one specific node gets the full
-  // effect" because only nodes selected during quiescent scenes survived.
-  // Post-Sub-project-C the engulfment-marker set itself lives on the
-  // ImpactCoordinator (see `impactCoordinator.clearEngulfed()`); this
-  // module-scope tracker stays per spec §4.3 (Sub-project E absorbs it later).
-  let _prevSelectedId: string | null = null;
+  // Sub-project E — previous-selection tracker migrated into
+  // SelectionController's private `_previousId` field. The engulfment-gate
+  // clear is now strictly transition-triggered inside SC.select via the
+  // cancel-via-idle path (state machine semantics — same id no-ops,
+  // different id transitions through idle which clears the engulfed set).
   let _sceneNodeMap: Map<string, import('./TopologyData').SceneNode> = new Map();
   let _prevNodeSizes: Map<string, number> = new Map();
   let _seedBatchActive = false;
@@ -325,157 +295,14 @@
   // Persisted edge grouping — shared between rebuildScene and formation rebuild
   let _edgesByParent: Map<string, HierEdge[]> = new Map();
 
-  // External highlight tracking (for family selection sync)
-  let _highlightedId: string | null = null;
-  let _highlightedColor: number | null = null;
-
-  /** Restore previous highlight color and apply neon cyan to a new node.
-   *  Cluster fill meshes use `MeshStandardMaterial` (per brand reference
-   *  "Material Recipes"). The highlight swaps both `material.color` AND
-   *  `material.emissive` — without the emissive flip, the matte surface
-   *  would read cyan but the lit emission would still emit the original
-   *  domain hex, producing a desaturated mismatch under the directional
-   *  light. Spec § 3.2 (emissive setHex on highlight). */
-  function applyHighlight(nodeId: string): void {
-    // Restore previous
-    if (_highlightedId && _highlightedId !== nodeId) {
-      const prev = nodeMeshes.get(_highlightedId);
-      if (prev && _highlightedColor !== null) {
-        const m = prev.material as THREE.MeshStandardMaterial;
-        m.color.setHex(_highlightedColor);
-        m.emissive.setHex(_highlightedColor);
-      }
-    }
-    const mesh = nodeMeshes.get(nodeId);
-    if (!mesh) {
-      _highlightedId = null;
-      _highlightedColor = null;
-      return;
-    }
-    const m = mesh.material as THREE.MeshStandardMaterial;
-    _highlightedColor = m.color.getHex();
-    _highlightedId = nodeId;
-    m.color.setHex(HIGHLIGHT_COLOR);
-    m.emissive.setHex(HIGHLIGHT_COLOR);
-  }
-
-  /** Clear any active highlight, restoring the original color + emission. */
-  function clearHighlight(): void {
-    if (_highlightedId) {
-      const prev = nodeMeshes.get(_highlightedId);
-      if (prev && _highlightedColor !== null) {
-        const m = prev.material as THREE.MeshStandardMaterial;
-        m.color.setHex(_highlightedColor);
-        m.emissive.setHex(_highlightedColor);
-      }
-    }
-    _highlightedId = null;
-    _highlightedColor = null;
-  }
-
-  /**
-   * Trigger emissive engulfment glow on a node at beam impact.
-   *
-   * `domainColor` is the node's brand color from the SceneNode data — always
-   * the organic domain hue, never the highlight cyan. It is applied to
-   * `mat.emissive` during the glow so the inner burst radiates the correct
-   * brand color even when the highlight system has already swapped the emissive
-   * to HIGHLIGHT_COLOR. The prior emissive is snapshot-ed and restored on
-   * glow completion so the cyan highlight persists correctly afterwards.
-   */
-  function flashEmissive(nodeId: string, domainColor: THREE.Color): void {
-    const mesh = nodeMeshes.get(nodeId);
-    if (!mesh) return;
-    const mat = mesh.material as THREE.MeshStandardMaterial;
-    const existing = _flashStates.get(nodeId);
-    // MUST use the true baseEmissive cached on the mesh, otherwise rapid refires
-    // while the node is pulsing (idlePulse) will compound the pulse into the baseline.
-    const trueBase = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
-    const baseline = existing ? existing.baselineEmissive : trueBase;
-    // Anti-dip guard: capture the CURRENT displayed emissiveIntensity as
-    // the attack-phase start. If the idle pulse (or a prior incomplete
-    // flash) elevated the visible emissive above the data-driven
-    // baseline, the attack ramp should start FROM that elevated value
-    // and climb UP to the peak — NOT snap-cut back down to baseline
-    // first. Pre-fix the `_tickFlashStates` attack formula was
-    // `baselineEmissive + (peak - baselineEmissive) * ease` which dipped
-    // emissive to `baselineEmissive` on impact, producing the operator-
-    // observed "becomes flat when the beam hits" frame. New behavior:
-    // start from `attackStart = max(currentIntensity, baselineEmissive)`,
-    // ramp to peak. Reuses existing `startIntensity` field added to the
-    // state record.
-    const startIntensity = existing
-      ? existing.startIntensity
-      : Math.max(mat.emissiveIntensity, baseline);
-    _flashStates.set(nodeId, {
-      startTime: performance.now(),
-      baselineEmissive: baseline,
-      startIntensity,
-      domainEmissive: domainColor.clone(),
-    });
-    // Apply domain color immediately so there is no one-frame cyan blip at attack onset.
-    mat.emissive.copy(domainColor);
-  }
-
-  /**
-   * Per-frame advance for every active emissive engulfment glow.
-   * Mirrors the 3-phase EnvelopePool state machine (attack → hold → decay)
-   * so the inner glow and outer envelope are always in phase.
-   */
-  function _tickFlashStates(now: number): void {
-    if (_flashStates.size === 0) return;
-    for (const [nodeId, state] of _flashStates) {
-      const mesh = nodeMeshes.get(nodeId);
-      if (!mesh) {
-        _flashStates.delete(nodeId);
-        continue;
-      }
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      const elapsed = now - state.startTime;
-      const peak = state.baselineEmissive + GLOW_PEAK_DELTA;
-
-      if (elapsed >= GLOW_TOTAL_MS) {
-        // Glow complete. Determine the correct emissive color by live-checking
-        // the highlight state — NOT from a prevEmissive snapshot which may be
-        // stale if the user clicked a different node during the 1380ms glow window.
-        // applyHighlight restores the old node to domain color when switching nodes,
-        // so a stale "cyan" snapshot would incorrectly re-apply highlight to a node
-        // that is no longer selected.
-        if (_highlightedId === nodeId) {
-          mat.emissive.setHex(HIGHLIGHT_COLOR);
-        } else {
-          // Not selected: domain color is already correct (tick drives it every frame).
-          mat.emissive.copy(state.domainEmissive);
-        }
-        mat.emissiveIntensity = state.baselineEmissive;
-        _flashStates.delete(nodeId);
-        continue;
-      }
-
-      // Keep domain color active throughout the glow so rapid re-fires or
-      // concurrent highlight changes cannot re-inject cyan during the burst.
-      mat.emissive.copy(state.domainEmissive);
-
-      if (elapsed < GLOW_ATTACK_MS) {
-        // Attack: cubic ease-out ramp `startIntensity` → peak. Ramping from
-        // the current displayed value (captured at acquire time) — not the
-        // data-driven baseline — eliminates the operator-reported "becomes
-        // flat when the beam hits" dip when the idle pulse had already
-        // lifted emissive above baseline before impact.
-        const t = elapsed / GLOW_ATTACK_MS;
-        const ease = 1 - Math.pow(1 - t, 3);
-        mat.emissiveIntensity = state.startIntensity + (peak - state.startIntensity) * ease;
-      } else if (elapsed < GLOW_ATTACK_MS + GLOW_HOLD_MS) {
-        // Hold: node radiates at full engulfment peak while beam is connected.
-        mat.emissiveIntensity = peak;
-      } else {
-        // Decay: cubic ease-out from peak → baseline, in sync with envelope dissolve.
-        const t = (elapsed - GLOW_ATTACK_MS - GLOW_HOLD_MS) / GLOW_DECAY_MS;
-        const ease = 1 - Math.pow(1 - t, 3);
-        mat.emissiveIntensity = peak + (state.baselineEmissive - peak) * ease;
-      }
-    }
-  }
+  // Sub-project E — highlight id + color snapshots migrated into
+  // SelectionController's private fields. The prior inline highlight helpers
+  // are now SC's private apply/clear methods (the F16 dual color+emissive
+  // swap is preserved verbatim — see SelectionController.ts). Similarly,
+  // the inline flash helper + per-frame tick are owned by FlashController.ts
+  // (constructed transitively via `new SelectionController(...)`); the
+  // inline attack/hold/decay tick + anti-dip guard + live-highlighted check
+  // on flash completion are preserved unchanged.
 
   /** Set opacity on an edge material — handles both LineBasicMaterial and ShaderMaterial. */
   function setEdgeOpacity(obj: THREE.LineSegments, value: number): void {
@@ -574,113 +401,6 @@
     return positions;
   }
 
-  /**
-   * Per-frame breathing callback — registered through coordinator's
-   * `breathing` phase. Composes:
-   *   T3.3 — Beam impact camera micro-shake
-   *   T1.1 — Per-node phase offset for desynchronized breathing
-   *   T2.4 — Hover proximity field amplification
-   *   T3.4 — Idle pulse engulfed-guard (Sub-project C §3.4 hazard)
-   *   F4   — Readiness ring sync (via RingBuilder accessor)
-   *   F3   — Template ring opacity + rotation (via RingBuilder accessor)
-   *
-   * Extracted from rebuildScene body so the orchestrator stays under the
-   * 150 LOC ceiling per spec §6.1 #3.
-   */
-  function _advanceBreathing(): void {
-    _breathingTime += 0.016;
-
-    // T3.3 — Beam impact camera micro-shake.
-    if (_cameraShake > 0.001) {
-      if (renderer?.camera) {
-        renderer.camera.rotation.x += (Math.random() - 0.5) * _cameraShake;
-        renderer.camera.rotation.y += (Math.random() - 0.5) * _cameraShake;
-      }
-      _cameraShake *= 0.85;
-    } else {
-      _cameraShake = 0;
-    }
-
-    for (const [nodeId, mesh] of nodeMeshes) {
-      const node = _sceneNodeMap.get(nodeId);
-      if (!node) continue;
-
-      // T1.1 — Per-node phase offset for desynchronized breathing.
-      const phase = _nodePhaseOffsets.get(nodeId) ?? 0;
-      const scaleBase = Math.sin((_breathingTime + phase) * 1.5) * 0.02 + 1.0;
-
-      // T2.4 — Hover proximity field.
-      const PROXIMITY_RADIUS = 8.0;
-      const isHovered = (hoveredNodeId === nodeId);
-      let proximityFactor = 0;
-      if (!isHovered && hoveredNodeId) {
-        const hoveredNode = _sceneNodeMap.get(hoveredNodeId);
-        if (hoveredNode) {
-          const dx = node.position[0] - hoveredNode.position[0];
-          const dy = node.position[1] - hoveredNode.position[1];
-          const dz = node.position[2] - hoveredNode.position[2];
-          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (dist < PROXIMITY_RADIUS) {
-            const t = 1 - dist / PROXIMITY_RADIUS;
-            proximityFactor = t * t * 0.6;
-          }
-        }
-      }
-      const hoverAmplification = isHovered ? 1.1 : (1.0 + 0.1 * proximityFactor);
-      const targetScaleMultiplier = scaleBase * hoverAmplification;
-      const targetScale = node.size * targetScaleMultiplier;
-
-      mesh.scale.lerp(_scratchVec3a.set(targetScale, targetScale, targetScale), 0.1);
-
-      const parentGroup = mesh.parent;
-      if (parentGroup) {
-        for (const child of parentGroup.children) {
-          if (child !== mesh && child.type !== 'Group') {
-            child.scale.copy(mesh.scale);
-          }
-        }
-      }
-
-      // Readiness ring (canon F4) — read via RingBuilder accessor.
-      const readyEntry = ringBuilder?.getReadinessRing(nodeId);
-      if (readyEntry) {
-        if (isHovered) {
-          readyEntry.mesh.rotateOnAxis(Z_AXIS, 0.02);
-        }
-        readyEntry.mesh.scale.setScalar(targetScaleMultiplier);
-      }
-
-      // T3.4 — Idle Ambient Energy Pulse (canon)
-      // Engulfed-guard preserved per Sub-project C §3.4 phase-ordering
-      // hazard. The flash-state branch is a no-op (the engulfment-bug
-      // regression guard); `_tickFlashStates` owns the full attack →
-      // hold → decay ramp.
-      const isSelected = clustersStore.selectedClusterId === nodeId;
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      const baseEmissive = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
-      if (_flashStates.has(nodeId)) {
-        // No-op — `_tickFlashStates` owns the ramp.
-      } else if (impactCoordinator?.isEngulfed(nodeId) && isSelected) {
-        // No-op — ImpactCoordinator._tick owns the engulfed T3.4 pulse.
-      } else {
-        mat.emissiveIntensity = baseEmissive;
-      }
-
-      // Template ring (canon F3) — read via RingBuilder accessor.
-      const templateRing = ringBuilder?.getTemplateRing(nodeId);
-      if (templateRing) {
-        const ringMat = templateRing.material as THREE.MeshBasicMaterial;
-        if (isHovered) {
-          templateRing.rotation.z += 0.02;
-          ringMat.opacity = 0.35 + Math.sin(_breathingTime * 10.0) * 0.15;
-        } else {
-          ringMat.opacity = 0.35;
-        }
-        templateRing.scale.setScalar(targetScaleMultiplier);
-      }
-    }
-  }
-
   function rebuildScene(data: SceneData): void {
     if (!renderer) return;
     if (!coordinator) return;
@@ -690,7 +410,10 @@
     interaction?.clear();
     labels?.clear();
     nodeMeshes.clear();
-    clearHighlight();
+    // Sub-project E — pre-cleanup highlight clear removed here. `SC.afterRebuild()`
+    // (invoked at the end of this function) nulls the snapshots and
+    // re-applies highlight against the rebuilt mesh in one deterministic
+    // step; the prior pre-cleanup clear is redundant.
     _simScoreCache = null;
     _injWeightCache = null;
     // Unsubscribe the billboard FIRST so it cannot fire against a
@@ -833,11 +556,124 @@
     }
 
     // ── 11. Highlight survival (canon F16) ───────────────────────
-    // Re-apply cyan highlight if a focusedNodeId exists so it survives
-    // async rebuildScene mutations (stateFilter changes that re-fire
-    // the $effect rebuild loop).
-    if (focusedNodeId) {
-      applyHighlight(focusedNodeId);
+    // SC.afterRebuild re-applies highlight to the rebuilt mesh
+    // deterministically. Replaces the prior implicit re-apply hack
+    // per Sub-project E.
+    selectionController?.afterRebuild();
+  }
+
+  /**
+   * Per-frame breathing callback — registered through coordinator's
+   * `breathing` phase. Composes:
+   *   T3.3 — Beam impact camera micro-shake
+   *   T1.1 — Per-node phase offset for desynchronized breathing
+   *   T2.4 — Hover proximity field amplification
+   *   T3.4 — Idle pulse engulfed-guard (Sub-project E §3.4 hazard) —
+   *          reads `selectionController?.isFlashActive(nodeId)` and
+   *          `selectionController?.isEngulfed(nodeId)` (FC + SC state owned
+   *          by SelectionController post-Sub-project-E); the inner FC tick
+   *          owns the full attack→hold→decay ramp.
+   *   F4   — Readiness ring sync (via RingBuilder accessor)
+   *   F3   — Template ring opacity + rotation (via RingBuilder accessor)
+   *
+   * Extracted from rebuildScene body so the orchestrator stays under the
+   * 150 LOC ceiling per spec §6.1 #3. Function declaration intentionally
+   * sits AFTER the breathing register site (line 510) so the cleanup-contract
+   * source-grep (#14) finds the M3-migrated SC.isFlashActive anchor within
+   * the forward slice from the register call. JS function-declaration
+   * hoisting handles the forward reference.
+   */
+  function _advanceBreathing(): void {
+    _breathingTime += 0.016;
+
+    // T3.3 — Beam impact camera micro-shake.
+    if (_cameraShake > 0.001) {
+      if (renderer?.camera) {
+        renderer.camera.rotation.x += (Math.random() - 0.5) * _cameraShake;
+        renderer.camera.rotation.y += (Math.random() - 0.5) * _cameraShake;
+      }
+      _cameraShake *= 0.85;
+    } else {
+      _cameraShake = 0;
+    }
+
+    for (const [nodeId, mesh] of nodeMeshes) {
+      const node = _sceneNodeMap.get(nodeId);
+      if (!node) continue;
+
+      // T1.1 — Per-node phase offset for desynchronized breathing.
+      const phase = _nodePhaseOffsets.get(nodeId) ?? 0;
+      const scaleBase = Math.sin((_breathingTime + phase) * 1.5) * 0.02 + 1.0;
+
+      // T2.4 — Hover proximity field.
+      const PROXIMITY_RADIUS = 8.0;
+      const isHovered = (hoveredNodeId === nodeId);
+      let proximityFactor = 0;
+      if (!isHovered && hoveredNodeId) {
+        const hoveredNode = _sceneNodeMap.get(hoveredNodeId);
+        if (hoveredNode) {
+          const dx = node.position[0] - hoveredNode.position[0];
+          const dy = node.position[1] - hoveredNode.position[1];
+          const dz = node.position[2] - hoveredNode.position[2];
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (dist < PROXIMITY_RADIUS) {
+            const t = 1 - dist / PROXIMITY_RADIUS;
+            proximityFactor = t * t * 0.6;
+          }
+        }
+      }
+      const hoverAmplification = isHovered ? 1.1 : (1.0 + 0.1 * proximityFactor);
+      const targetScaleMultiplier = scaleBase * hoverAmplification;
+      const targetScale = node.size * targetScaleMultiplier;
+
+      mesh.scale.lerp(_scratchVec3a.set(targetScale, targetScale, targetScale), 0.1);
+
+      const parentGroup = mesh.parent;
+      if (parentGroup) {
+        for (const child of parentGroup.children) {
+          if (child !== mesh && child.type !== 'Group') {
+            child.scale.copy(mesh.scale);
+          }
+        }
+      }
+
+      // Readiness ring (canon F4) — read via RingBuilder accessor.
+      const readyEntry = ringBuilder?.getReadinessRing(nodeId);
+      if (readyEntry) {
+        if (isHovered) {
+          readyEntry.mesh.rotateOnAxis(Z_AXIS, 0.02);
+        }
+        readyEntry.mesh.scale.setScalar(targetScaleMultiplier);
+      }
+
+      // T3.4 — Idle Ambient Energy Pulse (canon)
+      // Engulfed-guard preserved per Sub-project E §3.4 phase-ordering
+      // hazard. The flash-state branch is a no-op (the engulfment-bug
+      // regression guard); FlashController owns the full attack →
+      // hold → decay ramp.
+      const isSelected = clustersStore.selectedClusterId === nodeId;
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      const baseEmissive = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
+      if (selectionController?.isFlashActive(nodeId)) {
+        // No-op — FlashController._tick owns the ramp.
+      } else if (selectionController?.isEngulfed(nodeId) && isSelected) {
+        // No-op — SelectionController._tickIdlePulse owns the engulfed T3.4 pulse.
+      } else {
+        mat.emissiveIntensity = baseEmissive;
+      }
+
+      // Template ring (canon F3) — read via RingBuilder accessor.
+      const templateRing = ringBuilder?.getTemplateRing(nodeId);
+      if (templateRing) {
+        const ringMat = templateRing.material as THREE.MeshBasicMaterial;
+        if (isHovered) {
+          templateRing.rotation.z += 0.02;
+          ringMat.opacity = 0.35 + Math.sin(_breathingTime * 10.0) * 0.15;
+        } else {
+          ringMat.opacity = 0.35;
+        }
+        templateRing.scale.setScalar(targetScaleMultiplier);
+      }
     }
   }
 
@@ -882,7 +718,7 @@
   function handleNodeClick(nodeId: string): void {
     // Canon F15: only call selectCluster — the $effect watching
     // clustersStore.selectedClusterId drives every visual update
-    // (focusOn, applyHighlight, tactile feedback). Doing the work here
+    // (focusOn, SC highlight apply, tactile feedback). Doing the work here
     // too duplicates effort and creates race conditions with the
     // async getClusterDetail fetch.
     clustersStore.selectCluster(nodeId);
@@ -891,8 +727,9 @@
   }
 
   function handleAscend(): void {
-    if (focusedNodeId && sceneData) {
-      const current = sceneData.nodes.find(n => n.id === focusedNodeId);
+    const sel = selectionController?.selectedId;
+    if (sel && sceneData) {
+      const current = sceneData.nodes.find(n => n.id === sel);
       if (current?.parentId) {
         // Canon F15: route through selectCluster, let the $effect drive.
         clustersStore.selectCluster(current.parentId);
@@ -911,8 +748,8 @@
     );
     if (match) {
       interaction?.highlightNode(match.id);
-      // Canon F15: selectCluster drives applyHighlight + focusOn + tactile
-      // feedback via the $effect.
+      // Canon F15: selectCluster drives SC.select (highlight + focusOn +
+      // tactile feedback) via the $effect.
       clustersStore.selectCluster(match.id);
     }
   }
@@ -1185,7 +1022,7 @@
         // _hasAutoFocused is a one-shot guard — every subsequent rebuildScene
         // (triggered by stateFilter mutation, taxonomy_changed, etc.) skips
         // this block and preserves the user's current camera position.
-        if (!_hasAutoFocused && !focusedNodeId && sceneData.nodes.length > 0) {
+        if (!_hasAutoFocused && !selectionController?.selectedId && sceneData.nodes.length > 0) {
           _hasAutoFocused = true;
           const domainSizes = new Map<string, { count: number; cx: number; cy: number; cz: number }>();
           for (const n of sceneData.nodes) {
@@ -1461,69 +1298,20 @@
     });
   });
 
-  // Sync external family selection → highlight node + tactile feedback (canon F18)
+  // Sync external family selection → highlight node + tactile feedback
+  // (canon F18). Sub-project E — the entire engulfed-gate clear +
+  // highlight apply + focus tween + click-impact chain is now owned by
+  // `SelectionController.select`. The only orchestrator-side concern is
+  // the deselect-to-overview camera reset (SC.select(null) clears
+  // highlight + state but does NOT move the camera).
   $effect(() => {
     const externalId = clustersStore.selectedClusterId;
-
-    // Clear the engulfment-gate flag ONLY when the selection actually
-    // changes (deselect or switch to a different node). Pre-fix this
-    // cleared on every `$effect` re-trigger — including triggers from
-    // unrelated reactive deps like `sceneData` rebuilds during the
-    // ~700ms beam-travel window. The result was the operator-reported
-    // "only one specific node gets the full effect" symptom: that node
-    // happened to be selected during a quiescent scene period and its
-    // post-impact gate survived; other clicks landed mid-rebuild and
-    // had their gate cleared between impact and the next idle-pulse
-    // frame. `_prevSelectedId` makes the clear strictly transition-
-    // triggered so re-fires of the same selection preserve the gate.
-    if (externalId !== _prevSelectedId) {
-      impactCoordinator?.clearEngulfed();
-      _prevSelectedId = externalId;
+    // Deselect → return camera to overview (preserves prior behavior;
+    // SC.select(null) clears highlight + state but doesn't move camera).
+    if (!externalId && selectionController?.selectedId) {
+      renderer?.focusOn(_scratchVec3a.set(0, 0, 0), 80);
     }
-
-    // Deselected — restore previous highlight + return to overview camera.
-    // Borrow `_scratchVec3a` for the focusOn target — `focusOn` clones the
-    // target internally (TopologyRenderer.ts focusOn → endTarget.clone()),
-    // so the scratch can be re-mutated immediately.
-    if (!externalId) {
-      clearHighlight();
-      if (focusedNodeId) {
-        focusedNodeId = null;
-        renderer?.focusOn(_scratchVec3a.set(0, 0, 0), 80);
-      }
-      return;
-    }
-
-    if (!renderer || !sceneData) return;
-    if (externalId === focusedNodeId) return; // already focused via click or search
-
-    const node = sceneData.nodes.find(n => n.id === externalId);
-    if (!node) return;
-
-    applyHighlight(externalId);
-    focusedNodeId = externalId;
-    renderer.focusOn(
-      _scratchVec3a.set(node.position[0], node.position[1], node.position[2]),
-    );
-
-    // Tactile feedback (canon F7 + F18 + F19). All impact reactions —
-    // ClusterPhysics overshoot accretion, plasma envelopement burst,
-    // emissive flash on the fill material — fire from the beam's
-    // `onImpact` callback so they synchronize to the moment the beam
-    // visually arrives at the target. Calling these synchronously with
-    // `acquire()` was a pre-existing anti-causal-ordering bug: the beam
-    // takes `FIRING_MS` (~700ms) to travel from FPS-weapon NDC origin to the cluster,
-    // so the cluster used to ripple BEFORE being hit.
-    if (impactCoordinator) {
-      const group = _beamNodeGroups.get(node.id);
-      if (group) {
-        // Spec §5.3 M3 Row 1 — click selection routes through the
-        // coordinator. TRIGGER_PRESETS.click owns the radius floor +
-        // marksEngulfed=true (populates the coordinator's engulfment-marker
-        // set for the T3.4 idle pulse).
-        impactCoordinator.fire({ trigger: 'click', node, group });
-      }
-    }
+    selectionController?.select(externalId);
   });
 
   onMount(() => {
@@ -1565,23 +1353,48 @@
     // Instantiate the ImpactCoordinator AFTER all its dependencies are
     // constructed AND BEFORE the first impact-phase registration so the
     // coordinator can claim its slot in the impact phase before any other
-    // handler. The coordinator owns the engulfment-marker set + the T3.4
-    // idle pulse; all 4 trigger sites route through the coordinator's
-    // fire method.
+    // handler. Per Sub-project E, IC no longer owns the engulfment-marker
+    // set + the T3.4 idle pulse — those are SC's responsibilities. IC's
+    // `selectionController` dep is patched immediately after SC
+    // construction (thunked-dep pattern — spec §3.5).
     // Spec §6.1 acceptance #3 + canon F7 source-level enforcement.
     impactCoordinator = new ImpactCoordinator({
       beamPool,
       envelopePool,
       clusterPhysics,
-      flashEmissive,
+      flashEmissive: (id, color) => selectionController?.flash(id, color),
       getSceneNode: (id) => _sceneNodeMap.get(id),
       getBeamGroup: (id) => _beamNodeGroups.get(id),
       getNodeMesh: (id) => nodeMeshes.get(id),
-      getSelectedId: () => clustersStore.selectedClusterId,
-      isFlashActive: (id) => _flashStates.has(id),
       renderer,
       animationCoordinator: coordinator,
+      // Patched immediately below — TS visibility on `_deps` requires a cast.
+      selectionController: null as unknown as SelectionController,
     });
+
+    // Sub-project E — SelectionController construction. AFTER IC so the
+    // SC's `impactCoordinator` dep is non-null at construction time; the
+    // `flashEmissive` closure above + the patch below resolve the SC↔IC
+    // mutual reference (spec §3.5 thunked-dep pattern).
+    selectionController = new SelectionController({
+      renderer,
+      animationCoordinator: coordinator,
+      impactCoordinator,
+      getNodeMesh: (id) => nodeMeshes.get(id),
+      getSceneNode: (id) => _sceneNodeMap.get(id),
+      getBeamGroup: (id) => _beamNodeGroups.get(id),
+      getBaseEmissive: (id) => {
+        const mesh = nodeMeshes.get(id);
+        return mesh ? (mesh.userData.baseEmissive as number | undefined) : undefined;
+      },
+      highlightColor: HIGHLIGHT_COLOR,
+    });
+
+    // Patch IC's selectionController dep now that SC exists. The cast
+    // bypasses TS visibility on `_deps`; documented as canon thunked-dep
+    // pattern per spec §3.5.
+    (impactCoordinator as unknown as { _deps: { selectionController: SelectionController } })
+      ._deps.selectionController = selectionController;
 
     // Sub-project D — 5 scene builders constructed AFTER renderer,
     // coordinator, impactCoordinator per spec §6.1 #8 + acceptance #12.
@@ -1628,9 +1441,10 @@
 
     // CONSOLIDATED onMount animation registrations — strict source order
     // pins the impact-phase ordering required by spec §3.3 + cleanup-contract
-    // test #4: beam.update → envelope.update → _tickFlashStates. Followed by
-    // the physics-phase clusterPhysics handler (impact → physics per
-    // PHASE_ORDER) and the camera-phase ring-LOD writer.
+    // test #4: beam.update → envelope.update → FC tick (registered transitively
+    // by `new SelectionController(...)` below). Followed by the physics-phase
+    // clusterPhysics handler (impact → physics per PHASE_ORDER) and the
+    // camera-phase ring-LOD writer.
     // Beam pool tick — drives every active beam's instance offsets,
     // shader uniforms (uFade, uPulse), and impact dispatch. Fires
     // first in the impact phase so the beam's `onImpact` callback can
@@ -1645,12 +1459,13 @@
     coordinator.register('impact', (delta) => {
       envelopePool?.update(delta);
     });
-    // Flash tick — per-node MeshStandardMaterial emissive ramp for
-    // any active flash. Runs LAST in impact phase so its writes are
-    // the final emissive values seen by the renderer this frame.
-    coordinator.register('impact', () => {
-      _tickFlashStates(performance.now());
-    });
+    // Sub-project E — flash tick migrated to FlashController.ts. FC's
+    // constructor registers an impact-phase callback via
+    // `deps.animationCoordinator.register('impact', ...)`. Construction
+    // happens transitively when `new SelectionController(...)` runs below,
+    // AFTER the beam + envelope impact-phase registrations above so FC's
+    // tick lands LAST in the impact phase (preserves canon ordering:
+    // beam.update → envelope.update → FC.tick).
     coordinator.register('physics', (delta) => {
       clusterPhysics?.update(delta, (nodeId, scale, ripple) => {
         const group = _beamNodeGroups.get(nodeId);
@@ -1709,21 +1524,26 @@
     ro.observe(container);
 
     return () => {
-      // Sub-project C: impactCoordinator MUST dispose first so its
-      // `_disposed` flag short-circuits any subsequent RAF-driven `_tick`
-      // from the still-alive AnimationCoordinator. Reversed order is also
-      // race-safe per Sub-project B's lenient-on-disposed contract, but
-      // spec acceptance #10 (cleanup-contract.test.ts §Impact #10) pins
-      // this explicit order for Sub-project E future-compatibility.
+      // Sub-project E: selectionController MUST dispose FIRST so its
+      // `_disposed` flag short-circuits any subsequent RAF-driven idle-pulse
+      // tick from the still-alive AnimationCoordinator, and so FC.dispose
+      // (transitively invoked) restores per-active-flash baseline emissive
+      // BEFORE the mesh materials are torn down. SC.dispose also cancels its
+      // impact-phase tick + the inner FlashController's impact-phase tick.
+      selectionController?.dispose();
+      selectionController = null;
+      // Sub-project C: impactCoordinator disposes next. The strict order is
+      // pinned by spec acceptance #10 (cleanup-contract.test.ts §Impact #10)
+      // for Sub-project E future-compatibility — reversed order is also
+      // race-safe per Sub-project B's lenient-on-disposed contract.
       impactCoordinator?.dispose();
       impactCoordinator = null;
       // Dispose the AnimationCoordinator next so every per-frame handler
       // it owns stops before any pool/material cleanup that follows. This
       // is the cancel-before-clear ordering invariant pinned by the source
       // grep tests (cleanup-contract test #6 + SemanticTopology tests
-      // "cleanup return invokes coordinator?.dispose() before clearing
-      // _flashStates" / "cleanup return calls coordinator?.dispose() +
-      // envelopePool?.dispose() + nulls envelopePool"). The 8 absorbed
+      // for coordinator?.dispose() ordering before envelopePool?.dispose()
+      // and the FC dispose-restore of baseline emissive). The 8 absorbed
       // canceller calls (envelope, flash, beam+physics, ring-LOD, domain
       // rotation, edge anim, dust anim, breathing) are gone — coordinator
       // owns their lifetime via its single _removeTick subscription which
@@ -1740,25 +1560,14 @@
       // pool itself (releases all instance materials + geometry).
       envelopePool?.dispose();
       envelopePool = null;
-      // Emissive flash — restore each active flash's baseline emissive so
-      // a remount doesn't inherit inflated values that would only normalize
-      // on first paint (visible as a brief over-glow). The per-frame tick
-      // that wrote these was cancelled by coordinator.dispose() above, so
-      // _flashStates can be cleared without racing a late tick.
-      for (const [nodeId, state] of _flashStates) {
-        const mesh = nodeMeshes.get(nodeId);
-        if (mesh) {
-          const mat = mesh.material as THREE.MeshStandardMaterial;
-          // Restore emissive color: live check ensures no stale cyan bleed on remount.
-          if (_highlightedId === nodeId) {
-            mat.emissive.setHex(HIGHLIGHT_COLOR);
-          } else {
-            mat.emissive.copy(state.domainEmissive);
-          }
-          mat.emissiveIntensity = state.baselineEmissive;
-        }
-      }
-      _flashStates.clear();
+      // Sub-project E — the inline emissive-flash F19 restore loop here was
+      // migrated into `FlashController.dispose()` (invoked transitively via
+      // `selectionController?.dispose()` at the top of this return). FC's
+      // dispose iterates active flashes and restores per-node baseline
+      // emissive + domain/cyan emissive color via the `isHighlighted`
+      // callback (live highlight check, same semantics as the prior inline
+      // loop). The per-frame tick that wrote these was cancelled by FC's
+      // own register-remove inside `FlashController.dispose()`.
       // Conditional cancellers — formation lerp and readiness billboard.
       // These remain as module-scope `let` because they have rebuild-scoped
       // lifecycles (formation self-unregisters on completion, billboard
