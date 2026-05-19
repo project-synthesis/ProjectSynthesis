@@ -725,10 +725,13 @@ describe('Impact Coordinator — source-grep contract (spec §5.2)', () => {
   });
 
   // ── #5 ──
-  it('#5 — SemanticTopology.svelte has EXACTLY 4 impactCoordinator.fire( calls (one per trigger site)', () => {
+  it('#5 — SemanticTopology.svelte has EXACTLY 3 impactCoordinator.fire( calls (entrance + post-growth + optimization; click migrated to SelectionController.select per Sub-project E B2)', () => {
     const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
     const matches = src.match(/impactCoordinator[?!]?\.fire\(/g);
-    expect(matches?.length).toBe(4);
+    expect(matches?.length).toBe(3);
+    // Note: click-fire now lives inside SelectionController.select per spec
+    // §3.5 B2. Equivalent end-to-end coverage: SelectionController.test.ts #3
+    // + SC.integration.test.ts INT-1.
   });
 
   // ── #6 ──
@@ -1194,15 +1197,29 @@ describe('Cleanup contract — Sub-project E selection state machine (spec §5.3
     expect(slice).not.toMatch(/_flashStates\.has\s*\(/);
   });
 
-  test('#15 — ImpactCoordinator.ts does NOT contain _selectionEngulfed', () => {
-    expect(readSelSrc('ImpactCoordinator.ts')).not.toMatch(/_selectionEngulfed/);
+  test('#15 — ImpactCoordinator.ts does NOT contain _selectionEngulfed (live code, ignoring header-comment historical references)', () => {
+    const src = readSelSrc('ImpactCoordinator.ts');
+    // Strip block + line comments before grepping — IC.ts's header documents
+    // the post-Sub-project-E migration in prose ("there is no
+    // `_selectionEngulfed`..."). The Cycle 4 REFACTOR intentionally keeps
+    // that historical doc in place; this test guards LIVE code references.
+    const stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, '') // block comments
+      .replace(/^\s*\/\/.*$/gm, '');     // line comments
+    expect(stripped).not.toMatch(/_selectionEngulfed/);
   });
 
-  test('#16 — ImpactCoordinator.ts does NOT contain _tick / _pulseTime / T3.4 idle pulse formula', () => {
+  test('#16 — ImpactCoordinator.ts does NOT contain _tick / _pulseTime / T3.4 idle pulse formula (live code, ignoring header-comment historical references)', () => {
     const src = readSelSrc('ImpactCoordinator.ts');
-    expect(src).not.toMatch(/private\s+_tick\s*\(/);
-    expect(src).not.toMatch(/_pulseTime/);
-    expect(src).not.toMatch(/SELECTION_EMISSIVE_FLOOR/);
+    // Strip comments — IC.ts header mentions SELECTION_EMISSIVE_FLOOR /
+    // _selectionEngulfed / per-frame-tick in prose to document the
+    // Sub-project-E migration. LIVE code references are what we guard.
+    const stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    expect(stripped).not.toMatch(/private\s+_tick\s*\(/);
+    expect(stripped).not.toMatch(/_pulseTime/);
+    expect(stripped).not.toMatch(/SELECTION_EMISSIVE_FLOOR/);
   });
 
   test('#17 — ImpactCoordinator.ts does NOT export SELECTION_EMISSIVE_FLOOR', () => {

@@ -2554,18 +2554,14 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     expect(slice).not.toMatch(/^\s*renderer\.scene\.add\(\s*envelopePool\.group\s*\)/m);
   });
 
-  it('source: click $effect fires impactCoordinator.fire with click trigger (causal-ordering fix)', () => {
-    const src = _semTopSrc();
-    // Post-Sub-project-C: the click selection $effect routes through
-    // `impactCoordinator.fire({ trigger: 'click', ... })` (canon F7 + F18
-    // + F19 causal-ordering). The coordinator's onImpact callback fires
-    // every F19 reaction synchronously with beam arrival; SemanticTopology
-    // no longer touches beamPool.acquire directly. Equivalent end-to-end
-    // coverage: ImpactCoordinator.test.ts §5.1 #6 (click preset semantics).
-    expect(src).toMatch(
-      /impactCoordinator[?!]?\.fire\(\s*\{[\s\S]*?trigger\s*:\s*['"]click['"]/,
-    );
-  });
+  // DELETED (Sub-project E B2 / Cycle 4 REFACTOR): `source: click $effect
+  // fires impactCoordinator.fire with click trigger (causal-ordering fix)`.
+  // The click-trigger fire call migrated from SemanticTopology.svelte's
+  // selection $effect INTO `SelectionController.select(nodeId)` per spec
+  // §3.5 B2. The state machine now owns the canon F7 ordering invariant
+  // (click → fire → onImpact → physics → envelope → flash → engulfed).
+  // Replacement coverage: SelectionController.test.ts #3 (select fires
+  // click preset) + SC.integration.test.ts INT-1 (end-to-end click chain).
 
   it('source: entrance materialization beams route through impactCoordinator.fire with trigger: "entrance" (spec §5.3 M3 Row 1 — anchor moved from _triggerBeamImpact helper to coordinator fire site)', () => {
     const src = _semTopSrc();
@@ -2710,16 +2706,18 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // coordinator's onImpact callback, never synchronously with
     // beamPool.acquire. Post-Sub-project-C, SemanticTopology has ZERO
     // direct beamPool.acquire calls (cleanup-contract test #3); every
-    // beam trigger routes through `impactCoordinator.fire({...})`. Four
-    // call sites today (entrance, post-growth, optimization, click) —
-    // each must include a `trigger:` field that the coordinator's preset
-    // table dispatches on. Without this universal indirection, a future
-    // refactor could regress one site silently and re-introduce
-    // anti-causal ordering at that site only — invisible to the
-    // click-effect-specific regression tests above.
+    // beam trigger routes through `impactCoordinator.fire({...})`. Post-
+    // Sub-project-E B2, the click site migrated INTO
+    // SelectionController.select — three call sites remain in
+    // SemanticTopology.svelte (entrance, post-growth, optimization). The
+    // click-trigger invariant is now guarded inside SC.test.ts #3 +
+    // INT-1. Each remaining site must include a `trigger:` field that
+    // the coordinator's preset table dispatches on. Without this
+    // universal indirection, a future refactor could regress one site
+    // silently and re-introduce anti-causal ordering at that site only.
     const firePattern = /impactCoordinator[?!]?\.fire\(\s*\{([\s\S]*?)\}\s*\)/g;
     const matches = Array.from(src.matchAll(firePattern));
-    expect(matches.length).toBeGreaterThanOrEqual(4);
+    expect(matches.length).toBeGreaterThanOrEqual(3);
     for (const match of matches) {
       const configBody = match[1];
       expect(configBody, `impactCoordinator.fire site missing trigger field — preset dispatch risk\n${match[0]}`).toMatch(/trigger\s*:/);
