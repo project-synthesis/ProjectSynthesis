@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 from app.schemas.probes import ProbeContext
 from app.schemas.runs import RunRequest
+from app.services.batch_persistence import bulk_persist, batch_taxonomy_assign
 from app.services.batch_pipeline import PendingOptimization
 from app.services.event_bus import event_bus
 from app.services.generators.base import GeneratorResult
@@ -399,6 +400,34 @@ class TopicProbeGenerator:
             else:
                 failed_count += 1
 
+        # Finding 19b: canonical persist + assign block matching
+        # seed_agent_generator.py:241-282. Single bulk_persist + single
+        # batch_taxonomy_assign at end of run. Gated on write_queue presence
+        # (test-fixture path) + non-empty pendings (all-failed-pre-pipeline
+        # edge case).
+        taxonomy_result: dict | None = None
+        if self._write_queue is not None and pendings_for_assign:
+            persisted_count = await bulk_persist(
+                pendings_for_assign,
+                self._write_queue,
+                batch_id=run_id,
+            )
+            logger.info(
+                "probe %s persisted %d/%d pendings",
+                run_id, persisted_count, len(pendings_for_assign),
+            )
+            try:
+                taxonomy_result = await batch_taxonomy_assign(
+                    pendings_for_assign,
+                    self._write_queue,
+                    batch_id=run_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Taxonomy integration failed (non-fatal): %s", exc,
+                )
+                taxonomy_result = None
+
         # --- Phase 5: Reporting ---
         aggregate = self._build_aggregate(prompt_results)
         taxonomy_delta = await self._compute_taxonomy_delta(run_id)
@@ -673,6 +702,20 @@ class TopicProbeGenerator:
                 context_service=self._context_service,
                 project_id=project_id,
             )
+            # Finding 19b: append the completed pending to the run-scoped
+            # accumulator so the end-of-run bulk_persist +
+            # batch_taxonomy_assign block (in run() below) sees it. Append
+            # unconditionally — both bulk_persist and batch_taxonomy_assign
+            # filter internally:
+            # - bulk_persist at batch_persistence.py:108 filters
+            #   status=='completed' + quality gate (overall_score >= 5.0)
+            #   at :126-129
+            # - batch_taxonomy_assign at :352 additionally requires embedding
+            # Per spec §3.2: skip-failed semantics handled by canonical
+            # primitives, NOT probe code. Matches
+            # seed_agent_generator.py:241-282 pattern.
+            if pendings_for_assign is not None:
+                pendings_for_assign.append(pending)
             return {
                 "prompt_idx": idx,
                 "prompt_text": _truncate(prompt_text, 1000),
