@@ -1,12 +1,34 @@
 // frontend/src/lib/components/taxonomy/ImpactCoordinator.integration.test.ts
 //
-// Sub-project C — 5 stub-renderer integration tests per spec §7 Cycle 1
-// OPERATE.
+// Sub-project C — stub-renderer integration tests (originally 5).
+// Sub-project E Cycle 3 OPERATE — migrated to the post-shrink IC API:
+//   - `getSelectedId` / `isFlashActive` deps removed (SC owns those).
+//   - `coord.isEngulfed(id)` removed; engulfed-set lives on SelectionController.
+//   - `coord.clearEngulfed()` removed; cancellation flows through
+//     `SelectionController.select` (cancel-via-idle path).
+//   - INT-1 verifies the new contract: IC's onImpact body routes the
+//     impacted-node id through `deps.selectionController.onImpact(id)`
+//     for 'click' triggers (the only preset with `marksEngulfed: true`).
+//   - INT-2 verifies the same routing fires for repeated clicks — IC has
+//     no internal cancel-via-clear path anymore; the SC owns
+//     "stale selection → engulfed-set cleanup" via cancel-via-idle inside
+//     `SelectionController.select`. The behavior previously exercised by
+//     this integration test ("clear-then-re-mark") is covered by
+//     SelectionController.test.ts #25-#26 + SelectionController.integration
+//     INT-4 + the SC's own `select(other)` mid-decay zombie-transition guard.
+//   - INT-3 verifies the post-shrink dispose semantics: IC's constructor no
+//     longer registers an `impact`-phase handler (per IC.test.ts #1, the
+//     T3.4 idle pulse moved to SelectionController). dispose() now only
+//     toggles the `_disposed` flag — subsequent `fire()` calls become
+//     no-ops.
+// T3.4 idle-pulse integration test deleted entirely: behavior migrated
+// to SelectionController._tickIdlePulse, covered by SC unit tests
+// #25-#26 + SC integration INT-4.
 //
 // Stub renderer preserves addAnimationCallback shape verbatim; real
 // EnvelopePool/BeamPool/ClusterPhysics are constructed against jsdom
 // THREE (no WebGL).
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as THREE from 'three';
 import { ImpactCoordinator } from './ImpactCoordinator';
 import { AnimationCoordinator } from './AnimationCoordinator';
@@ -14,6 +36,7 @@ import { BeamPool } from './BeamPool';
 import { EnvelopePool } from './EnvelopePool';
 import { ClusterPhysics } from './ClusterPhysics';
 import type { TopologyRenderer } from './TopologyRenderer';
+import type { SelectionController } from './SelectionController';
 import type { SceneNode } from './TopologyData';
 
 function makeStubRenderer() {
@@ -33,6 +56,15 @@ function makeStubRenderer() {
   };
 }
 
+function makeSelectionController(): {
+  sc: SelectionController;
+  onImpact: ReturnType<typeof vi.fn>;
+} {
+  const onImpact = vi.fn();
+  const sc = { onImpact } as unknown as SelectionController;
+  return { sc, onImpact };
+}
+
 function mkNode(id: string, size = 5): SceneNode {
   // Cast via `unknown` — partial SceneNode test fixture omits the many
   // bookkeeping fields (opacity/persistence/visible/coherence/avgScore/
@@ -46,8 +78,8 @@ function mkNode(id: string, size = 5): SceneNode {
   } as unknown as SceneNode;
 }
 
-describe('ImpactCoordinator — stub-renderer integration (spec §7 Cycle 1 OPERATE)', () => {
-  it('INT-1: full chain — fire → beam.acquire → onImpact → envelope.acquire + flash + engulfed-marker', () => {
+describe('ImpactCoordinator — stub-renderer integration (Sub-project E Cycle 3 OPERATE)', () => {
+  it('INT-1: full chain — fire(click) → beam.acquire → onImpact → envelope.acquire + flash + selectionController.onImpact(id)', () => {
     const renderer = makeStubRenderer();
     const ac = new AnimationCoordinator(renderer as unknown as TopologyRenderer);
     const beamPool = new BeamPool();
@@ -57,14 +89,14 @@ describe('ImpactCoordinator — stub-renderer integration (spec §7 Cycle 1 OPER
     const clusterPhysics = new ClusterPhysics();
     let flashCalled = false;
     let flashedId: string | null = null;
+    const { sc, onImpact } = makeSelectionController();
     const coord = new ImpactCoordinator({
       beamPool, envelopePool, clusterPhysics,
       flashEmissive: (id: string) => { flashCalled = true; flashedId = id; },
       getSceneNode: () => undefined,
       getBeamGroup: () => undefined,
       getNodeMesh: () => undefined,
-      getSelectedId: () => null,
-      isFlashActive: () => false,
+      selectionController: sc,
       renderer: renderer as unknown as TopologyRenderer,
       animationCoordinator: ac,
     });
@@ -90,43 +122,56 @@ describe('ImpactCoordinator — stub-renderer integration (spec §7 Cycle 1 OPER
     }
     expect(flashCalled).toBe(true);
     expect(flashedId).toBe('n1');
-    expect(coord.isEngulfed('n1')).toBe(true);
+    // Post-shrink contract: IC routes engulfed-marker through SC.onImpact
+    // for 'click' triggers (`marksEngulfed: true`). SC owns the engulfed set.
+    expect(onImpact).toHaveBeenCalledWith('n1');
+    expect(onImpact).toHaveBeenCalledTimes(1);
   });
 
-  it('INT-2: clearEngulfed on click marks node; re-click after clearEngulfed re-marks', () => {
+  it('INT-2: repeated click fires selectionController.onImpact each time (IC is stateless — no internal clear API needed)', () => {
+    // Sub-project E Cycle 3 OPERATE — the original test verified IC's
+    // own `clearEngulfed` semantics. That method no longer exists; the SC
+    // owns engulfed-set lifecycle via cancel-via-idle inside `select(other)`.
+    // The IC-level contract is "every click fires SC.onImpact" — verify that.
     const renderer = makeStubRenderer();
     const ac = new AnimationCoordinator(renderer as unknown as TopologyRenderer);
     const beamPool = new BeamPool();
     const envelopePool = new EnvelopePool();
     const clusterPhysics = new ClusterPhysics();
+    const { sc, onImpact } = makeSelectionController();
     const coord = new ImpactCoordinator({
       beamPool, envelopePool, clusterPhysics,
       flashEmissive: () => {},
       getSceneNode: () => undefined,
       getBeamGroup: () => undefined,
       getNodeMesh: () => undefined,
-      getSelectedId: () => 'n1',
-      isFlashActive: () => false,
+      selectionController: sc,
       renderer: renderer as unknown as TopologyRenderer,
       animationCoordinator: ac,
     });
     const acquireSpy = vi.spyOn(beamPool, 'acquire');
     const node = mkNode('n1');
     const group = new THREE.Group();
-    // First click — engulfs n1
+    // First click — SC.onImpact called once with 'n1'.
     coord.fire({ trigger: 'click', node, group });
     (acquireSpy.mock.calls[0][1] as { onImpact: () => void }).onImpact();
-    expect(coord.isEngulfed('n1')).toBe(true);
-    // Clear
-    coord.clearEngulfed();
-    expect(coord.isEngulfed('n1')).toBe(false);
-    // Re-click — re-engulfs
+    expect(onImpact).toHaveBeenCalledTimes(1);
+    expect(onImpact).toHaveBeenLastCalledWith('n1');
+    // Second click on the same node — SC.onImpact called a second time.
+    // SC owns dedupe/idempotency at its layer; IC unconditionally routes.
     coord.fire({ trigger: 'click', node, group });
     (acquireSpy.mock.calls[1][1] as { onImpact: () => void }).onImpact();
-    expect(coord.isEngulfed('n1')).toBe(true);
+    expect(onImpact).toHaveBeenCalledTimes(2);
+    expect(onImpact).toHaveBeenLastCalledWith('n1');
   });
 
-  it('INT-3: dispose cancels impact-phase registration (verify stub renderer callback count goes back to baseline)', () => {
+  it('INT-3: post-shrink dispose — IC constructor does not register an impact-phase handler; dispose makes fire() a no-op', () => {
+    // Sub-project E Cycle 3 OPERATE — IC's `_tick`/`_removeTick`/the
+    // constructor's `animationCoordinator.register('impact', ...)` are
+    // deleted; the T3.4 idle pulse now lives on SelectionController.
+    // The integration-level invariant is therefore:
+    //   1. AC handler count for `impact` phase stays at 0 across IC ctor.
+    //   2. dispose() flips the `_disposed` flag so subsequent fire() no-ops.
     const renderer = makeStubRenderer();
     const ac = new AnimationCoordinator(renderer as unknown as TopologyRenderer);
     const beamPool = new BeamPool();
@@ -136,33 +181,35 @@ describe('ImpactCoordinator — stub-renderer integration (spec §7 Cycle 1 OPER
     // renderer (the AC's per-frame tick).
     const acBaseline = renderer._callbackCount();
     expect(acBaseline).toBe(1);
+    // AnimationCoordinator stores per-phase handler arrays in
+    // `_phases: Map<AnimationPhase, AnimationHandler[]>`.
+    const acAny = ac as unknown as { _phases?: Map<string, unknown[]> };
+    const impactHandlersBeforeCtor = acAny._phases?.get('impact')?.length ?? 0;
+    const { sc } = makeSelectionController();
     const coord = new ImpactCoordinator({
       beamPool, envelopePool, clusterPhysics,
       flashEmissive: () => {},
       getSceneNode: () => undefined,
       getBeamGroup: () => undefined,
       getNodeMesh: () => undefined,
-      getSelectedId: () => null,
-      isFlashActive: () => false,
+      selectionController: sc,
       renderer: renderer as unknown as TopologyRenderer,
       animationCoordinator: ac,
     });
-    // After ImpactCoordinator constructor: still 1 callback on renderer
-    // (coordinator registers against AC's `impact` phase, not directly
-    // against renderer). AC owns the renderer registration.
+    // After IC ctor: NO new impact-phase handlers added (T3.4 lives on SC now).
+    const impactHandlersAfterCtor = acAny._phases?.get('impact')?.length ?? 0;
+    expect(impactHandlersAfterCtor).toBe(impactHandlersBeforeCtor);
+    // Renderer callback count unchanged (AC owns the renderer registration).
     expect(renderer._callbackCount()).toBe(1);
-    // Capture AC's internal handler-count BEFORE coordinator.dispose().
-    // We need a way to introspect AC's per-phase handler set. Reach into
-    // private state via type assertion (acceptable in integration test).
-    // AnimationCoordinator stores per-phase handler arrays in `_phases: Map<AnimationPhase, AnimationHandler[]>`
-    // (verified at `AnimationCoordinator.ts:50`). The `_handlers` name from
-    // earlier plan revisions was incorrect.
-    const acAny = ac as unknown as { _phases?: Map<string, unknown[]> };
-    const impactHandlersBefore = acAny._phases?.get('impact')?.length ?? 0;
+    // dispose() flips _disposed; subsequent fire() short-circuits.
+    const acquireSpy = vi.spyOn(beamPool, 'acquire');
     coord.dispose();
-    const impactHandlersAfter = acAny._phases?.get('impact')?.length ?? 0;
-    // dispose() removes the coordinator's single impact-phase handler.
-    expect(impactHandlersAfter).toBe(impactHandlersBefore - 1);
+    const node = mkNode('n1');
+    const group = new THREE.Group();
+    coord.fire({ trigger: 'click', node, group });
+    expect(acquireSpy).not.toHaveBeenCalled();
+    // Idempotent dispose.
+    expect(() => coord.dispose()).not.toThrow();
   });
 
   it('INT-4: getter fallbacks — getSceneNode returns undefined uses request.node; getBeamGroup returns undefined uses request.group', () => {
@@ -172,6 +219,7 @@ describe('ImpactCoordinator — stub-renderer integration (spec §7 Cycle 1 OPER
     const envelopePool = new EnvelopePool();
     const clusterPhysics = new ClusterPhysics();
     const acquireSpy = vi.spyOn(beamPool, 'acquire');
+    const { sc } = makeSelectionController();
     const coord = new ImpactCoordinator({
       beamPool, envelopePool, clusterPhysics,
       flashEmissive: () => {},
@@ -179,8 +227,7 @@ describe('ImpactCoordinator — stub-renderer integration (spec §7 Cycle 1 OPER
       getSceneNode: () => undefined,
       getBeamGroup: () => undefined,
       getNodeMesh: () => undefined,
-      getSelectedId: () => null,
-      isFlashActive: () => false,
+      selectionController: sc,
       renderer: renderer as unknown as TopologyRenderer,
       animationCoordinator: ac,
     });
@@ -202,14 +249,14 @@ describe('ImpactCoordinator — stub-renderer integration (spec §7 Cycle 1 OPER
     const envelopePool = new EnvelopePool();
     const clusterPhysics = new ClusterPhysics();
     const acquireSpy = vi.spyOn(beamPool, 'acquire');
+    const { sc } = makeSelectionController();
     const coord = new ImpactCoordinator({
       beamPool, envelopePool, clusterPhysics,
       flashEmissive: () => {},
       getSceneNode: () => undefined,
       getBeamGroup: () => undefined,
       getNodeMesh: () => undefined,
-      getSelectedId: () => null,
-      isFlashActive: () => false,
+      selectionController: sc,
       renderer: renderer as unknown as TopologyRenderer,
       animationCoordinator: ac,
     });
