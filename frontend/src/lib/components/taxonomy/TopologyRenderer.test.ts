@@ -386,6 +386,47 @@ describe('TopologyRenderer', () => {
     expect(src).toMatch(/minDistance:\s*this\.controls\.minDistance/);
     expect(src).toMatch(/maxDistance:\s*this\.controls\.maxDistance/);
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Sub-project E Cycle 3 RED — focusOn 4th positional onComplete?
+  // parameter (B8 from selection-state-machine-design rev 2 spec).
+  // SC's `select(nodeId)` passes a done-callback that drives the
+  // focusing → focused transition.
+  // ──────────────────────────────────────────────────────────────────
+
+  it('focusOn(target, distance?, duration?, onComplete?) — onComplete fires after tween completes', async () => {
+    // Drive the tween to t=1 by advancing performance.now past `duration` via
+    // a sequenced spy: the 1st call (inside focusOn captures startTime) returns
+    // 0, all subsequent calls (inside animate's elapsed = now - startTime)
+    // return 200 → elapsed=200 > duration=100 → t=1 → animate's else branch
+    // fires onComplete in the FIRST synchronous animate() invocation.
+    const r = new TopologyRenderer(canvas);
+    const THREE = await import('three');
+    const onComplete = vi.fn();
+    let call = 0;
+    const perfSpy = vi.spyOn(performance, 'now').mockImplementation(() => {
+      call++;
+      return call === 1 ? 0 : 200;
+    });
+    r.focusOn(new THREE.Vector3(1, 1, 1), 15, 100, onComplete);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    perfSpy.mockRestore();
+    r.dispose();
+  });
+
+  it('focusOn called with 3 args (legacy SemanticTopology.svelte:1213 shape) still works — no onComplete callback', async () => {
+    const r = new TopologyRenderer(canvas);
+    const THREE = await import('three');
+    expect(() => r.focusOn(new THREE.Vector3(1, 1, 1), 15, 100)).not.toThrow();
+    r.dispose();
+  });
+
+  it('focusOn called with 2 args (legacy TopologyInteraction.ts:72 shape) still works', async () => {
+    const r = new TopologyRenderer(canvas);
+    const THREE = await import('three');
+    expect(() => r.focusOn(new THREE.Vector3(1, 1, 1), 15)).not.toThrow();
+    r.dispose();
+  });
 });
 
 /** Read TopologyRenderer.ts source for source-grep wiring assertions
