@@ -28,7 +28,7 @@ The following words refer to **specific data-bearing visual features** described
 | `halo` | A banner/template indicator ring drawn around clusters that have been forked into a `PromptTemplate`. Cyan (`0x00e5ff`), `MeshBasicMaterial`, `depthWrite:false`. Implementation pool: `_templateRingPool` (renamed from `_haloPool` for clarity, both names are acceptable in canon vocabulary). |
 | `bloom` | The `UnrealBloomPass` post-processing layer that amplifies bright pixels into surrounding ones. Canonical for the 3D Pattern Graph at parameters `(strength: 1.5, radius: 0.4, threshold: 0.85)`. |
 | `radiance` | Outgoing light from emissive surfaces post-bloom. The visible signal that conveys "this cluster is alive". |
-| `breathing` | Per-frame `±2%` sin-wave scale oscillation on every cluster mesh. Hovered clusters amplify to `±12%`. The data signal: clusters are alive, not freeze-framed. |
+| `breathing` | Per-frame `±2%` sin-wave scale oscillation on every cluster mesh. Hovered clusters amplify to `±10%`. The data signal: clusters are alive, not freeze-framed. |
 | `dust` | The 3000-particle ambient `Points` cloud (`Neural Dust`) that fills the 300³ scene void. Slow X+Y rotation. Provides depth perception. |
 | `pulse` | Time-driven shader uniform updates (e.g., `uTime`) that animate edge color/intensity at ~60Hz. Carries data flow signal. |
 | `flash` | Brief emission lift on the per-node `MeshStandardMaterial.emissiveIntensity` at beam impact — 120ms cubic ease-out attack from `startIntensity = max(currentEmissive, baseline)` to `baseline + 1.6` (additive `GLOW_PEAK_DELTA`, not multiplicative), 580ms hold at peak, 680ms cubic ease-out decay back to baseline. Total active window: 1380ms (matches plasma envelope total active duration). Owned by `FlashController.ts` post-Sub-project E; fires from the beam's `onImpact` callback so it synchronizes with the plasma envelopement and cluster-physics ripple. |
@@ -151,7 +151,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Time accumulator:** `_breathingTime += 0.016` per frame (~60fps)
 - **Per-node phase offset:** `_nodePhaseOffsets: Map<string, number>` populated during `rebuildScene` via a deterministic string hash of the node ID mapped to `[0, 2π]`. Each cluster oscillates at the same frequency but with a unique phase shift, so the colony reads as organic rather than a synchronized grid.
 - **Base:** `scaleBase = sin((_breathingTime + phaseOffset) * 1.5) * 0.02 + 1.0` → `±2%` oscillation
-- **Hover amplification:** `targetScaleMultiplier = isHovered ? scaleBase * 1.1 : scaleBase` → up to `±12%` when hovered
+- **Hover amplification:** `targetScaleMultiplier = isHovered ? scaleBase * 1.1 : scaleBase` → up to `±10%` when hovered
 - **Apply to:** every cluster mesh (`mesh.scale.lerp(_scratchVec3a.set(s, s, s), 0.1)`), the parent group's children at the same scale, the readiness ring (`scale.setScalar(targetScaleMultiplier)`), the template ring
 - **Allocation budget:** the `_scratchVec3a` borrow in `mesh.scale.lerp(...)` is mandatory — the per-frame `new THREE.Vector3()` form is banned (see "Per-Frame Allocation Budget" below)
 - *Source: `SemanticTopology.svelte` `_breathingAnim` callback (Sub-project D — extracted to the `_advanceBreathing` private helper for orchestrator LOC compression; the per-frame callback registration still lives in `rebuildScene`). Phase-offset hash formula lives in `frontend/src/lib/components/taxonomy/builders/ClusterBuilder.ts` + `DomainBuilder.ts` — both builders write `ctx.nodePhaseOffsets[node.id]` using the identical char-code sum hash so the orchestrator's module-level `_nodePhaseOffsets` is populated consistently across cluster + structural nodes.*
@@ -525,7 +525,7 @@ Run through each numbered feature. **The implementation passes if every line bel
 - [ ] **F7**: BeamPool of 10 reusable `PlasmaBeam` instances; FPS-weapon NDC origin
 - [ ] **F8**: `_breathingAnim` per-frame callback updates every cluster mesh + ring
 - [ ] **F8**: per-node phase offset via `_nodePhaseOffsets` — deterministic hash of node ID → `[0, 2π]`
-- [ ] **F8**: hover amplifies breathing to `±12%`
+- [ ] **F8**: hover amplifies breathing to `±10%`
 - [ ] **F8**: hover proximity field — clusters within 8 units of hovered cluster receive distance-attenuated breathing amplification (quadratic falloff, max 60% of full hover amplitude)
 - [ ] **F9**: ClusterPhysics integration uses `k=120`, `d=12`, `dt clamp=0.1`, `velocityFloor=1e-4`
 - [ ] **F9**: snap-to-target floor (prevents infinite micro-oscillation)
