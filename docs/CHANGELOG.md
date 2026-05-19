@@ -4,6 +4,10 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+
+- **Finding 19b restoration**: `TopicProbeGenerator` now calls `bulk_persist` + `batch_taxonomy_assign` ONCE at end of each run, matching the canonical `seed_agent_generator.py:241-282` pattern. Restores v0.4.12 T1 design intent — probes now produce `Optimization` rows in `/api/history` and emerge taxonomy clusters as designed. Skip-failed semantics handled internally by `bulk_persist` / `batch_taxonomy_assign` (filter for `status == 'completed'` + quality gate `overall_score >= 5.0`; `batch_taxonomy_assign` additionally requires non-None embedding); rate-limit passthrough fallbacks persist with `rate_limit_meta` tag preserved. `batch_taxonomy_assign` wrapped in try/except (non-fatal warning + continue, matches canonical); `bulk_persist` left unwrapped per spec §3.1. Test-fixture path preserved via `self._write_queue is not None` guard. Per-run `pendings_for_assign` accumulator scope avoids cross-run leak on the long-lived singleton. Closes deferred Finding 19b from v0.4.22 `SOAK_GATES.md`.
+
 ## v0.4.27 — 2026-05-19
 
 ### Changed
