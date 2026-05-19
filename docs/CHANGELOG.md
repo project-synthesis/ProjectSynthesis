@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.26 — 2026-05-19
+
 ### Changed
 
 - **Selection state machine (Sub-project E):** introduces `SelectionController` (state machine with 5 states + cancel-via-idle re-selection) and extracts `FlashController` from inline `flashEmissive` + `_flashStates`. `SemanticTopology.svelte` deletes 5 module-scope selection refs (`_highlightedId`, `_highlightedColor`, `_prevSelectedId`, `focusedNodeId`, `_flashStates`, plus inline `applyHighlight`/`clearHighlight`/`flashEmissive`/`_tickFlashStates` helpers). The canon F16 highlight-survival hack is replaced by `selectionController.afterRebuild()` invoked deterministically at the end of `rebuildScene`. `ImpactCoordinator` shrinks: `_selectionEngulfed`, `_pulseTime`, `_tick`, `isEngulfed`, `clearEngulfed`, `SELECTION_EMISSIVE_FLOOR` export, and the `getSelectedId` / `isFlashActive` deps are deleted; the `marksEngulfed` branch in `fire()` routes through `selectionController.onImpact(...)`. `TopologyRenderer.focusOn` gains an optional 4th positional `onComplete?: () => void` parameter. 49 new tests (14 FC + 30 SC unit + 5 SC integration) + 18 new source-grep assertions; M3 migration sweep across 13 `SemanticTopology.test.ts` `it()` blocks (5 deletes, 8 rewrites) + 5 `cleanup-contract.test.ts` `it()` blocks (1 rewrite anchor swap, 1 count update, 2 anchor migrations).
