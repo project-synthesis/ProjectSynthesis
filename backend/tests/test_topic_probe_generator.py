@@ -700,7 +700,7 @@ def _build_topic_probe_generator_with_stub_pipeline(
 
     # Bind the stub method to the instance.
     import types
-    gen._run_one_prompt = types.MethodType(_stub_run_one_prompt, gen)
+    gen._run_one_prompt = types.MethodType(_stub_run_one_prompt, gen)  # type: ignore[method-assign]
     return gen
 
 
