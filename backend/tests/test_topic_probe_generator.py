@@ -630,8 +630,8 @@ def _build_topic_probe_generator_with_stub_pipeline(
     test_topic_probe_generator.py:358-450 (object() placeholders for
     collaborators the new tests don't exercise).
     """
-    from app.services.generators.topic_probe_generator import TopicProbeGenerator
     import app.services.generators.topic_probe_generator as tpg_mod
+    from app.services.generators.topic_probe_generator import TopicProbeGenerator
 
     # Stub Phase 2 (generate_probe_prompts) to return canned prompts.
     # The real primitive does heavy work (template rendering, LLM call,
