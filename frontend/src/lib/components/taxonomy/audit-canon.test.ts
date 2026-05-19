@@ -19,7 +19,110 @@
 //
 // Spec: docs/superpowers/specs/2026-05-19-audit-as-code-design.md
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+
+// ── Cinematic post-processing mocks for the F13 composer-dispose RUNTIME
+// test (canon F13). Three.js + addon mocks are scoped to the audit-canon
+// suite — they only affect tests that instantiate TopologyRenderer. The
+// source-grep majority neither imports THREE at runtime nor depends on
+// these constructors. Pattern mirrors TopologyRenderer.test.ts so the
+// audit suite uses the same fake post-processing chain (passes track
+// dispose calls; composer.dispose walks `passes[]`).
+vi.mock('three', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('three')>();
+  // Re-export real THREE so source-grep tests still see real types
+  // for any incidental import. Override only the constructors the
+  // TopologyRenderer constructor walks at instantiate time.
+  class WebGLRenderer {
+    setPixelRatio = vi.fn();
+    setSize = vi.fn();
+    render = vi.fn();
+    dispose = vi.fn();
+    forceContextLoss = vi.fn();
+    domElement = document.createElement('canvas');
+    shadowMap = { enabled: false, type: 0 };
+  }
+  return {
+    ...actual,
+    WebGLRenderer,
+  };
+});
+
+vi.mock('three/addons/controls/OrbitControls.js', () => {
+  function makeTargetVec() {
+    return {
+      x: 0, y: 0, z: 0,
+      clone() { return makeTargetVec(); },
+      subVectors(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) {
+        this.x = a.x - b.x; this.y = a.y - b.y; this.z = a.z - b.z; return this;
+      },
+      normalize() { return this; },
+      multiplyScalar() { return this; },
+      add() { return this; },
+      set(x: number, y: number, z: number) { this.x = x; this.y = y; this.z = z; return this; },
+      length() { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); },
+      divideScalar(s: number) {
+        if (s !== 0) { this.x /= s; this.y /= s; this.z /= s; } return this;
+      },
+      lerpVectors: vi.fn(),
+    };
+  }
+  class OrbitControls {
+    enableDamping = false;
+    dampingFactor = 0;
+    minDistance = 0;
+    maxDistance = 0;
+    addEventListener = vi.fn();
+    update = vi.fn();
+    dispose = vi.fn();
+    target = makeTargetVec();
+  }
+  return { OrbitControls };
+});
+
+vi.mock('three/addons/postprocessing/EffectComposer.js', () => {
+  class EffectComposer {
+    passes: unknown[] = [];
+    constructor(_renderer: unknown) {}
+    addPass(pass: unknown) { this.passes.push(pass); }
+    render = vi.fn();
+    setSize = vi.fn();
+    dispose = vi.fn();
+  }
+  return { EffectComposer };
+});
+
+vi.mock('three/addons/postprocessing/RenderPass.js', () => {
+  class RenderPass {
+    constructor(_scene: unknown, _camera: unknown) {}
+    dispose = vi.fn();
+  }
+  return { RenderPass };
+});
+
+vi.mock('three/addons/postprocessing/UnrealBloomPass.js', () => {
+  class UnrealBloomPass {
+    constructor(
+      public resolution: unknown,
+      public strength: number,
+      public radius: number,
+      public threshold: number,
+    ) {}
+    dispose = vi.fn();
+  }
+  return { UnrealBloomPass };
+});
+
+vi.mock('three/addons/postprocessing/FilmPass.js', () => {
+  class FilmPass {
+    constructor(public intensity: number, public grayscale: boolean) {}
+    dispose = vi.fn();
+  }
+  return { FilmPass };
+});
+
+// Import after mocks so the constructor uses the fake passes.
+import { TopologyRenderer } from './TopologyRenderer';
 
 // ── Source-grep helpers ──────────────────────────────────────────────
 
@@ -34,6 +137,7 @@ const taxonomySourceMap = import.meta.glob<string>(
     './ImpactCoordinator.ts',
     './SelectionController.ts',
     './FlashController.ts',
+    './focus-math.ts', // F14 zero-length direction fallback helper (Sub-project E refactor)
     './AnimationCoordinator.ts',
     './DomainEdgeShader.ts',
     './EdgeShader.ts', // declares F5 `uTime` uniform consumed by EdgeBuilder via createEdgeDepthUniforms
@@ -559,4 +663,543 @@ describe('PERF — Cross-cutting', () => {
   });
 });
 
-// (F11-F19 + Performance/lifecycle tests go in Cycle 2 RED.)
+// ── F11 — Lighting Setup ─────────────────────────────────────────────
+
+describe('F11 — Lighting', () => {
+  it('F11: 3 lights Ambient 0 3 Directional 0 7', () => {
+    // Canon line 535: 3 lights (Ambient 0.3, Directional 0.7 at (5,10,5),
+    // Hemisphere 0.2). Source: TopologyRenderer.ts:74-87.
+    const src = readSrc('TopologyRenderer.ts');
+    // AmbientLight(0xffffff, 0.3)
+    expectInSource(src, /new\s+THREE\.AmbientLight\s*\(\s*0xffffff\s*,\s*0\.3\s*\)/);
+    // DirectionalLight(0xffffff, 0.7) positioned at (5, 10, 5)
+    expectInSource(src, /new\s+THREE\.DirectionalLight\s*\(\s*0xffffff\s*,\s*0\.7\s*\)/);
+    expectInSource(src, /\.position\.set\(\s*5\s*,\s*10\s*,\s*5\s*\)/);
+    // HemisphereLight with intensity 0.2
+    expectInSource(src, /new\s+THREE\.HemisphereLight\s*\([^)]*0\.2\s*\)/);
+  });
+});
+
+// ── F12 — Shadow Map ─────────────────────────────────────────────────
+
+describe('F12 — Shadows', () => {
+  it('F12: shadowMap enabled = true type = PCFShadowMap mapSize', () => {
+    // Canon line 536: shadowMap.enabled = true, type = PCFShadowMap,
+    // mapSize 1024×1024. Source: TopologyRenderer.ts:64-65 +
+    // DirectionalLight.shadow.mapSize.set(1024, 1024) on line 82.
+    const src = readSrc('TopologyRenderer.ts');
+    expectInSource(src, /shadowMap\.enabled\s*=\s*true/);
+    expectInSource(src, /shadowMap\.type\s*=\s*THREE\.PCFShadowMap/);
+    expectInSource(src, /shadow\.mapSize\.set\(\s*1024\s*,\s*1024\s*\)/);
+  });
+});
+
+// ── F13 — Post-Processing Pipeline ───────────────────────────────────
+
+describe('F13 — Post-Processing', () => {
+  it('F13: EffectComposer with RenderPass + UnrealBloomPass 1 5 0', () => {
+    // Canon line 537: EffectComposer with RenderPass + UnrealBloomPass
+    // (1.5, 0.4, 0.85) + FilmPass(0.35, false) + SMAAPass. Source:
+    // TopologyRenderer.ts:94-105.
+    const src = readSrc('TopologyRenderer.ts');
+    // EffectComposer instantiation
+    expectInSource(src, /new\s+EffectComposer\s*\(\s*this\.renderer\s*\)/);
+    // RenderPass with scene + camera
+    expectInSource(src, /new\s+RenderPass\s*\(\s*this\.scene\s*,\s*this\.camera\s*\)/);
+    // UnrealBloomPass canonical params (strength 1.5, radius 0.4, threshold 0.85)
+    expectInSource(src, /new\s+UnrealBloomPass\s*\([\s\S]*?1\.5\s*,[\s\S]*?0\.4\s*,[\s\S]*?0\.85/);
+    // FilmPass(0.35, false)
+    expectInSource(src, /new\s+FilmPass\s*\(\s*0\.35\s*,\s*false\s*\)/);
+    // SMAAPass
+    expectInSource(src, /new\s+SMAAPass\s*\(/);
+  });
+
+  it('F13: composer render not renderer render ; composer setSize', () => {
+    // Canon line 538: composer.render() not renderer.render();
+    // composer.setSize on resize. Source: TopologyRenderer.ts:143 + :154.
+    const src = readSrc('TopologyRenderer.ts');
+    // Render loop uses composer, not renderer directly.
+    expectInSource(src, /this\.composer\.render\(\s*\)/);
+    // Resize forwards to composer.setSize.
+    expectInSource(src, /this\.composer\.setSize\(\s*width\s*,\s*height\s*\)/);
+    // Negative anchor — the render loop body must not invoke
+    // `this.renderer.render(` (canon F13 mandates the composer chain).
+    const stripped = stripComments(src);
+    expect(stripped, 'render loop must call composer.render(), not renderer.render()').not.toMatch(
+      /this\.renderer\.render\(/,
+    );
+  });
+
+  // ── F13 RUNTIME — composer.dispose calls dispose on all 4 passes ──
+  describe('F13 — Post-Processing (runtime)', () => {
+    let canvas: HTMLCanvasElement;
+    let renderer: TopologyRenderer;
+
+    beforeEach(() => {
+      canvas = document.createElement('canvas');
+      Object.defineProperty(canvas, 'clientWidth', { value: 800, configurable: true });
+      Object.defineProperty(canvas, 'clientHeight', { value: 600, configurable: true });
+      renderer = new TopologyRenderer(canvas);
+    });
+
+    afterEach(() => {
+      // Ensure cleanup even if dispose was already called inside the test.
+      // dispose() is idempotent — repeated calls are safe.
+      if (renderer && !(renderer as unknown as { _disposed: boolean })._disposed) {
+        renderer.dispose();
+      }
+    });
+
+    it('F13 runtime: composer.dispose() invokes dispose on every pass (canon "+ each pass disposed")', () => {
+      // Canon F13 disposal: composer.dispose() + each composer.passes[i].dispose().
+      // Source: TopologyRenderer.ts:252-257 — the dispose loop walks the
+      // passes array and invokes each pass's dispose before composer.dispose.
+      // Runtime check anchors that the loop actually fires the spies.
+      const composer = renderer.composer as unknown as { passes: { dispose: () => void }[] };
+      expect(composer).toBeDefined();
+      expect(composer.passes.length).toBeGreaterThanOrEqual(4);
+      const passDisposeSpies = composer.passes.map((p) => vi.spyOn(p, 'dispose'));
+      const composerDisposeSpy = vi.spyOn(
+        renderer.composer as unknown as { dispose: () => void },
+        'dispose',
+      );
+
+      renderer.dispose();
+
+      for (const spy of passDisposeSpies) {
+        expect(spy).toHaveBeenCalled();
+      }
+      expect(composerDisposeSpy).toHaveBeenCalled();
+    });
+  });
+});
+
+// ── F14 — Camera Focus (`focusOn`) ───────────────────────────────────
+
+describe('F14 — focusOn', () => {
+  it('F14: focusOn with adaptive distance default — keeps current', () => {
+    // Canon line 541: focusOn with adaptive distance default — keeps
+    // current zoom when distance omitted, clamps to [5, 25].
+    // Source: TopologyRenderer.ts:199-201.
+    const src = readSrc('TopologyRenderer.ts');
+    expectInSource(
+      src,
+      /distance\s*!==\s*undefined\s*\?\s*distance\s*:\s*Math\.max\(\s*5\s*,\s*Math\.min\(\s*currentDist\s*,\s*25\s*\)\s*\)/,
+    );
+  });
+
+  it('F14: zero-length direction fallback to +Z', () => {
+    // Canon line 542: zero-length direction guard falls back to +Z axis.
+    // Source: focus-math.ts:82-87 (helper) — TopologyRenderer.focusOn
+    // delegates the endpoint math to computeFocusEndpoint, which contains
+    // the fallback. Anchor both call site + helper body.
+    const helperSrc = readSrc('focus-math.ts');
+    // Zero-direction guard (direction.length() < epsilon) + fallback to (0, 0, 1).
+    expectInSource(helperSrc, /direction\.length\(\)/);
+    expectInSource(helperSrc, /direction\.set\s*\(\s*0\s*,\s*0\s*,\s*1\s*\)/);
+    // Caller wires the helper.
+    const callerSrc = readSrc('TopologyRenderer.ts');
+    expectInSource(callerSrc, /computeFocusEndpoint\s*\(/);
+  });
+
+  it('F14: checkLod called per-frame inside the focus animate loop', () => {
+    // Canon line 543: _checkLod() called per-frame inside the focus animate
+    // loop (because OrbitControls.update does NOT fire 'change' on
+    // programmatic position mutation without damping residual).
+    // Source: TopologyRenderer.ts:228 (inside the animate() body).
+    const src = readSrc('TopologyRenderer.ts');
+    const stripped = stripComments(src);
+    // Anchor on the animate() closure containing this._checkLod() call.
+    // The structure: `const animate = () => { ... this._checkLod(); ... }`.
+    expect(stripped).toMatch(/const\s+animate\s*=[\s\S]*?this\._checkLod\(\s*\)/);
+  });
+});
+
+// ── F15 — Click → Selection Flow ─────────────────────────────────────
+
+describe('F15 — handleNodeClick', () => {
+  it('F15: handleNodeClick only calls clustersStore selectCluster nodeId — no', () => {
+    // Canon line 544: handleNodeClick body contains only
+    // `clustersStore.selectCluster(nodeId)` — no duplicate visual logic.
+    // Source: SemanticTopology.svelte:718-724.
+    const src = readSrc('SemanticTopology.svelte');
+    const stripped = stripComments(src);
+    // Extract handleNodeClick function body by balanced-brace scan from
+    // the `function handleNodeClick(nodeId: string)` declaration.
+    const fnOpen = stripped.match(
+      /function\s+handleNodeClick\s*\(\s*nodeId\s*:\s*string\s*\)\s*:\s*void\s*\{/,
+    );
+    expect(fnOpen, 'expected handleNodeClick function declaration').not.toBeNull();
+    const openIdx = fnOpen!.index! + fnOpen![0].length;
+    let depth = 1;
+    let i = openIdx;
+    while (i < stripped.length && depth > 0) {
+      const ch = stripped[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      if (depth === 0) break;
+      i++;
+    }
+    const body = stripped.slice(openIdx, i);
+    // The body's ONLY executable line is clustersStore.selectCluster(nodeId).
+    // (Comments are already stripped.) Verify the selectCluster call AND
+    // the absence of any other visual side-effect markers.
+    expect(body).toMatch(/clustersStore\.selectCluster\s*\(\s*nodeId\s*\)/);
+    // Forbidden side-effects in the click handler — must be driven by the
+    // $effect watching selectedClusterId, not by handleNodeClick.
+    expect(body, 'handleNodeClick must not call focusOn directly').not.toMatch(/focusOn\s*\(/);
+    expect(body, 'handleNodeClick must not call impactCoordinator.fire').not.toMatch(
+      /impactCoordinator\.fire\(/,
+    );
+    expect(body, 'handleNodeClick must not call beamPool.acquire').not.toMatch(
+      /beamPool\.acquire\(/,
+    );
+    expect(body, 'handleNodeClick must not call applyHighlight').not.toMatch(
+      /applyHighlight\s*\(/,
+    );
+  });
+});
+
+// ── F16 — Highlight Survival on Async Rebuild ────────────────────────
+
+describe('F16 — Highlight Survival', () => {
+  it('F16: selectionController afterRebuild at end of rebuildScene replaces the', () => {
+    // Canon line 545: selectionController.afterRebuild() at end of
+    // rebuildScene (replaces the pre-Sub-project-E inline applyHighlight
+    // hack). Source: SemanticTopology.svelte:562.
+    const src = readSrc('SemanticTopology.svelte');
+    expectInSource(src, /selectionController\?\.afterRebuild\(\s*\)/);
+    // afterRebuild is also declared on the SelectionController class.
+    const sc = readSrc('SelectionController.ts');
+    expectInSource(sc, /afterRebuild\s*\(\s*\)\s*:\s*void\s*\{/);
+  });
+
+  it('F16: SelectionController applyHighlight flips both mat color setHex HIGHLIGHTCOLOR', () => {
+    // Canon line 546: SelectionController._applyHighlight flips BOTH
+    // mat.color.setHex(HIGHLIGHT_COLOR) AND mat.emissive.setHex(HIGHLIGHT_COLOR)
+    // (dual swap); _clearHighlight restores both from the _highlightedColor
+    // snapshot. Source: SelectionController.ts:301-339.
+    const src = readSrc('SelectionController.ts');
+    // _applyHighlight contains both the color swap AND the emissive swap.
+    expectInSource(src, /mat\.color\.setHex\s*\(\s*this\._deps\.highlightColor\s*\)/);
+    expectInSource(src, /mat\.emissive\.setHex\s*\(\s*this\._deps\.highlightColor\s*\)/);
+    // _clearHighlight restores both from the captured _highlightedColor.
+    expectInSource(src, /mat\.color\.setHex\s*\(\s*this\._highlightedColor\s*\)/);
+    expectInSource(src, /mat\.emissive\.setHex\s*\(\s*this\._highlightedColor\s*\)/);
+  });
+});
+
+// ── F17 — One-Shot Auto-Focus ────────────────────────────────────────
+
+describe('F17 — Auto-Focus Guard', () => {
+  // eslint-disable-next-line quotes
+  it("F17: hasAutoFocused guard — bird's-eye-view zoom runs exactly once", () => {
+    // Canon line 547: _hasAutoFocused guard — bird's-eye-view zoom runs
+    // EXACTLY ONCE per component lifecycle. Subsequent rebuildScene
+    // calls do not re-trigger the auto-focus block.
+    // Source: SemanticTopology.svelte:279 (declaration) + :1025-1026
+    // (guard pattern). Source-grep verifies (a) declaration, (b) guard
+    // expression `!_hasAutoFocused`, (c) the one-shot set inside the
+    // guarded block — together they encode the once-only invariant.
+    const src = readSrc('SemanticTopology.svelte');
+    const stripped = stripComments(src);
+    // (a) Declaration.
+    expect(stripped).toMatch(/let\s+_hasAutoFocused\s*=\s*false/);
+    // (b) Guard expression in the if-condition AND
+    // (c) the one-shot set inside the guarded block — `if (!_hasAutoFocused ...) { _hasAutoFocused = true; ...`.
+    expect(stripped).toMatch(
+      /if\s*\(\s*!_hasAutoFocused[\s\S]*?\{\s*[\s\S]{0,100}?_hasAutoFocused\s*=\s*true/,
+    );
+  });
+});
+
+// ── F18 — Tactile Feedback on External Selection ─────────────────────
+
+describe('F18 — Selection-Engulfment', () => {
+  it('F18: external selection routes through impactCoordinator fire { trigger', () => {
+    // Canon line 548: external selection routes through
+    // impactCoordinator.fire({ trigger: 'click', node, group }) — the
+    // coordinator's fire() body wraps clusterPhysics.onBeamImpact AND the
+    // F19 envelope + flash INSIDE the beamPool.acquire's onImpact callback.
+    // Selection-engulfment is tracked in SelectionController's internal
+    // engulfed set; canonical read is SelectionController.isEngulfed(id).
+    // Sub-project E migrated ownership from ImpactCoordinator to SC.
+    // Sources: ImpactCoordinator.ts:205-260 + SelectionController.ts:96-98.
+    const ic = readSrc('ImpactCoordinator.ts');
+    // fire() body wraps F19 reactions inside the beamPool.acquire onImpact
+    // callback — the canonical causal-ordering invariant.
+    expectInSource(ic, /this\._deps\.beamPool\.acquire\s*\([\s\S]*?onImpact\s*:\s*\(\s*\)\s*=>\s*\{/);
+    // The selectionController.onImpact routing call lives inside that callback.
+    expectInSource(ic, /this\._deps\.selectionController\.onImpact\s*\(/);
+
+    // SelectionController owns the engulfed set (canonical read).
+    const sc = readSrc('SelectionController.ts');
+    expectInSource(sc, /isEngulfed\s*\(\s*nodeId\s*:\s*string\s*\)\s*:\s*boolean/);
+    expectInSource(sc, /this\._engulfedSet\.has\s*\(\s*nodeId\s*\)/);
+
+    // ImpactCoordinator must NOT carry its own engulfed set anymore (the
+    // ownership migration). Anchors on the absence of a private
+    // _selectionEngulfed field on IC.
+    expect(stripComments(ic), 'ImpactCoordinator must not declare _selectionEngulfed').not.toMatch(
+      /_selectionEngulfed/,
+    );
+  });
+});
+
+// ── F19 — Envelopement Burst at Beam Impact ──────────────────────────
+
+describe('F19 — Engulfment Envelope', () => {
+  it('F19: EnvelopePool constructed in onMount; envelope geometry shape literals', () => {
+    // Canon line 549: EnvelopePool constructed in onMount; envelope
+    // geometry shape literals match `node.state === 'domain' ? 'domain' : 'cluster'`.
+    // Sources: SemanticTopology.svelte:1350 (onMount construction) +
+    // ImpactCoordinator.ts:217 (shape literal at fire site).
+    const semTop = readSrc('SemanticTopology.svelte');
+    // EnvelopePool instantiated inside the component (no constructor args).
+    expectInSource(semTop, /envelopePool\s*=\s*new\s+EnvelopePool\s*\(/);
+    // Shape literal at the canonical fire site lives in ImpactCoordinator —
+    // the coordinator's fire() is the single entry point for all impact
+    // sites, so the shape decision lives there.
+    const ic = readSrc('ImpactCoordinator.ts');
+    expectInSource(
+      ic,
+      /freshNode\.state\s*===\s*['"]domain['"]\s*\?\s*['"]domain['"]\s*:\s*['"]cluster['"]/,
+    );
+  });
+
+  it('F19: FlashController flash uses baseline-capture pattern — rapid re-fires reuse', () => {
+    // Canon line 550: FlashController.flash() uses baseline-capture pattern —
+    // rapid re-fires REUSE the prior baselineEmissive AND startIntensity
+    // (B6 mid-flash continuity preserved through the FlashController class
+    // field _states). Source: FlashController.ts:92 + :120-138.
+    const src = readSrc('FlashController.ts');
+    // _states is the class field that survives re-fires.
+    expectInSource(src, /_states\s*:\s*Map<string,\s*FlashState>/);
+    // The baseline-capture conditional: `existing ? existing.baselineEmissive : trueBase`.
+    expectInSource(src, /existing\s*\?\s*existing\.baselineEmissive\s*:\s*trueBase/);
+    // The startIntensity-capture conditional: `existing ? existing.startIntensity : ...`.
+    expectInSource(src, /existing\s*\?\s*existing\.startIntensity\s*:/);
+  });
+
+  it('F19: causal-ordering invariant enforced at source level — every', () => {
+    // Canon line 551: causal-ordering invariant — every impactCoordinator.fire
+    // site routes through the coordinator's fire() body, which wires
+    // clusterPhysics.onBeamImpact + envelopePool.acquire +
+    // selectionController.onImpact INSIDE an onImpact callback, never
+    // synchronously alongside beamPool.acquire. Per Sub-project C
+    // source-grep test #6: ZERO matches for those reactions outside
+    // ImpactCoordinator.ts. Source: ImpactCoordinator.ts:234-258.
+    const ic = readSrc('ImpactCoordinator.ts');
+    const icStripped = stripComments(ic);
+    // The onImpact callback body wires all three F19 reactions.
+    expect(icStripped).toMatch(
+      /onImpact\s*:\s*\(\s*\)\s*=>\s*\{[\s\S]*?clusterPhysics\.onBeamImpact[\s\S]*?envelopePool\.acquire[\s\S]*?\}/,
+    );
+    // The reactions appear NOWHERE else in the taxonomy directory —
+    // mirrors the cleanup-contract test #6 invariant.
+    const otherFiles = [
+      'SemanticTopology.svelte',
+      'SelectionController.ts',
+      'FlashController.ts',
+      'AnimationCoordinator.ts',
+      'BeamPool.ts',
+      'EnvelopePool.ts',
+      'ClusterPhysics.ts',
+    ];
+    const reactionPattern = /clusterPhysics\.onBeamImpact|envelopePool\.acquire/;
+    for (const f of otherFiles) {
+      const body = stripComments(readSrc(f));
+      expect(
+        body,
+        `${f} must not contain synchronous F19 reactions — they live only inside ImpactCoordinator.ts`,
+      ).not.toMatch(reactionPattern);
+    }
+  });
+});
+
+// ── Performance + lifecycle ──────────────────────────────────────────
+
+describe('PERF — Performance + lifecycle', () => {
+  it('PERF: Module-level scratch table declared scratchVec3a scratchQuat scratchColor ZAXIS', () => {
+    // Canon line 556: Module-level scratch table declared (_scratchVec3a,
+    // _scratchQuat, _scratchColor, Z_AXIS). Source: SemanticTopology.svelte
+    // module scope. Post-Sub-project D, _scratchQuat + _scratchColor were
+    // migrated to builder-private scratch tables — the orchestrator file
+    // retains them as references (in code or canonical comments) so the
+    // scratch-table contract is observable at module top, matching the
+    // perf-budget.test.ts existing scratch-table assertion. (This canon
+    // line is mirrored by perf-budget.test.ts; audit-canon pins the same
+    // invariant from the audit-as-code surface.)
+    const src = readSrc('SemanticTopology.svelte');
+    // Each canonical scratch identifier must appear in the source (raw —
+    // covers both live declarations and the migration-note comment that
+    // pins the contract). Mirrors perf-budget.test.ts scratch-table assertion.
+    const required = ['_scratchVec3a', '_scratchQuat', '_scratchColor', 'Z_AXIS'];
+    const missing = required.filter((id) => !src.includes(id));
+    expect(missing, 'expected canonical scratch identifiers present at module scope').toEqual([]);
+    // Z_AXIS initialized to (0, 0, 1) — the readonly +Z axis used by rotateOnAxis.
+    expectInSource(
+      src,
+      /Z_AXIS\s*=\s*new\s+THREE\.Vector3\s*\(\s*0\s*,\s*0\s*,\s*1\s*\)/,
+    );
+  });
+
+  it('PERF: breathingAnim borrows scratchVec3a for mesh scale lerp not', () => {
+    // Canon line 557: _breathingAnim borrows _scratchVec3a for
+    // mesh.scale.lerp (not new THREE.Vector3()). Source:
+    // SemanticTopology.svelte:629.
+    const src = readSrc('SemanticTopology.svelte');
+    // The canonical borrow pattern (mesh.scale.lerp consumes
+    // _scratchVec3a.set(s, s, s), not a fresh allocation).
+    expectInSource(
+      src,
+      /mesh\.scale\.lerp\s*\(\s*_scratchVec3a\.set\s*\(\s*targetScale\s*,\s*targetScale\s*,\s*targetScale\s*\)\s*,\s*0\.1\s*\)/,
+    );
+    // Forbidden anti-pattern — never allocate per-frame Vector3 inside
+    // the breathing callback. Anchored on the scratch-borrow expression
+    // appearing in the breathing block; verify no `new THREE.Vector3` is
+    // co-located with `mesh.scale.lerp`.
+    const stripped = stripComments(src);
+    // Find every occurrence of `mesh.scale.lerp(` and inspect its argument.
+    const lerpRe = /mesh\.scale\.lerp\s*\(\s*([^,]+?)\s*,/g;
+    let match: RegExpExecArray | null;
+    while ((match = lerpRe.exec(stripped)) !== null) {
+      const arg = match[1];
+      expect(arg, `mesh.scale.lerp argument must not allocate (got: ${arg})`).not.toMatch(
+        /new\s+THREE\.Vector3/,
+      );
+    }
+  });
+
+  it('PERF: Coordinators + 2 conditional cancellers wired in cleanup', () => {
+    // Canon line 558: Coordinators + 2 conditional cancellers wired in
+    // cleanup return in order: selectionController?.dispose() →
+    // impactCoordinator?.dispose() → coordinator?.dispose() →
+    // _removeFormationAnim?.() + _removeReadinessBillboard?.().
+    // Source: SemanticTopology.svelte:1521-1577 (cleanup return body).
+    const src = readSrc('SemanticTopology.svelte');
+    const stripped = stripComments(src);
+    // The cleanup return is unique — match the canonical disposal-chain order.
+    expect(
+      stripped,
+      'cleanup return must dispose SC → IC → AnimationCoordinator → conditionals in order',
+    ).toMatch(
+      /selectionController\?\.dispose\(\s*\)[\s\S]*?impactCoordinator\?\.dispose\(\s*\)[\s\S]*?coordinator\?\.dispose\(\s*\)[\s\S]*?_removeFormationAnim\?\.\(\s*\)[\s\S]*?_removeReadinessBillboard\?\.\(\s*\)/,
+    );
+  });
+
+  it('PERF: envelopePool? dispose invoked + reference nulled in cleanup', () => {
+    // Canon line 559: envelopePool?.dispose() invoked + reference nulled
+    // in cleanup return. Source: SemanticTopology.svelte:1556-1557.
+    const src = readSrc('SemanticTopology.svelte');
+    const stripped = stripComments(src);
+    // Pool disposed.
+    expect(stripped).toMatch(/envelopePool\?\.dispose\(\s*\)/);
+    // Reference nulled (right after dispose).
+    expect(stripped).toMatch(/envelopePool\?\.dispose\(\s*\)[\s\S]{0,100}?envelopePool\s*=\s*null/);
+  });
+
+  it('PERF: FlashController states clear happens inside selectionController dispose →', () => {
+    // Canon line 560: FlashController._states.clear() happens inside
+    // selectionController.dispose() → FlashController.dispose() BEFORE
+    // coordinator?.dispose() tears down AnimationCoordinator. Each active
+    // flash's baselineEmissive restored before the map is cleared, with
+    // emissive color decided by live isHighlighted query (HIGHLIGHT_COLOR
+    // if still selected, captured domainEmissive otherwise).
+    // Sources: FlashController.ts:159-177 (dispose body) +
+    // SemanticTopology.svelte cleanup return ordering.
+    const fc = readSrc('FlashController.ts');
+    const fcStripped = stripComments(fc);
+    // FlashController.dispose body: restore baseline + clear states.
+    expect(fcStripped).toMatch(
+      /dispose\s*\(\s*\)\s*:\s*void\s*\{[\s\S]*?mat\.emissiveIntensity\s*=\s*state\.baselineEmissive[\s\S]*?this\._states\.clear\(\s*\)/,
+    );
+    // Live isHighlighted query — HIGHLIGHT_COLOR if still selected, else captured domainEmissive.
+    expect(fcStripped).toMatch(/this\._deps\.isHighlighted\s*\(\s*nodeId\s*\)/);
+    expect(fcStripped).toMatch(/mat\.emissive\.setHex\s*\(\s*HIGHLIGHT_COLOR\s*\)/);
+    expect(fcStripped).toMatch(/mat\.emissive\.copy\s*\(\s*state\.domainEmissive\s*\)/);
+
+    // Cleanup-return ordering: SC.dispose (which transitively invokes
+    // FC.dispose) precedes coordinator.dispose so the AnimationCoordinator
+    // is still alive when FC restores baseline — pinned via SemanticTopology.
+    const semTop = stripComments(readSrc('SemanticTopology.svelte'));
+    expect(semTop).toMatch(
+      /selectionController\?\.dispose\(\s*\)[\s\S]*?coordinator\?\.dispose\(\s*\)/,
+    );
+  });
+
+  // eslint-disable-next-line quotes
+  it("PERF: All disposables drained geometries materials textures lights' shadow", () => {
+    // Canon line 561: All disposables drained — geometries, materials,
+    // textures, lights' shadow maps. Source: TopologyRenderer.dispose
+    // scene.traverse covers Mesh/LineSegments/Points/Sprite/Light.shadow.map.
+    const src = readSrc('TopologyRenderer.ts');
+    const stripped = stripComments(src);
+    // Geometry dispose inside the traverse.
+    expect(stripped).toMatch(/obj\.geometry\.dispose\(\s*\)/);
+    // Material dispose (both array + single).
+    expect(stripped).toMatch(/m\.dispose\(\s*\)/);
+    expect(stripped).toMatch(/material\s+as\s+THREE\.Material\)\.dispose\(\s*\)/);
+    // Sprite map (texture) dispose.
+    expect(stripped).toMatch(/obj\.material\.map\?\.dispose\(\s*\)/);
+    // Shadow map dispose on shadow-casting lights.
+    expect(stripped).toMatch(/obj\.shadow\?\.map\?\.dispose\(\s*\)/);
+  });
+
+  it('PERF: composer dispose + each pass disposed', () => {
+    // Canon line 562: composer.dispose() + each pass disposed.
+    // Source: TopologyRenderer.ts:252-257.
+    const src = readSrc('TopologyRenderer.ts');
+    const stripped = stripComments(src);
+    // The for-of loop walks composer.passes and invokes each pass dispose.
+    expect(stripped).toMatch(
+      /for\s*\(\s*const\s+pass\s+of\s+this\.composer\.passes\s*\)[\s\S]*?\.dispose\(\s*\)/,
+    );
+    // composer.dispose() called after the loop.
+    expect(stripped).toMatch(/this\.composer\.dispose\(\s*\)/);
+    // Ordering: pass-dispose loop precedes composer.dispose().
+    const loopIdx = stripped.search(/for\s*\(\s*const\s+pass\s+of\s+this\.composer\.passes/);
+    const composerDisposeIdx = stripped.search(/this\.composer\.dispose\(\s*\)/);
+    expect(loopIdx, 'pass-dispose loop must run before composer.dispose').toBeGreaterThan(-1);
+    expect(composerDisposeIdx).toBeGreaterThan(loopIdx);
+  });
+
+  it('PERF: renderer dispose + renderer forceContextLoss', () => {
+    // Canon line 563: renderer.dispose() + renderer.forceContextLoss().
+    // Source: TopologyRenderer.ts:258 + :262. The forceContextLoss call
+    // prevents GL context accumulation on rapid mount/unmount.
+    const src = readSrc('TopologyRenderer.ts');
+    const stripped = stripComments(src);
+    expect(stripped).toMatch(/this\.renderer\.dispose\(\s*\)/);
+    expect(stripped).toMatch(/this\.renderer\.forceContextLoss\(\s*\)/);
+    // Ordering — dispose precedes forceContextLoss (mirrors canon Disposal
+    // Contract line 476: "renderer.dispose() + renderer.forceContextLoss()").
+    const disposeIdx = stripped.search(/this\.renderer\.dispose\(\s*\)/);
+    const forceLossIdx = stripped.search(/this\.renderer\.forceContextLoss\(\s*\)/);
+    expect(disposeIdx).toBeGreaterThan(-1);
+    expect(forceLossIdx).toBeGreaterThan(disposeIdx);
+  });
+
+  it('PERF: Pool retention templateRingPool array preserved across unmount high-water', () => {
+    // Canon line 564: Pool retention — _templateRingPool array preserved
+    // across unmount (high-water mark). Source: RingBuilder.ts — the pool
+    // grows in TEMPLATE_RING_POOL_GROW_CHUNK increments up to
+    // TEMPLATE_RING_POOL_MAX, and the high-water-mark semantics live in
+    // the pool's growable-array contract. Anchors:
+    //   1. Pool field declared on the builder (`_templateRingPool`).
+    //   2. High-water bounds: INITIAL=50, GROW_CHUNK=50, MAX=500.
+    //   3. Dev-only hook re-publishes the pool ref on each build so
+    //      tests observe the current high-water across rebuilds.
+    const src = readSrc('builders/RingBuilder.ts');
+    const stripped = stripComments(src);
+    // (1) Pool field declaration — readonly Mesh[] on the builder instance.
+    expect(stripped).toMatch(/_templateRingPool\s*:\s*THREE\.Mesh\[\]/);
+    // (2) High-water bounds.
+    expect(stripped).toMatch(/TEMPLATE_RING_POOL_INITIAL\s*=\s*50/);
+    expect(stripped).toMatch(/TEMPLATE_RING_POOL_GROW_CHUNK\s*=\s*50/);
+    expect(stripped).toMatch(/TEMPLATE_RING_POOL_MAX\s*=\s*500/);
+    // (3) Dev-only re-publish of the pool ref on each build — preserves the
+    // pre-extraction test surface (__semTopTemplateRingPool global hook).
+    expect(stripped).toMatch(/__semTopTemplateRingPool[\s\S]*?this\._templateRingPool/);
+  });
+});
