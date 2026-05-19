@@ -91,13 +91,14 @@ function makeDeps(overrides: Partial<ImpactCoordinatorDeps> = {}) {
 
 describe('ImpactCoordinator — unit tests (Sub-project E Cycle 3 RED)', () => {
   // ── #1 ──
-  it('#1 — constructor registers exactly one impact-phase handler', () => {
+  it('#1 — constructor does NOT register an impact-phase handler (T3.4 idle pulse moved to SC)', () => {
+    // Per spec §3.4: IC's `_tick` + `_removeTick` + the constructor's
+    // `animationCoordinator.register('impact', ...)` are deleted; the T3.4
+    // idle pulse now lives on SelectionController.
     const stub = makeStubAnimationCoordinator();
     const deps = makeDeps({ animationCoordinator: stub.ac });
     new ImpactCoordinator(deps);
-    expect(stub.registerCalls).toHaveLength(1);
-    expect(stub.registerCalls[0].phase).toBe('impact');
-    expect(typeof stub.registerCalls[0].handler).toBe('function');
+    expect(stub.registerCalls).toHaveLength(0);
   });
 
   // ── #2 ──
@@ -216,13 +217,16 @@ describe('ImpactCoordinator — unit tests (Sub-project E Cycle 3 RED)', () => {
   });
 
   // ── #12 ──
-  it('#12 — dispose is idempotent + cancels impact-phase handler', () => {
+  it('#12 — dispose is idempotent (no per-frame handler to cancel post-§3.4)', () => {
+    // Per spec §3.4: IC no longer registers an impact-phase handler, so
+    // dispose() has nothing AnimationCoordinator-side to cancel. The
+    // idempotence guard remains (a second dispose is a no-op).
     const stub = makeStubAnimationCoordinator();
     const deps = makeDeps({ animationCoordinator: stub.ac });
     const coord = new ImpactCoordinator(deps);
     coord.dispose();
     coord.dispose(); // second call is safe
-    expect(stub.unregisterCalls).toBe(1);
+    expect(stub.unregisterCalls).toBe(0);
   });
 
   // ── #13 ──
