@@ -1,10 +1,14 @@
 // frontend/src/lib/components/taxonomy/ImpactCoordinator.test.ts
 //
-// Sub-project C — 22 mock-based unit tests for ImpactCoordinator per spec §5.1.
-// Mocks for BeamPool, EnvelopePool, ClusterPhysics, AnimationCoordinator, TopologyRenderer.
+// Sub-project C (original) — mock-based unit tests for ImpactCoordinator.
+// Sub-project E (Cycle 3 RED) — shrinks the IC API: deleted tests for the
+// methods/fields that now live on SelectionController
+// (`isEngulfed` / `clearEngulfed` / `_tick` idle-pulse formula /
+// `SELECTION_EMISSIVE_FLOOR` export / `getSelectedId` + `isFlashActive` deps);
+// added tests for the new `selectionController` dep + `onImpact` wiring (B2).
 //
-// Spec: docs/superpowers/specs/2026-05-17-impact-coordinator-design.md
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+// Spec: docs/superpowers/specs/2026-05-18-selection-state-machine-design.md
+import { describe, it, expect, vi } from 'vitest';
 import * as THREE from 'three';
 import type { TopologyRenderer } from './TopologyRenderer';
 import type { BeamPool } from './BeamPool';
@@ -12,11 +16,12 @@ import type { EnvelopePool } from './EnvelopePool';
 import type { ClusterPhysics } from './ClusterPhysics';
 import type { AnimationCoordinator, AnimationHandler } from './AnimationCoordinator';
 import type { SceneNode } from './TopologyData';
+import type { SelectionController } from './SelectionController';
 import {
   ImpactCoordinator,
   TRIGGER_PRESETS,
-  SELECTION_EMISSIVE_FLOOR,
   type ImpactCoordinatorDeps,
+  type Trigger,
 } from './ImpactCoordinator';
 
 function makeMockNode(overrides: Partial<SceneNode> = {}): SceneNode {
@@ -36,19 +41,10 @@ function makeMockGroup(): THREE.Group {
   return new THREE.Group();
 }
 
-function makeMockMesh(baseEmissive = 0.5): THREE.Mesh {
-  const geometry = new THREE.SphereGeometry(1, 8, 6);
-  const material = new THREE.MeshStandardMaterial({ emissiveIntensity: baseEmissive });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.userData.baseEmissive = baseEmissive;
-  return mesh;
-}
-
 function makeStubAnimationCoordinator(): {
   ac: AnimationCoordinator;
   registerCalls: Array<{ phase: string; handler: AnimationHandler }>;
   unregisterCalls: number;
-  triggerImpactTick: (delta: number) => void;
 } {
   const registerCalls: Array<{ phase: string; handler: AnimationHandler }> = [];
   let unregisterCalls = 0;
@@ -62,15 +58,21 @@ function makeStubAnimationCoordinator(): {
     ac,
     registerCalls,
     get unregisterCalls() { return unregisterCalls; },
-    triggerImpactTick(delta: number) {
-      const impact = registerCalls.find((r) => r.phase === 'impact');
-      if (impact) impact.handler(delta);
-    },
   };
+}
+
+function makeStubSelectionController(): {
+  sc: SelectionController;
+  onImpact: ReturnType<typeof vi.fn>;
+} {
+  const onImpact = vi.fn();
+  const sc = { onImpact } as unknown as SelectionController;
+  return { sc, onImpact };
 }
 
 function makeDeps(overrides: Partial<ImpactCoordinatorDeps> = {}) {
   const { ac } = makeStubAnimationCoordinator();
+  const { sc } = makeStubSelectionController();
   const deps: ImpactCoordinatorDeps = {
     beamPool: { acquire: vi.fn() } as unknown as BeamPool,
     envelopePool: { acquire: vi.fn() } as unknown as EnvelopePool,
@@ -79,16 +81,15 @@ function makeDeps(overrides: Partial<ImpactCoordinatorDeps> = {}) {
     getSceneNode: vi.fn(),
     getBeamGroup: vi.fn(),
     getNodeMesh: vi.fn(),
-    getSelectedId: vi.fn(() => null),
-    isFlashActive: vi.fn(() => false),
     renderer: { camera: new THREE.PerspectiveCamera() } as unknown as TopologyRenderer,
     animationCoordinator: ac,
+    selectionController: sc,
     ...overrides,
   };
   return deps;
 }
 
-describe('ImpactCoordinator — 22 unit tests per spec §5.1', () => {
+describe('ImpactCoordinator — unit tests (Sub-project E Cycle 3 RED)', () => {
   // ── #1 ──
   it('#1 — constructor registers exactly one impact-phase handler', () => {
     const stub = makeStubAnimationCoordinator();
@@ -190,7 +191,7 @@ describe('ImpactCoordinator — 22 unit tests per spec §5.1', () => {
   });
 
   // ── #8 ──
-  it('#8 — onImpact fires reactions in order: clusterPhysics → envelopePool → flashEmissive → engulfed-marker', () => {
+  it('#8 — onImpact fires reactions in order: clusterPhysics → envelopePool → flashEmissive', () => {
     const deps = makeDeps();
     const coord = new ImpactCoordinator(deps);
     const calls: string[] = [];
@@ -203,32 +204,6 @@ describe('ImpactCoordinator — 22 unit tests per spec §5.1', () => {
     const config = (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1];
     config.onImpact();
     expect(calls).toEqual(['physics', 'envelope', 'flash']);
-    // post-growth's marksEngulfed is false so isEngulfed stays false
-    expect(coord.isEngulfed('n1')).toBe(false);
-  });
-
-  // ── #9 ──
-  it('#9 — click trigger adds node id to _selectionEngulfed', () => {
-    const deps = makeDeps();
-    const coord = new ImpactCoordinator(deps);
-    const node = makeMockNode({ id: 'click-node' });
-    coord.fire({ trigger: 'click', node, group: makeMockGroup() });
-    const config = (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1];
-    config.onImpact();
-    expect(coord.isEngulfed('click-node')).toBe(true);
-  });
-
-  // ── #10 ──
-  it('#10 — non-click triggers do NOT add to _selectionEngulfed', () => {
-    const deps = makeDeps();
-    const coord = new ImpactCoordinator(deps);
-    for (const trigger of ['entrance', 'post-growth', 'optimization'] as const) {
-      const node = makeMockNode({ id: `n-${trigger}` });
-      coord.fire({ trigger, node, group: makeMockGroup() });
-      const config = (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
-      config.onImpact();
-      expect(coord.isEngulfed(`n-${trigger}`)).toBe(false);
-    }
   });
 
   // ── #11 ──
@@ -266,125 +241,6 @@ describe('ImpactCoordinator — 22 unit tests per spec §5.1', () => {
     );
   });
 
-  // ── #14 ──
-  it('#14 — _tick skips emissive write when getSelectedId returns null', () => {
-    const mesh = makeMockMesh(0.5);
-    const stub = makeStubAnimationCoordinator();
-    const deps = makeDeps({
-      animationCoordinator: stub.ac,
-      getSelectedId: () => null,
-      getNodeMesh: () => mesh,
-    });
-    new ImpactCoordinator(deps);
-    stub.triggerImpactTick(0.016);
-    expect((mesh.material as THREE.MeshStandardMaterial).emissiveIntensity).toBe(0.5);
-  });
-
-  // ── #15 ──
-  it('#15 — _tick skips emissive write when selected node is not engulfed', () => {
-    const mesh = makeMockMesh(0.5);
-    const stub = makeStubAnimationCoordinator();
-    const deps = makeDeps({
-      animationCoordinator: stub.ac,
-      getSelectedId: () => 'unengulfed-node',
-      getNodeMesh: () => mesh,
-    });
-    new ImpactCoordinator(deps);
-    stub.triggerImpactTick(0.016);
-    expect((mesh.material as THREE.MeshStandardMaterial).emissiveIntensity).toBe(0.5);
-  });
-
-  // ── #16 ──
-  it('#16 — clearEngulfed() resets _pulseTime AND clears engulfed set; subsequent click re-populates', () => {
-    const mesh = makeMockMesh(0.5);
-    const stub = makeStubAnimationCoordinator();
-    const deps = makeDeps({
-      animationCoordinator: stub.ac,
-      getSelectedId: () => 'n1',
-      getNodeMesh: () => mesh,
-    });
-    const coord = new ImpactCoordinator(deps);
-    // Engulf n1 via click
-    coord.fire({ trigger: 'click', node: makeMockNode({ id: 'n1' }), group: makeMockGroup() });
-    (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1].onImpact();
-    expect(coord.isEngulfed('n1')).toBe(true);
-    // Run one tick to advance _pulseTime
-    stub.triggerImpactTick(0.5);
-    const emissiveAfterFirstTick = (mesh.material as THREE.MeshStandardMaterial).emissiveIntensity;
-    // Clear and re-engulf
-    coord.clearEngulfed();
-    expect(coord.isEngulfed('n1')).toBe(false);
-    coord.fire({ trigger: 'click', node: makeMockNode({ id: 'n1' }), group: makeMockGroup() });
-    (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[1][1].onImpact();
-    expect(coord.isEngulfed('n1')).toBe(true);
-    // After clearEngulfed, _pulseTime = 0; first tick advances to delta=0.5
-    // sine(0.5 * 0.4) = sine(0.2) ≈ 0.1987; idlePulse = 0.1987*0.1 + 0.1 = 0.1199
-    stub.triggerImpactTick(0.5);
-    const emissiveAfterReEngulf = (mesh.material as THREE.MeshStandardMaterial).emissiveIntensity;
-    // The two values should match (same _pulseTime starting state)
-    expect(emissiveAfterReEngulf).toBeCloseTo(emissiveAfterFirstTick, 5);
-  });
-
-  // ── #17 ──
-  it('#17 — _tick writes T3.4 idle pulse formula on engulfed selected node', () => {
-    const mesh = makeMockMesh(0.5);
-    const stub = makeStubAnimationCoordinator();
-    const deps = makeDeps({
-      animationCoordinator: stub.ac,
-      getSelectedId: () => 'n1',
-      getNodeMesh: () => mesh,
-    });
-    const coord = new ImpactCoordinator(deps);
-    coord.fire({ trigger: 'click', node: makeMockNode({ id: 'n1' }), group: makeMockGroup() });
-    (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1].onImpact();
-    stub.triggerImpactTick(0.016);
-    const t = 0.016;
-    const expectedPulse = Math.sin(t * 0.4) * 0.1 + 0.1;
-    const expected = Math.max(0.5, SELECTION_EMISSIVE_FLOOR) + expectedPulse;
-    expect((mesh.material as THREE.MeshStandardMaterial).emissiveIntensity).toBeCloseTo(expected, 5);
-  });
-
-  // ── #18 ──
-  it('#18 — _tick skips emissive write when isFlashActive returns true (flash owns ramp)', () => {
-    const mesh = makeMockMesh(0.5);
-    const stub = makeStubAnimationCoordinator();
-    const deps = makeDeps({
-      animationCoordinator: stub.ac,
-      getSelectedId: () => 'n1',
-      getNodeMesh: () => mesh,
-      isFlashActive: () => true,
-    });
-    const coord = new ImpactCoordinator(deps);
-    coord.fire({ trigger: 'click', node: makeMockNode({ id: 'n1' }), group: makeMockGroup() });
-    (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1].onImpact();
-    (mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 999; // sentinel
-    stub.triggerImpactTick(0.016);
-    expect((mesh.material as THREE.MeshStandardMaterial).emissiveIntensity).toBe(999);
-  });
-
-  // ── #19 ──
-  it('#19 — _tick uses real-time delta accumulator (framerate-independent)', () => {
-    const mesh1 = makeMockMesh(0.5);
-    const mesh2 = makeMockMesh(0.5);
-    const stub1 = makeStubAnimationCoordinator();
-    const stub2 = makeStubAnimationCoordinator();
-    const deps1 = makeDeps({ animationCoordinator: stub1.ac, getSelectedId: () => 'n1', getNodeMesh: () => mesh1 });
-    const deps2 = makeDeps({ animationCoordinator: stub2.ac, getSelectedId: () => 'n1', getNodeMesh: () => mesh2 });
-    const c1 = new ImpactCoordinator(deps1);
-    const c2 = new ImpactCoordinator(deps2);
-    [c1, c2].forEach((c, i) => {
-      const d = i === 0 ? deps1 : deps2;
-      c.fire({ trigger: 'click', node: makeMockNode({ id: 'n1' }), group: makeMockGroup() });
-      (d.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1].onImpact();
-    });
-    // c1: 1 tick of delta=0.5; c2: 50 ticks of delta=0.01 (both total 0.5s)
-    stub1.triggerImpactTick(0.5);
-    for (let i = 0; i < 50; i++) stub2.triggerImpactTick(0.01);
-    const e1 = (mesh1.material as THREE.MeshStandardMaterial).emissiveIntensity;
-    const e2 = (mesh2.material as THREE.MeshStandardMaterial).emissiveIntensity;
-    expect(e1).toBeCloseTo(e2, 5);
-  });
-
   // ── #20 ──
   it('#20 — fire falls back to request.node when getSceneNode returns undefined; to request.group when getBeamGroup returns undefined', () => {
     const deps = makeDeps({
@@ -399,20 +255,6 @@ describe('ImpactCoordinator — 22 unit tests per spec §5.1', () => {
     const [calledGroup, config] = (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(calledGroup).toBe(group); // fell back to request.group
     expect(config.radius).toBeCloseTo(Math.max(7 * 0.04, 0.1)); // fell back to request.node.size
-  });
-
-  // ── #21 ──
-  it('#21 — _tick skips when getNodeMesh returns undefined (mid-rebuild race)', () => {
-    const stub = makeStubAnimationCoordinator();
-    const deps = makeDeps({
-      animationCoordinator: stub.ac,
-      getSelectedId: () => 'n1',
-      getNodeMesh: () => undefined,
-    });
-    const coord = new ImpactCoordinator(deps);
-    coord.fire({ trigger: 'click', node: makeMockNode({ id: 'n1' }), group: makeMockGroup() });
-    (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1].onImpact();
-    expect(() => stub.triggerImpactTick(0.016)).not.toThrow();
   });
 
   // ── #22 ──
@@ -434,5 +276,67 @@ describe('ImpactCoordinator — 22 unit tests per spec §5.1', () => {
     expect(TRIGGER_PRESETS.entrance.marksEngulfed).toBe(false);
     expect(TRIGGER_PRESETS['post-growth'].marksEngulfed).toBe(false);
     expect(TRIGGER_PRESETS.optimization.marksEngulfed).toBe(false);
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Sub-project E Cycle 3 RED — selectionController dep + onImpact wiring
+  // (B2 from selection-state-machine-design rev 2 spec).
+  // ──────────────────────────────────────────────────────────────────
+
+  // ── A ──
+  it('A — ImpactCoordinatorDeps interface includes selectionController dep', () => {
+    // Compile-time check: constructing with selectionController works without
+    // ts errors. The dep is required (no optional `?`), so omitting it would
+    // be a type error post-GREEN.
+    const { sc } = makeStubSelectionController();
+    const ic = new ImpactCoordinator({
+      ...makeDeps(),
+      selectionController: sc,
+    });
+    expect(ic).toBeDefined();
+  });
+
+  // ── B ──
+  it('B — fire({trigger:"click"}) routes engulfed-marker through selectionController.onImpact', () => {
+    const { sc, onImpact } = makeStubSelectionController();
+    const deps = makeDeps({ selectionController: sc });
+    const coord = new ImpactCoordinator(deps);
+    coord.fire({ trigger: 'click', node: makeMockNode({ id: 'n1' }), group: makeMockGroup() });
+    // Invoke the beam's onImpact callback — that's where the engulfed-marker
+    // routes happen in the new wiring.
+    const beamConfig = (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    beamConfig.onImpact();
+    expect(onImpact).toHaveBeenCalledWith('n1');
+    expect(onImpact).toHaveBeenCalledTimes(1);
+  });
+
+  // ── C ──
+  it.each(['entrance', 'post-growth', 'optimization'] as const)(
+    'C — fire({trigger:"%s"}) does NOT call selectionController.onImpact',
+    (trigger: Trigger) => {
+      const { sc, onImpact } = makeStubSelectionController();
+      const deps = makeDeps({ selectionController: sc });
+      const coord = new ImpactCoordinator(deps);
+      coord.fire({ trigger, node: makeMockNode({ id: 'n1' }), group: makeMockGroup() });
+      const beamConfig = (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      beamConfig.onImpact();
+      expect(onImpact).not.toHaveBeenCalled();
+    },
+  );
+
+  // ── D ──
+  it('D — fire onImpact callback still invokes flashEmissive dep', () => {
+    // The `flashEmissive` dep is preserved in the interface (the wiring shifts
+    // in SemanticTopology to `(id, color) => selectionController.flash(id, color)`,
+    // but IC still calls it inside the beam onImpact callback per the §3.4
+    // re-wiring contract).
+    const flashEmissive = vi.fn();
+    const { sc } = makeStubSelectionController();
+    const deps = makeDeps({ flashEmissive, selectionController: sc });
+    const coord = new ImpactCoordinator(deps);
+    coord.fire({ trigger: 'click', node: makeMockNode({ id: 'n1' }), group: makeMockGroup() });
+    const beamConfig = (deps.beamPool.acquire as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    beamConfig.onImpact();
+    expect(flashEmissive).toHaveBeenCalledWith('n1', expect.any(THREE.Color));
   });
 });
