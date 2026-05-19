@@ -2633,74 +2633,44 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     );
   });
 
-  // Cycle 4: flashEmissive lifecycle — attack/decay state machine on the
-  // per-node MeshStandardMaterial. Pinned via source-grep so future
-  // refactors can't strip the baseline-capture or restore-on-expiry
-  // semantics. Combined with the envelope (external plasma skin) the
-  // node now reads as both internally energized AND externally engulfed
-  // at impact.
-  it('source: _flashStates Map includes domainEmissive for brand-color burst (no prevEmissive snapshot)', () => {
-    const src = _semTopSrc();
-    // Core fields
-    expect(src).toMatch(/_flashStates\s*=\s*new\s+Map/);
-    expect(src).toMatch(/startTime\s*:\s*number/);
-    expect(src).toMatch(/baselineEmissive\s*:\s*number/);
-    // Brand color contract: domainEmissive drives burst; NO prevEmissive (stale if node deselected mid-glow).
-    expect(src).toMatch(/domainEmissive\s*:\s*THREE\.Color/);
-    expect(src).not.toMatch(/prevEmissive\s*:\s*THREE\.Color/);
-    // DELETED (Sub-project B / spec §5.2.2 M3): `_removeFlashUpdate` module-scope
-    // symbol absorbed by `coordinator.dispose()`. Replacement coverage:
-    // cleanup-contract test #6 asserts `coordinator?.dispose()` appears in
-    // cleanup return; cleanup-contract test #4 pins flash registered via
-    // `coordinator.register('impact', ...)`.
-  });
+  // Sub-project E (spec §5.5 M3) — DELETED 4 source-grep tests anchored on
+  // `_flashStates`, `flashEmissive`, `_tickFlashStates` 3-phase lifecycle,
+  // and the `GLOW_TOTAL_MS` cleanup branch. The state map + per-frame tick
+  // + attack/hold/decay state machine migrated to `FlashController.ts`.
+  // Replacement coverage: FlashController.test.ts #2 (state map shape),
+  // #4-#8 (3-phase tick + cleanup branch), #9 + #11 (flash() + baseline
+  // capture). Cross-component wiring covered by SC.integration.test.ts INT-4
+  // (flash + idle pulse don't compete) + cleanup-contract.test.ts §Sub-project-E
+  // tests #2 + #14 (FC export + breathing handler reads SC.isFlashActive).
 
-  it('source: flashEmissive takes domainColor arg + applies it immediately (no prevEmissive snapshot)', () => {
-    const src = _semTopSrc();
-    // Signature: flashEmissive(nodeId, domainColor)
-    expect(src).toMatch(/function flashEmissive\(\s*nodeId\s*:\s*string\s*,\s*domainColor\s*:\s*THREE\.Color\s*\)/);
-    // Baseline capture: preserve prior state on re-fire
-    expect(src).toMatch(/existing\s*\?\s*existing\.baselineEmissive\s*:\s*trueBase/);
-    // No prevEmissive snapshot — stale if user switches nodes during 1380ms glow.
-    expect(src).not.toMatch(/existing\.prevEmissive/);
-    // Domain color applied immediately at stamp time (no one-frame cyan blip)
-    expect(src).toMatch(/mat\.emissive\.copy\(\s*domainColor\s*\)/);
-  });
-
-  it('source: per-frame tick handles attack/hold/decay 3-phase lifecycle with additive peak delta', () => {
-    const src = _semTopSrc();
-    // 3-phase lifecycle mirrors EnvelopePool exactly.
-    expect(src).toMatch(/elapsed\s*<\s*GLOW_ATTACK_MS/);
-    expect(src).toMatch(/elapsed\s*<\s*GLOW_ATTACK_MS\s*\+\s*GLOW_HOLD_MS/);
-    // Peak uses additive GLOW_PEAK_DELTA (not multiplicative) to stay within bloom headroom.
-    expect(src).toMatch(/GLOW_PEAK_DELTA/);
-    expect(src).toMatch(/baselineEmissive\s*\+\s*GLOW_PEAK_DELTA/);
-    // Cubic ease-out used for attack + decay — same shape as EnvelopePool.
-    const easeMatches = src.match(/1\s*-\s*Math\.pow\(\s*1\s*-\s*t\s*,\s*3\s*\)/g);
-    expect(easeMatches).not.toBeNull();
-    expect(easeMatches!.length).toBeGreaterThanOrEqual(2);
-    // Completion: live _highlightedId check decides correct emissive color (not stale prevEmissive).
-    expect(src).toMatch(/elapsed\s*>=\s*GLOW_TOTAL_MS/);
-    expect(src).toMatch(/_highlightedId\s*===\s*nodeId/);
-    expect(src).toMatch(/mat\.emissive\.setHex\(\s*HIGHLIGHT_COLOR\s*\)/);
-    expect(src).toMatch(
-      /mat\.emissiveIntensity\s*=\s*state\.baselineEmissive[\s\S]{0,80}_flashStates\.delete\(\s*nodeId\s*\)/,
-    );
-    // Domain color re-asserted every frame during glow (guards against concurrent highlight change).
-    expect(src).toMatch(/mat\.emissive\.copy\(\s*state\.domainEmissive\s*\)/);
-  });
-
-  it("source: _tickFlashStates wired via coordinator.register('impact', ...) in onMount", () => {
-    const src = _semTopSrc();
-    // Post-Sub-project B (spec §5.2.2 M3): flash per-frame tick is registered
-    // through the AnimationCoordinator in the `impact` phase. The canceller
-    // symbol `_removeFlashUpdate` is absorbed into `coordinator.dispose()`.
-    expect(src).toMatch(
-      /coordinator\.register\(\s*['"]impact['"][\s\S]{0,300}_tickFlashStates/,
+  it("source: FlashController._tick wired via animationCoordinator.register('impact', ...) in FC constructor (spec §5.5 M3 Row — anchor moved from SemanticTopology.svelte._tickFlashStates to FC.ts)", () => {
+    // Sub-project E: flash per-frame tick migrated from
+    // `_tickFlashStates` in SemanticTopology.svelte to `FlashController._tick`
+    // in `FlashController.ts`. The register-site moved INSIDE FC's
+    // constructor, where it calls `deps.animationCoordinator.register('impact', ...)`.
+    // The dep wrapper preserves the canon impact-phase ordering invariant
+    // (beam → envelope → flash) when SC constructs FC.
+    const mod = import.meta.glob<string>(['./FlashController.ts'], {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    });
+    const src = mod['./FlashController.ts'];
+    expect(typeof src).toBe('string');
+    expect(src as string).toMatch(
+      /deps\.animationCoordinator\.register\(\s*['"]impact['"][\s\S]{0,300}this\._tick/,
     );
   });
 
-  it('source: cleanup return invokes coordinator?.dispose() before clearing _flashStates', () => {
+  it('source: cleanup return invokes selectionController?.dispose() (spec §5.5 M3 Row — anchor migrated from coordinator?.dispose()→_flashStates.clear() ordering to SC.dispose() presence + position)', () => {
+    // Sub-project E: `_flashStates.clear()` deleted from cleanup body —
+    // `FlashController.dispose()` (invoked transitively via
+    // `selectionController?.dispose()`) owns the state-map clear + baseline
+    // restore per F19. The cancel-before-clear ordering invariant becomes
+    // SC.dispose() PRESENCE (which internally cancels FC's register, restores
+    // baselines, and clears the map) BEFORE pool disposes. Equivalent
+    // runtime coverage: FlashController.test.ts #13 (dispose restores
+    // baselines) + SC.integration.test.ts INT-5 (dispose chain order).
     const src = _semTopSrc();
     const closeIdx = src.indexOf('</script>');
     const returnPattern = /return\s*\(\s*\)\s*=>\s*\{/g;
@@ -2719,48 +2689,20 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     }
     const cleanupBody = src.slice(lastReturnIdx, i - 1);
 
-    // Post-Sub-project B (spec §5.2.2 M3): the `_removeFlashUpdate` symbol is
-    // absorbed into `coordinator.dispose()`. The cancel-before-clear ordering
-    // invariant survives: `coordinator?.dispose()` (which cancels the flash
-    // per-frame handler) must precede `_flashStates.clear()` so the tick can't
-    // read into a half-cleared map.
-    expect(cleanupBody).toMatch(/coordinator\?\.dispose\(\)/);
-    expect(cleanupBody).toMatch(/_flashStates\.clear\(\)/);
-    const cancelIdx = cleanupBody.indexOf('coordinator?.dispose()');
-    const clearIdx = cleanupBody.indexOf('_flashStates.clear()');
-    expect(cancelIdx).toBeGreaterThan(-1);
-    expect(clearIdx).toBeGreaterThan(-1);
-    expect(cancelIdx).toBeLessThan(clearIdx);
+    // SC dispose is present in cleanup body.
+    expect(cleanupBody).toMatch(/selectionController\?\.dispose\(\)/);
+    // Anti-regression: the deleted state-map clear must NOT reappear here —
+    // FlashController.dispose() owns that work post-migration.
+    expect(cleanupBody).not.toMatch(/_flashStates\.clear\(\)/);
   });
 
-  it('source: cleanup return restores baselines on every active flash before clearing the map', () => {
-    const src = _semTopSrc();
-    const closeIdx = src.indexOf('</script>');
-    const returnPattern = /return\s*\(\s*\)\s*=>\s*\{/g;
-    let lastReturnIdx = -1;
-    let m: RegExpExecArray | null;
-    while ((m = returnPattern.exec(src)) !== null) {
-      if (m.index < closeIdx) lastReturnIdx = m.index + m[0].length;
-    }
-    let depth = 1;
-    let i = lastReturnIdx;
-    while (i < src.length && depth > 0) {
-      if (src[i] === '{') depth++;
-      else if (src[i] === '}') depth--;
-      i++;
-    }
-    const cleanupBody = src.slice(lastReturnIdx, i - 1);
-    // The restore loop iterates entries and writes baselineEmissive back
-    // onto the per-node MeshStandardMaterial. Without this, a remount
-    // could inherit inflated emissiveIntensity that would only normalize
-    // on first paint — visible as a brief over-glow.
-    expect(cleanupBody).toMatch(
-      /for\s*\(\s*const\s*\[[^\]]+\]\s*of\s*_flashStates\s*\)/,
-    );
-    expect(cleanupBody).toMatch(
-      /mat\.emissiveIntensity\s*=\s*state\.baselineEmissive/,
-    );
-  });
+  // Sub-project E (spec §5.5 M3) — DELETED `source: cleanup return restores
+  // baselines on every active flash before clearing the map`. The restore
+  // loop migrated to `FlashController.dispose()` which iterates its private
+  // `_states` map and writes `mat.emissiveIntensity = state.baselineEmissive`
+  // before clearing. Replacement coverage: FlashController.test.ts #13
+  // (dispose restores baselines + clears map) + SC.integration.test.ts INT-5
+  // (SC.dispose chains FC.dispose under the new state machine API).
 
   it('source: every impactCoordinator.fire site routes through coordinator (canon F7 universal causal-ordering invariant)', () => {
     const src = _semTopSrc();
@@ -2853,24 +2795,26 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
       /\}\s*else\s*\{[\s\S]{0,2000}n\.position\s*=\s*\[\s*\n?\s*settledPositions\[i\s*\*\s*3\]/,
     );
   });
-  it('source: breathing loop does NOT override emissiveIntensity while _flashStates.has(nodeId) — _tickFlashStates owns full attack→hold→decay ramp (Engulfment-Bug regression)', () => {
+  it('source: breathing loop does NOT override emissiveIntensity while selectionController?.isFlashActive(nodeId) — FlashController._tick owns full attack→hold→decay ramp (Engulfment-Bug regression) (spec §5.5 M3 Row — anchors migrated _flashStates.has → SC.isFlashActive, impactCoordinator.isEngulfed → SC.isEngulfed, _tickFlashStates → flashController._tick)', () => {
     // Live-observed: MATURE/database clusters showed the full engulfment burst
     // on selection, but ACTIVE clusters (low member count, baseline ~0.5-0.6)
     // appeared dim during the 120ms attack phase and only briefly bloomed
     // during hold. Root cause: the breathing animation loop ran a blend-OUT
     // formula `mat.emissiveIntensity = baseEmissive + idlePulse * blendOut`
     // during `glowElapsed < GLOW_ATTACK_MS && isSelected` that DECAYED toward
-    // baseEmissive at frame 120ms — overwriting `_tickFlashStates`' cubic
-    // ramp from baseline → peak. For low-baseline clusters that meant the
-    // attack phase never crossed the 0.85 bloom threshold and the engulfment
-    // was effectively invisible. For high-baseline mature clusters (~1.1)
-    // the override still landed above bloom threshold so the engulfment
-    // appeared "full" — creating the per-state visual asymmetry the operator
-    // observed and reported as a bug.
+    // baseEmissive at frame 120ms — overwriting the flash tick's cubic ramp
+    // from baseline → peak. For low-baseline clusters that meant the attack
+    // phase never crossed the 0.85 bloom threshold and the engulfment was
+    // effectively invisible.
     //
-    // The fix: when `_flashStates.has(nodeId)` is true, the breathing loop
-    // MUST be a no-op for `mat.emissiveIntensity`. `_tickFlashStates` (which
-    // runs earlier in the per-frame chain) owns the entire ramp.
+    // Post-Sub-project-E: the flash-state predicate migrated from local
+    // `_flashStates.has(nodeId)` to `selectionController?.isFlashActive(nodeId)`
+    // (SC owns FC, exposes the predicate as a facade). The engulfed-set
+    // predicate similarly migrated from `impactCoordinator?.isEngulfed(nodeId)`
+    // to `selectionController?.isEngulfed(nodeId)` (engulfed state lives on
+    // SC's internal state machine). The contract preserved: when SC says
+    // a flash is active, the breathing loop is a no-op so FC's _tick owns
+    // the per-frame emissive write.
     const src = _semTopSrc();
 
     // Locate the breathing-loop section.
@@ -2879,28 +2823,26 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     );
     expect(breathingMatch).not.toBeNull();
 
-    // The `if (_flashStates.has(nodeId))` block must NOT contain any line
-    // that writes `mat.emissiveIntensity = ...` — the regression bug was
-    // the blend-out write that decayed toward baseEmissive during attack.
-    // Post-Sub-project-C: the second branch now checks
-    // `impactCoordinator?.isEngulfed(nodeId)` (the coordinator owns the
-    // engulfment-marker set + the T3.4 idle pulse); the regex anchor
-    // updates accordingly. See cleanup-contract.test.ts §Impact #8 + #12.
+    // Post-Sub-project-E: the flash-active branch now anchors on
+    // `selectionController?.isFlashActive(nodeId)` and chains via
+    // `else if (selectionController?.isEngulfed(...)`. The branch body
+    // must remain a no-op for `mat.emissiveIntensity`.
     const flashBranchMatch = src.match(
-      /if \(_flashStates\.has\(nodeId\)\) \{([\s\S]*?)\} else if \(impactCoordinator/,
+      /if \(selectionController(?:\?\.|\!\.|\.)isFlashActive\(nodeId\)\) \{([\s\S]*?)\} else if \(selectionController/,
     );
     expect(flashBranchMatch).not.toBeNull();
     const flashBranchBody = flashBranchMatch![1];
     expect(flashBranchBody).not.toMatch(/mat\.emissiveIntensity\s*=/);
     expect(flashBranchBody).not.toMatch(/blendOut/);
 
-    // Defense-in-depth: the comment must mention that _tickFlashStates owns
-    // the ramp, so future editors don't accidentally re-add an override.
-    expect(flashBranchBody).toMatch(/_tickFlashStates/);
+    // Defense-in-depth: the comment must mention that flashController._tick
+    // (or FC._tick) owns the ramp, so future editors don't accidentally
+    // re-add an override.
+    expect(flashBranchBody).toMatch(/flashController\._tick|FlashController\._tick|FC\._tick/);
   });
 
 
-  it('source: selection idle pulse uses SELECTION_EMISSIVE_FLOOR via Math.max in ImpactCoordinator._tick (spec §5.3 M3 Row 4 — anchor moved from breathing handler to coordinator _tick body)', () => {
+  it('source: selection idle pulse uses SELECTION_EMISSIVE_FLOOR via Math.max in SelectionController._tickIdlePulse (spec §5.5 M3 Row — anchor migrated from ImpactCoordinator._tick to SelectionController._tickIdlePulse; SELECTION_EMISSIVE_FLOOR import-source IC → SC)', () => {
     // Live-observed pre-fix: even after the flash-override fix landed, only
     // MATURE/database clusters showed the continuous engulfment glow on
     // selection. Root cause: the IDLE PULSE for selected nodes (NOT the
@@ -2914,26 +2856,25 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     //
     // Fix: root the pulse at `Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR)`
     // where the floor is >= the bloom threshold + margin (1.0). The named
-    // constant is exported from ImpactCoordinator.ts so future editors
-    // can't regress it to a magic number.
+    // constant is exported from SelectionController.ts (Sub-project E
+    // migration; pre-migration it was exported from IC).
     //
-    // Post-Sub-project-C: this anchor lives in `ImpactCoordinator._tick(...)`.
+    // Post-Sub-project-E: this anchor lives in `SelectionController._tickIdlePulse(...)`.
     // The breathing handler retains a guard branch (no-op body) so the bare
-    // `else { = baseEmissive }` does NOT overwrite the coordinator's write;
-    // that guard is pinned by cleanup-contract.test.ts test #12. Equivalent
-    // runtime coverage: ImpactCoordinator.test.ts §5.1 #17.
-    const mod = import.meta.glob<string>(['./ImpactCoordinator.ts'], {
+    // `else { = baseEmissive }` does NOT overwrite SC's write; that guard
+    // is pinned by cleanup-contract.test.ts test #12 (post-rev-2). Equivalent
+    // runtime coverage: SelectionController.test.ts (idle-pulse behavior).
+    const mod = import.meta.glob<string>(['./SelectionController.ts'], {
       query: '?raw',
       import: 'default',
       eager: true,
     });
-    const src = mod['./ImpactCoordinator.ts'];
+    const src = mod['./SelectionController.ts'];
     expect(typeof src).toBe('string');
 
-    // Extract the _tick(...) method body via a brace-balanced slice from
-    // the header through the matching close. Anchored on the signature
-    // shape that Cycle 1 GREEN landed.
-    const headerRegex = /private\s+_tick\s*\(\s*delta\s*:\s*number\s*\)\s*:\s*void\s*\{/;
+    // Extract the _tickIdlePulse(...) method body via a brace-balanced slice
+    // from the header through the matching close.
+    const headerRegex = /private\s+_tickIdlePulse\s*\(\s*delta\s*:\s*number\s*\)\s*:\s*void\s*\{/;
     const m = headerRegex.exec(src as string);
     expect(m).not.toBeNull();
     const openIdx = m!.index + m![0].length - 1;
@@ -2948,8 +2889,8 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     const tickBody = (src as string).slice(openIdx + 1, i - 1);
 
     // The named floor must be referenced (not a magic 1.0 literal) inside
-    // _tick. The export is at module scope, so a bare `SELECTION_EMISSIVE_FLOOR`
-    // identifier appears inside the body.
+    // _tickIdlePulse. The export is at module scope of SC.ts, so a bare
+    // `SELECTION_EMISSIVE_FLOOR` identifier appears inside the body.
     expect(tickBody).toMatch(/SELECTION_EMISSIVE_FLOOR/);
 
     // The floor must be USED via Math.max against baseEmissive so the lift
@@ -3028,7 +2969,7 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
   });
 
 
-  it('source: post-engulfment idle pulse is gated on isEngulfed + isFlashActive in ImpactCoordinator._tick (Engulfment-Timing regression) (spec §5.3 M3 Row 6 — anchor moved from breathing handler to coordinator _tick body)', () => {
+  it('source: post-engulfment idle pulse is gated on engulfed-state + flash-active in SelectionController._tickIdlePulse (Engulfment-Timing regression) (spec §5.5 M3 Row — anchors migrated from ImpactCoordinator._tick / _deps.isFlashActive callbacks to SelectionController._tickIdlePulse / internal _state + _flash.isActive)', () => {
     // Live-observed pre-fix: operator reported "fully engulfs and triggers
     // BEFORE the beam actually triggers and then becomes flat when the beam
     // actually hits it." Root cause: the idle ambient pulse (canon T3.4)
@@ -3038,29 +2979,29 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // 1.0 it produced a visible bloomed glow IMMEDIATELY on click, before
     // the beam had finished its 700ms POV→target travel.
     //
-    // Fix: the post-engulfment idle pulse is gated on the engulfed-set
-    // membership. The set is populated inside the coordinator's onImpact
-    // callback when `preset.marksEngulfed === true` (click trigger only),
-    // and cleared on every selection change via `clearEngulfed()`. The
-    // mid-flash protection (`isFlashActive(...)` skip) prevents the pulse
-    // from competing with `_tickFlashStates`'s attack/hold/decay ramp.
+    // Fix: the post-engulfment idle pulse is gated on SC's internal state
+    // machine — only fires when `_state === 'engulfed'`. The engulfed
+    // transition happens after the GLOW_TOTAL_MS=1380ms decay timer
+    // elapses (set in onImpact). The mid-flash protection
+    // (`_flash.isActive(selectedId)` skip) prevents the pulse from
+    // competing with FlashController._tick's attack/hold/decay ramp.
     //
-    // Post-Sub-project-C: this anchor lives in `ImpactCoordinator._tick(...)`.
-    // The two guards are read via getter callbacks (`isEngulfed` is the
-    // public method on the coordinator itself; `isFlashActive` is a dep
-    // callback wired by SemanticTopology to `(id) => _flashStates.has(id)`
-    // per spec §3.1 M2 + M6). Equivalent runtime coverage:
-    // ImpactCoordinator.test.ts §5.1 #15 (non-engulfed skip), #17 (writes
-    // the formula on engulfed-selected), #18 (flash-active skip).
-    const mod = import.meta.glob<string>(['./ImpactCoordinator.ts'], {
+    // Post-Sub-project-E: this anchor lives in `SelectionController._tickIdlePulse(...)`.
+    // Both guards are INTERNAL to SC (no dep callbacks): the engulfed
+    // state lives on `this._state` and the flash predicate reads through
+    // SC's owned `FlashController` reference via `this._flash.isActive(...)`.
+    // Equivalent runtime coverage: SelectionController.test.ts (idle
+    // pulse + state transitions) + SC.integration.test.ts INT-4 (flash +
+    // idle pulse don't compete).
+    const mod = import.meta.glob<string>(['./SelectionController.ts'], {
       query: '?raw',
       import: 'default',
       eager: true,
     });
-    const src = mod['./ImpactCoordinator.ts'];
+    const src = mod['./SelectionController.ts'];
     expect(typeof src).toBe('string');
 
-    const headerRegex = /private\s+_tick\s*\(\s*delta\s*:\s*number\s*\)\s*:\s*void\s*\{/;
+    const headerRegex = /private\s+_tickIdlePulse\s*\(\s*delta\s*:\s*number\s*\)\s*:\s*void\s*\{/;
     const m = headerRegex.exec(src as string);
     expect(m).not.toBeNull();
     const openIdx = m!.index + m![0].length - 1;
@@ -3074,20 +3015,18 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     }
     const tickBody = (src as string).slice(openIdx + 1, i - 1);
 
-    // (a) Engulfed guard: `if (... !this.isEngulfed(selectedId)) return;`
-    // The full coordinator pattern wraps the engulfed check with a
-    // null-selectedId short-circuit; permit either an inline negation
-    // or a separate guard line.
+    // (a) Engulfed-state guard: `if (this._state !== 'engulfed') return;`
+    // (replaces the pre-Sub-project-E `if (... !this.isEngulfed(selectedId)) return;`
+    // pattern that lived in ImpactCoordinator._tick).
     expect(tickBody).toMatch(
-      /if\s*\([^)]*!\s*this\.isEngulfed\s*\(\s*selectedId\s*\)[^)]*\)\s*return/,
+      /if\s*\(\s*this\._state\s*!==\s*['"]engulfed['"]\s*\)\s*return/,
     );
 
-    // (b) Flash-active skip via the getter callback dep (M2 + M6 wiring).
-    // The coordinator reads `this._deps.isFlashActive(selectedId)` and
-    // returns when true, so the flash ramp owns the emissive during its
-    // active window.
+    // (b) Flash-active skip via internal FC reference (replaces the
+    // `_deps.isFlashActive(selectedId)` dep callback pattern). SC owns FC
+    // directly per spec §3.1 — no callback indirection.
     expect(tickBody).toMatch(
-      /this\._deps\.isFlashActive\s*\(\s*selectedId\s*\)/,
+      /this\._flash\.isActive\s*\(\s*this\._selectedId\s*\)/,
     );
 
     // (c) The body writes mat.emissiveIntensity and references the pulse
@@ -3099,7 +3038,7 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     );
   });
 
-  it('source: flash attack ramps from `startIntensity` (current displayed value), not `baselineEmissive` — no dip when beam hits a node mid-pulse (Flash-Dip regression)', () => {
+  it('source: flash attack ramps from `startIntensity` (current displayed value), not `baselineEmissive` — no dip when beam hits a node mid-pulse (Flash-Dip regression) (spec §5.5 M3 Row — anchor moved from SemanticTopology.svelte to FlashController.ts)', () => {
     // Live-observed: operator reported "becomes flat when the beam actually
     // hits it." Root cause: pre-fix the flash attack formula was
     // `state.baselineEmissive + (peak - state.baselineEmissive) * ease`
@@ -3110,67 +3049,50 @@ describe('SemanticTopology — optimization beam wiring (Data-as-Matter)', () =>
     // phase reset the visible intensity DOWN to baseline before ramping
     // up — producing a visible "dim" frame at the moment of impact.
     //
-    // Fix: `flashEmissive` captures `mat.emissiveIntensity` at acquire
-    // time as `state.startIntensity = max(currentIntensity, baseline)`,
+    // Fix: `FlashController.flash()` captures `mat.emissiveIntensity` at
+    // acquire time as `state.startIntensity = max(currentIntensity, baseline)`,
     // and the attack-phase formula ramps from `startIntensity` → peak.
     // The decay phase still ramps `peak` → `baselineEmissive` (so the
     // post-engulfment value lands at the data-driven baseline, matching
     // the operator-spec'd "fluidly dissipates" close).
-    const src = _semTopSrc();
+    //
+    // Post-Sub-project-E: the state record + acquire-time capture + attack
+    // formula all live in `FlashController.ts`. The identifiers are
+    // unchanged (`startIntensity`, `baseline`, `state.startIntensity`,
+    // `peak`, `ease`) — only the source file moved.
+    const mod = import.meta.glob<string>(['./FlashController.ts'], {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    });
+    const src = mod['./FlashController.ts'];
+    expect(typeof src).toBe('string');
 
     // The state record must include `startIntensity`.
-    expect(src).toMatch(/startIntensity:\s*number/);
+    expect(src as string).toMatch(/startIntensity:\s*number/);
 
-    // flashEmissive must compute startIntensity from current emissive.
-    expect(src).toMatch(
+    // FC.flash() must compute startIntensity from current emissive.
+    expect(src as string).toMatch(
       /startIntensity[\s\S]{0,200}Math\.max\(\s*mat\.emissiveIntensity\s*,\s*baseline\s*\)/,
     );
 
-    // _tickFlashStates attack-phase formula must use startIntensity.
-    expect(src).toMatch(
+    // FC._tick attack-phase formula must use startIntensity.
+    expect(src as string).toMatch(
       /mat\.emissiveIntensity\s*=\s*state\.startIntensity\s*\+\s*\(peak\s*-\s*state\.startIntensity\)\s*\*\s*ease/,
     );
   });
 
 
-  it('source: engulfment gate clear is keyed off ACTUAL selection transitions via impactCoordinator?.clearEngulfed() (_prevSelectedId regression) (spec §5.3 M3 Row 7 — anchor migrated from _selectionEngulfed.clear to coordinator.clearEngulfed)', () => {
-    // Live-observed pre-fix: operator reported "only one specific node gets
-    // the full effect." Root cause: the selection $effect cleared the
-    // engulfed set unconditionally on every re-trigger. The effect re-fires
-    // whenever any of its reactive deps change (sceneData rebuilds,
-    // focusedNodeId self-writes during the body, downstream store updates,
-    // etc.). During the ~700ms beam-travel window between click and impact,
-    // scene rebuilds are common — each one cleared the engulfment gate.
-    //
-    // Fix: track `_prevSelectedId` and only clear when the selection actually
-    // changes (transition: A → B or A → null). Re-fires of the SAME
-    // selection preserve the gate. Post-Sub-project-C the clear routes
-    // through `impactCoordinator?.clearEngulfed()` (the coordinator owns
-    // `_selectionEngulfed`); `_prevSelectedId` STAYS in SemanticTopology
-    // per spec §4.3 (Sub-project E absorbs it later).
-    const src = _semTopSrc();
-
-    // The previous-selection tracker must exist (stays per §4.3).
-    expect(src).toMatch(/let\s+_prevSelectedId\s*:\s*string\s*\|\s*null\s*=\s*null/);
-
-    // The clear inside the selection effect must be guarded by an
-    // inequality check against the previous selection AND route through
-    // the coordinator's clearEngulfed() method.
-    expect(src).toMatch(
-      /if\s*\(\s*externalId\s*!==\s*_prevSelectedId\s*\)[\s\S]{0,200}impactCoordinator[?!]?\.clearEngulfed\s*\(\s*\)/,
-    );
-
-    // The previous-selection must be UPDATED inside the same conditional
-    // so the next re-fire's comparison reads the correct value.
-    expect(src).toMatch(
-      /if\s*\(\s*externalId\s*!==\s*_prevSelectedId\s*\)[\s\S]{0,200}_prevSelectedId\s*=\s*externalId/,
-    );
-
-    // Anti-regression: `_selectionEngulfed.clear()` must NOT appear in
-    // SemanticTopology.svelte. The symbol is fully migrated to the
-    // coordinator per spec §4.3.
-    expect(src).not.toMatch(/_selectionEngulfed\.clear/);
-  });
+  // Sub-project E (spec §5.5 M3) — DELETED `source: engulfment gate clear
+  // is keyed off ACTUAL selection transitions via impactCoordinator?.clearEngulfed()`.
+  // `_prevSelectedId` migrated to SC's internal `_previousId`; same-id
+  // re-selects no-op via `if (nodeId === this._selectedId) return;` guard
+  // inside SC.select(). The engulfed-state lifecycle now lives entirely
+  // inside SC's state machine, NOT as a $effect transition gate on the
+  // component. Replacement coverage: SelectionController.test.ts #12
+  // (same-id no-op via early return) + #8 (cancel-via-idle on different
+  // id) + SC.integration.test.ts INT-2 (re-select mid-impact cancels +
+  // re-enters focusing).
 
 
 });

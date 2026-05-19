@@ -68,10 +68,14 @@ describe('Cleanup contract — canon animation cancellers', () => {
     const cleanup = extractCleanupBody(readSemTopSource());
     // Post-Sub-project B: coordinator?.dispose() absorbs 8 unconditional cancellers;
     // formation and readiness billboard remain conditional and survive.
+    // Post-Sub-project E: selectionController?.dispose() chained for SC + FC
+    // teardown (FC.dispose restores baseline emissive on active flashes;
+    // SC.dispose cancels the engulfed-set decay timer + clears highlight).
     const required = [
       'coordinator?.dispose()',         // absorbs 8 unconditional cancellers (Sub-project B)
       '_removeFormationAnim?.()',       // conditional during entrance; retained
       '_removeReadinessBillboard?.()',  // conditional when _readinessRings.size > 0; retained
+      'selectionController?.dispose()', // Sub-project E — chains FC.dispose + SC state teardown
     ];
     const missing = required.filter((sig) => !cleanup.includes(sig));
     expect(missing).toEqual([]);
@@ -88,7 +92,9 @@ describe('Cleanup contract — canon disposables', () => {
       'beamPool?.dispose()',
       'clusterPhysics?.clear()',
       'envelopePool?.dispose()', // canon F19 — plasma envelope pool
-      '_flashStates.clear()',    // canon F19 — emissive flash state map
+      // _flashStates.clear() removed in Sub-project E — FlashController.dispose()
+      // owns emissive baseline restore + state-map clear; invoked transitively
+      // via selectionController?.dispose() (pinned by #13 in §5.3 source-grep).
       'ringBuilder?.dispose()',  // Sub-project D — absorbs readiness + template ring cleanup
       'dustBuilder?.dispose()',  // Sub-project D — neural dust cleanup
       'ro.disconnect()',
@@ -407,29 +413,38 @@ describe('Animation Coordinator — source-grep contract (spec §5.2)', () => {
   });
 
   // ── #4 ──
-  it('#4 — impact-phase strict order: beam.update BEFORE envelope.update BEFORE _tickFlashStates', () => {
+  it('#4 — impact-phase strict order in SemanticTopology.svelte: beam.update register BEFORE envelope.update register', () => {
     const src = readAnimationCoordinatorSrc('SemanticTopology.svelte');
     const onMountIdx = src.indexOf('onMount(() => {');
     const onMountSlice = src.slice(onMountIdx, onMountIdx + 8000);
     const beamPos = onMountSlice.search(/coordinator\.register\(\s*['"]impact['"][\s\S]{0,200}beamPool[?!]?\.update/);
     const envPos = onMountSlice.search(/coordinator\.register\(\s*['"]impact['"][\s\S]{0,200}envelopePool[?!]?\.update/);
-    const flashPos = onMountSlice.search(/coordinator\.register\(\s*['"]impact['"][\s\S]{0,200}_tickFlashStates/);
     expect(beamPos).toBeGreaterThan(-1);
     expect(envPos).toBeGreaterThan(-1);
-    expect(flashPos).toBeGreaterThan(-1);
     expect(beamPos).toBeLessThan(envPos);
-    expect(envPos).toBeLessThan(flashPos);
+    // Post-Sub-project-E: flash tick registered inside FlashController's constructor
+    // via `deps.animationCoordinator.register(...)`, not via `coordinator.register(...)`
+    // from this file. Execution order (beam → envelope → flash → SC idle pulse)
+    // preserved by AnimationCoordinator's FIFO handler array; FC's register call
+    // (invoked via `new SelectionController`) lands AFTER beam + envelope registers
+    // at runtime. SelectionController.integration.test.ts INT-4 pins the per-frame
+    // execution interaction between flash and idle pulse.
   });
 
   // ── #5 ──
-  it('#5 — exactly 11 coordinator.register call sites distributed across rebuildScene (5), handleRecluster (1 formation), onMount (5)', () => {
+  it('#5 — exactly 10 coordinator.register call sites distributed across rebuildScene (5), handleRecluster (1 formation), onMount (4)', () => {
+    // Sub-project E post-migration count = 10. Pre-migration count was 11
+    // (5 rebuildScene + 1 handleRecluster + 5 onMount). Sub-project E
+    // DELETES the inline `_tickFlashStates` register call from onMount —
+    // FC's per-frame tick is now registered INSIDE FC's constructor via
+    // `deps.animationCoordinator.register('impact', ...)`. That internal
+    // register call uses `animationCoordinator` (the parameter name) and
+    // does NOT match this test's `coordinator\.register\(` regex —
+    // escaping the count. Net change: -1 ⇒ 10 total.
     const src = readAnimationCoordinatorSrc('SemanticTopology.svelte');
     const totalMatches = src.match(/coordinator\.register\(/g);
-    expect(totalMatches?.length).toBe(11);
+    expect(totalMatches?.length).toBe(10);
 
-    // Source order at HEAD 522701f8: rebuildScene (~966) → handleLodChange
-    // (~1692) → handleRecluster (~1767, contains formation registration) →
-    // onMount (~2381). Slice in source order, not assumed-presentation order.
     const rebuildIdx = src.indexOf('function rebuildScene(');
     const handleLodIdx = src.indexOf('function handleLodChange(');
     const handleReclusterIdx = src.indexOf('async function handleRecluster(');
@@ -439,20 +454,14 @@ describe('Animation Coordinator — source-grep contract (spec §5.2)', () => {
     expect(handleReclusterIdx).toBeGreaterThan(handleLodIdx);
     expect(onMountIdx).toBeGreaterThan(handleReclusterIdx);
 
-    // rebuildScene body: rebuildIdx → handleLodIdx (5 register calls expected)
     const rebuildRegion = src.slice(rebuildIdx, handleLodIdx);
-    const rebuildCount = (rebuildRegion.match(/coordinator\.register\(/g) ?? []).length;
-    expect(rebuildCount).toBe(5);
+    expect((rebuildRegion.match(/coordinator\.register\(/g) ?? []).length).toBe(5);
 
-    // handleRecluster body: handleReclusterIdx → onMountIdx (1 register call = formation)
     const handleReclusterRegion = src.slice(handleReclusterIdx, onMountIdx);
-    const handleReclusterCount = (handleReclusterRegion.match(/coordinator\.register\(/g) ?? []).length;
-    expect(handleReclusterCount).toBe(1);
+    expect((handleReclusterRegion.match(/coordinator\.register\(/g) ?? []).length).toBe(1);
 
-    // onMount body: onMountIdx → end of file (5 register calls expected)
     const onMountRegion = src.slice(onMountIdx);
-    const onMountCount = (onMountRegion.match(/coordinator\.register\(/g) ?? []).length;
-    expect(onMountCount).toBe(5);
+    expect((onMountRegion.match(/coordinator\.register\(/g) ?? []).length).toBe(4);
   });
 
   // ── #6 ──
@@ -648,12 +657,13 @@ function extractMethodBody(src: string, headerRegex: RegExp): string {
 
 describe('Impact Coordinator — source-grep contract (spec §5.2)', () => {
   // ── #1 ──
-  it('#1 — ImpactCoordinator.ts exports class + Trigger type + TRIGGER_PRESETS + SELECTION_EMISSIVE_FLOOR', () => {
+  it('#1 — ImpactCoordinator.ts exports class + Trigger type + TRIGGER_PRESETS (post-Sub-project-E: SELECTION_EMISSIVE_FLOOR migrated to SelectionController.ts; the SC export is pinned by Sub-project E §5.3 test #1)', () => {
     const src = readImpactCoordinatorSrc('ImpactCoordinator.ts');
     expect(src).toMatch(/export\s+class\s+ImpactCoordinator/);
     expect(src).toMatch(/export\s+type\s+Trigger\s*=/);
     expect(src).toMatch(/export\s+const\s+TRIGGER_PRESETS/);
-    expect(src).toMatch(/export\s+const\s+SELECTION_EMISSIVE_FLOOR/);
+    // SELECTION_EMISSIVE_FLOOR export check moved to Sub-project E §5.3 test #1
+    // (asserts the const is now exported from SelectionController.ts).
   });
 
   // ── #2 ──
@@ -833,19 +843,26 @@ describe('Impact Coordinator — source-grep contract (spec §5.2)', () => {
   });
 
   // ── #11 ──
-  it('#11 — ImpactCoordinator._tick body contains zero per-frame allocations', () => {
-    const src = readImpactCoordinatorSrc('ImpactCoordinator.ts');
-    const tickBody = extractMethodBody(src, /private\s+_tick\s*\(\s*delta\s*:\s*number\s*\)\s*:\s*void\s*\{/);
+  it('#11 — SelectionController._tickIdlePulse body contains zero per-frame allocations', () => {
+    // Sub-project E: IC's `_tick` deleted; the post-engulfment idle pulse
+    // (canon T3.4) migrated to SC's `_tickIdlePulse(delta)`. The zero-alloc
+    // invariant carries forward — pulse runs every frame after engulfment
+    // and may not allocate on hot paths.
+    const src = readSelSrc('SelectionController.ts');
+    const tickBody = extractMethodBody(src, /private\s+_tickIdlePulse\s*\(\s*delta\s*:\s*number\s*\)\s*:\s*void\s*\{/);
     expect(tickBody).not.toMatch(/new\s+(Map|Array|Set|WeakSet|Vector\d|Color|Quaternion|Matrix\d)\b/);
   });
 
   // ── #12 ──
-  it('#12 — Breathing handler retains an impactCoordinator.isEngulfed guard (positive — paired with #8 negative; per spec §3.4 phase-ordering hazard)', () => {
+  it('#12 — Breathing handler retains selectionController.isEngulfed guard (post-Sub-project-E migration)', () => {
+    // Sub-project E: `_selectionEngulfed` state migrated from IC to SC; the
+    // engulfed-set guard in the breathing handler now reads from the SC
+    // facade. Per spec §3.4 phase-ordering hazard: the guard prevents the
+    // breathing handler's bare `else { = baseEmissive }` from clobbering
+    // the idle-pulse write owned by SC._tickIdlePulse.
     const src = readImpactCoordinatorSrc('SemanticTopology.svelte');
     const breathingBody = extractBreathingHandlerBody(src);
-    // Permit `impactCoordinator?.isEngulfed(`, `impactCoordinator!.isEngulfed(`,
-    // or `impactCoordinator.isEngulfed(` — the guard exists in any of these forms.
-    expect(breathingBody).toMatch(/impactCoordinator(?:\?\.|\!\.|\.)isEngulfed\s*\(/);
+    expect(breathingBody).toMatch(/selectionController(?:\?\.|\!\.|\.)isEngulfed\s*\(/);
   });
 });
 
@@ -1070,5 +1087,130 @@ describe('Cleanup contract — Sub-project D scene-builder extraction (spec §5.
     expect(src).toMatch(/let\s+_edgeTime\b/);
     expect(src).toMatch(/let\s+_cameraShake\b/);
     expect(src).toMatch(/let\s+_nodePhaseOffsets\b|const\s+_nodePhaseOffsets\b/);
+  });
+});
+
+// ── Sub-project E source-grep contract (spec §5.3 #1-#18) ──────
+
+const selectionSourceMap = import.meta.glob<string>(
+  [
+    './SelectionController.ts',
+    './FlashController.ts',
+    './SemanticTopology.svelte',
+    './ImpactCoordinator.ts',
+    './TopologyRenderer.ts',
+  ],
+  { query: '?raw', import: 'default', eager: true },
+);
+
+function readSelSrc(name: string): string {
+  const key = `./${name}`;
+  const content = selectionSourceMap[key];
+  if (typeof content !== 'string') {
+    throw new Error(`cleanup-contract: ${key} not found in selection glob map`);
+  }
+  return content;
+}
+
+describe('Cleanup contract — Sub-project E selection state machine (spec §5.3)', () => {
+  test('#1 — SelectionController.ts exports class + SelectionState type + SELECTION_EMISSIVE_FLOOR const', () => {
+    const src = readSelSrc('SelectionController.ts');
+    expect(src).toMatch(/export\s+class\s+SelectionController/);
+    expect(src).toMatch(/export\s+type\s+SelectionState/);
+    expect(src).toMatch(/export\s+const\s+SELECTION_EMISSIVE_FLOOR\s*=/);
+  });
+
+  test('#2 — FlashController.ts exports class', () => {
+    const src = readSelSrc('FlashController.ts');
+    expect(src).toMatch(/export\s+class\s+FlashController/);
+  });
+
+  test('#3 — SemanticTopology.svelte does NOT contain `let _highlightedId`', () => {
+    expect(readSelSrc('SemanticTopology.svelte')).not.toMatch(/let\s+_highlightedId/);
+  });
+
+  test('#4 — SemanticTopology.svelte does NOT contain `let _highlightedColor`', () => {
+    expect(readSelSrc('SemanticTopology.svelte')).not.toMatch(/let\s+_highlightedColor/);
+  });
+
+  test('#5 — SemanticTopology.svelte does NOT contain `let _prevSelectedId`', () => {
+    expect(readSelSrc('SemanticTopology.svelte')).not.toMatch(/let\s+_prevSelectedId/);
+  });
+
+  test('#6 — SemanticTopology.svelte does NOT contain `_flashStates` declaration', () => {
+    expect(readSelSrc('SemanticTopology.svelte')).not.toMatch(/(const|let)\s+_flashStates\s*=/);
+  });
+
+  test('#7 — SemanticTopology.svelte does NOT contain `function flashEmissive(`', () => {
+    expect(readSelSrc('SemanticTopology.svelte')).not.toMatch(/function\s+flashEmissive\s*\(/);
+  });
+
+  test('#8 — SemanticTopology.svelte does NOT contain `function _tickFlashStates(`', () => {
+    expect(readSelSrc('SemanticTopology.svelte')).not.toMatch(/function\s+_tickFlashStates\s*\(/);
+  });
+
+  test('#9 — SemanticTopology.svelte does NOT contain `function applyHighlight(` (F16 hack helper)', () => {
+    expect(readSelSrc('SemanticTopology.svelte')).not.toMatch(/function\s+applyHighlight\s*\(/);
+  });
+
+  test('#10 — SemanticTopology.svelte rebuildScene body contains `selectionController?.afterRebuild()` (F16 fix)', () => {
+    const src = readSelSrc('SemanticTopology.svelte');
+    const fnIdx = src.indexOf('function rebuildScene(');
+    expect(fnIdx).toBeGreaterThan(-1);
+    const end = src.indexOf('function ', fnIdx + 50);
+    const body = src.slice(fnIdx, end);
+    expect(body).toMatch(/selectionController\??\.afterRebuild\s*\(/);
+  });
+
+  test('#11 — SemanticTopology.svelte does NOT contain `applyHighlight(focusedNodeId)` (F16 hack gone)', () => {
+    expect(readSelSrc('SemanticTopology.svelte')).not.toMatch(/applyHighlight\s*\(\s*focusedNodeId/);
+  });
+
+  test('#12 — onMount instantiates selectionController = new SelectionController AFTER impactCoordinator = new ImpactCoordinator', () => {
+    const src = readSelSrc('SemanticTopology.svelte');
+    const onMountIdx = src.indexOf('onMount(() => {');
+    const slice = src.slice(onMountIdx);
+    const icIdx = slice.search(/impactCoordinator\s*=\s*new\s+ImpactCoordinator\s*\(/);
+    const scIdx = slice.search(/selectionController\s*=\s*new\s+SelectionController\s*\(/);
+    expect(icIdx).toBeGreaterThan(-1);
+    expect(scIdx).toBeGreaterThan(-1);
+    expect(icIdx).toBeLessThan(scIdx);
+  });
+
+  test('#13 — cleanup return invokes selectionController?.dispose()', () => {
+    const src = readSelSrc('SemanticTopology.svelte');
+    const cleanupIdx = src.lastIndexOf('return () => {');
+    expect(cleanupIdx).toBeGreaterThan(-1);
+    const cleanup = src.slice(cleanupIdx, cleanupIdx + 4000);
+    expect(cleanup).toMatch(/selectionController\??\.dispose\(\)/);
+  });
+
+  test('#14 — Breathing handler reads selectionController?.isFlashActive(nodeId) instead of _flashStates.has(nodeId)', () => {
+    const src = readSelSrc('SemanticTopology.svelte');
+    const idx = src.search(/coordinator\.register\(\s*['"]breathing['"]/);
+    expect(idx).toBeGreaterThan(-1);
+    const slice = src.slice(idx, idx + 4000);
+    expect(slice).toMatch(/selectionController(?:\?\.|\!\.|\.)isFlashActive\s*\(/);
+    expect(slice).not.toMatch(/_flashStates\.has\s*\(/);
+  });
+
+  test('#15 — ImpactCoordinator.ts does NOT contain _selectionEngulfed', () => {
+    expect(readSelSrc('ImpactCoordinator.ts')).not.toMatch(/_selectionEngulfed/);
+  });
+
+  test('#16 — ImpactCoordinator.ts does NOT contain _tick / _pulseTime / T3.4 idle pulse formula', () => {
+    const src = readSelSrc('ImpactCoordinator.ts');
+    expect(src).not.toMatch(/private\s+_tick\s*\(/);
+    expect(src).not.toMatch(/_pulseTime/);
+    expect(src).not.toMatch(/SELECTION_EMISSIVE_FLOOR/);
+  });
+
+  test('#17 — ImpactCoordinator.ts does NOT export SELECTION_EMISSIVE_FLOOR', () => {
+    expect(readSelSrc('ImpactCoordinator.ts')).not.toMatch(/export\s+const\s+SELECTION_EMISSIVE_FLOOR/);
+  });
+
+  test('#18 — TopologyRenderer.focusOn signature contains onComplete? as 4th positional param', () => {
+    const src = readSelSrc('TopologyRenderer.ts');
+    expect(src).toMatch(/focusOn\s*\(\s*target:\s*THREE\.Vector3\s*,\s*distance\?:\s*number\s*,\s*duration\s*=\s*600\s*,\s*onComplete\?:\s*\(\s*\)\s*=>\s*void\s*,?\s*\)/);
   });
 });
