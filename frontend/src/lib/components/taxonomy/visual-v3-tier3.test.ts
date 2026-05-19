@@ -15,7 +15,13 @@
 import { describe, expect, test } from 'vitest';
 
 const sourceMap = import.meta.glob<string>(
-  ['./SemanticTopology.svelte', './ClusterPhysics.ts', './ImpactCoordinator.ts'],
+  [
+    './SemanticTopology.svelte',
+    './ClusterPhysics.ts',
+    './ImpactCoordinator.ts',
+    // Sub-project D — Neural Dust migrated to DustBuilder.ts.
+    './builders/DustBuilder.ts',
+  ],
   { query: '?raw', import: 'default', eager: true },
 );
 
@@ -29,22 +35,25 @@ function read(name: string): string {
 // ── T3.1 — Domain-Tinted Neural Dust ────────────────────────────────
 
 describe('T3.1 — Domain-Tinted Neural Dust', () => {
+  // Sub-project D — Neural Dust construction migrated to DustBuilder.ts.
   test('dust material enables vertexColors', () => {
-    const src = read('SemanticTopology.svelte');
+    const src = read('builders/DustBuilder.ts');
     expect(src).toMatch(/vertexColors:\s*true/);
   });
 
   test('dust geometry sets color attribute per vertex', () => {
-    const src = read('SemanticTopology.svelte');
-    expect(src).toMatch(/dustGeo\.setAttribute\(\s*['"]color['"]/);
+    const src = read('builders/DustBuilder.ts');
+    // DustBuilder may name its variable differently (e.g. `geometry`)
+    // but the setAttribute('color', ...) pattern must remain.
+    expect(src).toMatch(/setAttribute\(\s*['"]color['"]/);
   });
 
   test('dust color selection iterates over domain anchors to find nearest', () => {
-    const src = read('SemanticTopology.svelte');
-    // Must contain a distance-check loop against domain anchors
-    expect(src).toMatch(/Math\.min\(/); // or similar distance comparison
-    // Domain anchors check
-    expect(src).toMatch(/n\.state\s*===\s*['"]domain['"]/);
+    const src = read('builders/DustBuilder.ts');
+    // Must contain a distance-check loop against domain anchors.
+    expect(src).toMatch(/Math\.min\(|nearestDist/);
+    // Domain anchors check.
+    expect(src).toMatch(/state\s*===\s*['"]domain['"]/);
   });
 });
 
