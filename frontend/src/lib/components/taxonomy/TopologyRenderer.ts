@@ -168,7 +168,16 @@ export class TopologyRenderer {
    *  `_checkLod()` is fired per-frame inside the animate loop because
    *  `OrbitControls.update()` does NOT fire 'change' events when camera
    *  position is mutated programmatically without damping residual.
-   *  Without this call, LOD tier changes silently lag the camera. */
+   *  Without this call, LOD tier changes silently lag the camera.
+   *
+   *  Sub-project E (B8): Append-only 4th positional `onComplete?: () => void`
+   *  fires after tween completes (NOT on cancellation — a subsequent focusOn
+   *  call cancels the prior animate loop via `cancelAnimationFrame`, and the
+   *  cancelled closure never reaches the done branch). Does NOT fire on dispose
+   *  (the `if (this._disposed) return;` guard at top of `animate` short-circuits).
+   *
+   *  Existing callers (TopologyInteraction.ts:72, SemanticTopology.svelte:1213 + :1492)
+   *  pass fewer than 4 args — those continue to work unchanged. */
   focusOn(
     target: THREE.Vector3,
     distance?: number,
