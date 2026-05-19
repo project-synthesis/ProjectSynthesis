@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.25 — 2026-05-18
+
 ### Changed
 
 - Scene construction in `frontend/src/lib/components/taxonomy/SemanticTopology.svelte` routed through 5 `SceneBuilder` instances under `frontend/src/lib/components/taxonomy/builders/` (Sub-project D of the Pattern Graph architecture hardening program). The 774-line monolithic `rebuildScene` body collapses to a 144-LOC orchestrator that delegates to `ClusterBuilder` → `DomainBuilder` → `EdgeBuilder` → `RingBuilder` → `DustBuilder` in fixed source order. `SemanticTopology.svelte` total line count drops from 2794 to 2028 (-766 LOC of inline cluster/domain/edge/ring/dust construction).
