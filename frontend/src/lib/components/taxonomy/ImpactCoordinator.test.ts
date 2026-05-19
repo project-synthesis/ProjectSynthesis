@@ -80,7 +80,6 @@ function makeDeps(overrides: Partial<ImpactCoordinatorDeps> = {}) {
     flashEmissive: vi.fn(),
     getSceneNode: vi.fn(),
     getBeamGroup: vi.fn(),
-    getNodeMesh: vi.fn(),
     renderer: { camera: new THREE.PerspectiveCamera() } as unknown as TopologyRenderer,
     animationCoordinator: ac,
     selectionController: sc,
