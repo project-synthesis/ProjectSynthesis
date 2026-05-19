@@ -144,8 +144,7 @@ export class SelectionController {
 
     const mesh = this._deps.getNodeMesh(nodeId);
     const target = mesh?.position ?? _scratchVec3.set(0, 0, 0);
-    // TODO: remove `as any` after Cycle 3 appends onComplete? — Sub-project E B8
-    (this._deps.renderer.focusOn as any)(
+    this._deps.renderer.focusOn(
       target,
       undefined,
       undefined,

@@ -1,8 +1,12 @@
 // frontend/src/lib/components/taxonomy/ImpactCoordinator.ts
 //
 // Sub-project C — single source for the canon F7→F19→F9 impact chain.
+// Sub-project E (Cycle 3 GREEN) — shrunken API: selection-engulfed
+// bookkeeping + T3.4 idle pulse moved to SelectionController. IC now
+// routes the `marksEngulfed` branch through `deps.selectionController.onImpact`.
 //
 // Spec: docs/superpowers/specs/2026-05-17-impact-coordinator-design.md
+//       docs/superpowers/specs/2026-05-18-selection-state-machine-design.md §3.4
 // Brand canon: .claude/skills/brand-guidelines/references/3d-visualization.md
 //   F7 (BeamPool) + F18 (selection) + F19 (envelope + flash) cross-reference
 //   this coordinator.
@@ -15,11 +19,6 @@
 //     per the `TriggerPreset` interface. Adding a Trigger requires
 //     touching this table + the enum + tests —
 //     intentionally not extensible at call-site.
-//   - Owns `_selectionEngulfed: Set<string>`; `isEngulfed(id)` exposes
-//     read access to consumers (breathing handler, T3.4 idle pulse).
-//   - Registers a dedicated handler in AnimationCoordinator's `impact` phase
-//     to drive the T3.4 idle ambient pulse on engulfed nodes (extracted
-//     from the breathing handler where it lives today).
 //   - Causal-ordering invariant: all F19 reactions (envelope, flash, physics)
 //     fire inside the BeamPool onImpact callback body, never synchronously
 //     with acquire. Pinned at source level by source-grep test #6.
@@ -31,6 +30,7 @@ import type { ClusterPhysics } from './ClusterPhysics';
 import type { AnimationCoordinator } from './AnimationCoordinator';
 import type { TopologyRenderer } from './TopologyRenderer';
 import type { SceneNode } from './TopologyData';
+import type { SelectionController } from './SelectionController';
 
 export type Trigger = 'entrance' | 'post-growth' | 'optimization' | 'click';
 
@@ -58,7 +58,7 @@ export interface TriggerPreset {
    * Optimization + click skip this (fixed sustainMs).
    */
   sizeFactorSustainBonus: boolean;
-  /** Adds the impacted node to `_selectionEngulfed` (only true for 'click'). */
+  /** Routes the impacted node through `selectionController.onImpact(id)` (only true for 'click'). */
   marksEngulfed: boolean;
 }
 
@@ -131,62 +131,30 @@ export interface ImpactCoordinatorDeps {
   getSceneNode: (id: string) => SceneNode | undefined;
   /** Looks up the current group by id (rebuildScene may have replaced it). Returns undefined for unknown ids — fire() falls back to request.group. */
   getBeamGroup: (id: string) => THREE.Group | undefined;
-  /** Looks up the current node mesh by id (for T3.4 idle pulse emissive writes). Returns undefined for unknown ids — _tick early-returns. */
+  /** Looks up the current node mesh by id (kept for future T3.4 needs in IC; current GREEN no longer reads it). */
   getNodeMesh: (id: string) => THREE.Mesh | undefined;
-  /** Returns currently-selected cluster id, or null. */
-  getSelectedId: () => string | null;
-  /** Returns true if the node currently has an active flash (`_flashStates.has(id)`). Used to gate the T3.4 idle pulse so it doesn't overwrite the flash's attack/hold/decay ramp. */
-  isFlashActive: (id: string) => boolean;
   renderer: TopologyRenderer;
   animationCoordinator: AnimationCoordinator;
+  /**
+   * Selection state machine — IC routes the `marksEngulfed` branch of the
+   * 'click' onImpact through `selectionController.onImpact(nodeId)` so the
+   * SC owns engulfed-set + idle-pulse bookkeeping (Sub-project E §3.4).
+   */
+  selectionController: SelectionController;
 }
-
-/**
- * Selection emissive floor (canon T3.4) — the T3.4 idle ambient pulse
- * writes `max(baseEmissive, SELECTION_EMISSIVE_FLOOR) + idlePulse`. 1.0
- * sits above the UnrealBloomPass threshold (0.85) so the pulse is
- * bloom-visible even on low-baseline clusters. Preserved verbatim from
- * pre-refactor `SemanticTopology.svelte:1508`.
- */
-export const SELECTION_EMISSIVE_FLOOR = 1.0;
 
 export class ImpactCoordinator {
   private _deps: ImpactCoordinatorDeps;
-  /**
-   * Set of node ids that have received their first 'click' impact since
-   * selection. Populated by `fire(...)` when `preset.marksEngulfed === true`.
-   * Cleared via `clearEngulfed()` on selection transition. Read publicly
-   * via `isEngulfed(id)` — the T3.4 idle ambient pulse + the breathing
-   * handler's emissive-overwrite guard both key off this set.
-   */
-  private _selectionEngulfed: Set<string> = new Set();
-  private _removeTick: (() => void) | null = null;
   private _disposed = false;
-  /**
-   * T3.4 idle ambient pulse accumulator. Real-time seconds advance via
-   * `delta` from AnimationCoordinator (`_pulseTime += delta` inside `_tick`).
-   * Reset to 0 by `clearEngulfed()` so each selection cycle starts at
-   * sine-phase zero (predictable per-selection phase, no visible jump on
-   * rapid re-selection). Framerate-independent — pre-refactor used
-   * `_breathingTime += 0.016` (fixed-step) which drifted on 30fps devices.
-   */
-  private _pulseTime = 0;
 
   constructor(deps: ImpactCoordinatorDeps) {
     this._deps = deps;
-    // Register the idle-pulse + decay handler in the impact phase. The
-    // impact phase already orders impact-related per-frame work; registering
-    // the pulse here keeps the engulfment-driven emissive write in the same
-    // phase as the beam/envelope/flash advances.
-    this._removeTick = deps.animationCoordinator.register('impact', (delta) => {
-      this._tick(delta);
-    });
   }
 
   /**
    * Fire a canonical impact chain: beam acquire → onImpact callback →
    * (optional) clusterPhysics kinetic shake + envelope acquire + emissive
-   * flash + selection-engulfment marker. Per-trigger parameters from
+   * flash + selection-engulfment routing. Per-trigger parameters from
    * `TRIGGER_PRESETS[request.trigger]`.
    *
    * Lenient on disposed: returns silently if `dispose()` was called.
@@ -246,7 +214,7 @@ export class ImpactCoordinator {
           this._deps.envelopePool.acquire(currentGroup, freshNode.size, shape, envelopeColor);
           this._deps.flashEmissive(freshNode.id, envelopeColor);
           if (preset.marksEngulfed) {
-            this._selectionEngulfed.add(freshNode.id);
+            this._deps.selectionController.onImpact(freshNode.id);
           }
         },
       },
@@ -254,76 +222,9 @@ export class ImpactCoordinator {
     );
   }
 
-  /** True if the node received its first 'click' impact since selection. */
-  isEngulfed(nodeId: string): boolean {
-    return this._selectionEngulfed.has(nodeId);
-  }
-
-  /**
-   * Clear the engulfed-marker set (called on selection change so a re-click
-   * triggers a fresh engulfment burst). Pre-migration the call site at
-   * `SemanticTopology.svelte:2365` used `_selectionEngulfed.clear()` directly
-   * (clear-all on every selection transition); this method preserves that
-   * shape. Calling with an `id` argument deletes only that single entry —
-   * intended for future Sub-project E (Selection State Machine) which may
-   * want finer-grained eviction.
-   *
-   * Side effect: resets `_pulseTime` so the T3.4 idle ambient pulse starts
-   * from sine-phase zero on the NEXT engulfment (predictable per-selection
-   * phase; no visible jump on rapid re-selection).
-   */
-  clearEngulfed(id?: string): void {
-    if (this._disposed) return;
-    if (id != null) {
-      this._selectionEngulfed.delete(id);
-    } else {
-      this._selectionEngulfed.clear();
-    }
-    this._pulseTime = 0;
-  }
-
-  /**
-   * T3.4 idle ambient pulse — slow emissive flare on the currently-selected
-   * node AFTER its first beam impact (gated by `_selectionEngulfed`).
-   * Extracted from the breathing handler's `else if (isSelected && ...)`
-   * branch in `SemanticTopology.svelte`.
-   *
-   * Reads via `getNodeMesh` + `getSelectedId` + the flash-state getter;
-   * writes only to `mat.emissiveIntensity` (no scale, no color). Mid-flash
-   * protection: skips emissive writes if the active flash state already
-   * owns the emissive ramp during attack/hold/decay; pulse takes over after.
-   *
-   * Note: in this sub-project, `_flashStates` is still read via a getter
-   * since flash state stays inline in SemanticTopology pending Sub-project E.
-   * The `isFlashActive` dep is the bridge — `(id) => _flashStates.has(id)`
-   * supplied by SemanticTopology at construction.
-   */
-  private _tick(delta: number): void {
-    if (this._disposed) return;
-    this._pulseTime += delta;
-    const selectedId = this._deps.getSelectedId();
-    if (!selectedId || !this.isEngulfed(selectedId)) return;
-    if (this._deps.isFlashActive(selectedId)) return; // flash owns ramp
-    const mesh = this._deps.getNodeMesh(selectedId);
-    if (!mesh) return;
-    const mat = mesh.material as THREE.MeshStandardMaterial;
-    const baseEmissive = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
-    // SELECTION_EMISSIVE_FLOOR = 1.0 — ensures the selected node's baseline
-    // sits at or above the UnrealBloomPass threshold (0.85) so the pulse
-    // contribution is bloom-visible. The pulse formula is preserved
-    // verbatim from the pre-refactor breathing handler at
-    // SemanticTopology.svelte:1508-1511.
-    const idlePulse = Math.sin(this._pulseTime * 0.4) * 0.1 + 0.1;
-    mat.emissiveIntensity =
-      Math.max(baseEmissive, SELECTION_EMISSIVE_FLOOR) + idlePulse;
-  }
-
-  /** Idempotent. Cancels the impact-phase tick handler + clears state. */
+  /** Idempotent. */
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
-    this._removeTick?.();
-    this._removeTick = null;
-    this._selectionEngulfed.clear();
   }
 }

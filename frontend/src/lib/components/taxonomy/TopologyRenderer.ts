@@ -169,7 +169,12 @@ export class TopologyRenderer {
    *  `OrbitControls.update()` does NOT fire 'change' events when camera
    *  position is mutated programmatically without damping residual.
    *  Without this call, LOD tier changes silently lag the camera. */
-  focusOn(target: THREE.Vector3, distance?: number, duration = 600): void {
+  focusOn(
+    target: THREE.Vector3,
+    distance?: number,
+    duration = 600,
+    onComplete?: () => void,
+  ): void {
     // Cancel any in-flight focus animation
     if (this._focusAnimId != null) {
       cancelAnimationFrame(this._focusAnimId);
@@ -217,6 +222,7 @@ export class TopologyRenderer {
         this._focusAnimId = requestAnimationFrame(animate);
       } else {
         this._focusAnimId = null;
+        if (onComplete) onComplete();
       }
     };
     animate();
