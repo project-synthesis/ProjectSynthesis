@@ -46,6 +46,20 @@ const taxonomySourceMap = import.meta.glob<string>(
   { query: '?raw', import: 'default', eager: true },
 );
 
+/**
+ * Look up a taxonomy source file by its taxonomy-relative path
+ * (e.g. `'builders/RingBuilder.ts'` or `'SemanticTopology.svelte'`)
+ * and return its raw text via Vite's `?raw` glob loader.
+ *
+ * Throws a clear error if the file is not registered in
+ * {@link taxonomySourceMap} so a typo'd test name surfaces immediately
+ * rather than producing a confusing `undefined.match` failure downstream.
+ *
+ * @param name - Taxonomy-relative file path (no leading `./`).
+ * @returns Raw file contents as a string.
+ * @example
+ *   const src = readSrc('builders/RingBuilder.ts');
+ */
 function readSrc(name: string): string {
   const key = `./${name}`;
   const content = taxonomySourceMap[key];
@@ -55,6 +69,24 @@ function readSrc(name: string): string {
   return content;
 }
 
+/**
+ * Strip `/* … *​/` block comments and `// …` line comments (when the
+ * line comment is the only token on a line) from `src` so source-grep
+ * assertions don't accidentally match content inside a comment that
+ * was added as documentation. Line-comments embedded mid-expression
+ * (e.g. `let x = 1; // note`) are preserved to keep the surrounding
+ * code intact for column-sensitive regexes — anchoring on whitespace
+ * + line-start ensures only comment-only lines are removed.
+ *
+ * Best-effort only — does not understand string-literal context, so a
+ * `/* …` sequence inside a multiline string would be stripped. Audit
+ * tests don't rely on such constructs.
+ *
+ * @param src - Raw source text.
+ * @returns `src` with comment-only constructs removed.
+ * @example
+ *   stripComments("const x = 1; // note\n//standalone\n") === "const x = 1; // note\n\n"
+ */
 function stripComments(src: string): string {
   return src
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -70,6 +102,21 @@ function stripComments(src: string): string {
  * argument body — extracted by balanced-brace scan from the literal's
  * opening `{` (so nested `{ ... }` type casts inside prop expressions
  * don't truncate the body prematurely).
+ *
+ * Asserts and throws via `expect(...)` on mismatch.
+ *
+ * @param src      - Source text to search (typically the output of {@link readSrc}).
+ * @param ctorName - Regex-escaped constructor name
+ *   (e.g. `'THREE\\.PointsMaterial'`). The string is embedded into a
+ *   `new RegExp(...)`, so `.` must be escaped as `\\.`.
+ * @param props    - Map of prop name → value regex. The prop name is
+ *   embedded literally (no escaping) and the value regex's `source` is
+ *   spliced in after the `:` and whitespace.
+ * @example
+ *   expectMaterialRecipe(src, 'THREE\\.PointsMaterial', {
+ *     size: /0\.35/,
+ *     blending: /THREE\.AdditiveBlending/,
+ *   });
  */
 function expectMaterialRecipe(
   src: string,
@@ -102,7 +149,21 @@ function expectMaterialRecipe(
 }
 
 /**
- * Assert `const|let|var <identifier> = <valueRegex>` exists in `src`.
+ * Assert a top-level `const | let | var <identifier> = <valueRegex>`
+ * binding exists in `src` after comment stripping. Useful for anchoring
+ * named module constants (e.g. `POOL_SIZE = 10`).
+ *
+ * Asserts and throws via `expect(...)` on mismatch.
+ *
+ * @param src        - Source text to search.
+ * @param identifier - Identifier name. Embedded literally into a
+ *   regex — must not contain regex metacharacters (typical for JS
+ *   identifiers).
+ * @param valueRegex - Regex matching the binding's value expression.
+ *   Its `source` is spliced after `<identifier> = `.
+ * @example
+ *   expectConstantValue(src, 'POOL_SIZE', /10/);
+ *   expectConstantValue(src, 'SPRING_K', /120/);
  */
 function expectConstantValue(src: string, identifier: string, valueRegex: RegExp): void {
   const stripped = stripComments(src);
@@ -111,9 +172,17 @@ function expectConstantValue(src: string, identifier: string, valueRegex: RegExp
 }
 
 /**
- * Assert `src` contains `pattern` (substring or regex) after stripping
- * comments. Useful for short canonical-string anchors like
- * `castShadow = true`.
+ * Assert `src` matches `pattern` after stripping comments. Thin
+ * wrapper around `expect(...).toMatch(...)` that centralizes the
+ * comment-stripping step so canon assertions can't be accidentally
+ * fooled by an anchor that lives inside a `//` or `/* … *​/` comment.
+ *
+ * Asserts and throws via `expect(...)` on mismatch.
+ *
+ * @param src     - Source text to search.
+ * @param pattern - Regex the source must match.
+ * @example
+ *   expectInSource(src, /castShadow\s*=\s*true/);
  */
 function expectInSource(src: string, pattern: RegExp): void {
   expect(stripComments(src)).toMatch(pattern);
