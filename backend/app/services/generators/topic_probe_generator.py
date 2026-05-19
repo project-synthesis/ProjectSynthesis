@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 from app.schemas.probes import ProbeContext
 from app.schemas.runs import RunRequest
-from app.services.batch_persistence import bulk_persist, batch_taxonomy_assign
+from app.services.batch_persistence import batch_taxonomy_assign, bulk_persist
 from app.services.batch_pipeline import PendingOptimization
 from app.services.event_bus import event_bus
 from app.services.generators.base import GeneratorResult
@@ -400,12 +400,43 @@ class TopicProbeGenerator:
             else:
                 failed_count += 1
 
-        # Finding 19b: canonical persist + assign block matching
-        # seed_agent_generator.py:241-282. Single bulk_persist + single
-        # batch_taxonomy_assign at end of run. Gated on write_queue presence
-        # (test-fixture path) + non-empty pendings (all-failed-pre-pipeline
-        # edge case).
-        taxonomy_result: dict | None = None
+        # Finding 19b: canonical end-of-run persist + assign block, modelled
+        # after ``seed_agent_generator.py:241-282``.
+        #
+        # Sequence (must be in this order — taxonomy reads the rows that
+        # persist writes):
+        #   1. ``bulk_persist`` — one queue closure flushes the entire run
+        #      worth of pendings to the optimizations table. Internally
+        #      filters status=='completed' + quality-gate
+        #      (``overall_score >= 5.0`` at ``batch_persistence.py:126-129``).
+        #   2. ``batch_taxonomy_assign`` — wires each persisted row into the
+        #      taxonomy (cluster + domain). Additionally requires an
+        #      embedding (``batch_persistence.py:352``).
+        #
+        # Guards:
+        #   - ``write_queue is not None`` — silent skip for the test-fixture
+        #     path where the generator is instantiated without DI (legacy
+        #     ``tests/test_topic_probe_generator.py`` fixtures). NOT a
+        #     warning condition — it is the expected unit-test state.
+        #   - ``pendings_for_assign`` truthy — silent skip when every prompt
+        #     failed pre-pipeline (rare: provider crashed before the first
+        #     pending was appended). Nothing to persist, nothing to assign.
+        #
+        # Exception semantics:
+        #   - ``bulk_persist`` raise → propagates per spec §3.1. Unlike the
+        #     canonical seed pattern which downgrades persist failure to a
+        #     ``GeneratorResult(terminal_status='partial')``, probe lets the
+        #     exception bubble. INTEGRATE-phase discretionary call (Task 4)
+        #     may revisit; the spec keeps it propagating.
+        #   - ``batch_taxonomy_assign`` raise → log warning, continue. The
+        #     warm-path taxonomy engine picks up unclustered rows on its
+        #     next sweep, so a transient assign failure is non-fatal to the
+        #     probe run.
+        #
+        # ``taxonomy_result`` is intentionally NOT bound here: probe rebuilds
+        # its taxonomy delta via ``_compute_taxonomy_delta(run_id)`` (next
+        # block), which queries the DB by ``run_id`` — orthogonal to the
+        # canonical seed pattern where the returned summary is consumed.
         if self._write_queue is not None and pendings_for_assign:
             persisted_count = await bulk_persist(
                 pendings_for_assign,
@@ -417,7 +448,7 @@ class TopicProbeGenerator:
                 run_id, persisted_count, len(pendings_for_assign),
             )
             try:
-                taxonomy_result = await batch_taxonomy_assign(
+                await batch_taxonomy_assign(
                     pendings_for_assign,
                     self._write_queue,
                     batch_id=run_id,
@@ -426,7 +457,6 @@ class TopicProbeGenerator:
                 logger.warning(
                     "Taxonomy integration failed (non-fatal): %s", exc,
                 )
-                taxonomy_result = None
 
         # --- Phase 5: Reporting ---
         aggregate = self._build_aggregate(prompt_results)
@@ -704,16 +734,26 @@ class TopicProbeGenerator:
             )
             # Finding 19b: append the completed pending to the run-scoped
             # accumulator so the end-of-run bulk_persist +
-            # batch_taxonomy_assign block (in run() below) sees it. Append
-            # unconditionally — both bulk_persist and batch_taxonomy_assign
-            # filter internally:
-            # - bulk_persist at batch_persistence.py:108 filters
-            #   status=='completed' + quality gate (overall_score >= 5.0)
-            #   at :126-129
-            # - batch_taxonomy_assign at :352 additionally requires embedding
-            # Per spec §3.2: skip-failed semantics handled by canonical
-            # primitives, NOT probe code. Matches
-            # seed_agent_generator.py:241-282 pattern.
+            # batch_taxonomy_assign block (in ``run()`` above) sees it.
+            #
+            # Append unconditionally — skip-failed semantics live in the
+            # canonical primitives, NOT in probe code (per spec §3.2):
+            #   - ``bulk_persist`` (``batch_persistence.py:108``) filters
+            #     ``status=='completed'`` + quality-gate
+            #     (``overall_score >= 5.0`` at :126-129).
+            #   - ``batch_taxonomy_assign`` (``:352``) additionally requires
+            #     an embedding on the pending. ``rate_limit_meta`` (e.g.
+            #     transient quota hits surfaced via ``PendingOptimization``)
+            #     is preserved on the pending and therefore on the persisted
+            #     row.
+            #
+            # The ``pendings_for_assign is not None`` guard keeps the
+            # default-None signature (line 644 above) backward-compatible
+            # with legacy callers in ``tests/test_topic_probe_generator.py``
+            # that invoke ``_run_one_prompt`` without the accumulator.
+            #
+            # Matches the canonical pattern in
+            # ``seed_agent_generator.py:241-282``.
             if pendings_for_assign is not None:
                 pendings_for_assign.append(pending)
             return {
