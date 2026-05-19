@@ -63,7 +63,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
   - `transparent: true`, `opacity: node.opacity * 0.9`
 - **Mesh flags:** `castShadow = true`, `receiveShadow = true` (self-shadowing under directional light)
 - **Scale:** initial `mesh.scale.setScalar(node.size)`; per-frame breathing modulates this (see F8)
-- *Source: `SemanticTopology.svelte` rebuildScene cluster-fill block*
+- *Source: `frontend/src/lib/components/taxonomy/builders/ClusterBuilder.ts` (cluster fill + ripple wireframe) + `frontend/src/lib/components/taxonomy/builders/DomainBuilder.ts` (domain dodecahedron fill — emissive recipe lives in the structural-emissive helper). Sub-project D extracted the inline construction blocks from `SemanticTopology.svelte`.*
 
 ### F2 — Domain Anchor Vertex Energy Cores
 
@@ -82,7 +82,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
   - `sizeAttenuation: true`
 - **JSDOM stability:** `if (!ctx) globalThis.__semTopGlowTexture = undefined` — headless tests fall back to no map
 - **Disposal:** texture disposed on unmount via `globalThis.__semTopGlowTexture?.dispose()`
-- *Source: `SemanticTopology.svelte` domain-anchor branch in cluster-fill block*
+- *Source: `frontend/src/lib/components/taxonomy/builders/DomainBuilder.ts` (Sub-project D — owns the lazy `__semTopGlowTexture` build + the `PointsMaterial` + `Points` mesh construction for every structural node).*
 
 ### F3 — Template Indicator Ring (`halo`)
 
@@ -94,7 +94,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Pool:** growable mesh pool — `TEMPLATE_RING_POOL_INITIAL=50` / `GROW_CHUNK=50` / `MAX=500`. High-water mark retained across rebuilds.
 - **Hover behavior:** `rotation.z += 0.02` per frame (spin), `material.opacity` oscillates `0.20–0.50` via `0.35 + sin(time * 10) * 0.15`
 - **Position sync:** position written every formation-animation frame (avoids the rings-pinned-at-origin bug)
-- *Source: `SemanticTopology.svelte` template-ring helpers `_ensureTemplateRingPool` / `_syncTemplateRings`. Renamed in cycle 2 from `_ensureHaloPool` / `_syncHalos`. Both old + new identifier names are acceptable per Canon Vocabulary.*
+- *Source: `frontend/src/lib/components/taxonomy/builders/RingBuilder.ts` (Sub-project D — owns the template ring pool infrastructure + `_syncTemplateRings` + getters `getTemplateRing`. Pool constants `TEMPLATE_RING_POOL_INITIAL / GROW_CHUNK / MAX` live as module-scope constants at the top of the file). Renamed in cycle 2 from `_ensureHaloPool` / `_syncHalos`. Both old + new identifier names are acceptable per Canon Vocabulary.*
 
 ### F4 — Readiness Ring (per-domain composite tier indicator)
 
@@ -106,7 +106,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
   - `side: THREE.DoubleSide` (visible from below the canopy view)
 - **Per-frame billboard:** `_removeReadinessBillboard` callback iterates rings, calls `entry.mesh.lookAt(camera.position)` so the ring stays orthogonal to the view
 - **LOD-attenuated opacity:** far `0.4`, mid `0.7`, near `1.0` (multiplied with base)
-- *Source: `SemanticTopology.svelte` readiness-ring builder block*
+- *Source: `frontend/src/lib/components/taxonomy/builders/RingBuilder.ts` (Sub-project D — owns the readiness ring lifecycle: `_syncReadinessRings`, `_buildReadinessRingEntry`, `_pruneReadinessRings`, `getReadinessRing(id)` / `readinessRingCount()` / `readinessRingIds()` accessors). The per-frame billboard + LOD-attenuation callbacks remain in `SemanticTopology.svelte` (orchestrator-owned per-rebuild registrations).*
 
 ### F5 — Hierarchical Edge (parent → children fan-out)
 
@@ -118,14 +118,14 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Color:** parent's domain hex (`parentNode.color`)
 - **Catenary sag:** `0.15 * distance` (15% of cluster-to-cluster distance)
 - **Domain structural edge shader:** domain dodecahedron `EdgesGeometry` uses `DOMAIN_EDGE_VERTEX` / `DOMAIN_EDGE_FRAGMENT` (`DomainEdgeShader.ts`) — half-frequency "slow heartbeat" pulse that differentiates the parent container's rhythm from the faster child data-flow signal. Higher baseline opacity (0.4 vs 0.3) so the domain container never fully dims between pulses. Moderate HDR boost (0.5 vs 0.8) so domains don't outshine data-carrying children. Shared `uTime` uniform keeps both systems phase-coherent.
-- *Source: `SemanticTopology.svelte` `buildMergedCurveGeometry` + `EdgeShader.ts` + `DomainEdgeShader.ts`*
+- *Source: `frontend/src/lib/components/taxonomy/builders/EdgeBuilder.ts` (hierarchical + similarity + injection edge construction; owns `buildMergedCurveGeometry` + `buildCurvePositions` private copies) + `frontend/src/lib/components/taxonomy/builders/DomainBuilder.ts` (domain-edge branch — pushes domain-edge uniforms into `ctx.edgeUniforms` so the F5 per-frame uTime tick covers both child + parent rhythms) + `EdgeShader.ts` + `DomainEdgeShader.ts`. `SemanticTopology.svelte` retains a copy of `buildMergedCurveGeometry` + `buildCurvePositions` for the formation-animation post-completion rebuild path.*
 
 ### F6 — Similarity / Injection Edge
 
 - **Material:** `LineDashedMaterial` (similarity, dashed) or `LineBasicMaterial` (injection, solid)
 - **Color:** `SIMILARITY_EDGE_COLOR` constant or domain hex
 - **Toggle-driven visibility** via `clustersStore.showSimilarityEdges` / `showInjectionEdges`
-- *Source: `SemanticTopology.svelte` `buildEdgeGroup` shared builder*
+- *Source: `frontend/src/lib/components/taxonomy/builders/EdgeBuilder.ts` `_buildSecondaryEdgeGroup` shared builder (Sub-project D — extracted from `SemanticTopology.svelte`'s `buildEdgeGroup` helper). `EdgeOpacityResolvers` constructor dep wires `clustersStore.showSimilarityEdges` / `showInjectionEdges` into the build-time `.visible` flag; live runtime toggles route through `edgeBuilder.getSimilarityGroup()` / `getInjectionGroup()` accessors.*
 
 ### F7 — Plasma Beam Tactile Feedback
 
@@ -154,7 +154,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Hover amplification:** `targetScaleMultiplier = isHovered ? scaleBase * 1.1 : scaleBase` → up to `±12%` when hovered
 - **Apply to:** every cluster mesh (`mesh.scale.lerp(_scratchVec3a.set(s, s, s), 0.1)`), the parent group's children at the same scale, the readiness ring (`scale.setScalar(targetScaleMultiplier)`), the template ring
 - **Allocation budget:** the `_scratchVec3a` borrow in `mesh.scale.lerp(...)` is mandatory — the per-frame `new THREE.Vector3()` form is banned (see "Per-Frame Allocation Budget" below)
-- *Source: `SemanticTopology.svelte` `_breathingAnim` callback*
+- *Source: `SemanticTopology.svelte` `_breathingAnim` callback (Sub-project D — extracted to the `_advanceBreathing` private helper for orchestrator LOC compression; the per-frame callback registration still lives in `rebuildScene`). Phase-offset hash formula lives in `frontend/src/lib/components/taxonomy/builders/ClusterBuilder.ts` + `DomainBuilder.ts` — both builders write `ctx.nodePhaseOffsets[node.id]` using the identical char-code sum hash so the orchestrator's module-level `_nodePhaseOffsets` is populated consistently across cluster + structural nodes.*
 
 ### F9 — Spring Physics on Cluster Scale (Beam Impact Accretion)
 
@@ -190,7 +190,7 @@ Every numbered feature below is **canon**. An audit verifies the implementation 
 - **Per-frame motion:** `_removeDustAnim` callback rotates `_dustPoints.rotation.y += 0.0003`, `rotation.x += 0.0001` — slow drift
 - **Userdata tag:** `{ isNeuralDust: true }`
 - **Single-instance:** added once per `_dustPoints === null` check; persists across rebuildScene calls
-- *Source: `SemanticTopology.svelte` neural-dust block + `_removeDustAnim` callback*
+- *Source: `frontend/src/lib/components/taxonomy/builders/DustBuilder.ts` (Sub-project D — owns the lazy `_dustPoints` construction + T3.1 vertex-color tinting; exposes `dustPoints()` accessor). The `_removeDustAnim` per-frame rotation handler stays in `SemanticTopology.svelte` and reads `dustBuilder.dustPoints()` to advance rotation.*
 
 ### F11 — Lighting Setup
 
@@ -371,6 +371,54 @@ per-frame objects — `delta` is a number, `PHASE_ORDER` is a compile-time
 constant readonly tuple, handler arrays are pre-allocated at construction.
 See "Per-Frame Allocation Budget" above.
 
+## Scene Builder Ownership
+
+Sub-project D (v0.4.25) split the 774-line `rebuildScene` in
+`SemanticTopology.svelte` into 5 single-responsibility builders living
+under `frontend/src/lib/components/taxonomy/builders/`:
+
+| Builder | Owns | Persistent flag |
+|---|---|---|
+| `ClusterBuilder.ts` | Per-cluster `THREE.Group` containers (Icosahedron fill + ripple wireframe + per-cluster `ShaderMaterial`). Writes `ctx.nodeMeshes` / `ctx.beamNodeGroups` / `ctx.clusterShaderMaterials` / `ctx.nodePhaseOffsets`. Registers cluster fill with `TopologyInteraction` via constructor dep. | none — per-cluster groups rebuild each cycle |
+| `DomainBuilder.ts` | Per-domain `THREE.Group` containers (Dodecahedron fill + `EdgesGeometry` `LineSegments` + vertex glow `Points` — canon F2). Writes `ctx.nodeMeshes` / `ctx.beamNodeGroups` / `ctx.domainGroups` / `ctx.edgeUniforms` (domain-edge uniforms) / `ctx.nodePhaseOffsets`. Owns the canon F2 glow `CanvasTexture` lazy build. Registers domain fill with `TopologyInteraction`. | none — `userData.isStructural = true` preserved for selection code |
+| `EdgeBuilder.ts` | 3 ephemeral sub-groups — `hierarchicalGroup` (catenary curves, canon F5), `similarityEdgeGroup` (dashed cluster-to-cluster), `injectionEdgeGroup` (solid domain-to-domain). Pushes hierarchical-bucket uniforms into `ctx.edgeUniforms`. Exposes `getSimilarityGroup()` / `getInjectionGroup()` accessors for the visibility-toggle `$effect`s. | none |
+| `RingBuilder.ts` | Readiness rings (F4 — per-domain contour ring colored by composite tier, `DoubleSide`) + template rings (F3 — per-cluster `0x00e5ff` indicator with pool-managed lifecycle). Exposes `getReadinessRing(id)` / `getTemplateRing(id)` / `readinessRingCount()` / `readinessRingIds()` accessors for the per-frame breathing handler + LOD opacity callback. Re-publishes the `__semTopTemplateRingPool` dev hook each build for runtime template-ring pool tests. | `_readinessRingGroup` + `_templateRingGroup` set `userData.persistent = true` |
+| `DustBuilder.ts` | 3000-point Neural Dust backdrop (canon F10) with T3.1 nearest-anchor vertex-color tinting. Exposes `dustPoints(): THREE.Points \| null` accessor for the ambient-rotation handler. | `_dustPoints` sets `userData.persistent = true` |
+
+Build order is fixed in the orchestrator (post-migration `rebuildScene`
+body): **cluster → domain → edge → ring → dust**. EdgeBuilder +
+RingBuilder read `ctx.nodeMeshes` populated by ClusterBuilder +
+DomainBuilder; DustBuilder is order-independent but conventionally last.
+A source-grep contract test (`cleanup-contract.test.ts §5.2 #4`) pins
+this exact order at the orchestrator body.
+
+Shared per-rebuild state flows through a typed `BuilderContext`
+interface (`builders/BuilderContext.ts`) — 7 maps + arrays passed
+explicitly to every `build(data, scene, ctx)` call. Module-level state
+(`nodeMeshes`, `_beamNodeGroups`, `_edgeUniforms`, `_nodePhaseOffsets`,
+`_clusterShaderMaterials`) is **reassigned from ctx AFTER all builders
+complete**; per-frame handlers read the module-level refs on the next
+RAF tick — race-free per spec §4 acceptance.
+
+The `ImpactCoordinator` physics handler reads
+`ctx.clusterShaderMaterials.get(nodeId)` (via the module-level
+`_clusterShaderMaterials` sync) instead of walking `group.children[1]`
+to find the wire mesh — locks the architecture improvement at source
+level. Integration test INT-6 (`builders/integration.test.ts`) pins
+this wiring.
+
+Cleanup contract: `cleanupScene` (Sub-project A) disposes ephemeral
+children at the start of each rebuild; persistent groups survive via
+`userData.persistent`. Builder `dispose()` methods release internal
+state + detach persistent parents on component unmount (called from
+`SemanticTopology.svelte`'s cleanup return between
+`coordinator.dispose()` and pool disposes).
+
+Per-frame accumulators (`_breathingTime`, `_edgeTime`, `_cameraShake`,
+`_nodePhaseOffsets`) **remain at module scope** in
+`SemanticTopology.svelte` — builders own per-rebuild ephemeral state,
+not per-frame accumulator state.
+
 ## Persistence Contract
 
 Any `THREE.Object3D` added as a direct child of `renderer.scene` that
@@ -497,6 +545,7 @@ Run through each numbered feature. **The implementation passes if every line bel
 - [ ] **F19**: `flashEmissive` uses baseline-capture pattern — rapid re-fires reuse prior `baselineEmissive`
 - [ ] **F19**: causal-ordering invariant enforced at source level — every `impactCoordinator.fire({...})` site (click selection, entrance materialization burst, post-growth burst, optimization event) routes through the coordinator's `fire()` body, which wires `clusterPhysics.onBeamImpact` + `envelopePool.acquire` + `flashEmissive(...)` inside an `onImpact: () =>` callback, never synchronously alongside `beamPool.acquire()`. Per Sub-project C source-grep test #6: ZERO matches for those three reaction patterns outside `ImpactCoordinator.ts` (modulo the `function flashEmissive(` declaration carveout)
 - [ ] All four impact trigger sites (entrance burst, post-growth burst, optimization event, click selection) route through ImpactCoordinator.fire(...) — pinned by source-grep test #5 in cleanup-contract.test.ts.
+- [ ] Scene construction routes through 5 `SceneBuilder` instances (`ClusterBuilder`, `DomainBuilder`, `EdgeBuilder`, `RingBuilder`, `DustBuilder`) in cluster → domain → edge → ring → dust order per Scene Builder Ownership above. `rebuildScene` body is < 150 LOC; 5 `builder.build()` calls + 5 `builder.dispose()` calls pinned by `cleanup-contract.test.ts` §5.2 #4 + #13.
 
 ### Performance + lifecycle
 - [ ] Module-level scratch table declared (`_scratchVec3a`, `_scratchQuat`, `_scratchColor`, `Z_AXIS`)
