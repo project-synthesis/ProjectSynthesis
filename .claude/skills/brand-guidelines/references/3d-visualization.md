@@ -503,6 +503,8 @@ Every GPU resource reaches a `dispose()` call from cleanup.
 
 Run through each numbered feature. **The implementation passes if every line below is checked**.
 
+Each item below is enforced as a test in `frontend/src/lib/components/taxonomy/audit-canon.test.ts`. The `_canon-coverage.test.ts` meta-test verifies that every checklist line maps to a test at CI time. **Failing CI = failing audit.**
+
 ### Visual canon
 - [ ] **F1**: cluster fill = `MeshStandardMaterial` with `roughness: 0.6`, `metalness: 0`, `emissiveIntensity` data-driven compound signal (member count + coherence + score)
 - [ ] **F1**: cluster mesh `castShadow = true` AND `receiveShadow = true`
