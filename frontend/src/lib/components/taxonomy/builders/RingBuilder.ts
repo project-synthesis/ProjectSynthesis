@@ -73,17 +73,32 @@ const ENTRY_DURATION_MS = 400;
 const EXIT_DURATION_MS = 300;
 
 /**
- * Cubic ease-in for the F3 entry tween (`t * t * t`) — slow start, fast
- * finish. Read `t` as normalized elapsed/duration in `[0, 1]`.
+ * Cubic ease-in for the F3 entry tween — `t * t * t`. Slow start, fast
+ * finish (derivative grows from 0 at `t=0` to 3 at `t=1`).
+ *
+ * @param t - Normalized elapsed time in `[0, 1]` (elapsed / duration).
+ * @returns Eased progress in `[0, 1]`.
+ * @example
+ *   easeInCubic(0)   === 0
+ *   easeInCubic(0.5) === 0.125
+ *   easeInCubic(1)   === 1
  */
 function easeInCubic(t: number): number {
   return t * t * t;
 }
 
 /**
- * Cubic ease-out for the F3 exit tween (`1 - (1 - t)^3`) — fast start,
- * slow finish. Matches the codebase pattern from EnvelopePool.ts /
- * FlashController.ts (form `1 - Math.pow(1 - t, 3)`).
+ * Cubic ease-out for the F3 exit tween — `1 - (1 - t)^3`. Fast start,
+ * slow finish (derivative starts at 3 and decays to 0 at `t=1`).
+ * Matches the codebase pattern from EnvelopePool.ts / FlashController.ts
+ * (form `1 - Math.pow(1 - t, 3)`).
+ *
+ * @param t - Normalized elapsed time in `[0, 1]` (elapsed / duration).
+ * @returns Eased progress in `[0, 1]`.
+ * @example
+ *   easeOutCubic(0)   === 0
+ *   easeOutCubic(0.5) === 0.875
+ *   easeOutCubic(1)   === 1
  */
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
