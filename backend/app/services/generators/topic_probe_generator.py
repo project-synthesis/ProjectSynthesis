@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 from app.schemas.probes import ProbeContext
 from app.schemas.runs import RunRequest
+from app.services.batch_pipeline import PendingOptimization
 from app.services.event_bus import event_bus
 from app.services.generators.base import GeneratorResult
 
@@ -168,6 +169,15 @@ class TopicProbeGenerator:
             else "codebase"
         )
         started_at = datetime.now(timezone.utc)
+
+        # Finding 19b: per-run accumulator for the canonical batched-at-end
+        # persist + assign block (matches seed_agent_generator.py:241-282).
+        # Per-spec §3.3: per-run scope (NOT __init__) — avoids cross-run
+        # pending leak on the long-lived TopicProbeGenerator singleton at
+        # main.py:1241-1251. Reset to [] every run; pendings appended in
+        # _run_one_prompt; flushed via bulk_persist + batch_taxonomy_assign
+        # at end of run.
+        pendings_for_assign: list[PendingOptimization] = []
 
         # --- Phase 1: Started + Grounding ---
         self._publish_started(
@@ -360,7 +370,7 @@ class TopicProbeGenerator:
         for idx, prompt_text in enumerate(prompts):
             try:
                 result = await self._run_one_prompt(
-                    idx, prompt_text, ctx_dict, run_id,
+                    idx, prompt_text, ctx_dict, run_id, pendings_for_assign,
                 )
             except asyncio.CancelledError:
                 raise
@@ -602,6 +612,7 @@ class TopicProbeGenerator:
         prompt_text: str,
         ctx: dict,
         run_id: str,
+        pendings_for_assign: list[PendingOptimization] | None = None,
     ) -> dict:
         """Per-prompt full-pipeline execution.
 
