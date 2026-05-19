@@ -113,6 +113,13 @@ const DEFAULT_RESOLVERS: EdgeOpacityResolvers = {
  */
 export class EdgeBuilder implements SceneBuilder {
   private _disposed = false;
+  // Latest similarity + injection sub-groups. Ephemeral — replaced each
+  // build() call. Exposed via the live-group accessors below so external
+  // visibility-toggle effects (e.g. `clustersStore.showSimilarityEdges`
+  // → `.visible`) can target the current group reference without walking
+  // the scene.
+  private _similarityGroup: THREE.Group | null = null;
+  private _injectionGroup: THREE.Group | null = null;
 
   constructor(private readonly _resolvers: EdgeOpacityResolvers = DEFAULT_RESOLVERS) {}
 
@@ -200,6 +207,7 @@ export class EdgeBuilder implements SceneBuilder {
     });
     simGroup.visible = this._resolvers.similarityVisible();
     scene.add(simGroup);
+    this._similarityGroup = simGroup;
 
     // ── Injection: between domains ───
     const injGroup = EdgeBuilder._buildSecondaryEdgeGroup(data, ctx.sceneNodeMap, {
@@ -211,6 +219,27 @@ export class EdgeBuilder implements SceneBuilder {
     });
     injGroup.visible = this._resolvers.injectionVisible();
     scene.add(injGroup);
+    this._injectionGroup = injGroup;
+  }
+
+  /**
+   * Returns the live similarity sub-group from the most recent build()
+   * call, or null if dispose() has been invoked. Used by the visibility-
+   * toggle $effect in SemanticTopology.svelte to set `.visible` without
+   * walking the scene.
+   */
+  getSimilarityGroup(): THREE.Group | null {
+    return this._disposed ? null : this._similarityGroup;
+  }
+
+  /**
+   * Returns the live injection sub-group from the most recent build()
+   * call, or null if dispose() has been invoked. Used by the visibility-
+   * toggle $effect in SemanticTopology.svelte to set `.visible` without
+   * walking the scene.
+   */
+  getInjectionGroup(): THREE.Group | null {
+    return this._disposed ? null : this._injectionGroup;
   }
 
   /**
@@ -221,6 +250,8 @@ export class EdgeBuilder implements SceneBuilder {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    this._similarityGroup = null;
+    this._injectionGroup = null;
   }
 
   /**

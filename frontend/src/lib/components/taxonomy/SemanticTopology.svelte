@@ -25,11 +25,15 @@
   import { EnvelopePool } from './EnvelopePool';
   import { AnimationCoordinator } from './AnimationCoordinator';
   import { ImpactCoordinator } from './ImpactCoordinator';
-  import { createRippleUniforms, RIPPLE_VERTEX_SHADER, RIPPLE_FRAGMENT_SHADER } from './BeamShader';
-  import { EDGE_DEPTH_VERTEX, EDGE_DEPTH_FRAGMENT, createEdgeDepthUniforms } from './EdgeShader';
-  import { DOMAIN_EDGE_VERTEX, DOMAIN_EDGE_FRAGMENT, createDomainEdgeUniforms } from './DomainEdgeShader';
-  import { readinessTierColor } from './readiness-tier';
-  import type { ReadinessTier } from './readiness-tier';
+  // Sub-project D — 5 single-responsibility builders + typed context.
+  // Each builder implements SceneBuilder (build + dispose); shared per-
+  // rebuild state flows through BuilderContext explicitly.
+  import { ClusterBuilder } from './builders/ClusterBuilder';
+  import { DomainBuilder } from './builders/DomainBuilder';
+  import { EdgeBuilder, type EdgeOpacityResolvers } from './builders/EdgeBuilder';
+  import { RingBuilder } from './builders/RingBuilder';
+  import { DustBuilder } from './builders/DustBuilder';
+  import { createBuilderContext } from './builders/BuilderContext';
 
   // ── Per-frame scratch table ──────────────────────────────────────
   // Per spec § 3.5: animation callbacks borrow these instances via
@@ -51,66 +55,20 @@
   // (rather than each file inventing its own scratch primitives).
   //
   // Borrow rules:
-  //   - `_scratchVec3a` / `_scratchQuat` / `_scratchColor` may be
-  //     mutated by any callback as a transient. Treat the value as
-  //     **invalid after the same callback returns** — no caching.
+  //   - `_scratchVec3a` may be mutated by any callback as a transient.
+  //     Treat the value as **invalid after the same callback returns**
+  //     — no caching.
   //   - `Z_AXIS` is read-only. Never `.set()` or `.copy()` it. Used
   //     by `rotateOnAxis` callers that need a constant +Z axis.
+  // Sub-project D — `_scratchQuat` + `_scratchColor` migrated into
+  // builder-private scratch tables (the pre-extraction consumers are
+  // gone from this file).
   const _scratchVec3a = new THREE.Vector3();
-  const _scratchQuat = new THREE.Quaternion();
-  const _scratchColor = new THREE.Color();
   const Z_AXIS = new THREE.Vector3(0, 0, 1);
 
-  /** ease-out cubic: 1 - (1-t)^3 — matches brand motion system. */
-  const _CUBIC = (t: number): number => 1 - Math.pow(1 - t, 3);
-
-  const prefersReducedMotion = (): boolean =>
-    typeof window !== 'undefined' &&
-    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-
-  /** Handle for an in-flight color tween. `cancel()` stops the RAF chain;
-   *  safe to call after natural completion. */
-  interface TweenHandle { cancel(): void }
-
-  /** Tween `material.color` from `fromColor` → `toHex` over `durationMs`.
-   *  `fromColor` is a live `THREE.Color` — typically `material.color` at the
-   *  moment of call — so superseding an in-flight tween starts from the
-   *  actual rendered color rather than a stale tier hex (prevents snap-back).
-   *  The source color is cloned so subsequent mutation of `material.color`
-   *  by the RAF step doesn't feed back into the interpolation baseline.
-   *  Returns a handle whose `cancel()` stops the RAF chain at the next
-   *  frame boundary. Caller must cancel on ring disposal and when
-   *  superseding an in-flight tween on the same material — RAF callbacks
-   *  can otherwise outlive the ring they animate (use-after-free). */
-  function tweenRingColor(
-    material: THREE.MeshBasicMaterial,
-    fromColor: THREE.Color,
-    toHex: string,
-    durationMs = 320,
-  ): TweenHandle {
-    if (prefersReducedMotion()) {
-      material.color.set(toHex);
-      return { cancel: () => {} };
-    }
-    const from = fromColor.clone();
-    const to = new THREE.Color(toHex);
-    const start = performance.now();
-    let rafId = 0;
-    let cancelled = false;
-    const step = (now: number) => {
-      if (cancelled) return;
-      const t = Math.min(1, (now - start) / durationMs);
-      material.color.copy(from).lerp(to, _CUBIC(t));
-      if (t < 1) rafId = requestAnimationFrame(step);
-    };
-    rafId = requestAnimationFrame(step);
-    return {
-      cancel: () => {
-        cancelled = true;
-        if (rafId) cancelAnimationFrame(rafId);
-      },
-    };
-  }
+  // Sub-project D — `TweenHandle` interface + `tweenRingColor` helper +
+  // `prefersReducedMotion` + `_CUBIC` migrated to RingBuilder.ts. The
+  // readiness-ring tier-tween RAF chain is now owned by RingBuilder.
 
   // Resolved at module level to avoid per-frame allocations
   const HIGHLIGHT_COLOR = parseInt(HIGHLIGHT_COLOR_HEX.replace('#', ''), 16);
@@ -118,14 +76,9 @@
   const SIMILARITY_EDGE_COLOR = parseInt(SIMILARITY_EDGE_COLOR_HEX.replace('#', ''), 16);
   const INJECTION_EDGE_COLOR = 0xff9500; // warm gold/amber
 
-  /** Readiness-ring geometry + material constants.
-   *  Ring sits just outside the domain node's silhouette (`RADIUS_FACTOR`),
-   *  1px-thin to match brand 1px-contour spec (`THICKNESS`), sampled finely
-   *  for a smooth contour (`SEGMENTS`), and slightly transparent so it
-   *  reads as an outline, not a fill (`OPACITY_FACTOR`). */
-  const READINESS_RING_RADIUS_FACTOR = 1.25;
-  const READINESS_RING_THICKNESS = 0.05;
-  const READINESS_RING_SEGMENTS = 64;
+  // Sub-project D — Ring radius/thickness/segments constants migrated
+  // to RingBuilder.ts. `READINESS_RING_OPACITY_FACTOR` stays here because
+  // the LOD-tier opacity callback (orchestrator-owned) reads it.
   const READINESS_RING_OPACITY_FACTOR = 0.9;
 
   /** LOD-tier → absolute ring opacity. At far camera distances the ring is a
@@ -148,183 +101,11 @@
    *  scope so the two sweeps cannot drift apart. */
   const DOMAIN_DIM_FACTOR = 0.15;
 
-  // ---------------------------------------------------------------------------
-  // Template ring pool — growable mesh pool for templated clusters (Task 19)
-  //
-  // Template rings are cyan RingGeometry meshes rendered around cluster nodes
-  // whose `template_count > 0`. The pool starts at TEMPLATE_RING_POOL_INITIAL
-  // capacity and grows in TEMPLATE_RING_POOL_GROW_CHUNK increments up to
-  // TEMPLATE_RING_POOL_MAX. After the pool reaches TEMPLATE_RING_POOL_MAX,
-  // excess requests fall through to one-frame allocation (spill) and a
-  // console.warn is emitted once per rebuild.
-  //
-  // Design notes:
-  //  • `_templateRingPool`  — all ever-allocated Mesh objects (high-water mark).
-  //  • `_freeTemplateRings` — currently unused template rings available for reuse.
-  //  • `_templateRingById`  — active template ring per cluster id.
-  //  • `_templateRingGroup` — THREE.Group re-attached to the scene after the
-  //                   scene-clear traverse (mirrors readiness ring group).
-  // ---------------------------------------------------------------------------
-  const TEMPLATE_RING_POOL_INITIAL = 50;
-  const TEMPLATE_RING_POOL_GROW_CHUNK = 50;
-  const TEMPLATE_RING_POOL_MAX = 500;
-
-  const _templateRingPool: THREE.Mesh[] = [];
-  const _templateRingPoolSet: Set<THREE.Mesh> = new Set(); // O(1) membership check
-  const _freeTemplateRings: THREE.Mesh[] = [];
-  const _templateRingById: Map<string, THREE.Mesh> = new Map();
-  let _templateRingGroup: THREE.Group | null = null;
-  // Per-rebuild warn-once flag: prevent spamming console.warn every frame
-  // when the cluster count stays above TEMPLATE_RING_POOL_MAX.
-  let _templateRingWarnedThisRebuild = false;
-
-  function _createTemplateRingMesh(): THREE.Mesh {
-    const geom = new THREE.RingGeometry(1.25, 1.35, 64); // canon F3 — 64 segments
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0x00e5ff,
-      transparent: true,
-      opacity: 0.35,
-      side: THREE.DoubleSide,
-    });
-    const mesh = new THREE.Mesh(geom, mat);
-    mesh.visible = false;
-    mesh.userData = { kind: 'template_ring' };
-    return mesh;
-  }
-
-  /** Ensure `_freeTemplateRings` has enough entries for `extraNeeded` new attachments.
-   *  On the very first call the pool is empty — seed it with TEMPLATE_RING_POOL_INITIAL
-   *  meshes so early small renders don't re-enter the grow loop each time.
-   *  Subsequent shortfalls grow in TEMPLATE_RING_POOL_GROW_CHUNK increments.  Emits a
-   *  once-per-rebuild warning when the cap is hit and excess template rings spill
-   *  to one-frame allocation (not pooled). */
-  function _ensureTemplateRingPool(extraNeeded: number): void {
-    while (_freeTemplateRings.length < extraNeeded && _templateRingPool.length < TEMPLATE_RING_POOL_MAX) {
-      // First-time seeding uses TEMPLATE_RING_POOL_INITIAL; subsequent growth uses the
-      // standard chunk size.  Both are capped so we never exceed TEMPLATE_RING_POOL_MAX.
-      const seed = _templateRingPool.length === 0 ? TEMPLATE_RING_POOL_INITIAL : TEMPLATE_RING_POOL_GROW_CHUNK;
-      const grow = Math.min(seed, TEMPLATE_RING_POOL_MAX - _templateRingPool.length);
-      for (let i = 0; i < grow; i++) {
-        const m = _createTemplateRingMesh();
-        _templateRingPool.push(m);
-        _templateRingPoolSet.add(m);
-        _freeTemplateRings.push(m);
-      }
-    }
-    if (!_templateRingWarnedThisRebuild && extraNeeded > _freeTemplateRings.length && _templateRingPool.length >= TEMPLATE_RING_POOL_MAX) {
-      console.warn(
-        `[SemanticTopology] template ring pool at cap ${TEMPLATE_RING_POOL_MAX}; ${extraNeeded - _freeTemplateRings.length} clusters spill to one-frame allocation`,
-      );
-      _templateRingWarnedThisRebuild = true;
-    }
-  }
-
-  function _acquireTemplateRing(): THREE.Mesh {
-    return _freeTemplateRings.pop() ?? _createTemplateRingMesh();
-  }
-
-  function _releaseTemplateRing(cid: string, mesh: THREE.Mesh): void {
-    // T2.2 — Exit transition: animate opacity/scale down before returning to pool.
-    // Use a simple RAF-based linear fade (300ms) instead of allocating a tween object.
-    const mat = mesh.material as THREE.MeshBasicMaterial;
-    const startOpacity = mat.opacity;
-    const startScale = mesh.scale.x;
-    const exitStart = performance.now();
-    const EXIT_MS = 300;
-    function exitStep() {
-      const elapsed = performance.now() - exitStart;
-      const t = Math.min(elapsed / EXIT_MS, 1.0);
-      const easeT = 1 - (1 - t) * (1 - t) * (1 - t); // cubic ease-out
-      mat.opacity = startOpacity * (1 - easeT);
-      mesh.scale.setScalar(startScale * (1 - easeT * 0.5));
-      if (t < 1.0) {
-        requestAnimationFrame(exitStep);
-      } else {
-        mesh.visible = false;
-        mat.opacity = 0.35; // reset for reuse
-        mesh.scale.setScalar(1.0);
-        if (mesh.parent) mesh.parent.remove(mesh);
-        _templateRingById.delete(cid);
-        if (_templateRingPoolSet.has(mesh)) _freeTemplateRings.push(mesh);
-      }
-    }
-    // Start immediately — ring visually dissolves while the node data might
-    // have already changed. Removing from _templateRingById only after the
-    // animation completes prevents the sync function from re-acquiring the
-    // same ring mid-exit.
-    requestAnimationFrame(exitStep);
-  }
-
-  /** Sync template ring meshes to the current cluster set.  Called from within
-   *  `rebuildScene` immediately after the node-mesh loop so that the template ring
-   *  and node color are written in the same render pass. */
-  function _syncTemplateRings(nodes: SceneNode[]): void {
-    if (!_templateRingGroup) {
-      _templateRingGroup = new THREE.Group();
-      _templateRingGroup.userData.isTemplateRingGroup = true;
-      _templateRingGroup.userData.persistent = true;
-      if (renderer) renderer.scene.add(_templateRingGroup);
-    }
-    _templateRingWarnedThisRebuild = false;
-
-    const templated = nodes.filter((n) => (n.template_count ?? 0) > 0 && n.visible);
-
-    // Release template rings for clusters that are no longer templated or no longer visible
-    for (const [cid, mesh] of [..._templateRingById]) {
-      if (!templated.find((c) => c.id === cid)) _releaseTemplateRing(cid, mesh);
-    }
-
-    const newAttachments = templated.filter((c) => !_templateRingById.has(c.id)).length;
-    _ensureTemplateRingPool(newAttachments);
-
-    for (const c of templated) {
-      const isNew = !_templateRingById.has(c.id);
-      let mesh = _templateRingById.get(c.id);
-      if (!mesh) {
-        mesh = _acquireTemplateRing();
-        _templateRingById.set(c.id, mesh);
-        mesh.userData = { kind: 'template_ring', clusterId: c.id };
-        _templateRingGroup.add(mesh);
-      } else {
-        // Update clusterId tag in case the template ring was reused
-        mesh.userData.clusterId = c.id;
-      }
-      mesh.visible = true;
-      mesh.position.set(...c.position);
-      // Color follows the cluster's live color — same source as the node wireframe.
-      const colorHex = parseInt(c.color.replace('#', ''), 16);
-      (mesh.material as THREE.MeshBasicMaterial).color.setHex(colorHex);
-
-      // T2.2 — Entry transition: new rings start at opacity 0 + scale 0.5,
-      // animate to resting state over 400ms. Only fires when a ring was just
-      // acquired (not on position/color updates of existing rings).
-      if (isNew) {
-        const entryMat = mesh.material as THREE.MeshBasicMaterial;
-        entryMat.opacity = 0;
-        mesh.scale.setScalar(0.5);
-        const entryMesh = mesh; // capture for closure
-        const entryStart = performance.now();
-        const ENTRY_MS = 400;
-        function entryStep() {
-          const elapsed = performance.now() - entryStart;
-          const t = Math.min(elapsed / ENTRY_MS, 1.0);
-          const easeT = 1 - (1 - t) * (1 - t) * (1 - t); // cubic ease-out
-          entryMat.opacity = 0.35 * easeT;
-          entryMesh.scale.setScalar(0.5 + 0.5 * easeT);
-          if (t < 1.0) requestAnimationFrame(entryStep);
-        }
-        requestAnimationFrame(entryStep);
-      }
-    }
-  }
-
-  // Test-only: expose template ring pool length via a global so tests can observe
-  // the high-water mark and growth behaviour without coupling to internals.
-  if (import.meta.env.MODE === 'test') {
-    // `_templateRingPool` is the array; expose the reference so the length reflects
-    // every allocation.  Tests read `.length` on the array directly.
-    (globalThis as any).__semTopTemplateRingPool = _templateRingPool;
-  }
+  // Sub-project D — Template ring pool migrated to RingBuilder. The pool
+  // infrastructure (template-ring pool / free-list / id-map / set /
+  // group, pool helpers create/ensure/acquire/release/sync) lives inside
+  // RingBuilder.ts. The dev-only template-ring-pool hook is re-published
+  // by RingBuilder.build.
 
   /** Predicate — shared between scene-build loop and DOM marker `{#each}`.
    *  Centralizes the "this node gets a readiness ring" rule so the two
@@ -333,74 +114,28 @@
     return node.state === 'domain' && node.readinessTier != null;
   }
 
-  /** Suppress hierarchical edges shorter than this (scene units).
-   *  Spatial proximity already communicates the parent-child relationship.
-   *  UMAP parent-child distances are typically 3-8 units (domain nodes sit
-   *  at children's centroid); the force sim settles children at ~9 units.
-   *  Threshold of 5.0 only hides edges where nodes nearly overlap. */
+  // Sub-project D — buildEdgeGroup helper + similarity/injection group
+  // construction migrated to EdgeBuilder.ts (per-rebuild similarity +
+  // injection groups acquired via EdgeBuilder.getSimilarityGroup() /
+  // getInjectionGroup() accessors). The curve helpers
+  // buildCurvePositions / buildMergedCurveGeometry STAY at module scope
+  // because the formation animation rebuild loop (post-formation
+  // completion) reuses them to repaint hierarchical edges at settled
+  // positions. EdgeBuilder owns its own private copies for the initial
+  // hierarchical build — duplication is acceptable; the formation rebuild
+  // is a separate concern from per-rebuildScene edge construction.
   const EDGE_PROXIMITY_THRESHOLD = 5.0;
-
-  /** Segments per bezier curve for hierarchical edges.
-   *  Used by buildCurvePositions and callers for index construction. */
   const CURVE_SEGMENTS = 12;
-
-  /** Endpoint pair for hierarchical edge curve building.
-   *  T2.3 extends with optional memberCount for per-vertex alpha encoding. */
   interface HierEdge {
     from: [number, number, number];
     to: [number, number, number];
     memberCount?: number;
   }
 
-  // Edge groups — persisted across rebuilds for visibility toggle
-  let similarityEdgeGroup: THREE.Group | null = null;
-  let injectionEdgeGroup: THREE.Group | null = null;
-
-  // Opacity lookup caches — rebuilt per rebuildScene call
+  // Opacity lookup caches — rebuilt per rebuildScene call. Read by the
+  // EdgeOpacityResolvers injected into EdgeBuilder.
   let _simScoreCache: Map<string, number> | null = null;
   let _injWeightCache: { map: Map<string, number>; max: number } | null = null;
-
-  interface EdgeGroupOptions {
-    type: 'similarity' | 'injection';
-    color: number;
-    dashed: boolean;
-    tag: string;
-    opacityFn: (edge: import('./TopologyData').SceneEdge) => number;
-  }
-
-  /** Build a THREE.Group of line segments for a given edge type. */
-  function buildEdgeGroup(
-    data: SceneData,
-    nodeMap: Map<string, import('./TopologyData').SceneNode>,
-    opts: EdgeGroupOptions,
-  ): THREE.Group {
-    const group = new THREE.Group();
-    group.userData = { [opts.tag]: true };
-    const edges = data.edges.filter(e => e.type === opts.type);
-    for (const edge of edges) {
-      const from = nodeMap.get(edge.from);
-      const to = nodeMap.get(edge.to);
-      if (!from || !to) continue;
-      const opacity = opts.opacityFn(edge);
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(
-        [...from.position, ...to.position], 3,
-      ));
-      const mat = opts.dashed
-        ? new THREE.LineDashedMaterial({
-            color: opts.color, transparent: true, opacity,
-            dashSize: 0.3, gapSize: 0.2,
-          })
-        : new THREE.LineBasicMaterial({
-            color: opts.color, transparent: true, opacity,
-          });
-      const line = new THREE.LineSegments(geo, mat);
-      if (opts.dashed) line.computeLineDistances();
-      line.userData = { [opts.tag]: true, baseOpacity: opacity };
-      group.add(line);
-    }
-    return group;
-  }
 
   let canvas: HTMLCanvasElement;
   let container: HTMLDivElement;
@@ -417,45 +152,13 @@
   // Node meshes for raycasting
   let nodeMeshes: Map<string, THREE.Mesh> = new Map();
 
-  // Per-domain readiness ring registry. Rings live inside `_readinessRingGroup`
-  // so `rebuildScene` can detach the whole group before the scene-clear traverse
-  // and re-attach it after — mirrors the beam-pool protection pattern.
-  // Billboarding is driven by a single animation callback (`_removeReadinessBillboard`)
-  // that iterates this map each frame, mirroring `_removeDomainRotation`.
-  // `tween` is the in-flight color tween handle (if any); cancelled on disposal
-  // or when superseded so RAF callbacks cannot outlive the material they write to.
-  interface ReadinessRingEntry {
-    mesh: THREE.Mesh;
-    material: THREE.MeshBasicMaterial;
-    /** The tier this ring is currently displaying or tweening toward — i.e.
-     *  the target of the most recent `tweenRingColor` call (or the initial
-     *  tier on first build). Used only for change-detection in the supersede
-     *  branch (`existing.lastTier !== tier`); it is NOT the tween's `from`
-     *  color — that is always `material.color` at the moment of supersede. */
-    lastTier: ReadinessTier;
-    /** The `node.size` used to build the current `RingGeometry`. Tracked so
-     *  the reuse branch in `rebuildScene` can detect size drift (cluster
-     *  physics reconciles base scale as `member_count` evolves) and dispose
-     *  + recreate the geometry. Without this, the ring keeps its first-build
-     *  radius and visibly drifts from its parent domain. */
-    lastSize: number;
-    /** Owning node's primary domain, captured at build/update time. The
-     *  per-frame LOD callback composes `DOMAIN_DIM_FACTOR` against this value
-     *  without having to traverse `sceneData.nodes` each tick.
-     *  Typed as `string` because `SceneNode.domain` is always defined
-     *  (TopologyData.ts sets it via `parsePrimaryDomain`). */
-    domain: string;
-    /** Owning node's `opacity` (from sceneData), captured at build/update
-     *  time. Composed into the per-frame opacity write so LOD attenuation
-     *  does not clobber per-node opacity.
-     *  Future per-frame node opacity animations (e.g. seed-pulse, stability
-     *  pulse) should route through this field — update it in the animation
-     *  callback and the LOD composition picks it up next tick. */
-    nodeOpacity: number;
-    tween: TweenHandle | null;
-  }
-  const _readinessRings: Map<string, ReadinessRingEntry> = new Map();
-  let _readinessRingGroup: THREE.Group | null = null;
+  // Sub-project D — Readiness ring registry migrated to RingBuilder.ts.
+  // `ReadinessRingEntry` interface + `_readinessRings` map +
+  // `_readinessRingGroup` + ring helpers (`buildRingGeometry`,
+  // `updateRingFrameInputs`, `updateExistingRing`, `disposeRingEntry`)
+  // all live in RingBuilder.ts. The per-frame billboard handle stays at
+  // module scope because it's an orchestrator-owned canceller for the
+  // per-frame readiness-billboard registration.
   let _removeReadinessBillboard: (() => void) | null = null;
 
   // ── Atmospheric layer state (canon F5/F8/F10) ────────────────────
@@ -479,109 +182,43 @@
   let _removeEdgeAnim: (() => void) | null = null;
   let _edgeTime = 0;
 
-  let _dustPoints: THREE.Points | null = null;
+  // Sub-project D — `_dustPoints` migrated to DustBuilder.ts. Per-frame
+  // dust drift reads `dustBuilder.dustPoints()` (rev-2 accessor).
   let _removeDustAnim: (() => void) | null = null;
   let _breathingAnim: (() => void) | null = null;
   let _breathingTime = 0;
 
   // T1.1 — Per-node phase offset for desynchronized organic breathing.
   // Seeded from a deterministic string hash so the same node always gets
-  // the same phase (stable across rebuilds). Populated during rebuildScene.
+  // the same phase (stable across rebuilds). Populated during rebuildScene
+  // by ClusterBuilder + DomainBuilder (writes ctx.nodePhaseOffsets) +
+  // synced to this module-level ref after all builders complete.
   let _nodePhaseOffsets: Map<string, number> = new Map();
 
-  // Canon F2 — radial-gradient glow texture build sentinel. Records that
-  // we've already attempted to construct the texture (success OR JSDOM
-  // no-context fallback) so the lazy-init guard doesn't re-enter every
-  // rebuildScene.
-  let _glowTextureBuilt = false;
+  // Sub-project D — Per-cluster ShaderMaterial refs synced from
+  // ctx.clusterShaderMaterials after ClusterBuilder.build(). Consumed by
+  // the physics handler for ripple-uniform writes (replaces the prior
+  // `group.children[1]` index walk — locks INT-6 architecture
+  // improvement).
+  let _clusterShaderMaterials: Map<string, THREE.ShaderMaterial> = new Map();
 
-  /** Single source of truth for readiness ring geometry. Used by both the
-   *  initial-build path and the size-drift rebuild path in `rebuildScene`
-   *  so radius/thickness/segments never diverge between the two.
-   *
-   *  Asymmetry note: `updateExistingRing` takes a `camera` parameter for
-   *  billboard `lookAt`, but this function deliberately does NOT — it
-   *  returns pure geometry, which is camera-independent. The caller
-   *  performs `mesh.lookAt(camera.position)` once, either in the new-ring
-   *  branch of `rebuildScene` or inside `updateExistingRing` for reuse.
-   *  Keeping geometry construction camera-free means tests that mock
-   *  THREE without a real camera can still exercise this helper. */
-  function buildRingGeometry(size: number): THREE.RingGeometry {
-    const radius = size * READINESS_RING_RADIUS_FACTOR;
-    return new THREE.RingGeometry(
-      radius,
-      radius + READINESS_RING_THICKNESS,
-      READINESS_RING_SEGMENTS,
-    );
-  }
+  // Sub-project D — Ring helpers + canon F2 glow texture migrated to
+  // builders. RingBuilder.ts owns the readiness ring lifecycle +
+  // `buildRingGeometry`/`updateExistingRing`/`disposeRingEntry`. The
+  // `_glowTextureBuilt` sentinel is no longer needed — DomainBuilder
+  // owns the lazy glow-texture construction.
 
-  /** Refresh per-frame LOD callback inputs on a readiness ring entry.
-   *  Both the rebuild path (`updateExistingRing`) and the dim-sweep
-   *  `$effect` need to keep `entry.domain` and `entry.nodeOpacity` in
-   *  sync with the latest `SceneNode` so the LOD animation callback
-   *  composes the current opacity formula on the next tick. Extracted
-   *  to a single helper so the two sites can't drift apart — if a third
-   *  input ever joins (e.g. `entry.state`), it is added here once. */
-  function updateRingFrameInputs(entry: ReadinessRingEntry, node: SceneNode): void {
-    entry.domain = node.domain;
-    entry.nodeOpacity = node.opacity;
-  }
-
-  /** Reconcile an existing readiness ring with the latest scene node: tween
-   *  color on tier change, rebuild geometry on size drift, then update
-   *  position + billboard. Keeps the `rebuildScene` reuse branch readable
-   *  by grouping the four distinct concerns behind one call. Camera is
-   *  passed in because it comes from the renderer and may be undefined in
-   *  test environments. */
-  function updateExistingRing(
-    existing: ReadinessRingEntry,
-    node: SceneNode,
-    tier: ReadinessTier,
-    camera: THREE.Camera | undefined,
-  ): void {
-    if (existing.lastTier !== tier) {
-      // Supersede any in-flight tween so two RAF chains don't race on the
-      // same material. Tween from the currently rendered color (not the
-      // last target) to preserve continuity across rapid tier changes.
-      existing.tween?.cancel();
-      existing.tween = tweenRingColor(
-        existing.material,
-        existing.material.color,
-        readinessTierColor(tier),
-      );
-      existing.lastTier = tier;
-    }
-    if (existing.lastSize !== node.size) {
-      // Size drift: dispose old geometry BEFORE assigning the new one
-      // (GPU resource leak otherwise) and swap in a fresh RingGeometry
-      // sized to the current `node.size`. Keep the mesh (and thus its
-      // parent link + material + tween state) intact.
-      existing.mesh.geometry?.dispose?.();
-      existing.mesh.geometry = buildRingGeometry(node.size);
-      existing.lastSize = node.size;
-    }
-    existing.mesh.position.set(...node.position);
-    if (camera?.position) existing.mesh.lookAt(camera.position);
-    // Keep per-frame LOD callback inputs in sync with the latest sceneData
-    // so dim + node-opacity composition doesn't lag behind rebuilds.
-    updateRingFrameInputs(existing, node);
-  }
-
-  /** Per-entry teardown for a readiness ring: cancel any in-flight tween
-   *  BEFORE disposing GPU resources so the RAF step can't write to a
-   *  disposed material. Scene-graph removal stays at the call site — the
-   *  per-rebuild pruning loop removes individual meshes, while unmount
-   *  drops the whole group. Dispose lookups are null-safe because test
-   *  environments mock THREE with minimal stubs lacking `dispose`. */
-  function disposeRingEntry(entry: ReadinessRingEntry): void {
-    entry.tween?.cancel();
-    if (typeof entry.mesh.geometry?.dispose === 'function') {
-      entry.mesh.geometry.dispose();
-    }
-    if (typeof entry.material?.dispose === 'function') {
-      entry.material.dispose();
-    }
-  }
+  // Sub-project D — 5 scene builders constructed in onMount after
+  // renderer + AnimationCoordinator + ImpactCoordinator + interaction.
+  // Disposed in cleanup return between coordinator.dispose() + pool
+  // disposes. ClusterBuilder + DomainBuilder receive the `interaction`
+  // instance as a constructor dep so raycast-target registration
+  // co-locates with mesh construction.
+  let clusterBuilder: ClusterBuilder | null = null;
+  let domainBuilder: DomainBuilder | null = null;
+  let edgeBuilder: EdgeBuilder | null = null;
+  let ringBuilder: RingBuilder | null = null;
+  let dustBuilder: DustBuilder | null = null;
 
   // Flat node lookup for mid-LOD label logic and domain highlight
   let flatNodeMap: Map<string, ClusterNode> = new Map();
@@ -937,549 +574,162 @@
     return positions;
   }
 
+  /**
+   * Per-frame breathing callback — registered through coordinator's
+   * `breathing` phase. Composes:
+   *   T3.3 — Beam impact camera micro-shake
+   *   T1.1 — Per-node phase offset for desynchronized breathing
+   *   T2.4 — Hover proximity field amplification
+   *   T3.4 — Idle pulse engulfed-guard (Sub-project C §3.4 hazard)
+   *   F4   — Readiness ring sync (via RingBuilder accessor)
+   *   F3   — Template ring opacity + rotation (via RingBuilder accessor)
+   *
+   * Extracted from rebuildScene body so the orchestrator stays under the
+   * 150 LOC ceiling per spec §6.1 #3.
+   */
+  function _advanceBreathing(): void {
+    _breathingTime += 0.016;
+
+    // T3.3 — Beam impact camera micro-shake.
+    if (_cameraShake > 0.001) {
+      if (renderer?.camera) {
+        renderer.camera.rotation.x += (Math.random() - 0.5) * _cameraShake;
+        renderer.camera.rotation.y += (Math.random() - 0.5) * _cameraShake;
+      }
+      _cameraShake *= 0.85;
+    } else {
+      _cameraShake = 0;
+    }
+
+    for (const [nodeId, mesh] of nodeMeshes) {
+      const node = _sceneNodeMap.get(nodeId);
+      if (!node) continue;
+
+      // T1.1 — Per-node phase offset for desynchronized breathing.
+      const phase = _nodePhaseOffsets.get(nodeId) ?? 0;
+      const scaleBase = Math.sin((_breathingTime + phase) * 1.5) * 0.02 + 1.0;
+
+      // T2.4 — Hover proximity field.
+      const PROXIMITY_RADIUS = 8.0;
+      const isHovered = (hoveredNodeId === nodeId);
+      let proximityFactor = 0;
+      if (!isHovered && hoveredNodeId) {
+        const hoveredNode = _sceneNodeMap.get(hoveredNodeId);
+        if (hoveredNode) {
+          const dx = node.position[0] - hoveredNode.position[0];
+          const dy = node.position[1] - hoveredNode.position[1];
+          const dz = node.position[2] - hoveredNode.position[2];
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (dist < PROXIMITY_RADIUS) {
+            const t = 1 - dist / PROXIMITY_RADIUS;
+            proximityFactor = t * t * 0.6;
+          }
+        }
+      }
+      const hoverAmplification = isHovered ? 1.1 : (1.0 + 0.1 * proximityFactor);
+      const targetScaleMultiplier = scaleBase * hoverAmplification;
+      const targetScale = node.size * targetScaleMultiplier;
+
+      mesh.scale.lerp(_scratchVec3a.set(targetScale, targetScale, targetScale), 0.1);
+
+      const parentGroup = mesh.parent;
+      if (parentGroup) {
+        for (const child of parentGroup.children) {
+          if (child !== mesh && child.type !== 'Group') {
+            child.scale.copy(mesh.scale);
+          }
+        }
+      }
+
+      // Readiness ring (canon F4) — read via RingBuilder accessor.
+      const readyEntry = ringBuilder?.getReadinessRing(nodeId);
+      if (readyEntry) {
+        if (isHovered) {
+          readyEntry.mesh.rotateOnAxis(Z_AXIS, 0.02);
+        }
+        readyEntry.mesh.scale.setScalar(targetScaleMultiplier);
+      }
+
+      // T3.4 — Idle Ambient Energy Pulse (canon)
+      // Engulfed-guard preserved per Sub-project C §3.4 phase-ordering
+      // hazard. The flash-state branch is a no-op (the engulfment-bug
+      // regression guard); `_tickFlashStates` owns the full attack →
+      // hold → decay ramp.
+      const isSelected = clustersStore.selectedClusterId === nodeId;
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      const baseEmissive = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
+      if (_flashStates.has(nodeId)) {
+        // No-op — `_tickFlashStates` owns the ramp.
+      } else if (impactCoordinator?.isEngulfed(nodeId) && isSelected) {
+        // No-op — ImpactCoordinator._tick owns the engulfed T3.4 pulse.
+      } else {
+        mat.emissiveIntensity = baseEmissive;
+      }
+
+      // Template ring (canon F3) — read via RingBuilder accessor.
+      const templateRing = ringBuilder?.getTemplateRing(nodeId);
+      if (templateRing) {
+        const ringMat = templateRing.material as THREE.MeshBasicMaterial;
+        if (isHovered) {
+          templateRing.rotation.z += 0.02;
+          ringMat.opacity = 0.35 + Math.sin(_breathingTime * 10.0) * 0.15;
+        } else {
+          ringMat.opacity = 0.35;
+        }
+        templateRing.scale.setScalar(targetScaleMultiplier);
+      }
+    }
+  }
+
   function rebuildScene(data: SceneData): void {
     if (!renderer) return;
     if (!coordinator) return;
+    if (!clusterBuilder || !domainBuilder || !edgeBuilder || !ringBuilder || !dustBuilder) return;
 
-    // Clear previous
+    // ── 1. Pre-cleanup state clearing ─────────────────────────────
     interaction?.clear();
-    labels?.clear();  // disposes label sprites + textures
+    labels?.clear();
     nodeMeshes.clear();
     clearHighlight();
     _simScoreCache = null;
     _injWeightCache = null;
-
-    // Unsubscribe the billboard callback FIRST so it cannot fire against a
+    // Unsubscribe the billboard FIRST so it cannot fire against a
     // half-disposed mesh (use-after-free guard).
     _removeReadinessBillboard?.();
     _removeReadinessBillboard = null;
 
-    // Ring survives only if the domain is still visible AND still carries a
-    // readiness tier — matches the ring-build pass gate below, so LOD hides
-    // rings implicitly (disposal preferred over hidden-mesh accumulation).
-    const currentDomainIds = new Set(
-      data.nodes.filter((n) => n.visible && hasReadinessRing(n)).map((n) => n.id),
-    );
-    for (const [id, entry] of _readinessRings) {
-      if (!currentDomainIds.has(id)) {
-        disposeRingEntry(entry);
-        _readinessRingGroup?.remove(entry.mesh);
-        _readinessRings.delete(id);
-      }
-    }
-
-    // `cleanupScene` detaches every child tagged `userData.persistent = true`,
-    // disposes ephemeral geometry-owners (Mesh + LineSegments + Line + Points),
-    // wipes ephemeral children, then reattaches the persistent set. Pool groups +
-    // lights + dust + ring groups survive automatically via their persistent flag
-    // set at construction. Type-coverage spans Mesh + LineSegments + Line + Points
-    // (closes the per-domain PointsMaterial leak documented in lifecycle-hardening
-    // spec §1). Contract canon: `scene-cleanup.ts` header + spec §2 rev-9.
+    // ── 2. cleanupScene — Sub-project A flag-aware wipe ──────────
+    // Readiness-ring pruning is absorbed into RingBuilder.build per
+    // spec §3.6 step 2 NOTE + Cycle 4 GREEN (Task 17).
     cleanupScene(renderer.scene);
 
-    // Build nodes — two distinct visual tiers:
-    //
-    // CLUSTERS: Icosahedron — dark fill + triangular wireframe contour.
-    //   Standard neon-contour card aesthetic.
-    //
-    // DOMAIN NODES: Dodecahedron — dark fill + EdgesGeometry (clean pentagonal
-    //   outlines only) + vertex anchor points + slow Y-axis rotation.
-    //   Three complementary effects form one coherent "precision container" look:
-    //   structural edges, bright vertex markers, mechanical motion.
-    const clusterFillGeo = new THREE.IcosahedronGeometry(1, 2);
-    const clusterWireGeo = new THREE.IcosahedronGeometry(1, 1);
-    const domainFillGeo = new THREE.DodecahedronGeometry(1, 2);
-    // EdgesGeometry on subdiv-0 dodecahedron: extracts only the 30 structural
-    // edges (pentagonal outlines), ignoring subdivision diagonals.
-    const domainEdgesBase = new THREE.DodecahedronGeometry(1, 0);
-    const domainEdgesGeo = new THREE.EdgesGeometry(domainEdgesBase, 1);
-    // Vertex points: extract the 20 unique vertices of the base dodecahedron
-    const domainVertPositions = domainEdgesBase.getAttribute('position');
-    const uniqueVerts = new Map<string, [number, number, number]>();
-    for (let i = 0; i < domainVertPositions.count; i++) {
-      const x = domainVertPositions.getX(i);
-      const y = domainVertPositions.getY(i);
-      const z = domainVertPositions.getZ(i);
-      const key = `${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`;
-      if (!uniqueVerts.has(key)) uniqueVerts.set(key, [x, y, z]);
-    }
-    const vertArray = new Float32Array([...uniqueVerts.values()].flat());
-    const domainPointsGeo = new THREE.BufferGeometry();
-    domainPointsGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertArray, 3));
+    // ── 3. Pre-populate ctx — sceneNodeMap must exist BEFORE any
+    //       builder runs (EdgeBuilder + RingBuilder read it) ──────
+    const ctx = createBuilderContext();
+    for (const node of data.nodes) ctx.sceneNodeMap.set(node.id, node);
 
-    const domainGroups: THREE.Group[] = [];
-    for (const node of data.nodes) {
-      if (!node.visible) continue;
+    // ── 4. Sub-project D — 5 builders in dependency order ────────
+    clusterBuilder.build(data, renderer.scene, ctx);
+    domainBuilder.build(data, renderer.scene, ctx);
+    edgeBuilder.build(data, renderer.scene, ctx);
+    ringBuilder.build(data, renderer.scene, ctx);
+    dustBuilder.build(data, renderer.scene, ctx);
 
-      const group = new THREE.Group();
-      group.position.set(...node.position);
-      const isStructural = node.state === 'domain' || node.state === 'project';
-      const isSubDomain = node.isSubDomain;
-      group.userData = { isStructural, isSubDomain };
+    // ── 5. Sync ctx → module-level for downstream consumers ──────
+    nodeMeshes = ctx.nodeMeshes;
+    _beamNodeGroups = ctx.beamNodeGroups;
+    _edgeUniforms = ctx.edgeUniforms;
+    _nodePhaseOffsets = ctx.nodePhaseOffsets;
+    _clusterShaderMaterials = ctx.clusterShaderMaterials;
 
-      // Fill: dark tinted interior (structural nodes slightly darker = edge-dominant)
-      // Non-structural nodes: modulate fill scalar by avgScore for saturation encoding
-      let fillScalar = isStructural ? 0.08 : 0.15;
-      if (!isStructural && node.avgScore != null) {
-        fillScalar *= 0.7 + 0.3 * Math.min(1, Math.max(0, node.avgScore / 10));
-      }
-      // emissiveIntensity is **data-driven**, never aesthetic. Brand reference:
-      // .claude/skills/brand-guidelines/references/3d-visualization.md
-      // "Material Recipes". Mapping: member count 1 → 0.6 base, 50+ → 1.4 hero,
-      // clamped. Domain anchors recess to 0.4 since they're context, not the
-      // foreground signal. Source: brand reference, "Cluster sphere" + "Domain
-      // anchor" rows.
-      const HERO_MEMBER_COUNT = 50;
-      const baseEmissiveIntensity = isStructural
-        ? 0.4
-        : 0.6 + 0.8 * Math.min(1, Math.max(0, (node.memberCount - 1) / (HERO_MEMBER_COUNT - 1)));
-
-      // T1.2 — Coherence-driven color temperature (chromatic encoding axiom).
-      // High-coherence clusters shift emissive toward white ("hotter plasma"),
-      // low-coherence clusters stay at the domain base hue ("cooler").
-      // Also lifts emissiveIntensity slightly so hot clusters radiate more.
-      const coherenceBoost = isStructural ? 0 : 0.1 * node.coherence;
-      const emissiveColor = new THREE.Color(node.color);
-      if (!isStructural && coherenceBoost > 0) {
-        emissiveColor.lerp(new THREE.Color(0xffffff), coherenceBoost * 0.3);
-      }
-
-      // T2.1 — Score-driven emissive modulation: avgScore lifts emissive so
-      // high-scoring clusters radiate more under bloom.
-      const scoreModifier = (!isStructural && node.avgScore != null)
-        ? 0.85 + 0.15 * Math.min(1, Math.max(0, node.avgScore / 10))
-        : 1.0;
-      const emissiveIntensity = baseEmissiveIntensity * (1.0 + coherenceBoost) * scoreModifier;
-
-      const fillMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(node.color).multiplyScalar(fillScalar),
-        emissive: emissiveColor,
-        emissiveIntensity,
-        roughness: 0.6,
-        metalness: 0.0,
-        transparent: true,
-        opacity: node.opacity * 0.9,
-      });
-
-      // T1.1 — Compute deterministic phase offset for desynchronized breathing.
-      // Simple hash: sum of char codes mod 1000, mapped to [0, 2π].
-      let hash = 0;
-      for (let ci = 0; ci < node.id.length; ci++) hash += node.id.charCodeAt(ci);
-      _nodePhaseOffsets.set(node.id, (hash % 1000) / 1000 * Math.PI * 2);
-      const fillGeo = isStructural ? domainFillGeo : clusterFillGeo;
-      const fill = new THREE.Mesh(fillGeo, fillMat);
-      // Self-shadowing: clusters cast shadows AND receive shadows from
-      // neighbouring clusters under the directional key light. Without a
-      // floor plane, this is the only way the shadow render pass produces
-      // visible output (per code-quality review M4: shadows enabled with
-      // no receivers is wasted compute).
-      fill.castShadow = true;
-      fill.receiveShadow = true;
-      fill.userData = { isClusterFill: true, baseEmissive: emissiveIntensity };
-      fill.scale.setScalar(node.size);
-      group.add(fill); // child 0: fill
-
-      if (isStructural) {
-        // Domain: EdgesGeometry — clean pentagonal structural outlines
-        // T1.3 — ShaderMaterial with slow heartbeat pulse (half-frequency
-        // of hierarchical child edges). Shared uTime uniform drives both
-        // systems phase-coherently. Replaces static LineBasicMaterial.
-        const domainEdgeColor = parseInt(node.color.replace('#', ''), 16);
-        const domainEdgeUniforms = createDomainEdgeUniforms(domainEdgeColor, node.opacity * 0.9);
-        _edgeUniforms.push(domainEdgeUniforms); // driven by _removeEdgeAnim
-        const edgeMat = new THREE.ShaderMaterial({
-          uniforms: domainEdgeUniforms,
-          vertexShader: DOMAIN_EDGE_VERTEX,
-          fragmentShader: DOMAIN_EDGE_FRAGMENT,
-          transparent: true,
-          depthWrite: false,
-        });
-        const edges = new THREE.LineSegments(domainEdgesGeo, edgeMat);
-        edges.scale.setScalar(node.size);
-        group.add(edges); // child 1: edges
-
-        // Domain: vertex anchor points — glowing energy cores (canon F2).
-        // Lazily build the radial-gradient CanvasTexture once per component
-        // lifecycle. Sentinel `_glowTextureBuilt` records the no-canvas
-        // (JSDOM) branch so the truthy `if (!__semTopGlowTexture)` check
-        // doesn't re-enter every rebuildScene when ctx is null.
-        if (!_glowTextureBuilt) {
-          _glowTextureBuilt = true;
-          const canvas = document.createElement('canvas');
-          canvas.width = 64; canvas.height = 64;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-            gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.8)');
-            gradient.addColorStop(0.6, 'rgba(255, 255, 255, 0.2)');
-            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-            ctx.fillStyle = gradient;
-            ctx.fillRect(0, 0, 64, 64);
-            (globalThis as any).__semTopGlowTexture = new THREE.CanvasTexture(canvas);
-          }
-          // JSDOM (no canvas context): leave __semTopGlowTexture undefined;
-          // PointsMaterial.map = undefined falls back to sprite-less
-          // rendering (size + color still convey the data signal).
-        }
-
-        const pointsMat = new THREE.PointsMaterial({
-          color: node.color,
-          size: 0.35, // larger to accommodate the soft glow falloff
-          map: (globalThis as any).__semTopGlowTexture,
-          transparent: true,
-          opacity: node.opacity * 0.95,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-          sizeAttenuation: true,
-        });
-        const points = new THREE.Points(domainPointsGeo, pointsMat);
-        points.scale.setScalar(node.size);
-        group.add(points); // child 2: vertex glowing energy cores
-
-        domainGroups.push(group);
-      } else {
-        // Cluster: dense triangular wireframe contour with ripple shader
-        // Coherence maps [0,1] to opacity multiplier [0.5, 1.0]
-        const wireUniforms = createRippleUniforms();
-        wireUniforms.uColor.value = new THREE.Color(node.color);
-        wireUniforms.uOpacity.value = node.opacity * (0.5 + 0.5 * node.coherence);
-        const wireMat = new THREE.ShaderMaterial({
-          uniforms: wireUniforms,
-          vertexShader: RIPPLE_VERTEX_SHADER,
-          fragmentShader: RIPPLE_FRAGMENT_SHADER,
-          transparent: true,
-          wireframe: true,
-          depthWrite: false,
-        });
-        const wire = new THREE.Mesh(clusterWireGeo, wireMat);
-        wire.scale.setScalar(node.size);
-        group.add(wire); // child 1: wire
-      }
-
-      renderer.scene.add(group);
-      nodeMeshes.set(node.id, fill);
-      interaction?.registerNode(node.id, fill, node);
-    }
-
-    // Template rings — sync after node-mesh loop so template ring and node color are
-    // written in the same rebuildScene pass (satisfies same-frame sync).
-    // The group is added to the scene once inside the lazy `if (!_templateRingGroup)`
-    // block above; it survives subsequent rebuilds via userData.persistent.
-    _syncTemplateRings(data.nodes);
-
-    // Readiness rings — per-domain contour ring colored by composite tier.
-    // Only for visible domain nodes with a resolved readinessTier (see
-    // `hasReadinessRing`). Brand spec: 1px contour, sharp emission, no falloff —
-    // MeshBasicMaterial with depthWrite:false is sufficient to sit over the
-    // dodecahedron silhouette without z-fighting.
-    const camera = renderer.camera;
-    if (!_readinessRingGroup) {
-      _readinessRingGroup = new THREE.Group();
-      _readinessRingGroup.userData.isReadinessRingGroup = true;
-      _readinessRingGroup.userData.persistent = true;
-      renderer.scene.add(_readinessRingGroup);
-    }
-    for (const node of data.nodes) {
-      if (!node.visible) continue;
-      if (!hasReadinessRing(node)) continue;
-      // `hasReadinessRing` guarantees `readinessTier` is defined — the
-      // non-null assertion is safe and narrower than a type cast.
-      const tier = node.readinessTier!;
-      const existing = _readinessRings.get(node.id);
-      if (existing) {
-        updateExistingRing(existing, node, tier, camera);
-        continue;
-      }
-      const geom = buildRingGeometry(node.size);
-      const color = readinessTierColor(tier);
-      const mat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(color),
-        transparent: true,
-        opacity: node.opacity * READINESS_RING_OPACITY_FACTOR,
-        depthWrite: false,
-        side: THREE.DoubleSide, // canon F4 — visible from below the canopy
-      });
-      const mesh = new THREE.Mesh(geom, mat);
-      mesh.position.set(...node.position);
-      // Billboard toward camera at build time so the first frame after
-      // rebuildScene paints correctly — the per-frame callback below runs
-      // between `controls.update()` and `renderer.render()` on subsequent
-      // frames, but the first render after a rebuild could paint before
-      // the next animation tick otherwise.
-      if (camera?.position) mesh.lookAt(camera.position);
-      _readinessRingGroup.add(mesh);
-      _readinessRings.set(node.id, {
-        mesh,
-        material: mat,
-        lastTier: tier,
-        lastSize: node.size,
-        domain: node.domain,
-        nodeOpacity: node.opacity,
-        tween: null,
-      });
-    }
-    // The readiness ring group is added to the scene once inside the lazy
-    // `if (!_readinessRingGroup)` block above; it survives subsequent
-    // rebuildScene cycles via userData.persistent.
-
-    // Neural Dust — galaxy-style ambient backdrop (canon F10 + T3.1).
-    // 3000-particle Points cloud uniformly distributed in 300^3 space.
-    // T3.1 uses vertexColors to tint dust based on proximity to domain anchors.
-    if (!_dustPoints) {
-      const DUST_COUNT = 3000;
-      const dustGeo = new THREE.BufferGeometry();
-      const dustPositions = new Float32Array(DUST_COUNT * 3);
-      const dustColors = new Float32Array(DUST_COUNT * 3);
-
-      // Pre-collect structural domains for fast nearest-neighbor lookups
-      const anchors = data.nodes.filter(n => n.state === 'domain');
-
-      for (let i = 0; i < DUST_COUNT; i++) {
-        const x = (Math.random() - 0.5) * 300;
-        const y = (Math.random() - 0.5) * 300;
-        const z = (Math.random() - 0.5) * 300;
-        dustPositions[i * 3] = x;
-        dustPositions[i * 3 + 1] = y;
-        dustPositions[i * 3 + 2] = z;
-
-        // T3.1 Nearest anchor calculation
-        let nearestDist = Infinity;
-        let nearestColorStr = '#88ccff'; // Default cool blue
-        for (const anchor of anchors) {
-          const dx = x - anchor.position[0];
-          const dy = y - anchor.position[1];
-          const dz = z - anchor.position[2];
-          const distSq = dx * dx + dy * dy + dz * dz;
-          if (distSq < nearestDist) {
-            nearestDist = distSq;
-            nearestColorStr = anchor.color;
-          }
-        }
-        
-        // Convert to RGB, with distance attenuation (blend to default blue if far)
-        const baseColor = new THREE.Color(nearestColorStr);
-        const fallbackColor = new THREE.Color(0x88ccff);
-        // If > 80 units away, lerp towards the fallback blue
-        const t = Math.min(Math.max((Math.sqrt(nearestDist) - 30) / 50, 0), 1);
-        baseColor.lerp(fallbackColor, t);
-
-        dustColors[i * 3] = baseColor.r;
-        dustColors[i * 3 + 1] = baseColor.g;
-        dustColors[i * 3 + 2] = baseColor.b;
-      }
-
-      dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
-      dustGeo.setAttribute('color', new THREE.BufferAttribute(dustColors, 3));
-
-      const dustMat = new THREE.PointsMaterial({
-        size: 0.15,
-        transparent: true,
-        opacity: 0.25,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        vertexColors: true,
-      });
-      _dustPoints = new THREE.Points(dustGeo, dustMat);
-      _dustPoints.userData.isNeuralDust = true;
-      _dustPoints.userData.persistent = true;
-      renderer.scene.add(_dustPoints);
-    }
-
-    // Per-frame billboard — one callback iterates all rings, mirroring the
-    // `_removeDomainRotation` pattern. OrbitControls rotates the camera
-    // around the scene, so a one-time lookAt goes stale; re-orient each
-    // frame. Unsubscribe at rebuildScene entry (above) prevents accumulation
-    // and prevents use-after-free on freshly disposed meshes.
-    if (_readinessRings.size > 0) {
-      _removeReadinessBillboard = coordinator.register('camera', () => {
-        if (!camera?.position) return;
-        for (const entry of _readinessRings.values()) {
-          entry.mesh.lookAt(camera.position);
-        }
-      });
-    }
-
-    // Domain rotation: ~1 revolution per 50s at 60fps. Registered through
-    // the AnimationCoordinator in the `ambient` phase (spec §3.2 / §3.5).
-    // rebuildScene cancels the prior registration before re-registering so
-    // the handler array doesn't accumulate across rebuilds — `domainGroups`
-    // is locally scoped here so each rebuild owns a fresh closure.
-    _removeDomainRotation?.();
-    _removeDomainRotation = coordinator.register('ambient', () => {
-      for (const g of domainGroups) {
-        g.rotation.y += 0.002;
-      }
-    });
-
-    // Edge animation pulse — drives uTime uniform on each hierarchical
-    // edge's ShaderMaterial (canon F5). Edges register their uniforms into
-    // _edgeUniforms during the build loop below; this callback advances
-    // _edgeTime ~60Hz and writes it to every registered edge uniform set.
-    _removeEdgeAnim?.();
-    _edgeUniforms = [];
-    _removeEdgeAnim = coordinator.register('ambient', () => {
-      _edgeTime += 0.016;
-      for (const u of _edgeUniforms) {
-        if (u.uTime) u.uTime.value = _edgeTime;
-      }
-    });
-
-    // Neural Dust slow drift (canon F10) — y rotates ~0.0003/frame,
-    // x rotates ~0.0001/frame, giving a perceptible but unobtrusive
-    // parallax that makes the void feel like real volume.
-    _removeDustAnim?.();
-    _removeDustAnim = coordinator.register('ambient', () => {
-      if (_dustPoints) {
-        _dustPoints.rotation.y += 0.0003;
-        _dustPoints.rotation.x += 0.0001;
-      }
-    });
-
-    // Organic breathing oscillation (canon F8) — every cluster mesh's
-    // scale oscillates ±2% via sin wave; hovered clusters amplify to
-    // ±12% (scaleBase * 1.1). Template indicator rings spin + pulse
-    // opacity when hovered. Readiness rings scale to match the cluster.
-    //
-    // Allocation budget: this callback uses _scratchVec3a + Z_AXIS from
-    // the module-level scratch table (canon "Per-Frame Allocation
-    // Budget"). The legacy `new THREE.Vector3()` form is banned — the
-    // perf-budget regression test would fail.
-    _breathingAnim?.();
-    _breathingAnim = coordinator.register('breathing', () => {
-      _breathingTime += 0.016;
-
-      // T3.3 — Beam Impact Camera Micro-Shake
-      if (_cameraShake > 0.001) {
-        if (renderer?.camera) {
-          renderer.camera.rotation.x += (Math.random() - 0.5) * _cameraShake;
-          renderer.camera.rotation.y += (Math.random() - 0.5) * _cameraShake;
-        }
-        _cameraShake *= 0.85; // Exponential decay
-      } else {
-        _cameraShake = 0;
-      }
-
-      for (const [nodeId, mesh] of nodeMeshes) {
-        const node = _sceneNodeMap.get(nodeId);
-        if (!node) continue;
-
-        // T1.1 — Per-node phase offset for desynchronized breathing.
-        // Each cluster oscillates at the same frequency but with a
-        // deterministic phase shift so the colony reads as organic,
-        // not a mechanical grid.
-        const phase = _nodePhaseOffsets.get(nodeId) ?? 0;
-        const scaleBase = Math.sin((_breathingTime + phase) * 1.5) * 0.02 + 1.0;
-
-        // T2.4 — Hover proximity field: clusters near the hovered cluster
-        // receive distance-attenuated breathing amplification. The hovered
-        // cluster itself gets full ±12%, neighbors within PROXIMITY_RADIUS
-        // get a proportional lift, and distant clusters stay at base ±2%.
-        const PROXIMITY_RADIUS = 8.0;
-        const isHovered = (hoveredNodeId === nodeId);
-        let proximityFactor = 0;
-        if (!isHovered && hoveredNodeId) {
-          const hoveredNode = _sceneNodeMap.get(hoveredNodeId);
-          if (hoveredNode) {
-            const dx = node.position[0] - hoveredNode.position[0];
-            const dy = node.position[1] - hoveredNode.position[1];
-            const dz = node.position[2] - hoveredNode.position[2];
-            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            if (dist < PROXIMITY_RADIUS) {
-              // Quadratic falloff — closer = stronger
-              const t = 1 - dist / PROXIMITY_RADIUS;
-              proximityFactor = t * t * 0.6; // max 60% of full hover amplitude
-            }
-          }
-        }
-        const hoverAmplification = isHovered ? 1.1 : (1.0 + 0.1 * proximityFactor);
-        const targetScaleMultiplier = scaleBase * hoverAmplification;
-        const targetScale = node.size * targetScaleMultiplier;
-
-        // Smoothly lerp into the target scale via the canonical scratch
-        // vector (no per-frame Vector3 allocation).
-        mesh.scale.lerp(_scratchVec3a.set(targetScale, targetScale, targetScale), 0.1);
-
-        // Sibling group children (edges, glowing cores) follow the fill.
-        // Using `for...of` instead of `.forEach` avoids per-frame closure
-        // allocation across ~50 cluster meshes × 60fps = ~3000 closures/sec.
-        const parentGroup = mesh.parent;
-        if (parentGroup) {
-          for (const child of parentGroup.children) {
-            if (child !== mesh && child.type !== 'Group') {
-              child.scale.copy(mesh.scale);
-            }
-          }
-        }
-
-        const ring = _readinessRings.get(nodeId);
-        if (ring) {
-          if (isHovered) {
-            ring.mesh.rotateOnAxis(Z_AXIS, 0.02);
-          }
-          ring.mesh.scale.setScalar(targetScaleMultiplier);
-        }
-
-        // T3.4 — Idle Ambient Energy Pulse (canon)
-        // Add a slow, gentle emissive flare to the selected node so it remains
-        // distinct even when the user isn't hovering.
-        const isSelected = clustersStore.selectedClusterId === nodeId;
-        const mat = mesh.material as THREE.MeshStandardMaterial;
-        const baseEmissive = (mesh.userData.baseEmissive as number) ?? mat.emissiveIntensity;
-
-        // Glow state takes full priority: `_tickFlashStates` owns the entire
-        // attack → hold → decay emissive ramp. The breathing loop MUST NOT
-        // touch `mat.emissiveIntensity` while a flash is active, otherwise
-        // the attack-phase ramp (baseline → peak via cubic ease) gets
-        // overwritten and the engulfment burst never reaches bloom threshold
-        // (0.85) for low-baseline clusters (active state, ~0.6 baseline),
-        // making the burst visually invisible for non-mature clusters while
-        // mature/domain clusters with high baseline (~1.1) still look fully
-        // engulfed. Pre-fix the breathing loop ran a blend-OUT formula
-        // (`baseEmissive + idlePulse * blendOut`) during the first 120ms
-        // that decayed *toward* the baseline rather than ramping *up to*
-        // the peak — for active clusters the attack phase stayed sub-bloom
-        // and the entire engulfment effect was barely visible.
-        if (_flashStates.has(nodeId)) {
-          // No-op — `_tickFlashStates` (which runs earlier in the per-frame
-          // callback chain) already set the correct phase-driven value.
-        } else if (impactCoordinator?.isEngulfed(nodeId) && isSelected) {
-          // No-op — `ImpactCoordinator._tick` (registered in the impact
-          // phase, which runs BEFORE breathing per PHASE_ORDER) owns the
-          // post-engulfment idle ambient pulse (canon T3.4) for the
-          // engulfed-selected node. This guard is load-bearing per spec
-          // §3.4 (paired with cleanup-contract.test.ts #8 negative and #12
-          // positive). Without it, the bare `else { = baseEmissive }`
-          // below would overwrite the impact-phase pulse the coordinator
-          // just wrote, producing a flat selection state. Equivalent
-          // runtime coverage: ImpactCoordinator.test.ts §5.1 #17.
-        } else {
-          // Ensure unselected nodes remain at base emissive intensity
-          mat.emissiveIntensity = baseEmissive;
-        }
-
-        // Template indicator ring (canon F3) — opacity oscillates and
-        // rotation spins faster when hovered; resting at opacity 0.35.
-        const templateRing = _templateRingById.get(nodeId);
-        if (templateRing) {
-          const mat = templateRing.material as THREE.MeshBasicMaterial;
-          if (isHovered) {
-            templateRing.rotation.z += 0.02;
-            mat.opacity = 0.35 + Math.sin(_breathingTime * 10.0) * 0.15;
-          } else {
-            mat.opacity = 0.35;
-          }
-          templateRing.scale.setScalar(targetScaleMultiplier);
-        }
-      }
-    });
-
-    // Build node map once — used for edge building, beam targeting, and edge group opacity
+    // ── 6. _sceneNodeMap rebuild ─────────────────────────────────
+    // Required by formation animation, hover-proximity field, beam
+    // targeting — all of which outlive rebuildScene.
     _sceneNodeMap = buildNodeMap(data.nodes);
 
-    // Group hierarchical edges by parent — proximity-suppressed edges excluded.
-    // Persisted in _edgesByParent so the formation animation rebuild can
-    // reconstruct curves from settled positions without re-scanning all edges.
+    // ── 7. _edgesByParent rebuild ────────────────────────────────
+    // Required by formation animation post-completion. Reads bucketed
+    // hierarchical edges by parent id. Persists across rebuilds.
     _edgesByParent = new Map<string, HierEdge[]>();
     for (const edge of data.edges) {
       if (edge.type !== 'hierarchical') continue;
@@ -1488,147 +738,92 @@
       if (!from || !to) continue;
       if (edge.distance != null && edge.distance < EDGE_PROXIMITY_THRESHOLD) continue;
       let bucket = _edgesByParent.get(edge.from);
-      if (!bucket) { bucket = []; _edgesByParent.set(edge.from, bucket); }
-      // T2.3 — Carry child memberCount so buildMergedCurveGeometry can compute
-      // per-vertex alpha for weight-based visual encoding.
+      if (!bucket) {
+        bucket = [];
+        _edgesByParent.set(edge.from, bucket);
+      }
       bucket.push({ from: from.position, to: to.position, memberCount: to.memberCount });
     }
 
-    // Count total children per parent (including proximity-suppressed ones)
-    // so opacity scales by actual density, not by visible-edge count
-    const childCountByParent = new Map<string, number>();
-    for (const edge of data.edges) {
-      if (edge.type !== 'hierarchical') continue;
-      childCountByParent.set(edge.from, (childCountByParent.get(edge.from) ?? 0) + 1);
-    }
-
-    const hierarchicalGroup = new THREE.Group();
-    hierarchicalGroup.userData = { isInterClusterEdgeGroup: true };
-    for (const [parentId, edges] of _edgesByParent) {
-      if (edges.length === 0) continue;
-      const childCount = childCountByParent.get(parentId) ?? 1;
-      const opacity = computeHierarchicalOpacity(childCount);
-      const { positions: curvePositions, indices: curveIndices, alphas: curveAlphas } = buildMergedCurveGeometry(edges);
-
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(curvePositions, 3));
-      // T2.3 — Per-vertex alpha for member-count weight encoding.
-      geo.setAttribute('aAlpha', new THREE.Float32BufferAttribute(curveAlphas, 1));
-      geo.setIndex(curveIndices);
-
-      // Inherit parent domain's color — edges fan out in the domain's hue
-      const parentNode = _sceneNodeMap.get(parentId);
-      const edgeColor = parentNode
-        ? parseInt(parentNode.color.replace('#', ''), 16)
-        : EDGE_COLOR;
-      const uniforms = createEdgeDepthUniforms(edgeColor, opacity);
-      _edgeUniforms.push(uniforms); // canon F5 — driven by _removeEdgeAnim
-      const mat = new THREE.ShaderMaterial({
-        uniforms,
-        vertexShader: EDGE_DEPTH_VERTEX,
-        fragmentShader: EDGE_DEPTH_FRAGMENT,
-        transparent: true,
-        depthWrite: false,
+    // ── 8. Per-rebuild coordinator registrations ─────────────────
+    // Five callbacks that outlive any single builder. Each unsubscribes
+    // the prior registration before re-registering so handler arrays
+    // don't accumulate across rebuilds.
+    const camera = renderer.camera;
+    if (ringBuilder.readinessRingCount() > 0) {
+      _removeReadinessBillboard = coordinator.register('camera', () => {
+        if (!camera?.position) return;
+        for (const id of ringBuilder!.readinessRingIds()) {
+          const entry = ringBuilder!.getReadinessRing(id);
+          if (entry) entry.mesh.lookAt(camera.position);
+        }
       });
-      const lines = new THREE.LineSegments(geo, mat);
-      lines.userData = { isInterClusterEdge: true, baseOpacity: opacity, parentId };
-      hierarchicalGroup.add(lines);
     }
-    renderer.scene.add(hierarchicalGroup);
-
-    // Similarity + injection edges — shared builder, separate groups with toggles
-    similarityEdgeGroup = buildEdgeGroup(data, _sceneNodeMap, {
-      type: 'similarity',
-      color: SIMILARITY_EDGE_COLOR,
-      dashed: true,
-      tag: 'isSimilarityEdge',
-      opacityFn: (edge) => {
-        // Build lookup (bidirectional for undirected similarity edges)
-        if (!_simScoreCache) {
-          _simScoreCache = new Map<string, number>();
-          for (const se of clustersStore.similarityEdges) {
-            _simScoreCache.set(`${se.from_id}:${se.to_id}`, se.similarity);
-            _simScoreCache.set(`${se.to_id}:${se.from_id}`, se.similarity);
-          }
-        }
-        const sim = _simScoreCache.get(`${edge.from}:${edge.to}`) ?? 0.5;
-        return Math.max(0.1, Math.min(0.4, 0.1 + (sim - 0.5) * 0.6));
-      },
+    _removeDomainRotation?.();
+    _removeDomainRotation = coordinator.register('ambient', () => {
+      for (const g of ctx.domainGroups) {
+        g.rotation.y += 0.002;
+      }
     });
-    similarityEdgeGroup.visible = clustersStore.showSimilarityEdges;
-    renderer.scene.add(similarityEdgeGroup);
-
-    injectionEdgeGroup = buildEdgeGroup(data, _sceneNodeMap, {
-      type: 'injection',
-      color: INJECTION_EDGE_COLOR,
-      dashed: false,
-      tag: 'isInjectionEdge',
-      opacityFn: (edge) => {
-        if (!_injWeightCache) {
-          _injWeightCache = { map: new Map<string, number>(), max: 1 };
-          for (const ie of clustersStore.injectionEdges) {
-            const key = `${ie.source_id}:${ie.target_id}`;
-            _injWeightCache.map.set(key, ie.weight);
-            if (ie.weight > _injWeightCache.max) _injWeightCache.max = ie.weight;
-          }
-        }
-        const w = _injWeightCache.map.get(`${edge.from}:${edge.to}`) ?? 1;
-        return Math.max(0.15, Math.min(0.5, 0.15 + (w / _injWeightCache.max) * 0.35));
-      },
+    _removeEdgeAnim?.();
+    _removeEdgeAnim = coordinator.register('ambient', () => {
+      _edgeTime += 0.016;
+      for (const u of _edgeUniforms) {
+        if (u.uTime) u.uTime.value = _edgeTime;
+      }
     });
-    injectionEdgeGroup.visible = clustersStore.showInjectionEdges;
-    renderer.scene.add(injectionEdgeGroup);
+    _removeDustAnim?.();
+    _removeDustAnim = coordinator.register('ambient', () => {
+      // DustBuilder.dustPoints() returns the live THREE.Points or null
+      // (rev-2 accessor). Canon F10 ambient rotation — preserved verbatim
+      // from the pre-extraction handler.
+      const dust = dustBuilder!.dustPoints();
+      if (dust) {
+        dust.rotation.y += 0.0003;
+        dust.rotation.x += 0.0001;
+      }
+    });
+    _breathingAnim?.();
+    _breathingAnim = coordinator.register('breathing', _advanceBreathing);
 
-    // Labels — always visible for small graphs (≤ 8 nodes), near = all, mid = large clusters
+    // ── 9. Label visibility (LOD-driven) ─────────────────────────
     if (labels) {
-      const visibleNodes = data.nodes.filter(n => n.visible);
+      const visibleNodes = data.nodes.filter((n) => n.visible);
       const alwaysShowLabels = visibleNodes.length <= 8;
       const templateSprites: import('three').Sprite[] = [];
-      // Mid-LOD: truncate labels to 14 chars for readability at distance
       const isMid = !alwaysShowLabels && lodTier === 'mid';
       const truncLabel = (text: string) =>
-        isMid && text.length > 14 ? text.slice(0, 14).trimEnd() + '\u2026' : text;
+        isMid && text.length > 14 ? text.slice(0, 14).trimEnd() + '…' : text;
       for (const node of data.nodes) {
         if (!node.visible) continue;
         const sprite = labels.getOrCreate(node.id, truncLabel(node.label), node.color);
         sprite.position.set(node.position[0], node.position[1] + node.size + 0.5, node.position[2]);
-        if (node.state === 'template') {
-          templateSprites.push(sprite);
-        }
+        if (node.state === 'template') templateSprites.push(sprite);
       }
       if (alwaysShowLabels || lodTier === 'near') {
         labels.setVisible(true);
       } else if (isMid) {
-        // Show labels for clusters with 5+ members, domains, and templates at mid zoom
         const midLabelIds = new Set(
           visibleNodes
-            .filter(n => n.state === 'template' || n.state === 'domain' || n.state === 'project' || (flatNodeMap.get(n.id)?.member_count ?? 0) >= 5)
-            .map(n => n.id)
+            .filter(
+              (n) =>
+                n.state === 'template' ||
+                n.state === 'domain' ||
+                n.state === 'project' ||
+                (flatNodeMap.get(n.id)?.member_count ?? 0) >= 5,
+            )
+            .map((n) => n.id),
         );
         labels.setVisibleFor(midLabelIds);
       } else {
         labels.setVisible(false);
       }
-      // Template nodes: labels always visible regardless of LOD or count
-      for (const sprite of templateSprites) {
-        sprite.visible = true;
-      }
-      // labels.group is one-time added in onMount and survives rebuildScene
-      // via userData.persistent (TopologyLabels constructor sets the flag).
+      for (const sprite of templateSprites) sprite.visible = true;
     }
 
-    // Build beam targeting map (node groups for beam target objects)
-    // _sceneNodeMap was already built above (before edges) — no need to rebuild
-    _beamNodeGroups.clear();
-    for (const [nodeId, mesh] of nodeMeshes) {
-      if (mesh?.parent) {
-        _beamNodeGroups.set(nodeId, mesh.parent as THREE.Group);
-      }
-    }
-
-    // Reconcile physics state with actual data-driven node sizes.
-    // Speculative accretion growth may have drifted from real member counts —
-    // setBaseScale snaps physics to the authoritative data on each rebuild.
+    // ── 10. clusterPhysics base-scale reconciliation ─────────────
+    // Speculative accretion growth may have drifted from real member
+    // counts; setBaseScale snaps physics back to the authoritative data.
     if (clusterPhysics) {
       for (const node of data.nodes) {
         if (node.state !== 'domain' && node.state !== 'project') {
@@ -1637,17 +832,10 @@
       }
     }
 
-    // beamPool.group and envelopePool.group are one-time added in onMount and
-    // survive rebuildScene via userData.persistent (set in their constructors).
-    // Active envelopes (still mid-attack/hold/decay) resume rendering on the
-    // next frame because their meshes never moved; the parent group never left.
-
-    // Highlight survival on rebuild (canon F16). If a focusedNodeId exists,
-    // re-apply the cyan highlight so it survives any async rebuildScene
-    // mutation (clicking a node fires getClusterDetail, which can mutate
-    // stateFilter, which rebuilds every node mesh — without this re-apply,
-    // the freshly-recreated mesh has the original domain color, not the
-    // selection cyan).
+    // ── 11. Highlight survival (canon F16) ───────────────────────
+    // Re-apply cyan highlight if a focusedNodeId exists so it survives
+    // async rebuildScene mutations (stateFilter changes that re-fire
+    // the $effect rebuild loop).
     if (focusedNodeId) {
       applyHighlight(focusedNodeId);
     }
@@ -1852,8 +1040,12 @@
           renderer?.scene.traverse((obj) => {
             if (obj.userData?.isInterClusterEdgeGroup) obj.visible = false;
           });
-          if (similarityEdgeGroup) similarityEdgeGroup.visible = false;
-          if (injectionEdgeGroup) injectionEdgeGroup.visible = false;
+          // Sub-project D — similarity/injection groups accessed via
+          // EdgeBuilder accessors instead of module-scope refs.
+          const simGroup = edgeBuilder?.getSimilarityGroup();
+          if (simGroup) simGroup.visible = false;
+          const injGroup = edgeBuilder?.getInjectionGroup();
+          if (injGroup) injGroup.visible = false;
 
           // Galaxy Formation Animation Loop (Lerp to Settled Positions)
           // Capture in const for TypeScript narrowing inside the closure
@@ -1919,9 +1111,11 @@
                 // re-sync (e.g. user zoom — which is exactly the symptom
                 // observed: "I have to zoom in or out for the rings to
                 // position themselves in the correct order and clusters").
-                const templateRing = _templateRingById.get(n.id);
+                // Sub-project D — ring meshes accessed via RingBuilder
+                // accessors instead of module-scope maps.
+                const templateRing = ringBuilder?.getTemplateRing(n.id);
                 if (templateRing) templateRing.position.set(n.position[0], n.position[1], n.position[2]);
-                const ringEntry = _readinessRings.get(n.id);
+                const ringEntry = ringBuilder?.getReadinessRing(n.id);
                 if (ringEntry) {
                   ringEntry.mesh.position.set(n.position[0], n.position[1], n.position[2]);
                 }
@@ -1951,8 +1145,12 @@
                     obj.visible = true;
                   }
                 });
-                if (similarityEdgeGroup) similarityEdgeGroup.visible = clustersStore.showSimilarityEdges;
-                if (injectionEdgeGroup) injectionEdgeGroup.visible = clustersStore.showInjectionEdges;
+                // Sub-project D — similarity/injection groups accessed
+                // via EdgeBuilder accessors.
+                const simGroupAfter = edgeBuilder?.getSimilarityGroup();
+                if (simGroupAfter) simGroupAfter.visible = clustersStore.showSimilarityEdges;
+                const injGroupAfter = edgeBuilder?.getInjectionGroup();
+                if (injGroupAfter) injGroupAfter.visible = clustersStore.showInjectionEdges;
              }
           });
           // Mirror the local const onto the module-scope handle so the
@@ -2067,20 +1265,18 @@
     }
   });
 
-  // Similarity edge visibility toggle
+  // Similarity edge visibility toggle (Sub-project D — accessor)
   $effect(() => {
     const show = clustersStore.showSimilarityEdges;
-    if (similarityEdgeGroup) {
-      similarityEdgeGroup.visible = show;
-    }
+    const simGroup = edgeBuilder?.getSimilarityGroup();
+    if (simGroup) simGroup.visible = show;
   });
 
-  // Injection edge visibility toggle
+  // Injection edge visibility toggle (Sub-project D — accessor)
   $effect(() => {
     const show = clustersStore.showInjectionEdges;
-    if (injectionEdgeGroup) {
-      injectionEdgeGroup.visible = show;
-    }
+    const injGroup = edgeBuilder?.getInjectionGroup();
+    if (injGroup) injGroup.visible = show;
   });
 
   // Optimization event listener — fire immediate beam to assigned cluster
@@ -2192,7 +1388,8 @@
     // the dodecahedron sweep's structure and keeps the shared
     // `DOMAIN_DIM_FACTOR` as the single source of truth.
     for (const node of sceneData.nodes) {
-      const ring = _readinessRings.get(node.id);
+      // Sub-project D — ring entries accessed via RingBuilder accessor.
+      const ring = ringBuilder?.getReadinessRing(node.id);
       if (!ring) continue;
       const dimmed =
         highlightDomain != null && node.domain !== highlightDomain;
@@ -2208,7 +1405,8 @@
       // corrects it on the very next frame. Keep `entry.domain` and
       // `entry.nodeOpacity` fresh so the LOD callback sees the latest inputs
       // when a highlight change lands between rebuild and the next tick.
-      updateRingFrameInputs(ring, node);
+      ring.domain = node.domain;
+      ring.nodeOpacity = node.opacity;
       ring.material.opacity =
         node.opacity * READINESS_RING_OPACITY_FACTOR * ringDimFactor;
     }
@@ -2385,6 +1583,49 @@
       animationCoordinator: coordinator,
     });
 
+    // Sub-project D — 5 scene builders constructed AFTER renderer,
+    // coordinator, impactCoordinator per spec §6.1 #8 + acceptance #12.
+    // `interaction` is constructed earlier in onMount so ClusterBuilder +
+    // DomainBuilder can inject it as a constructor dep — raycast-target
+    // registration co-locates with mesh construction (rev-2 B2).
+    clusterBuilder = new ClusterBuilder(interaction);
+    domainBuilder = new DomainBuilder(interaction);
+    // EdgeOpacityResolvers wire the clustersStore-backed opacity
+    // computations + visibility flags into EdgeBuilder. Caches
+    // (`_simScoreCache` / `_injWeightCache`) are nulled at rebuildScene
+    // entry and lazily reconstructed per build (resolvers close over the
+    // module-level refs, which are stable across rebuilds).
+    const edgeResolvers: EdgeOpacityResolvers = {
+      similarity: (edge) => {
+        if (!_simScoreCache) {
+          _simScoreCache = new Map<string, number>();
+          for (const se of clustersStore.similarityEdges) {
+            _simScoreCache.set(`${se.from_id}:${se.to_id}`, se.similarity);
+            _simScoreCache.set(`${se.to_id}:${se.from_id}`, se.similarity);
+          }
+        }
+        const sim = _simScoreCache.get(`${edge.from}:${edge.to}`) ?? 0.5;
+        return Math.max(0.1, Math.min(0.4, 0.1 + (sim - 0.5) * 0.6));
+      },
+      injection: (edge) => {
+        if (!_injWeightCache) {
+          _injWeightCache = { map: new Map<string, number>(), max: 1 };
+          for (const ie of clustersStore.injectionEdges) {
+            const key = `${ie.source_id}:${ie.target_id}`;
+            _injWeightCache.map.set(key, ie.weight);
+            if (ie.weight > _injWeightCache.max) _injWeightCache.max = ie.weight;
+          }
+        }
+        const w = _injWeightCache.map.get(`${edge.from}:${edge.to}`) ?? 1;
+        return Math.max(0.15, Math.min(0.5, 0.15 + (w / _injWeightCache.max) * 0.35));
+      },
+      similarityVisible: () => clustersStore.showSimilarityEdges,
+      injectionVisible: () => clustersStore.showInjectionEdges,
+    };
+    edgeBuilder = new EdgeBuilder(edgeResolvers);
+    ringBuilder = new RingBuilder();
+    dustBuilder = new DustBuilder();
+
     // CONSOLIDATED onMount animation registrations — strict source order
     // pins the impact-phase ordering required by spec §3.3 + cleanup-contract
     // test #4: beam.update → envelope.update → _tickFlashStates. Followed by
@@ -2417,10 +1658,14 @@
         for (const child of group.children) {
           child.scale.setScalar(scale);
         }
-        const wire = group.children[1];
-        if (wire && (wire as THREE.Mesh).material &&
-            ((wire as THREE.Mesh).material as any).uniforms?.uRipple) {
-          ((wire as THREE.Mesh).material as any).uniforms.uRipple.value = ripple;
+        // Sub-project D — read wire material via ctx-populated map (spec
+        // §3.3 ClusterBuilder + INT-6) instead of group.children[1] index
+        // walk. Locks the architecture improvement: the wire shader's
+        // ripple uniform is resolved by node id from the ClusterBuilder-
+        // populated map synced into module-level state by the orchestrator.
+        const wireMat = _clusterShaderMaterials.get(nodeId);
+        if (wireMat?.uniforms.uRipple) {
+          wireMat.uniforms.uRipple.value = ripple;
         }
       });
     });
@@ -2429,20 +1674,19 @@
     // per frame for readiness rings — it supersedes the dim-sweep `$effect`
     // on every tick based on `renderer.lodTier`. Registered in the `camera`
     // phase per spec §3.2 — camera phase runs after ambient so the LOD-driven
-    // opacity is the last write before render. Iterating an empty
-    // `_readinessRings` is O(0) — safe when no rings exist.
+    // opacity is the last write before render. Iterating zero ring ids is
+    // O(0) — safe when no rings exist (Sub-project D — RingBuilder accessor).
     coordinator.register('camera', () => {
+      if (!ringBuilder) return;
       const lodFactor = READINESS_LOD_OPACITY[renderer!.lodTier];
       // NOT a reactive read: this callback runs inside requestAnimationFrame
       // via the AnimationCoordinator's single subscription to renderer's
       // tick loop, OUTSIDE any Svelte `$effect` or `$derived` tracking
-      // scope. Reading `clustersStore.highlightedDomain` here is a plain
-      // getter — no subscription is installed and no effect re-runs when
-      // it changes. The per-frame tick is what keeps the visual in sync;
-      // the dim-sweep `$effect` above handles the same-frame first-paint
-      // case when a highlight toggles.
+      // scope.
       const highlighted = clustersStore.highlightedDomain;
-      for (const entry of _readinessRings.values()) {
+      for (const id of ringBuilder.readinessRingIds()) {
+        const entry = ringBuilder.getReadinessRing(id);
+        if (!entry) continue;
         const dimFactor =
           highlighted != null && entry.domain !== highlighted
             ? DOMAIN_DIM_FACTOR
@@ -2535,52 +1779,42 @@
       _edgeUniforms = [];
       _removeDustAnim = null;
       _breathingAnim = null;
-      // Neural Dust geometry + material are released alongside the renderer
-      // in the scene.traverse below. Note: `_dustPoints` is component-scoped
-      // (Svelte 5 `let` inside the script) so a remount starts with a fresh
-      // null reference — the 3000-particle BufferGeometry is rebuilt on
-      // first rebuildScene of the new instance. This is fast (~milliseconds)
-      // and avoids cross-instance ownership confusion.
 
       // Canon F2 — dispose the radial-gradient CanvasTexture cache so a
-      // future remount rebuilds it cleanly. Also reset the build sentinel.
-      const glowTex = (globalThis as any).__semTopGlowTexture as
-        | THREE.CanvasTexture
-        | undefined;
+      // future remount rebuilds it cleanly. DomainBuilder constructs the
+      // texture on first build but the cleanup contract for the global
+      // handle stays here (component-lifetime owner). Mirrors
+      // cleanup-contract.test.ts canon F2 assertions.
+      const glowTex = (globalThis as { __semTopGlowTexture?: THREE.CanvasTexture })
+        .__semTopGlowTexture;
       if (glowTex && typeof glowTex.dispose === 'function') {
         glowTex.dispose();
       }
-      (globalThis as any).__semTopGlowTexture = undefined;
-      _glowTextureBuilt = false;
-      // Cancel in-flight tier tweens before disposing materials (use-after-free guard).
-      for (const entry of _readinessRings.values()) {
-        disposeRingEntry(entry);
-      }
-      _readinessRings.clear();
-      if (_readinessRingGroup) {
-        // `renderer?.` is the null-renderer guard: if `onMount` aborted
-        // after `_readinessRingGroup` was created but before the
-        // renderer was fully initialized (rare but possible in test
-        // environments), `renderer` may be null here and `.scene.remove`
-        // would throw. The group itself still gets cleared below so
-        // it's GC-eligible; leaking a THREE.Group detached from any
-        // scene is a no-op since all its children are already disposed.
-        renderer?.scene.remove(_readinessRingGroup);
-        _readinessRingGroup = null;
-      }
-      // Clear active-template-ring state on unmount. The pool arrays themselves are
-      // retained (high-water mark) so a quick remount doesn't re-allocate.
-      _templateRingById.clear();
-      _freeTemplateRings.length = 0;
-      // Return all pool meshes to the free list for potential reuse on remount.
-      for (const m of _templateRingPool) {
-        m.visible = false;
-        _freeTemplateRings.push(m);
-      }
-      if (_templateRingGroup) {
-        renderer?.scene.remove(_templateRingGroup);
-        _templateRingGroup = null;
-      }
+      (globalThis as { __semTopGlowTexture?: THREE.CanvasTexture })
+        .__semTopGlowTexture = undefined;
+
+      // Sub-project D — Builder disposes between coordinator.dispose()
+      // (per-frame handlers stopped) + pool disposes (no races with beam
+      // termination cleanup). RingBuilder.dispose() releases readiness +
+      // template ring state (replaces the prior readiness-ring entry
+      // loop + template-ring pool reset). DustBuilder.dispose() releases
+      // the dust Points (replaces
+      // the prior `_dustPoints` cleanup which relied on scene.traverse).
+      // ClusterBuilder + DomainBuilder + EdgeBuilder dispose are mostly no-ops
+      // (their groups are ephemeral; cleanupScene handles them on the next
+      // rebuild) but pin the SceneBuilder contract.
+      clusterBuilder?.dispose();
+      clusterBuilder = null;
+      domainBuilder?.dispose();
+      domainBuilder = null;
+      edgeBuilder?.dispose();
+      edgeBuilder = null;
+      ringBuilder?.dispose();
+      ringBuilder = null;
+      dustBuilder?.dispose();
+      dustBuilder = null;
+      _clusterShaderMaterials.clear();
+
       ro.disconnect();
       interaction?.dispose();
       labels?.dispose();

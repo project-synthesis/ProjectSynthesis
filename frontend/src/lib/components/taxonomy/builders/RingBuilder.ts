@@ -170,6 +170,15 @@ export class RingBuilder implements SceneBuilder {
     this._pruneReadinessRings(data.nodes);
     this._syncTemplateRings(data.nodes);
     this._syncReadinessRings(data.nodes);
+    // Re-publish the dev-only template-ring-pool hook each build (Sub-project
+    // D — preserves the pre-extraction test surface that `__semTopTemplateRingPool`
+    // exposed from SemanticTopology.svelte). Tests read `.length` to verify
+    // high-water-mark growth + retention. Re-assigned each call so a remount
+    // observes the current builder instance's pool, not a stale closure.
+    if (import.meta.env.MODE === 'test') {
+      (globalThis as { __semTopTemplateRingPool?: THREE.Mesh[] }).__semTopTemplateRingPool =
+        this._templateRingPool;
+    }
   }
 
   /**

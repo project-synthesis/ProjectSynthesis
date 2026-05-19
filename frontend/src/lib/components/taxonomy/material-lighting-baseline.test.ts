@@ -52,7 +52,12 @@
 import { describe, expect, test } from 'vitest';
 
 const sourceMap = import.meta.glob<string>(
-  ['./SemanticTopology.svelte', './TopologyRenderer.ts'],
+  [
+    './SemanticTopology.svelte',
+    './TopologyRenderer.ts',
+    './builders/ClusterBuilder.ts',
+    './builders/RingBuilder.ts',
+  ],
   { query: '?raw', import: 'default', eager: true },
 );
 
@@ -67,21 +72,15 @@ function readSource(name: string): string {
 
 describe('Material baseline — cluster fill uses MeshStandardMaterial', () => {
   test('cluster fillMat is constructed via new THREE.MeshStandardMaterial', () => {
-    const src = readSource('SemanticTopology.svelte');
-    // Match the cluster-fill creation block. The pattern looks like:
-    //   const fillMat = new THREE.MeshStandardMaterial({ ... });
-    // Permissive whitespace; binding name MUST be `fillMat` to disambiguate
-    // from the readiness ring's `mat` (which legitimately stays Basic).
+    // Sub-project D — cluster fill construction migrated to ClusterBuilder.ts.
+    const src = readSource('builders/ClusterBuilder.ts');
     expect(src).toMatch(
       /const\s+fillMat\s*=\s*new\s+THREE\.MeshStandardMaterial\s*\(\s*\{/,
     );
   });
 
   test('cluster fillMat config sets roughness 0.6, metalness 0.0, emissive, emissiveIntensity', () => {
-    const src = readSource('SemanticTopology.svelte');
-    // Slice the fillMat constructor body (balanced-brace walk from the
-    // `new THREE.MeshStandardMaterial({` open). Catches reordering, comments,
-    // additional properties, etc.
+    const src = readSource('builders/ClusterBuilder.ts');
     const startMatch = src.match(/const\s+fillMat\s*=\s*new\s+THREE\.MeshStandardMaterial\s*\(\s*\{/);
     expect(startMatch).not.toBeNull();
     if (!startMatch) return;
@@ -99,57 +98,41 @@ describe('Material baseline — cluster fill uses MeshStandardMaterial', () => {
     // Brand reference: roughness 0.6 (matte, no specular), metalness 0.0.
     expect(body).toMatch(/roughness\s*:\s*0\.6/);
     expect(body).toMatch(/metalness\s*:\s*0(?:\.0+)?/);
-    // emissive: must be set. The driver is the domain hex (same as `color`).
     expect(body).toMatch(/emissive\s*:/);
-    // emissiveIntensity: must be set as either a labeled property
-    // (`emissiveIntensity: <expr>`) or via property-shorthand
-    // (`emissiveIntensity,` or `emissiveIntensity\n}`). Driver must be data —
-    // typically a function call or arithmetic on memberCount / avgScore.
     expect(body).toMatch(/emissiveIntensity\s*[:,}\n]/);
   });
 
   test('cluster fill mesh sets castShadow = true', () => {
-    const src = readSource('SemanticTopology.svelte');
-    // Look for `fill.castShadow = true` on the cluster-fill mesh. This is
-    // the production line (search around the `const fill = new THREE.Mesh(fillGeo, fillMat)`
-    // construction).
+    const src = readSource('builders/ClusterBuilder.ts');
     expect(src).toMatch(/fill\.castShadow\s*=\s*true/);
   });
 });
 
 describe('Material baseline — banner-overlay rings stay MeshBasicMaterial', () => {
   test('readiness ring uses MeshBasicMaterial with depthWrite:false (spec § 3.7 carve-out)', () => {
-    const src = readSource('SemanticTopology.svelte');
-    // The readiness ring is a banner overlay sitting OVER the cluster
-    // dodecahedron silhouette with `depthWrite: false` to avoid z-fighting.
-    // It is NOT a 3D shaded sphere, so MeshStandardMaterial would be wrong.
-    // Anchor on the unique property `depthWrite: false` near the
-    // `MeshBasicMaterial` construction — matches the readiness-ring block
-    // at line ~855 and would NOT match if a future change converted the
-    // readiness ring to MeshStandardMaterial (which would drop the
-    // MeshBasicMaterial line, no longer adjacent to depthWrite).
+    // Sub-project D — readiness ring construction migrated to RingBuilder.ts.
+    const src = readSource('builders/RingBuilder.ts');
     expect(src).toMatch(
       /new\s+THREE\.MeshBasicMaterial\s*\([\s\S]*?depthWrite\s*:\s*false[\s\S]*?\}\s*\)/,
     );
   });
 
   test('template ring uses MeshBasicMaterial with cyan literal 0x00e5ff (spec § 3.7 carve-out)', () => {
-    const src = readSource('SemanticTopology.svelte');
-    // The cyan template indicator ring sits around mature templated
-    // clusters. Like the readiness ring, it is a banner overlay rather
-    // than a 3D shaded sphere. Anchor on the cyan color literal `0x00e5ff`
-    // adjacent to the `MeshBasicMaterial` construction.
+    // Sub-project D — template ring construction migrated to RingBuilder.ts.
+    // RingBuilder defines a `TEMPLATE_RING_COLOR = 0x00e5ff` module-scope
+    // constant and references it in the material constructor; verify
+    // both (a) the cyan hex literal is defined in the file, AND
+    // (b) the material constructor references it.
+    const src = readSource('builders/RingBuilder.ts');
+    expect(src).toMatch(/0x00e5ff/);
     expect(src).toMatch(
-      /new\s+THREE\.MeshBasicMaterial\s*\([\s\S]*?color\s*:\s*0x00e5ff[\s\S]*?\}\s*\)/,
+      /new\s+THREE\.MeshBasicMaterial\s*\([\s\S]*?color\s*:\s*(?:0x00e5ff|TEMPLATE_RING_COLOR)[\s\S]*?\}\s*\)/,
     );
   });
 
   test('exactly two MeshBasicMaterial constructions remain in source', () => {
-    const src = readSource('SemanticTopology.svelte');
-    // Spec § 3.7 + § 4.5 + § 4.8: cluster fills + domain anchors swap to
-    // MeshStandardMaterial. The only surviving Basic constructions are the
-    // two banner-overlay rings (template + readiness). If a third Basic
-    // appears, something else dropped out of the standard-material swap.
+    // Sub-project D — both Basic-material rings live in RingBuilder.ts.
+    const src = readSource('builders/RingBuilder.ts');
     const matches = src.match(/new\s+THREE\.MeshBasicMaterial\s*\(/g) ?? [];
     expect(matches.length).toBe(2);
   });
