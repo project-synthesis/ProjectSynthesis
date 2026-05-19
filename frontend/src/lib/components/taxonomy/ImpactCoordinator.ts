@@ -1,9 +1,13 @@
 // frontend/src/lib/components/taxonomy/ImpactCoordinator.ts
 //
 // Sub-project C — single source for the canon F7→F19→F9 impact chain.
-// Sub-project E (Cycle 3 GREEN) — shrunken API: selection-engulfed
-// bookkeeping + T3.4 idle pulse moved to SelectionController. IC now
-// routes the `marksEngulfed` branch through `deps.selectionController.onImpact`.
+// Sub-project E §3.4 — shrunken API: selection lifecycle is owned
+// entirely by SelectionController. IC no longer carries
+// engulfed-set / idle-pulse / per-frame tick / SELECTION_EMISSIVE_FLOOR
+// state. The `marksEngulfed` branch of the 'click' trigger routes the
+// impacted node id through `deps.selectionController.onImpact(id)`
+// inside the beam's onImpact callback body (so the SC owns the
+// post-impact transition into the 'engulfed' state).
 //
 // Spec: docs/superpowers/specs/2026-05-17-impact-coordinator-design.md
 //       docs/superpowers/specs/2026-05-18-selection-state-machine-design.md §3.4
@@ -22,6 +26,12 @@
 //   - Causal-ordering invariant: all F19 reactions (envelope, flash, physics)
 //     fire inside the BeamPool onImpact callback body, never synchronously
 //     with acquire. Pinned at source level by source-grep test #6.
+//   - No per-frame role: IC has no animation tick of its own. Selection
+//     idle-pulse lives on `SelectionController._tickIdlePulse`, registered
+//     with the AnimationCoordinator there.
+//   - No selection state of its own: there is no `_selectionEngulfed`
+//     set + no `isEngulfed`/`clearEngulfed` API on IC anymore. Callers
+//     read engulfed state from `SelectionController.isEngulfed(id)`.
 
 import * as THREE from 'three';
 import type { BeamPool } from './BeamPool';
@@ -143,6 +153,21 @@ export interface ImpactCoordinatorDeps {
   selectionController: SelectionController;
 }
 
+/**
+ * ImpactCoordinator triggers the canonical F7→F19 reaction chain on
+ * exactly four trigger events: entrance, post-growth, optimization,
+ * click. Per-trigger visual parameters are pinned in
+ * {@link TRIGGER_PRESETS}.
+ *
+ * Selection lifecycle is owned by SelectionController (Sub-project E):
+ * the 'click' trigger's `marksEngulfed === true` branch routes the
+ * impacted node id through `selectionController.onImpact(id)` from
+ * inside the beam's onImpact callback body (post-causal-arrival). IC
+ * itself holds no selection state, no engulfed-set, and no per-frame
+ * tick — it is a stateless coordinator that exists between
+ * SemanticTopology call-sites and the BeamPool/EnvelopePool/Flash
+ * primitives.
+ */
 export class ImpactCoordinator {
   private _deps: ImpactCoordinatorDeps;
   private _disposed = false;
@@ -154,15 +179,28 @@ export class ImpactCoordinator {
   /**
    * Fire a canonical impact chain: beam acquire → onImpact callback →
    * (optional) clusterPhysics kinetic shake + envelope acquire + emissive
-   * flash + selection-engulfment routing. Per-trigger parameters from
-   * `TRIGGER_PRESETS[request.trigger]`.
+   * flash + (only for 'click') selection routing through
+   * `deps.selectionController.onImpact(nodeId)`. Per-trigger parameters
+   * come from `TRIGGER_PRESETS[request.trigger]`.
+   *
+   * Selection routing path (`preset.marksEngulfed === true`, currently
+   * only the 'click' trigger): inside the onImpact callback, after
+   * envelope+flash have been queued, IC calls
+   * `deps.selectionController.onImpact(freshNode.id)`. The SC's
+   * `onImpact` is responsible for transitioning from `selected-armed`
+   * into `engulfed` and starting the post-decay idle pulse — IC does
+   * NOT manipulate any selection state itself. If the SC is in an
+   * unrelated state when the impact lands (e.g. selection cleared
+   * mid-flight), the SC silently no-ops; IC stays unaware.
    *
    * Lenient on disposed: returns silently if `dispose()` was called.
    *
    * Causal-ordering invariant (canon F7): all F19 reactions live inside
    * the onImpact callback body, never synchronously here. The beam takes
    * ~700ms to travel; firing reactions synchronously would render them
-   * before the beam arrives.
+   * before the beam arrives. The same invariant applies to the SC
+   * routing call — `selectionController.onImpact` MUST be invoked
+   * inside the onImpact closure, not at fire() entry.
    */
   fire(request: ImpactRequest): void {
     if (this._disposed) return;
