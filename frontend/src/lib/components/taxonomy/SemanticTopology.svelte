@@ -17,7 +17,7 @@
   import * as THREE from 'three';
   import { triggerRecluster } from '$lib/api/clusters';
   import { addToast } from '$lib/stores/toast.svelte';
-  import { stateColor, HIGHLIGHT_COLOR_HEX, SIMILARITY_EDGE_COLOR_HEX } from '$lib/utils/colors';
+  import { HIGHLIGHT_COLOR_HEX } from '$lib/utils/colors';
   import { parsePrimaryDomain } from '$lib/utils/formatting';
   import type { ClusterNode } from '$lib/api/clusters';
   import { BeamPool } from './BeamPool';
@@ -70,11 +70,11 @@
   // `prefersReducedMotion` + `_CUBIC` migrated to RingBuilder.ts. The
   // readiness-ring tier-tween RAF chain is now owned by RingBuilder.
 
-  // Resolved at module level to avoid per-frame allocations
+  // Resolved at module level to avoid per-frame allocations.
+  // Sub-project D — EDGE_COLOR / SIMILARITY_EDGE_COLOR / INJECTION_EDGE_COLOR
+  // were consumed only by the deleted buildEdgeGroup helper; EdgeBuilder.ts
+  // owns its own copies now. HIGHLIGHT_COLOR remains for applyHighlight.
   const HIGHLIGHT_COLOR = parseInt(HIGHLIGHT_COLOR_HEX.replace('#', ''), 16);
-  const EDGE_COLOR = parseInt(stateColor('archived').replace('#', ''), 16);
-  const SIMILARITY_EDGE_COLOR = parseInt(SIMILARITY_EDGE_COLOR_HEX.replace('#', ''), 16);
-  const INJECTION_EDGE_COLOR = 0xff9500; // warm gold/amber
 
   // Sub-project D — Ring radius/thickness/segments constants migrated
   // to RingBuilder.ts. `READINESS_RING_OPACITY_FACTOR` stays here because
