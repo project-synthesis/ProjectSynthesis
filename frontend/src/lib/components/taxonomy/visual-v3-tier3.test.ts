@@ -21,6 +21,8 @@ const sourceMap = import.meta.glob<string>(
     './ImpactCoordinator.ts',
     // Sub-project D — Neural Dust migrated to DustBuilder.ts.
     './builders/DustBuilder.ts',
+    // Sub-project E — T3.4 idle pulse migrated to SelectionController.
+    './SelectionController.ts',
   ],
   { query: '?raw', import: 'default', eager: true },
 );
@@ -103,17 +105,19 @@ describe('T3.4 — Idle Ambient Energy Pulse', () => {
     expect(src).toMatch(/const\s+isSelected\s*=\s*.* === nodeId/);
   });
 
-  test('idle pulse computes slow sine wave (post-Sub-project-C: extracted to ImpactCoordinator._tick)', () => {
-    const src = read('ImpactCoordinator.ts');
+  test('idle pulse computes slow sine wave (post-Sub-project-E: migrated to SelectionController._tickIdlePulse)', () => {
+    const src = read('SelectionController.ts');
     // Period should be slower than the 1.5 multiplier used for breathing.
-    // Post-Sub-project-C the pulse accumulator is `_pulseTime` (real-time
-    // delta-driven) instead of `_breathingTime` (fixed-step). Frequency
-    // multiplier stays in the [0.2, 0.8] band.
+    // Post-Sub-project-C the pulse accumulator was `_pulseTime` on
+    // ImpactCoordinator; post-Sub-project-E it migrated to
+    // `SelectionController._tickIdlePulse` (state-machine-owned per spec
+    // §3.5 B1). The accumulator name + frequency band [0.2, 0.8] survive
+    // the migration verbatim.
     expect(src).toMatch(/Math\.sin\(\s*this\._pulseTime\s*\*\s*0\.[2-8]\s*\)/);
   });
 
-  test('idle pulse adds to the target emissiveIntensity (post-Sub-project-C: in ImpactCoordinator._tick)', () => {
-    const src = read('ImpactCoordinator.ts');
+  test('idle pulse adds to the target emissiveIntensity (post-Sub-project-E: in SelectionController._tickIdlePulse)', () => {
+    const src = read('SelectionController.ts');
     expect(src).toMatch(/emissiveIntensity\s*=\s*[\s\S]*?idlePulse/);
   });
 });
