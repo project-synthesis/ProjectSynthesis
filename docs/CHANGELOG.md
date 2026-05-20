@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.30 — 2026-05-20
+
 ### Added
 
 - **T3.3 drill-into-cluster**: `POST /api/clusters/{id}/drill` REST endpoint + `synthesis_drill_into_cluster(cluster_id, topic)` MCP tool launch a new focused `topic_probe` run from an existing cluster. New `RunRow.source_cluster_id` FK column records provenance (`ondelete=SET NULL`). `SeedOutput` schema gains `clusters: list[SeedClusterRef]` exposing per-cluster `{id, label, domain, task_type}` from completed seed runs (flowed via `batch_taxonomy_assign` summary). `DrillIntoClusterModal` + `DrillButton` Svelte components add a per-cluster Drill action to seed-run results (`SeedModal.svelte`). Third sub-feature of the Probe Tier 3 decomposition (v0.4.28-v0.4.31). Spec: `docs/superpowers/specs/2026-05-19-v0.4.30-t3.3-drill-into-cluster-design.md`.
