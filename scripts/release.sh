@@ -104,11 +104,51 @@ fi
 echo "  ✓ Preflight passed"
 
 # ---------------------------------------------------------------------------
-# 2c. Release-gate check (T3.1 stub — full implementation in Task 2 GREEN)
+# 2c. Release-gate check — block release if any is_release_gate=True suite
+#     is currently in alarm_state='firing'. Skipped if --skip-release-gates
+#     flag passed.
 #     Spec: docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md §3.3
 # ---------------------------------------------------------------------------
 CURRENT_STEP="preflight (release gates)"
-echo "  ⚠ Release-gate preflight stub — full check lands in Task 2"
+if $SKIP_RELEASE_GATES; then
+    echo "  ⚠ Release gates SKIPPED via --skip-release-gates flag"
+else
+    if ! command -v jq &>/dev/null; then
+        echo "  ✗ jq not installed; install jq or use --skip-release-gates"
+        exit 1
+    fi
+
+    # Capture curl output + exit code separately so set -euo pipefail doesn't
+    # mask a network failure. The `if !` pattern is unambiguous under errexit:
+    # the command-substitution exit code propagates through the assignment to
+    # the conditional, no errexit interaction needed.
+    if ! GATES_JSON=$(curl -sS --max-time 10 "http://localhost:8000/api/suites/release-gates"); then
+        echo "  ✗ Backend not reachable at localhost:8000; start backend or use --skip-release-gates"
+        exit 1
+    fi
+
+    # Defensive jq pass to verify well-formed JSON array; failure here
+    # surfaces a non-JSON response (e.g., HTML 500 page) with a useful error.
+    if ! echo "$GATES_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        echo "  ✗ Backend returned malformed response (expected JSON array)"
+        echo "    Response head: $(echo "$GATES_JSON" | head -c 200)"
+        exit 1
+    fi
+
+    FAILING=$(echo "$GATES_JSON" | jq -c '[.[] | select(.alarm_state == "firing")]')
+    FAILING_COUNT=$(echo "$FAILING" | jq 'length')
+    GATES_COUNT=$(echo "$GATES_JSON" | jq 'length')
+
+    if [[ "$FAILING_COUNT" -gt 0 ]]; then
+        echo "  ✗ Release gates FAILED ($FAILING_COUNT suite(s) firing):"
+        echo "$FAILING" | jq -r '.[] | "    - \(.label) (\(.suite_id)): firing, baseline_mean=\(.baseline_mean), latest_mean=\(.latest_mean), delta_abs=\(.delta_abs), latest_replay_at=\(.latest_replay_at)"'
+        echo ""
+        echo "  Fix the regressions (re-run replays, address scoring drift) OR run with --skip-release-gates"
+        exit 1
+    fi
+
+    echo "  ✓ Release gates passed ($GATES_COUNT gate(s) checked)"
+fi
 
 # ---------------------------------------------------------------------------
 # 2b. Dry-run exits here — below this point we mutate files/commits/remote.

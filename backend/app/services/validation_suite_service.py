@@ -1248,14 +1248,75 @@ class ValidationSuiteService:
 
         Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.2.
         """
-        raise NotImplementedError("RED phase — implement in GREEN")
+        async with _database_mod.async_session_factory() as db:
+            suite = await db.get(ValidationSuite, suite_id)
+            if suite is None:
+                raise ValueError("suite_not_found")
+            suite.is_release_gate = enabled
+            await db.commit()
+            await db.refresh(suite)
+            return suite
 
     async def list_release_gates(self) -> "list[ReleaseGatedSuiteOut]":
         """Return active flagged suites + their alarm_state.
 
+        Calls ``self.compute_regression_alarm()`` once; indexes
+        ``block.latest_alarms`` by ``suite_id``; emits one
+        ``ReleaseGatedSuiteOut`` per flagged active suite. Empty list when no
+        suites flagged.
+
+        Filters out retired suites (``retired_at IS NOT NULL``) — gate-checking
+        a retired suite is meaningless. Optimization: when no suites are
+        flagged, ``compute_regression_alarm()`` is NOT called.
+
         Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.2.
         """
-        raise NotImplementedError("RED phase — implement in GREEN")
+        # Load active flagged suites
+        async with _database_mod.async_session_factory() as db:
+            stmt = (
+                select(ValidationSuite)
+                .where(ValidationSuite.is_release_gate.is_(True))
+                .where(ValidationSuite.retired_at.is_(None))
+                .order_by(ValidationSuite.label.asc())
+            )
+            result = await db.execute(stmt)
+            flagged = list(result.scalars().all())
+
+        if not flagged:
+            return []
+
+        # One alarm call covers all suites (TTL-cached, ~30s)
+        block = await self.compute_regression_alarm()
+        firing_index = {entry.suite_id: entry for entry in block.latest_alarms}
+
+        out: list[ReleaseGatedSuiteOut] = []
+        for suite in flagged:
+            entry = firing_index.get(suite.id)
+            if entry is not None:
+                out.append(
+                    ReleaseGatedSuiteOut(
+                        suite_id=suite.id,
+                        label=suite.label,
+                        alarm_state="firing",
+                        baseline_mean=entry.baseline_mean,
+                        latest_mean=entry.latest_mean,
+                        delta_abs=entry.delta_abs,
+                        latest_replay_at=entry.latest_replay_at,
+                    ),
+                )
+            else:
+                out.append(
+                    ReleaseGatedSuiteOut(
+                        suite_id=suite.id,
+                        label=suite.label,
+                        alarm_state="nominal",
+                        baseline_mean=None,
+                        latest_mean=None,
+                        delta_abs=None,
+                        latest_replay_at=None,
+                    ),
+                )
+        return out
 
 
 def _suite_list_item_from_orm(row: ValidationSuite) -> ValidationSuiteListItem:
