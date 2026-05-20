@@ -24,7 +24,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, List
 
 from sqlalchemy import Select, func, select, update
 
@@ -1257,7 +1257,7 @@ class ValidationSuiteService:
             await db.refresh(suite)
             return suite
 
-    async def list_release_gates(self) -> "list[ReleaseGatedSuiteOut]":
+    async def list_release_gates(self) -> List[ReleaseGatedSuiteOut]:  # noqa: UP006 — sibling method `list` (line 821) shadows builtin `list` in class scope; mypy can't resolve `list[...]` here
         """Return active flagged suites + their alarm_state.
 
         Calls ``self.compute_regression_alarm()`` once; indexes
