@@ -39,7 +39,7 @@ import contextlib
 import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +49,9 @@ from app.schemas.runs import RunRequest
 from app.services.generators.base import GeneratorResult, RunGenerator
 from app.services.probe_common import current_run_id
 from app.services.write_queue import WriteQueue
+
+if TYPE_CHECKING:
+    from app.services.seed_agent_promoter import SeedAgentPromoter
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +108,16 @@ class RunOrchestrator:
 
     def __init__(
         self,
+        *,
         write_queue: WriteQueue,
         generators: dict[str, RunGenerator],
+        seed_agent_promoter: "SeedAgentPromoter | None" = None,  # T3.2 (v0.4.29)
     ) -> None:
         self._write_queue = write_queue
         self._generators = generators
+        # T3.2: lazy default avoids forcing every test fixture to construct one.
+        # Production (lifespan) supplies an explicit instance.
+        self._seed_agent_promoter = seed_agent_promoter  # may be None in tests
 
     async def run(
         self,
@@ -403,6 +411,16 @@ class RunOrchestrator:
         try:
             try:
                 await self._run_generator_and_persist(mode, request, run_id)
+                # T3.2 (v0.4.29 spec §3.2): dispatch auto-promotion as
+                # fire-and-forget AFTER successful generator+persist. Failures
+                # inside _dispatch_promotion are logged but never propagate.
+                # Gated on mode='topic_probe' here; the promoter gates on
+                # status='completed' + threshold + opt-in via a fresh row read.
+                if mode == "topic_probe" and self._seed_agent_promoter is not None:
+                    asyncio.create_task(
+                        self._dispatch_promotion(run_id),
+                        name=f"seed-agent-promoter-{run_id}",
+                    )
             except asyncio.CancelledError as exc:
                 # Shielded cleanup write — terminal status reaches DB
                 # even if the dispatching caller's task is cancelled.
@@ -525,6 +543,10 @@ class RunOrchestrator:
         (defaulting to ``"codebase"`` when absent) so future grounding
         strategies (``"none"``, ``"manual"``, ...) can be stored without
         a schema migration.
+
+        T3.2 (v0.4.29 spec §3.1): ``suggested_agent_name`` opts the probe
+        into auto-promotion at completion time. Persisted as-is from the
+        request payload; the promoter validates the slug shape before use.
         """
         if mode != "topic_probe":
             return None
@@ -534,6 +556,7 @@ class RunOrchestrator:
             "grounding_mode": request.payload.get(
                 "grounding_mode", "codebase",
             ),
+            "suggested_agent_name": request.payload.get("suggested_agent_name"),
         }
 
     @staticmethod
@@ -550,6 +573,26 @@ class RunOrchestrator:
             "tier": request.payload.get("tier"),
             "estimated_cost_usd": request.payload.get("estimated_cost_usd"),
         }
+
+    async def _dispatch_promotion(self, run_id: str) -> None:
+        """Wrap SeedAgentPromoter.maybe_promote with try/except so promoter
+        failures cannot escape and be observed elsewhere.
+
+        Spec: ``docs/superpowers/specs/2026-05-19-v0.4.29-t3.2-t3.5-design.md`` §3.2.
+        """
+        if self._seed_agent_promoter is None:
+            return
+        try:
+            result = await self._seed_agent_promoter.maybe_promote(run_id)
+            if result.written:
+                logger.info(
+                    "Seed-agent promotion: wrote %s for run %s (examples=%d)",
+                    result.path, run_id, result.examples_count,
+                )
+            elif result.skipped_reason not in {"below_threshold", "no_agent_name", "already_promoted"}:
+                logger.info("Seed-agent promotion skipped for run %s: %s", run_id, result.skipped_reason)
+        except Exception as exc:  # noqa: BLE001 — fire-and-forget; never propagate
+            logger.warning("Seed-agent promotion failed for run %s: %s", run_id, exc)
 
     async def _set_run_status(
         self, run_id: str, status: str, **fields: Any,

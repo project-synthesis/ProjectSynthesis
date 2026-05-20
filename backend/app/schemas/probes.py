@@ -112,6 +112,15 @@ class ProbeRunRequest(BaseModel):
     n_prompts: int | None = Field(default=None, ge=5, le=25)
     repo_full_name: str | None = None  # if None, server may resolve from session
     grounding_mode: Literal["codebase", "topic_only"] = "codebase"
+    suggested_agent_name: str | None = Field(  # T3.2 opt-in (spec §3.5)
+        default=None,
+        max_length=60,
+        description=(
+            "If set + matches slug regex ^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$ "
+            "AND aggregate.mean_overall >= AUTO_PROMOTE_THRESHOLD on completion, "
+            "auto-promotes this probe to prompts/seed-agents/<suggested_agent_name>.md."
+        ),
+    )
 
 
 class ProbePromptResult(BaseModel):
