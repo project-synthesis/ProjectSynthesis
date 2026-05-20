@@ -20,7 +20,6 @@ from httpx import AsyncClient
 from app.models import RunRow, ValidationSuite
 from app.services.validation_suite_service import ValidationSuiteService
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -154,7 +153,10 @@ async def test_list_release_gates_filters_to_active_flagged(
         id="s-flagged-active",
         source_run_id=None,
         prompts_snapshot=[],
-        baseline_scores={"mean_overall": 7.0, "p5_overall": 5.0, "p50_overall": 7.0, "p95_overall": 9.0, "per_prompt": [], "task_type_distribution": {}},
+        baseline_scores={
+            "mean_overall": 7.0, "p5_overall": 5.0, "p50_overall": 7.0,
+            "p95_overall": 9.0, "per_prompt": [], "task_type_distribution": {},
+        },
         tolerance_abs=0.5,
         label="flagged-active",
         is_release_gate=True,
@@ -164,7 +166,10 @@ async def test_list_release_gates_filters_to_active_flagged(
         id="s-flagged-retired",
         source_run_id=None,
         prompts_snapshot=[],
-        baseline_scores={"mean_overall": 7.0, "p5_overall": 5.0, "p50_overall": 7.0, "p95_overall": 9.0, "per_prompt": [], "task_type_distribution": {}},
+        baseline_scores={
+            "mean_overall": 7.0, "p5_overall": 5.0, "p50_overall": 7.0,
+            "p95_overall": 9.0, "per_prompt": [], "task_type_distribution": {},
+        },
         tolerance_abs=0.5,
         label="flagged-retired",
         is_release_gate=True,
@@ -175,7 +180,10 @@ async def test_list_release_gates_filters_to_active_flagged(
         id="s-unflagged-active",
         source_run_id=None,
         prompts_snapshot=[],
-        baseline_scores={"mean_overall": 7.0, "p5_overall": 5.0, "p50_overall": 7.0, "p95_overall": 9.0, "per_prompt": [], "task_type_distribution": {}},
+        baseline_scores={
+            "mean_overall": 7.0, "p5_overall": 5.0, "p50_overall": 7.0,
+            "p95_overall": 9.0, "per_prompt": [], "task_type_distribution": {},
+        },
         tolerance_abs=0.5,
         label="unflagged-active",
         is_release_gate=False,

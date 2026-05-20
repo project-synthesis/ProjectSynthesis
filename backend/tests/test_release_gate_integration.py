@@ -23,7 +23,6 @@ from httpx import AsyncClient
 
 from app.models import RunRow, ValidationSuite
 
-
 pytestmark = pytest.mark.integration
 
 
