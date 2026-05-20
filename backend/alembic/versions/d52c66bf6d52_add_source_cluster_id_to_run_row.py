@@ -39,6 +39,19 @@ def upgrade() -> None:
     SQLite cannot ALTER a table to add a constraint in place; ``batch_alter_table``
     triggers the canonical table-rebuild workaround. Precedent:
     ``d9e0f1a2b3c4_add_dominant_project_id_to_prompt_cluster.py`` lines 50-63.
+
+    **DESC-index preservation contract**: ``batch_alter_table`` rebuilds the
+    table by copying + re-creates indexes from SQLAlchemy reflection. The
+    reflector does NOT preserve the per-column ASC/DESC ordering on
+    composite indexes — ``Index(..., sa.text("col DESC"))`` reflects as
+    plain ``["col"]``. The original ``ix_run_row_suite_id`` (from migration
+    ``5576c539720f`` line 160) was created with ``["suite_id",
+    sa.text("started_at DESC")]`` per Tier 2 spec § 3 "latest replay per
+    suite" query-pattern contract — pinned by
+    ``tests/test_validation_suite_migration.py::test_ix_run_row_suite_id_exists_with_descending_started_at``.
+
+    Fix: drop + recreate ``ix_run_row_suite_id`` with explicit DESC AFTER
+    the batch_alter completes.
     """
     bind = op.get_bind()
 
@@ -56,6 +69,16 @@ def upgrade() -> None:
                     nullable=True,
                 )
             )
+
+        # Restore DESC ordering on ix_run_row_suite_id — the batch_alter
+        # rebuilt it without DESC per the contract documented above.
+        if _index_exists(bind, "run_row", "ix_run_row_suite_id"):
+            op.drop_index("ix_run_row_suite_id", table_name="run_row")
+        op.create_index(
+            "ix_run_row_suite_id",
+            "run_row",
+            ["suite_id", sa.text("started_at DESC")],
+        )
 
     if not _index_exists(bind, "run_row", "ix_run_row_source_cluster_id"):
         op.create_index(
