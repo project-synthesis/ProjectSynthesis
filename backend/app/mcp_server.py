@@ -500,6 +500,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             )
             from app.services.prompt_loader import PromptLoader
             from app.services.run_orchestrator import RunOrchestrator
+            from app.services.seed_agent_promoter import SeedAgentPromoter
             from app.services.seed_orchestrator import SeedOrchestrator
             from app.tools._shared import set_run_orchestrator as _set_ro
 
@@ -568,6 +569,8 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                         "seed_agent": _seed_agent_gen,
                         "replay_run": _replay_run_gen,
                     },
+                    # T3.2 (v0.4.29 spec §3.2): wire the auto-promotion service.
+                    seed_agent_promoter=SeedAgentPromoter(write_queue=_mcp_wq),
                 )
                 _set_ro(_mcp_run_orchestrator)
                 logger.info(
