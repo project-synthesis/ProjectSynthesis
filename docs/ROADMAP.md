@@ -158,6 +158,7 @@ With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate 
 - **v0.4.31** — **Probe Tier 4** (final UI consolidation — substrate already done in P3; was v0.4.29 pre-T3 decomposition shift). — **PLANNED**.
 - **TBD** — Foundation P2 Path B (Phase 3 body extraction — deferred indefinitely; needs fresh design cycle; not blocking T3-T4 because they build on the unified substrate from P3, not on Phase 3 isolation).
 - **TBD** — UI affordance for ValidationSuite release-gate toggle (admin-only API in v0.4.28 T3.1; UI suite-card toggle deferred). Could fold into v0.4.29 or later.
+- **TBD** — Universal "Drill into cluster" UI surface (anywhere a cluster appears — `ClusterNavigator`, `ClusterRow`, `ClusterTemplatesSection`, 3D Pattern Graph cluster context menu). v0.4.30 T3.3 shipped the seed-result-view-only version per the ROADMAP "action on seed runs" scoping; this entry tracks the future expansion to all cluster surfaces.
 - **TBD** — 8 deferred Sub-project D ring-animation tests (T2.2 transitions + readiness ring tier-tween + size-drift-rebuild) — scoped out of `RingBuilder` as visual polish. No version target; restore alongside any future ring-feature work.
 - **TBD** — Probe → Routine `/schedule` integration (periodic probe re-runs feeding the release-gate machinery from v0.4.28 T3.1). T3.1 reads existing alarm state; this future feature keeps the state fresh on a schedule. No version target.
 
