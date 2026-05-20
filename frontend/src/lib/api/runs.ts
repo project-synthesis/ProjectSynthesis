@@ -82,8 +82,10 @@ export interface RunListResponse {
 }
 
 export interface ListRunsParams {
-  mode?: 'topic_probe' | 'seed_agent';
-  status?: string;
+  // v0.4.31 T4: 3-mode union (add 'replay_run' so listRuns({mode:'replay_run'}) is type-safe)
+  mode?: 'topic_probe' | 'seed_agent' | 'replay_run';
+  // v0.4.31 T4: typed status enum matching RunSummary.status (was: string)
+  status?: 'running' | 'completed' | 'partial' | 'failed';
   project_id?: string;
   limit?: number;
   offset?: number;

@@ -13,6 +13,7 @@
   import ClusterNavigator from './ClusterNavigator.svelte';
   import StrategiesPanel from './StrategiesPanel.svelte';
   import HistoryPanel from './HistoryPanel.svelte';
+  import RunsPanel from './RunsPanel.svelte';  // v0.4.31 T4
   import GitHubPanel from './GitHubPanel.svelte';
   import SettingsPanel from './SettingsPanel.svelte';
   import SuitesPanel from '$lib/components/suites/SuitesPanel.svelte';
@@ -29,7 +30,7 @@
   // 12.1 test 3 (`test_suites_panel_navigator_entry_routes_correctly`):
   // clicking the SUITES tab renders SuitesPanel; switching to any other
   // tab unmounts it via the existing prop-driven `active` contract.
-  type Activity = 'editor' | 'history' | 'clusters' | 'suites' | 'github' | 'settings';
+  type Activity = 'editor' | 'history' | 'runs' | 'clusters' | 'suites' | 'github' | 'settings';
 
   let { active }: { active: Activity } = $props();
 
@@ -125,6 +126,8 @@
     <StrategiesPanel strategies={strategiesList} onSaved={onStrategiesSaved} />
   {:else if active === 'history'}
     <HistoryPanel active={true} />
+  {:else if active === 'runs'}
+    <RunsPanel active={true} />
   {:else if active === 'clusters'}
     <ClusterNavigator />
   {:else if active === 'suites'}
