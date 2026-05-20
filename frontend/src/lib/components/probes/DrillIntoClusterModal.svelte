@@ -21,12 +21,47 @@
   let submitting = $state(false);
   let error = $state<string | null>(null);
   let titleEl: HTMLElement;
+  let previouslyFocused: HTMLElement | null = null;
 
   onMount(() => {
+    // Remember the element that had focus (the DrillButton trigger) so we
+    // can return focus to it when the modal closes.
+    previouslyFocused = document.activeElement as HTMLElement | null;
     titleEl?.focus();
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      // Focus trap: cycle focus within the modal panel.
+      const panel = titleEl?.closest('[role="dialog"]') as HTMLElement | null;
+      if (!panel) return;
+      const focusables = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => !el.hasAttribute('disabled'));
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      // Return focus to the originating trigger on close.
+      previouslyFocused?.focus();
+    };
   });
 
   async function launch() {

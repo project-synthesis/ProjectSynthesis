@@ -378,3 +378,109 @@ input:focus, textarea:focus, select:focus {
   border-color: transparent;
   color: var(--color-text-dim);
 }
+
+/* T3.3 (v0.4.30): brand-compliant button utility classes per
+   .claude/skills/brand-guidelines/references/component-patterns.md:20-37.
+   Used by DrillButton + DrillIntoClusterModal + future modals.
+*/
+.btn-primary {
+  background: transparent;
+  color: var(--color-neon-purple);
+  border: 1px solid var(--color-neon-purple);
+  padding: 0 8px;
+  height: 20px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 18px;
+  border-radius: 0;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-neon-purple) 10%, transparent);
+  border-color: var(--color-neon-purple);
+  transform: translateY(-1px);
+}
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+  border-color: color-mix(in srgb, var(--color-neon-purple) 50%, transparent);
+}
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-outline-secondary {
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-subtle);
+  padding: 0 8px;
+  height: 20px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 18px;
+  border-radius: 0;
+  cursor: pointer;
+  transition: all 200ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn-outline-secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-bg-hover) 40%, transparent);
+  color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--color-border-subtle) 200%, transparent);
+}
+.btn-outline-secondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* T3.3 (v0.4.30): brand-compliant input utility class per
+   .claude/skills/brand-guidelines/references/component-patterns.md:65-73.
+*/
+.input-field {
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  padding: 0 4px;
+  height: 20px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  border-radius: 0;
+  transition: border-color 0.3s ease, background-color 0.3s ease;
+}
+.input-field:focus {
+  outline: none;
+  border-color: var(--color-neon-cyan);
+  background: color-mix(in srgb, var(--color-bg-input) 90%, var(--color-neon-cyan));
+}
+.input-field::placeholder {
+  color: color-mix(in srgb, var(--color-text-dim) 50%, transparent);
+}
+
+/* T3.3 (v0.4.30): brand-compliant chip utility class per
+   .claude/skills/brand-guidelines/references/component-patterns.md:51-61.
+*/
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  height: 16px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-bg-hover) 40%, transparent);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 9999px;
+  line-height: 14px;
+}
+.chip.chip-rect {
+  border-radius: 6px;
+}
