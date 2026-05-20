@@ -105,6 +105,7 @@ class ValidationSuiteOut(BaseModel):
     created_at: datetime
     retired_at: datetime | None = None
     retired_reason: str | None = None
+    is_release_gate: bool = False  # T3.1 spec §3.5
     prompts_snapshot: list[PromptSnapshotItem]
     baseline_scores: BaselineScoresPayload
 
@@ -178,3 +179,38 @@ class RegressionAlarmBlock(BaseModel):
     suites_total: int
     suites_in_alarm: int
     latest_alarms: list[RegressionAlarmEntry] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Release-gate types (T3.1 — spec §3.5)
+# ---------------------------------------------------------------------------
+
+
+class ReleaseGateRequest(BaseModel):
+    """``POST /api/suites/{id}/release-gate`` body schema.
+
+    Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.5.
+    """
+
+    enabled: bool
+
+
+class ReleaseGatedSuiteOut(BaseModel):
+    """``GET /api/suites/release-gates`` entry shape.
+
+    ``alarm_state`` derives from the suite's appearance in
+    ``RegressionAlarmBlock.latest_alarms``: ``'firing'`` if present (latest
+    replay regressed beyond tolerance), else ``'nominal'``. Flagged suites
+    with no completed replays surface as ``'nominal'`` (they pass the gate —
+    the gate only blocks on active regressions).
+
+    Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.5.
+    """
+
+    suite_id: str
+    label: str
+    alarm_state: Literal["firing", "nominal"]
+    baseline_mean: float | None
+    latest_mean: float | None
+    delta_abs: float | None
+    latest_replay_at: datetime | None

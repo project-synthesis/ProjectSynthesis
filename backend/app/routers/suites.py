@@ -90,6 +90,8 @@ from pydantic import BaseModel, ValidationError
 from app.dependencies.rate_limit import RateLimit
 from app.schemas.runs import RunListResponse, RunRequest
 from app.schemas.validation_suite import (
+    ReleaseGatedSuiteOut,  # T3.1
+    ReleaseGateRequest,  # T3.1
     ReplayRunOut,
     RetireSuiteRequest,
     SaveSuiteRequest,
@@ -204,6 +206,13 @@ def _classify_validation_error(exc: ValidationError, *, route: str) -> HTTPExcep
     if route == "retire":
         # Only field on RetireSuiteRequest is ``reason``.
         return HTTPException(status_code=400, detail="invalid_reason")
+
+    if route == "set_release_gate":
+        # Only field on ReleaseGateRequest is ``enabled`` — a bool. If the
+        # body is shape-wrong (e.g., enabled is a string), surface as
+        # ``invalid_request`` (no field-specific code; the bool is the
+        # whole contract).
+        return HTTPException(status_code=400, detail="invalid_request")
 
     # Unknown route — defensive fallback. This branch is never hit in
     # production because every Pydantic-validated body is route-scoped.
@@ -369,6 +378,25 @@ async def list_suites(
         limit=limit,
         offset=offset,
     )
+
+
+# ---------------------------------------------------------------------------
+# T3.1 — GET /api/suites/release-gates
+# MUST be declared BEFORE /api/suites/{suite_id} or FastAPI matches
+# "release-gates" as a suite_id. Spec §3.2.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/suites/release-gates",
+    response_model=list[ReleaseGatedSuiteOut],
+)
+async def list_release_gates() -> list[ReleaseGatedSuiteOut]:
+    """Return active suites flagged ``is_release_gate=True`` + their alarm state.
+
+    Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.2.
+    """
+    raise NotImplementedError("RED phase — implement in GREEN")
 
 
 # ---------------------------------------------------------------------------
@@ -646,6 +674,31 @@ async def retire_suite(
         return await _service.get(suite_id)
     except ValueError as exc:
         raise _map_service_error(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# T3.1 — POST /api/suites/{suite_id}/release-gate
+# Spec §3.2.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/suites/{suite_id}/release-gate",
+    response_model=ValidationSuiteOut,
+    responses={404: {"description": "Suite not found"}},
+    dependencies=[Depends(RateLimit(lambda: "20/minute"))],
+)
+async def set_release_gate(
+    suite_id: str,
+    request: Request,
+) -> ValidationSuiteOut:
+    """Toggle the release-gate flag on a ValidationSuite.
+
+    Body: ``{"enabled": true}`` or ``{"enabled": false}``.
+
+    Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.2.
+    """
+    raise NotImplementedError("RED phase — implement in GREEN")
 
 
 # ---------------------------------------------------------------------------

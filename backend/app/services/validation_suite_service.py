@@ -35,6 +35,7 @@ from app.schemas.runs import RunListResponse, RunSummary
 from app.schemas.validation_suite import (
     RegressionAlarmBlock,
     RegressionAlarmEntry,
+    ReleaseGatedSuiteOut,  # T3.1
     ValidationSuiteListItem,
     ValidationSuiteListResponse,
     ValidationSuiteOut,
@@ -1232,6 +1233,29 @@ class ValidationSuiteService:
         # failures (DB error, event-bus error) do not poison the cache.
         self._alarm_cache = (now, block)
         return block
+
+    async def set_release_gate(
+        self,
+        suite_id: str,
+        *,
+        enabled: bool,
+    ) -> "ValidationSuite":
+        """Toggle ``is_release_gate`` on the given suite.
+
+        Raises ``ValueError("suite_not_found")`` if no suite with that ID
+        exists (mapped to HTTP 404 by router's ``_map_service_error``).
+        Returns the refreshed ORM instance.
+
+        Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.2.
+        """
+        raise NotImplementedError("RED phase — implement in GREEN")
+
+    async def list_release_gates(self) -> "list[ReleaseGatedSuiteOut]":
+        """Return active flagged suites + their alarm_state.
+
+        Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.2.
+        """
+        raise NotImplementedError("RED phase — implement in GREEN")
 
 
 def _suite_list_item_from_orm(row: ValidationSuite) -> ValidationSuiteListItem:
