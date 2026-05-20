@@ -15,6 +15,8 @@
   }
 
   let { cluster, onClose, onDrilled }: Props = $props();
+  // Intentional: topic pre-fills from cluster.label on mount, then is freely editable.
+  // svelte-ignore state_referenced_locally
   let topic = $state(cluster.label);
   let submitting = $state(false);
   let error = $state<string | null>(null);
@@ -61,10 +63,12 @@
   role="presentation"
 >
   <!-- Panel: rounded-none (sharp), 1px border-subtle, p-1.5 max -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     role="dialog"
     aria-modal="true"
     aria-labelledby="drill-modal-title"
+    tabindex="-1"
     class="rounded-none border border-border-subtle bg-bg-card p-1.5 space-y-1.5 min-w-[320px] max-w-[480px]"
     style="animation: dialog-in 300ms cubic-bezier(0.16, 1, 0.3, 1);"
     onclick={(e) => e.stopPropagation()}

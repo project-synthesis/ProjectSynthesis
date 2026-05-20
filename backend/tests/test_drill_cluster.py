@@ -23,7 +23,6 @@ from app.models import PromptCluster, RunRow
 from app.schemas.runs import RunRequest
 from app.services.generators.base import GeneratorResult
 
-
 # asyncio_mode = "auto" in pyproject.toml handles async tests — no pytestmark needed.
 
 

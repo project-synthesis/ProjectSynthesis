@@ -20,8 +20,6 @@ from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.dependencies.write_queue import get_write_queue
 from app.models import MetaPattern, Optimization, OptimizationPattern, PromptCluster
-from app.schemas.probes import DrillInitiatedOutput, DrillRequest
-from app.schemas.runs import RunRequest
 from app.schemas.clusters import (
     ActivityHistoryResponse,
     ActivityResponse,
@@ -40,6 +38,8 @@ from app.schemas.clusters import (
     SimilarityEdgesResponse,
     TaxonomyActivityEvent,
 )
+from app.schemas.probes import DrillInitiatedOutput, DrillRequest
+from app.schemas.runs import RunRequest
 from app.services.taxonomy import TaxonomyEngine
 from app.services.taxonomy import get_engine as get_taxonomy_engine
 from app.services.taxonomy._constants import EXCLUDED_STRUCTURAL_STATES
