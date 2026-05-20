@@ -10,6 +10,16 @@ export interface SeedRequest {
   prompts?: string[] | null;
 }
 
+export interface SeedClusterRef {
+  // T3.3 (v0.4.30): per-cluster reference returned in SeedOutput.clusters
+  // for the SeedModal drill-into-cluster UI affordance. Maps 1:1 to the
+  // backend `SeedClusterRef` pydantic schema.
+  id: string;
+  label: string;
+  domain: string;
+  task_type: string;
+}
+
 export interface SeedOutput {
   // Foundation P3 (v0.4.18): includes 'running' for forward-compat with the
   // unified RunRow substrate. POST /api/seed sync-mode currently only
@@ -27,6 +37,12 @@ export interface SeedOutput {
   // NOTE: actual_cost_usd is intentionally absent — matches Python SeedOutput.
   // The backend provides estimation only.
   domains_touched: string[];
+  // T3.3 (v0.4.30) additive field. Per-cluster refs touched by this run,
+  // flowed end-to-end from `batch_taxonomy_assign` →
+  // `TaxonomyAssignSummary.clusters` → `RunRow.taxonomy_delta["clusters"]`
+  // → `SeedOutput.clusters`. SeedModal renders one `<DrillButton />` per
+  // entry to dispatch a focused topic_probe per cluster.
+  clusters: SeedClusterRef[];
   clusters_created: number;
   summary: string;
   duration_ms: number;

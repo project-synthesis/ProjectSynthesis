@@ -279,6 +279,7 @@ class SeedAgentGenerator:
                 "clusters_assigned": 0,
                 "clusters_created": 0,
                 "domains_touched": [],
+                "clusters": [],
             }
 
         # ---- Final classification (handle_seed:359-393) ----
@@ -295,6 +296,10 @@ class SeedAgentGenerator:
 
         clusters_created = taxonomy_result.get("clusters_created", 0)
         domains_touched = taxonomy_result.get("domains_touched", [])
+        # T3.3 (v0.4.30): pass through the per-cluster refs from
+        # batch_taxonomy_assign so SeedOutput.clusters can populate the
+        # drill-into-cluster UI in SeedModal.svelte.
+        clusters_refs = taxonomy_result.get("clusters", [])
         summary = (
             f"{completed} prompts optimized"
             f"{f', {failed} failed' if failed else ''}"
@@ -327,6 +332,7 @@ class SeedAgentGenerator:
             taxonomy_delta={
                 "domains_touched": domains_touched,
                 "clusters_created": clusters_created,
+                "clusters": clusters_refs,
             },
             final_report=None,
         )

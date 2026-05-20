@@ -286,7 +286,9 @@ async def test_synthesis_probe_result_schema_preserved(
 async def test_synthesis_seed_result_schema_with_run_id(
     stub_orchestrator: Any,
 ) -> None:
-    """SeedOutput keys preserved + only additive change is run_id."""
+    """SeedOutput keys preserved + documented additive surfaces:
+    ``run_id`` (Foundation P3 cycle 12 v0.4.18) + ``clusters`` (T3.3 v0.4.30).
+    """
     # Provide a routing stub so the gate doesn't divert into early-failure;
     # the synthesis_seed shim must compute tier from routing and supply a
     # provider so SeedAgentGenerator's input-validation passes.
@@ -308,12 +310,16 @@ async def test_synthesis_seed_result_schema_with_run_id(
     assert _SEED_OUTPUT_REQUIRED_KEYS.issubset(body.keys()), (
         f"missing keys: {_SEED_OUTPUT_REQUIRED_KEYS - set(body.keys())}"
     )
-    # Additive run_id must be present and the ONLY new key.
+    # Both additive surfaces must be present, and no others.
     assert "run_id" in body
+    assert "clusters" in body
     new_keys = set(body.keys()) - _SEED_OUTPUT_REQUIRED_KEYS
-    assert new_keys == {"run_id"}, f"unexpected new keys: {new_keys}"
+    assert new_keys == {"run_id", "clusters"}, (
+        f"unexpected new keys: {new_keys - {'run_id', 'clusters'}}"
+    )
     assert isinstance(body["run_id"], str)
     assert len(body["run_id"]) >= 32
+    assert isinstance(body["clusters"], list)
 
 
 # ---------------------------------------------------------------------------

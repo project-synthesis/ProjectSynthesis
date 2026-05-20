@@ -10,6 +10,8 @@ const SEED_OK: SeedOutput = {
   prompts_failed: 2,
   estimated_cost_usd: 0.42,
   domains_touched: ['backend'],
+  // T3.3 (v0.4.30) additive field; default to empty in fixtures.
+  clusters: [],
   clusters_created: 3,
   summary: 'ok',
   duration_ms: 5000,
