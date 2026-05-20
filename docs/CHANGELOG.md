@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.28 — 2026-05-19
+
 ### Added
 
 - **T3.1 release-gate CI hook**: `ValidationSuite` gains `is_release_gate: bool` column (Alembic migration `4d16718c337c`). New endpoints `POST /api/suites/{id}/release-gate` (toggle) + `GET /api/suites/release-gates` (list flagged active suites + their `compute_regression_alarm` state, with `alarm_state ∈ {firing, nominal}` — firing when the suite appears in `RegressionAlarmBlock.latest_alarms`, else nominal). `scripts/release.sh` new `gate_check` preflight blocks the release if any flagged suite reports `alarm_state == 'firing'`; `--skip-release-gates` flag bypasses for hotfix scenarios. Route ordering: `release-gates` declared before `{suite_id}` (FastAPI declaration-order matching). Second sub-feature of v0.4.28 (paired with Finding 19b).
