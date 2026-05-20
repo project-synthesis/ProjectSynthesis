@@ -58,6 +58,11 @@ class TaxonomyAssignSummary(TypedDict):
       target cluster was net-new (``member_count == 1`` after assign).
     * ``domains_touched`` — sorted, de-duplicated list of domain labels
       affected by this batch (input source: ``pending.domain``).
+    * ``clusters`` — T3.3 (v0.4.30): per-cluster reference list (one
+      ``{id, label, domain, task_type}`` dict per unique cluster touched
+      by this batch). Flowed to ``RunRow.taxonomy_delta["clusters"]`` and
+      then to ``SeedOutput.clusters`` so the SeedModal can render the
+      drill-into-cluster UI per spec § 5.2 #15. Deduplicated by ``id``.
 
     The post-queue ``seed_taxonomy_complete`` decision event and
     ``taxonomy_changed`` event-bus payload index by these keys verbatim;
@@ -67,6 +72,7 @@ class TaxonomyAssignSummary(TypedDict):
     clusters_assigned: int
     clusters_created: int
     domains_touched: list[str]
+    clusters: list[dict]
 
 
 async def bulk_persist(
@@ -354,6 +360,7 @@ async def batch_taxonomy_assign(
     if not completed:
         return TaxonomyAssignSummary(
             clusters_assigned=0, clusters_created=0, domains_touched=[],
+            clusters=[],
         )
 
     engine = get_engine()
@@ -361,6 +368,10 @@ async def batch_taxonomy_assign(
     async def _do_assign(db: AsyncSession) -> TaxonomyAssignSummary:
         clusters_created = 0
         domains_touched: set[str] = set()
+        # T3.3 (v0.4.30): accumulate per-cluster refs for SeedOutput.clusters.
+        # Dedupe by id at return time — a single batch can touch the same
+        # cluster multiple times (multiple pendings → same cluster).
+        clusters_touched: list[dict] = []
         assigned = 0
 
         # v0.4.16 P1a Cycle 2: peer-writer SKIP pre-check.
@@ -403,6 +414,7 @@ async def batch_taxonomy_assign(
                 clusters_assigned=0,
                 clusters_created=0,
                 domains_touched=[],
+                clusters=[],
             )
 
         for pending in completed:
@@ -446,6 +458,17 @@ async def batch_taxonomy_assign(
                     cluster.cluster_metadata, pattern_stale=True,
                 )
 
+                # T3.3 (v0.4.30): accumulate this cluster reference. We
+                # capture id/label/domain/task_type for the SeedOutput.
+                # clusters drill-into-cluster UI affordance. Dedup occurs
+                # below at return time.
+                clusters_touched.append({
+                    "id": cluster.id,
+                    "label": cluster.label,
+                    "domain": cluster.domain,
+                    "task_type": cluster.task_type,
+                })
+
             except Exception as exc:
                 logger.warning(
                     "Taxonomy assign failed for %s: %s",
@@ -453,10 +476,16 @@ async def batch_taxonomy_assign(
                 )
 
         await db.commit()
+        # Dedupe clusters_touched by id (multiple pendings can land in the
+        # same cluster within one batch — collapse to one ref per cluster).
+        deduped_clusters = list(
+            {c["id"]: c for c in clusters_touched}.values()
+        )
         return TaxonomyAssignSummary(
             clusters_assigned=assigned,
             clusters_created=clusters_created,
             domains_touched=sorted(domains_touched),
+            clusters=deduped_clusters,
         )
 
     # The queue serializes ``_do_assign`` against every other backend

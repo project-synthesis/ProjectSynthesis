@@ -38,6 +38,17 @@ class SeedRequest(BaseModel):
     )
 
 
+class SeedClusterRef(BaseModel):
+    """T3.3 (v0.4.30): per-cluster reference exposed in SeedOutput.clusters
+    for the drill-into-cluster UI affordance in SeedModal.svelte.
+    """
+
+    id: str
+    label: str
+    domain: str
+    task_type: str
+
+
 class SeedOutput(BaseModel):
     """Response from synthesis_seed tool and POST /api/seed.
 
@@ -49,6 +60,11 @@ class SeedOutput(BaseModel):
     populated from the underlying ``RunRow.id`` so callers can correlate
     the synchronous response with cross-channel SSE / GET-by-id reads.
     Defaults to ``None`` for backward-compat with old test fixtures.
+
+    T3.3 (v0.4.30) added the additive ``clusters`` field exposing per-
+    cluster ``SeedClusterRef`` records (id/label/domain/task_type) so the
+    SeedModal drill-into-cluster UI can dispatch a focused topic_probe
+    from any cluster touched by this seed run.
     """
 
     status: str  # running | completed | partial | failed
@@ -59,6 +75,7 @@ class SeedOutput(BaseModel):
     prompts_failed: int = 0
     estimated_cost_usd: float | None = None
     domains_touched: list[str] = []
+    clusters: list[SeedClusterRef] = []
     clusters_created: int = 0
     summary: str = ""
     duration_ms: int = 0

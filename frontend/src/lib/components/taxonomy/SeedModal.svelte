@@ -7,6 +7,8 @@
   import { runStatusColor } from '$lib/utils/colors';
   import { fade } from 'svelte/transition';
   import { navFade } from '$lib/utils/transitions';
+  import { goto } from '$app/navigation';
+  import DrillButton from '$lib/components/probes/DrillButton.svelte';
   import TopicProbeForm, {
     type ProbeFormPayload,
   } from '$lib/components/probes/TopicProbeForm.svelte';
@@ -667,6 +669,35 @@
               </div>
             {/if}
 
+            {#if result.clusters && result.clusters.length > 0}
+              <!-- T3.3 (v0.4.30) drill-into-cluster surface: each row
+                   exposes a `<DrillButton />` that opens
+                   `DrillIntoClusterModal` for the cluster and, on success,
+                   routes to /probes/{run_id} for the focused topic_probe.
+                   Visual pattern mirrors `.seed-domains-*` (CHIP-PAIR meta
+                   + bordered row + uppercase section label) so the result
+                   card reads consistently with the rest of the modal. -->
+              <div class="seed-clusters">
+                <span class="seed-clusters-label">
+                  CLUSTERS (drill to deepen)
+                </span>
+                <div class="seed-clusters-list">
+                  {#each result.clusters as cluster (cluster.id)}
+                    <div class="seed-cluster-row">
+                      <span class="seed-cluster-label">{cluster.label}</span>
+                      <span class="seed-cluster-meta">
+                        {cluster.domain} · {cluster.task_type}
+                      </span>
+                      <DrillButton
+                        {cluster}
+                        onDrilled={(runId) => goto(`/probes/${runId}`)}
+                      />
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
             <div class="seed-result-footer">
               {#if result.tier}
                 <span class="seed-tier-badge">{result.tier.toUpperCase()}</span>
@@ -1183,6 +1214,58 @@
     padding: 2px 6px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+  }
+
+  /* T3.3 (v0.4.30) drill-into-cluster section. Visually parallels
+     `.seed-domains-*` but the rows are wider and include a DrillButton
+     action — one bordered row per touched cluster. */
+  .seed-clusters {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .seed-clusters-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--color-text-dim);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .seed-clusters-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .seed-cluster-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border: 1px solid var(--color-border-subtle);
+    font-family: var(--font-mono);
+  }
+
+  .seed-cluster-label {
+    font-size: 11px;
+    color: var(--color-text-primary);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .seed-cluster-meta {
+    font-size: 9px;
+    color: var(--color-text-dim);
+    border: 1px solid var(--color-border-subtle);
+    padding: 1px 6px;
+    letter-spacing: 0.04em;
+    text-transform: lowercase;
+    white-space: nowrap;
   }
 
   .seed-result-footer {

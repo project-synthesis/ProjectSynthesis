@@ -247,7 +247,13 @@ async def test_post_seed_response_shape_byte_identical_with_run_id(
     app_client: AsyncClient,
     stub_seed_orchestrator: Any,
 ) -> None:
-    """SeedOutput shape preserved + additive run_id field, no other changes."""
+    """SeedOutput shape preserved + additive ``run_id`` (Foundation P3
+    cycle 12 v0.4.18) + additive ``clusters`` (T3.3 v0.4.30).
+
+    Each subsequent additive surface should append exactly one new key to
+    this allow-list — this guards against accidental drift while still
+    permitting the documented additive evolution path.
+    """
     resp = await app_client.post(
         "/api/seed",
         json={
@@ -259,10 +265,13 @@ async def test_post_seed_response_shape_byte_identical_with_run_id(
     body = resp.json()
     # Existing keys must all be present
     assert SEED_OUTPUT_REQUIRED_KEYS.issubset(body.keys())
-    # Additive run_id is the ONLY new key
+    # Documented additive surfaces: run_id (P3 c12) + clusters (T3.3).
     new_keys = set(body.keys()) - SEED_OUTPUT_REQUIRED_KEYS
-    assert new_keys == {"run_id"}
+    assert new_keys == {"run_id", "clusters"}, (
+        f"unexpected new SeedOutput keys: {new_keys - {'run_id', 'clusters'}}"
+    )
     assert isinstance(body["run_id"], str) and len(body["run_id"]) >= 32
+    assert isinstance(body["clusters"], list)
 
 
 async def test_post_seed_status_completed_on_success(

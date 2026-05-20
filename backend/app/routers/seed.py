@@ -30,7 +30,7 @@ from app.database import get_db
 from app.models import RunRow
 from app.routers.runs import _serialize_full, _serialize_summary
 from app.schemas.runs import RunListResponse, RunRequest, RunResult
-from app.schemas.seed import SeedOutput, SeedRequest
+from app.schemas.seed import SeedClusterRef, SeedOutput, SeedRequest
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,14 @@ async def seed_taxonomy(body: SeedRequest, request: Request) -> SeedOutput:
         prompts_failed=aggregate.get("prompts_failed", 0),
         estimated_cost_usd=seed_meta.get("estimated_cost_usd"),
         domains_touched=taxonomy_delta.get("domains_touched", []),
+        # T3.3 (v0.4.30): per-cluster refs surface from
+        # taxonomy_delta["clusters"] (flowed by SeedAgentGenerator from
+        # batch_taxonomy_assign's TaxonomyAssignSummary.clusters). The
+        # SeedModal drill-into-cluster UI consumes these to dispatch a
+        # focused topic_probe per cluster.
+        clusters=[
+            SeedClusterRef(**c) for c in taxonomy_delta.get("clusters", [])
+        ],
         clusters_created=taxonomy_delta.get("clusters_created", 0),
         summary=aggregate.get("summary", ""),
         duration_ms=duration_ms,
