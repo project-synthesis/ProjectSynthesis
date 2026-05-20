@@ -394,9 +394,17 @@ async def list_suites(
 async def list_release_gates() -> list[ReleaseGatedSuiteOut]:
     """Return active suites flagged ``is_release_gate=True`` + their alarm state.
 
+    The endpoint calls ``compute_regression_alarm()`` ONCE (per request) and
+    indexes ``RegressionAlarmBlock.latest_alarms`` by ``suite_id`` to resolve
+    each flagged suite's state. Suites in ``latest_alarms`` map to
+    ``alarm_state='firing'``; flagged suites NOT in ``latest_alarms`` map
+    to ``alarm_state='nominal'``.
+
+    Returns empty list when no suites are flagged.
+
     Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.2.
     """
-    raise NotImplementedError("RED phase — implement in GREEN")
+    return await _service.list_release_gates()
 
 
 # ---------------------------------------------------------------------------
@@ -695,10 +703,17 @@ async def set_release_gate(
     """Toggle the release-gate flag on a ValidationSuite.
 
     Body: ``{"enabled": true}`` or ``{"enabled": false}``.
+    Returns the updated suite (full ``ValidationSuiteOut`` shape).
+    404 ``suite_not_found`` if no suite with that ID exists.
 
     Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §3.2.
     """
-    raise NotImplementedError("RED phase — implement in GREEN")
+    body = await _parse_body(request, ReleaseGateRequest, route="set_release_gate")
+    try:
+        suite = await _service.set_release_gate(suite_id, enabled=body.enabled)
+    except ValueError as exc:
+        raise _map_service_error(exc) from exc
+    return ValidationSuiteOut.model_validate(suite)
 
 
 # ---------------------------------------------------------------------------

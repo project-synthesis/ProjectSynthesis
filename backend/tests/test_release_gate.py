@@ -3,9 +3,9 @@
 Spec: ``docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md`` §6.1.
 
 Eight unit tests pinning the functional acceptance criteria for the
-release-gate API surface + route ordering. All tests construct a fresh
-``ValidationSuiteService`` instance to keep the alarm cache isolated per
-test.
+release-gate API surface + route ordering. Tests use the canonical
+``app_client`` fixture from ``conftest.py`` which monkey-patches
+``async_session_factory`` so service-layer reads see the test ``db_session``.
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
@@ -15,14 +15,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 
-from app.main import app
 from app.models import RunRow, ValidationSuite
 from app.services.validation_suite_service import ValidationSuiteService
-
-
-pytestmark = pytest.mark.usefixtures("anyio_backend")
 
 
 # ---------------------------------------------------------------------------
@@ -30,18 +26,27 @@ pytestmark = pytest.mark.usefixtures("anyio_backend")
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def client() -> TestClient:
-    """FastAPI TestClient bound to the production app."""
-    return TestClient(app)
+@pytest.fixture(autouse=True)
+def reset_router_service_alarm_cache() -> None:
+    """Reset the router's module-level ``_service`` alarm cache before each test.
+
+    ``routers/suites.py:116`` defines a process-wide ``_service =
+    ValidationSuiteService()`` whose ``_alarm_cache`` (30s TTL) and
+    ``_prior_alarm_states`` would otherwise carry state across tests in this
+    file. Each test seeds different replay data, so prior cached state would
+    mask a `firing` suite as `nominal` (the symptom that surfaced in rev-2
+    of the test suite). The service exposes ``_invalidate_alarm_cache()`` as
+    a documented test seam at ``validation_suite_service.py:531``.
+    """
+    from app.routers.suites import _service
+
+    _service._invalidate_alarm_cache()
+    _service._prior_alarm_states.clear()
 
 
 @pytest.fixture
 async def suite(db_session: Any) -> ValidationSuite:
-    """Insert one ValidationSuite into the test DB; return it for assertions.
-
-    Uses the shared ``db_session`` fixture from ``backend/tests/conftest.py``.
-    """
+    """Insert one ValidationSuite into the test DB; return it for assertions."""
     suite = ValidationSuite(
         id="suite-t3-1-a",
         source_run_id=None,
@@ -71,11 +76,11 @@ async def suite(db_session: Any) -> ValidationSuite:
 
 
 async def test_is_release_gate_defaults_false_and_surfaces_in_get(
-    client: TestClient,
+    app_client: AsyncClient,
     suite: ValidationSuite,
 ) -> None:
     """Acceptance #1, #2 — new column defaults False; GET surfaces it."""
-    resp = client.get(f"/api/suites/{suite.id}")
+    resp = await app_client.get(f"/api/suites/{suite.id}")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["is_release_gate"] is False
@@ -87,11 +92,11 @@ async def test_is_release_gate_defaults_false_and_surfaces_in_get(
 
 
 async def test_post_release_gate_enabled_true_flips_on(
-    client: TestClient,
+    app_client: AsyncClient,
     suite: ValidationSuite,
 ) -> None:
     """Acceptance #3 — POST {enabled: true} flips column True."""
-    resp = client.post(
+    resp = await app_client.post(
         f"/api/suites/{suite.id}/release-gate",
         json={"enabled": True},
     )
@@ -107,11 +112,11 @@ async def test_post_release_gate_enabled_true_flips_on(
 
 
 async def test_post_release_gate_enabled_false_is_idempotent(
-    client: TestClient,
+    app_client: AsyncClient,
     suite: ValidationSuite,
 ) -> None:
     """Acceptance #3 — toggling off when already off is a no-op (200, False)."""
-    resp = client.post(
+    resp = await app_client.post(
         f"/api/suites/{suite.id}/release-gate",
         json={"enabled": False},
     )
@@ -125,9 +130,9 @@ async def test_post_release_gate_enabled_false_is_idempotent(
 # ---------------------------------------------------------------------------
 
 
-async def test_post_release_gate_404_on_missing_suite(client: TestClient) -> None:
+async def test_post_release_gate_404_on_missing_suite(app_client: AsyncClient) -> None:
     """Acceptance #3 — 404 with ``suite_not_found`` envelope."""
-    resp = client.post(
+    resp = await app_client.post(
         "/api/suites/does-not-exist-xyz/release-gate",
         json={"enabled": True},
     )
@@ -142,10 +147,9 @@ async def test_post_release_gate_404_on_missing_suite(client: TestClient) -> Non
 
 async def test_list_release_gates_filters_to_active_flagged(
     db_session: Any,
-    client: TestClient,
+    app_client: AsyncClient,
 ) -> None:
     """Acceptance #4, #6 — only is_release_gate=True AND retired_at IS NULL."""
-    # 3 suites: flagged-active, flagged-retired, unflagged-active
     flagged_active = ValidationSuite(
         id="s-flagged-active",
         source_run_id=None,
@@ -180,7 +184,7 @@ async def test_list_release_gates_filters_to_active_flagged(
     db_session.add_all([flagged_active, flagged_retired, unflagged_active])
     await db_session.commit()
 
-    resp = client.get("/api/suites/release-gates")
+    resp = await app_client.get("/api/suites/release-gates")
     assert resp.status_code == 200, resp.text
     items = resp.json()
     ids = {item["suite_id"] for item in items}
@@ -194,10 +198,9 @@ async def test_list_release_gates_filters_to_active_flagged(
 
 async def test_list_release_gates_maps_firing_and_nominal(
     db_session: Any,
-    client: TestClient,
+    app_client: AsyncClient,
 ) -> None:
     """Acceptance #5 — entry in latest_alarms ⇒ alarm_state='firing'; absent ⇒ 'nominal'."""
-    # Flagged suite "firing": regression below baseline - tolerance
     firing_suite = ValidationSuite(
         id="s-firing",
         source_run_id=None,
@@ -211,7 +214,6 @@ async def test_list_release_gates_maps_firing_and_nominal(
         is_release_gate=True,
         created_at=datetime.now(UTC),
     )
-    # Flagged suite "nominal": no replays seeded (folds into 'nominal' per Q6)
     nominal_suite = ValidationSuite(
         id="s-nominal",
         source_run_id=None,
@@ -225,7 +227,6 @@ async def test_list_release_gates_maps_firing_and_nominal(
         is_release_gate=True,
         created_at=datetime.now(UTC),
     )
-    # Seed a completed replay below firing_suite's baseline-tolerance threshold (8.0 - 0.5 = 7.5; latest_mean = 6.0 < 7.5)
     firing_replay = RunRow(
         id="rr-firing",
         mode="replay_run",
@@ -240,7 +241,7 @@ async def test_list_release_gates_maps_firing_and_nominal(
     db_session.add_all([firing_suite, nominal_suite, firing_replay])
     await db_session.commit()
 
-    resp = client.get("/api/suites/release-gates")
+    resp = await app_client.get("/api/suites/release-gates")
     assert resp.status_code == 200, resp.text
     items = {item["suite_id"]: item for item in resp.json()}
     assert items["s-firing"]["alarm_state"] == "firing"
@@ -261,7 +262,13 @@ async def test_list_release_gates_maps_firing_and_nominal(
 
 
 async def test_list_release_gates_empty_skips_alarm_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Acceptance #4 — when no flagged suites, return []; skip alarm call."""
+    """Acceptance #4 — when no flagged suites, return []; skip alarm call.
+
+    Constructs a fresh ``ValidationSuiteService`` (NOT the app singleton) so
+    the alarm-cache state is isolated. The service's internal
+    ``async_session_factory()`` opens the real DB session — fine because we
+    expect zero flagged suites in any non-fixture DB.
+    """
     service = ValidationSuiteService()
 
     calls = {"count": 0}
@@ -286,14 +293,14 @@ async def test_list_release_gates_empty_skips_alarm_call(monkeypatch: pytest.Mon
 # ---------------------------------------------------------------------------
 
 
-async def test_route_ordering_release_gates_matches_literal(client: TestClient) -> None:
+async def test_route_ordering_release_gates_matches_literal(app_client: AsyncClient) -> None:
     """Acceptance #6 — ASGI router matches /api/suites/release-gates to
     list_release_gates handler, NOT to get_suite with suite_id='release-gates'.
 
     If route ordering is wrong, this returns 404 (suite_not_found) instead of
     200 with a JSON array.
     """
-    resp = client.get("/api/suites/release-gates")
+    resp = await app_client.get("/api/suites/release-gates")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert isinstance(body, list), (
