@@ -16,12 +16,13 @@ describe('ActivityBar', () => {
     expect(screen.getByRole('navigation', { name: 'Activity bar' })).toBeInTheDocument();
   });
 
-  it('renders a tablist with 6 tabs', () => {
+  it('renders a tablist with 7 tabs', () => {
     // v0.4.22 T2: 'suites' added between 'clusters' and 'github'.
+    // v0.4.31 T4: 'runs' added between 'history' and 'clusters'.
     render(ActivityBar);
     expect(screen.getByRole('tablist', { name: 'Primary sections' })).toBeInTheDocument();
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(6);
+    expect(tabs).toHaveLength(7);
   });
 
   it('renders an Editor tab', () => {
@@ -32,6 +33,12 @@ describe('ActivityBar', () => {
   it('renders a History tab', () => {
     render(ActivityBar);
     expect(screen.getByRole('tab', { name: 'History' })).toBeInTheDocument();
+  });
+
+  it('renders a Runs tab', () => {
+    // v0.4.31 T4: RUNS surface routes to RunsPanel via Navigator.
+    render(ActivityBar);
+    expect(screen.getByRole('tab', { name: 'Runs' })).toBeInTheDocument();
   });
 
   it('renders a Clusters tab', () => {

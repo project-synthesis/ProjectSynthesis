@@ -18,8 +18,24 @@ function makeFull(overrides: Partial<RunResult> = {}): RunResult {
     intent_hint: null,
     prompts_generated: 0,
     prompt_results: [],
-    aggregate: {},
-    taxonomy_delta: {},
+    // TopicProbeReportCard reads aggregate.{mean_overall, score_distribution,
+    // top_prompts}; supply concrete defaults so the card renders without
+    // optional-chain crashes when the inline detail dispatches to it
+    // (canonical shape mirrors TopicProbeReportCard.test.ts:68-76).
+    aggregate: {
+      mean_overall: 0,
+      score_distribution: { excellent: 0, good: 0, fair: 0, poor: 0 },
+      top_prompts: [],
+    },
+    // TopicProbeReportCard reads taxonomy_delta.{domains_created,
+    // sub_domains_created, clusters_touched} as non-undefined; supply
+    // empty arrays / 0 so the `tagRow` snippet's `items.length` check
+    // doesn't crash on undefined (mirrors TopicProbeReportCard.test.ts:77-81).
+    taxonomy_delta: {
+      domains_created: [],
+      sub_domains_created: [],
+      clusters_touched: 0,
+    },
     final_report: '',
     suite_id: null,
     topic_probe_meta: null,
