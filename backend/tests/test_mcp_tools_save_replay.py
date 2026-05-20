@@ -793,13 +793,13 @@ async def test_synthesis_replay_suite_dispatches_through_run_orchestrator(
 
 
 # ===========================================================================
-# Test 9 — MCP tool count is now 17 (15 existing + 2 new)
+# Test 9 — MCP tool count is now 18 (17 prior + synthesis_refresh_seed_agent)
 # ===========================================================================
 
 
 async def test_mcp_tool_count_is_now_17():
-    """The FastMCP tool registry must hold EXACTLY 17 tools — the 15
-    pre-Cycle-10 tools plus ``synthesis_save_suite`` + ``synthesis_replay_suite``.
+    """The FastMCP tool registry must hold EXACTLY 18 tools — the 17
+    post-Cycle-10 tools plus ``synthesis_refresh_seed_agent`` (T3.5 v0.4.29).
 
     Spec §10 Cycle 10 RED test 9 + spec §4 line 322. Mirrors the
     ``test_15th_mcp_tool_registered`` canonical pattern in
@@ -808,6 +808,10 @@ async def test_mcp_tool_count_is_now_17():
     A drift of +1 (only one tool registered) or +0 (neither registered)
     is the canonical RED signal — the GREEN step must register both
     decorators in ``app/mcp_server.py``.
+
+    T3.5 (v0.4.29): added ``synthesis_refresh_seed_agent`` so the count
+    is bumped from 17 to 18; the presence assertions on the original
+    Cycle-10 tools remain load-bearing for spec §10 Cycle 10.
     """
     from app import mcp_server
 
@@ -821,7 +825,12 @@ async def test_mcp_tool_count_is_now_17():
         f"synthesis_replay_suite missing from MCP tool registry. "
         f"Registered tools: {sorted(tools)!r}"
     )
-    assert len(tools) == 17, (
-        f"Expected exactly 17 tools after Cycle 10 (15 existing + 2 new). "
+    assert "synthesis_refresh_seed_agent" in tools, (
+        f"synthesis_refresh_seed_agent missing from MCP tool registry. "
+        f"Registered tools: {sorted(tools)!r}"
+    )
+    assert len(tools) == 18, (
+        f"Expected exactly 18 tools after T3.5 v0.4.29 "
+        f"(17 post-Cycle-10 + synthesis_refresh_seed_agent). "
         f"Got {len(tools)}: {sorted(tools)!r}"
     )

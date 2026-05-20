@@ -272,3 +272,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 UPDATE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$")
+
+# T3.2 + T3.5 auto-promotion (v0.4.29 spec §3.7)
+AUTO_PROMOTE_THRESHOLD: float = 7.5  # mean_overall >= this triggers promotion
+AUTO_PROMOTE_TOP_K: int = 3          # # of few-shot examples embedded in seed-agent body

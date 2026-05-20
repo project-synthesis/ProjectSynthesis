@@ -45,6 +45,7 @@ from app.schemas.mcp_models import (
 )
 from app.schemas.probes import ProbeRunResult
 from app.schemas.seed import SeedOutput
+from app.schemas.seed_agent_promotion import RefreshResult  # T3.5
 from app.services.event_notification import notify_event_bus
 from app.services.mcp_session_file import MCPSessionFile
 from app.services.routing import RoutingManager
@@ -1625,6 +1626,33 @@ async def synthesis_replay_suite(
     from app.tools.replay_suite import handle_replay_suite
 
     return await handle_replay_suite(suite_id=suite_id)
+
+
+@mcp.tool(structured_output=True)
+async def synthesis_refresh_seed_agent(
+    agent_name: Annotated[str, Field(
+        description="Stem of the seed-agent file (e.g., 'react-testing' for prompts/seed-agents/react-testing.md).",
+    )],
+) -> RefreshResult:
+    """Refresh the few-shot Examples section of a promoted seed-agent file.
+
+    Reads ``prompts/seed-agents/{agent_name}.md``; extracts the
+    ``promoted_from_run_id`` from frontmatter; recomputes the top-K
+    examples from the source probe run's current ``prompt_results``;
+    rewrites ONLY the Examples section + ``last_refreshed_at`` frontmatter
+    field. All other content preserved.
+
+    Idempotent — running twice in a row produces the same file.
+
+    Returns ``RefreshResult`` shape:
+    * ``agent_name``: echoed back.
+    * ``refreshed``: True on success.
+    * ``examples_count``: number of examples in the refreshed section.
+    * ``source_run_id``: from frontmatter (if found).
+    * ``skipped_reason``: file_not_found | no_source_run | source_run_deleted | write_failed | None.
+    """
+    from app.tools.refresh_seed_agent import handle_refresh_seed_agent
+    return await handle_refresh_seed_agent(agent_name=agent_name)
 
 
 # ---------------------------------------------------------------------------
