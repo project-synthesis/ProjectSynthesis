@@ -5,8 +5,11 @@ Replaces the separate /api/taxonomy/ and /api/patterns/ routers with a single
 """
 
 import logging
+import uuid
+from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import OperationalError
@@ -17,6 +20,8 @@ from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.dependencies.write_queue import get_write_queue
 from app.models import MetaPattern, Optimization, OptimizationPattern, PromptCluster
+from app.schemas.probes import DrillInitiatedOutput, DrillRequest
+from app.schemas.runs import RunRequest
 from app.schemas.clusters import (
     ActivityHistoryResponse,
     ActivityResponse,
@@ -1072,3 +1077,34 @@ async def backfill_scores(
     except Exception as exc:
         logger.error("Score backfill failed: %s", exc, exc_info=True)
         raise HTTPException(500, "Score backfill failed") from exc
+
+
+# ---------------------------------------------------------------------------
+# T3.3 (v0.4.30): drill into cluster
+# Spec: docs/superpowers/specs/2026-05-19-v0.4.30-t3.3-drill-into-cluster-design.md §3.2
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/api/clusters/{cluster_id}/drill",
+    response_model=DrillInitiatedOutput,
+    status_code=202,
+    responses={
+        404: {"description": "Cluster not found"},
+        409: {"description": "Cluster is archived"},
+        400: {"description": "Invalid topic shape"},
+        503: {"description": "RunOrchestrator unavailable"},
+    },
+)
+async def drill_into_cluster(
+    cluster_id: str,
+    body: DrillRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+    response: Response,
+) -> DrillInitiatedOutput:
+    """Drill from an existing cluster into a new focused topic_probe run.
+
+    RED PHASE STUB — full implementation in GREEN (spec §3.2).
+    """
+    raise NotImplementedError("RED phase — implement in GREEN")

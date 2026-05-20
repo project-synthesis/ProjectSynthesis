@@ -522,6 +522,12 @@ class RunOrchestrator:
                 ),
                 topic_probe_meta=self._extract_probe_meta(mode, request),
                 seed_agent_meta=self._extract_seed_meta(mode, request),
+                # T3.3 (v0.4.30 spec §3.5): source_cluster_id from drill flow.
+                # Pattern matches payload.get("suite_id") conditional at
+                # lines 518-522. Mode-agnostic — only set when caller threads
+                # it through (currently only POST /api/clusters/{id}/drill +
+                # the MCP synthesis_drill_into_cluster tool do).
+                source_cluster_id=request.payload.get("source_cluster_id"),
             )
             write_db.add(row)
             await write_db.commit()  # required by WriteQueue contract

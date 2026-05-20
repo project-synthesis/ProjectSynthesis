@@ -829,8 +829,8 @@ async def test_mcp_tool_count_is_now_17():
         f"synthesis_refresh_seed_agent missing from MCP tool registry. "
         f"Registered tools: {sorted(tools)!r}"
     )
-    assert len(tools) == 18, (
-        f"Expected exactly 18 tools after T3.5 v0.4.29 "
-        f"(17 post-Cycle-10 + synthesis_refresh_seed_agent). "
+    assert len(tools) == 19, (
+        f"Expected exactly 19 tools after T3.3 v0.4.30 "
+        f"(18 post-T3.5 + synthesis_drill_into_cluster). "
         f"Got {len(tools)}: {sorted(tools)!r}"
     )
