@@ -141,7 +141,13 @@ describe('RunsPanel', () => {
   });
 
   it('Test 8: filter change mid-load discards stale response via requestId', async () => {
-    let resolveFirst: ((v: RunListResponse) => void) | null = null;
+    // Type assertion: TS narrows `resolveFirst` to `null` because it cannot
+    // see the assignment inside the Promise executor closure passed through
+    // `mockImplementationOnce`. The assignment IS reached at runtime (the
+    // executor runs synchronously inside `new Promise`), but the control-flow
+    // analyzer can't follow that path — so we widen the declared type and
+    // accept the `null` runtime guard via the optional-chain call below.
+    let resolveFirst: ((v: RunListResponse) => void) | null = null as ((v: RunListResponse) => void) | null;
     const spy = vi.spyOn(runsApi, 'listRuns')
       .mockImplementationOnce(() => new Promise<RunListResponse>(r => { resolveFirst = r; }))
       .mockResolvedValueOnce(makeResp([makeRun({ id: 'rr-fresh' })]));

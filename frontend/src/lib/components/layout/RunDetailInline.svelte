@@ -1,8 +1,8 @@
 <!-- frontend/src/lib/components/layout/RunDetailInline.svelte -->
 <script lang="ts">
-  import { getRun, type RunSummary, type RunResult } from '$lib/api/runs';
+  import { getRun, type RunSummary } from '$lib/api/runs';
   import { goto } from '$app/navigation';
-  import TopicProbeReportCard from '$lib/components/probes/TopicProbeReportCard.svelte';
+  import TopicProbeReportCard, { type RunResult as TopicProbeRunResult } from '$lib/components/probes/TopicProbeReportCard.svelte';
   import DrillButton from '$lib/components/probes/DrillButton.svelte';
 
   interface Props {
@@ -10,14 +10,23 @@
   }
   let { run }: Props = $props();
 
-  const fullPromise = getRun(run.id);
+  // `$derived` wraps the fetch so it re-runs if `run.id` changes (silences
+  // `state_referenced_locally`); the closure also keeps the promise reactive
+  // to prop swaps when the parent re-uses this component for a different row.
+  const fullPromise = $derived(getRun(run.id));
 </script>
 
 {#await fullPromise}
   <p class="text-[10px] text-text-dim">Loading detail…</p>
 {:then full}
   {#if run.mode === 'topic_probe'}
-    <TopicProbeReportCard result={full} />
+    <!-- Structural cast: `runs.ts::RunResult.prompt_results[].raw_prompt` is
+         `string | undefined` (backend may omit on partial rows), while
+         `TopicProbeReportCard` narrows to `string`. The card's `tagRow`
+         snippet defends against missing fields, so the runtime contract
+         is satisfied; the cast bridges the two type surfaces without
+         polluting the api module's permissive shape. -->
+    <TopicProbeReportCard result={full as unknown as TopicProbeRunResult} />
   {:else if run.mode === 'seed_agent'}
     {@const clusters = (full.seed_agent_meta as { clusters?: Array<{ id: string; label: string; domain: string; task_type: string }> } | null)?.clusters ?? []}
     {#if clusters.length > 0}
