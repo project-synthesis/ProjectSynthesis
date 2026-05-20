@@ -1214,6 +1214,7 @@ async def lifespan(app: FastAPI):
         )
         from app.services.prompt_loader import PromptLoader
         from app.services.run_orchestrator import RunOrchestrator
+        from app.services.seed_agent_promoter import SeedAgentPromoter
         from app.services.seed_orchestrator import SeedOrchestrator
 
         _wq = getattr(app.state, "write_queue", None)
@@ -1289,6 +1290,8 @@ async def lifespan(app: FastAPI):
                     "seed_agent": seed_agent_gen,
                     "replay_run": replay_run_gen,
                 },
+                # T3.2 (v0.4.29 spec §3.2): wire the auto-promotion service.
+                seed_agent_promoter=SeedAgentPromoter(write_queue=_wq),
             )
             # v0.4.22 soak-gate finding: wire run_orchestrator singleton so
             # MCP tool handlers (``tools/probe.py:70``, ``tools/seed.py:168``,
