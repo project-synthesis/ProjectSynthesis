@@ -14,11 +14,13 @@ ROOT="$SCRIPT_DIR/.."
 cd "$ROOT"
 
 DRY_RUN=false
+SKIP_RELEASE_GATES=false
 VERSION_ARG=""
 
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
+        --skip-release-gates) SKIP_RELEASE_GATES=true ;;
         *) VERSION_ARG="$arg" ;;
     esac
 done
@@ -100,6 +102,13 @@ if [[ -n "$(git tag -l "$TAG")" ]]; then
 fi
 
 echo "  ✓ Preflight passed"
+
+# ---------------------------------------------------------------------------
+# 2c. Release-gate check (T3.1 stub — full implementation in Task 2 GREEN)
+#     Spec: docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md §3.3
+# ---------------------------------------------------------------------------
+CURRENT_STEP="preflight (release gates)"
+echo "  ⚠ Release-gate preflight stub — full check lands in Task 2"
 
 # ---------------------------------------------------------------------------
 # 2b. Dry-run exits here — below this point we mutate files/commits/remote.

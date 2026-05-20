@@ -708,6 +708,18 @@ class ValidationSuite(Base):
     )
     retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     retired_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    is_release_gate: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        default=False,
+        doc=(
+            "When True, release.sh's gate_check preflight blocks the release "
+            "if this suite is in alarm_state='firing'. Toggle via POST "
+            "/api/suites/{id}/release-gate. See "
+            "docs/superpowers/specs/2026-05-19-t3.1-release-gate-design.md §3.1."
+        ),
+    )
 
     __table_args__ = (
         Index("ix_validation_suite_project_id", "project_id"),
