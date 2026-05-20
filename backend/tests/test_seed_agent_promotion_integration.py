@@ -27,7 +27,6 @@ from app.models import RunRow
 from app.services.run_orchestrator import RunOrchestrator
 from app.services.seed_agent_promoter import SeedAgentPromoter
 
-
 pytestmark = pytest.mark.integration
 
 

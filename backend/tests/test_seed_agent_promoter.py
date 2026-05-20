@@ -18,8 +18,6 @@ import pytest
 
 from app.config import AUTO_PROMOTE_THRESHOLD, AUTO_PROMOTE_TOP_K
 from app.models import RunRow
-from app.schemas.seed_agent_promotion import PromotionResult, RefreshResult
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -38,7 +36,6 @@ def tmp_prompts_dir(tmp_path: Path) -> Path:
 def promoter(tmp_prompts_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Construct SeedAgentPromoter pointing at the sandbox."""
     from app.services.seed_agent_promoter import SeedAgentPromoter
-    from app.services.write_queue import WriteQueue
 
     # Real WriteQueue is overkill for unit tests; use the test stand-in
     # pattern from conftest.app_client (a serialized work executor).
@@ -306,9 +303,11 @@ async def test_maybe_promote_examples_ranked_desc(
     row = _make_row(
         suggested_agent_name="ranked-agent",
         prompt_results=[
-            {"raw_prompt": "Mid prompt", "overall_score": 7.5},   # filtered (below threshold doesn't apply at K-rank time)
+            # below-threshold not relevant at K-rank time
+            {"raw_prompt": "Mid prompt", "overall_score": 7.5},
             {"raw_prompt": "Top prompt", "overall_score": 9.0},
-            {"raw_prompt": "Worst prompt", "overall_score": 6.0},  # not in top-3 only if K<4; K=3 so this drops
+            # K=3 so this drops
+            {"raw_prompt": "Worst prompt", "overall_score": 6.0},
             {"raw_prompt": "Second prompt", "overall_score": 8.5},
         ],
     )

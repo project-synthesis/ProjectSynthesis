@@ -20,7 +20,6 @@ from app.models import RunRow
 from app.schemas.seed_agent_promotion import PromotionResult, RefreshResult
 from app.services.write_queue import WriteQueue
 
-
 logger = logging.getLogger(__name__)
 
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$")
