@@ -62,7 +62,10 @@
     expandedId = expandedId === runId ? null : runId;
   }
 
-  let sentinelEl: HTMLDivElement;
+  // Bound via `bind:this`; declared with `$state(...)` so the IntersectionObserver
+  // wiring inside `onMount` reads the post-mount node value rather than the
+  // initial `undefined` (silences `non_reactive_update`).
+  let sentinelEl = $state<HTMLDivElement | undefined>(undefined);
 
   // Initial load + reactive re-fetch on filter / project change.
   $effect(() => {
