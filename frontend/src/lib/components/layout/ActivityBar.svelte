@@ -4,7 +4,7 @@
   import { ACTIVITY_TOOLTIPS } from '$lib/utils/ui-tooltips';
   import { handleTablistArrowKeys } from '$lib/utils/keyboard';
 
-  type Activity = 'editor' | 'history' | 'clusters' | 'suites' | 'github' | 'settings';
+  type Activity = 'editor' | 'history' | 'runs' | 'clusters' | 'suites' | 'github' | 'settings';
 
   let { active = $bindable('editor') }: { active: Activity } = $props();
 
@@ -17,6 +17,7 @@
   const activities: { id: Activity; label: string }[] = [
     { id: 'editor', label: 'Editor' },
     { id: 'history', label: 'History' },
+    { id: 'runs', label: 'Runs' },  // v0.4.31 T4: unified RunRow surface (probe + seed + replay)
     { id: 'clusters', label: 'Clusters' },
     { id: 'suites', label: 'Suites' },
     { id: 'github', label: 'GitHub' },
