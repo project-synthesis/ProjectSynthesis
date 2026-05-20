@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.29 — 2026-05-19
+
 ### Added
 
 - **T3.2 + T3.5 probe→seed-agent promotion**: `RunOrchestrator` auto-promotes completed `topic_probe` runs that satisfy `aggregate.mean_overall >= 7.5` AND `topic_probe_meta.suggested_agent_name` is a valid slug (regex `^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$`, max 60 chars) to a `prompts/seed-agents/<slug>.md` seed-agent file. The file's body embeds the source probe's top-3 highest-scoring prompts (by `prompt_results[i].overall_score`) as few-shot examples. `RunRow.topic_probe_meta` gains `promoted_at` + `promoted_to` provenance fields. New MCP tool `synthesis_refresh_seed_agent(agent_name)` re-renders the Examples section from the source probe's current state (useful when later high-scoring prompts have accumulated). Bundles T3.2 promotion + T3.5 cross-tier composition per the v0.4.28-v0.4.31 Probe Tier 3 decomposition. Spec: `docs/superpowers/specs/2026-05-19-v0.4.29-t3.2-t3.5-design.md`.
