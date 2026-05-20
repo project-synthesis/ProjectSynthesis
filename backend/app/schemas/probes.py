@@ -280,3 +280,31 @@ class ProbeListResponse(BaseModel):
     items: list[ProbeRunSummary] = Field(default_factory=list)
     has_more: bool
     next_offset: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# T3.3 (v0.4.30): drill-into-cluster types
+# Spec: docs/superpowers/specs/2026-05-19-v0.4.30-t3.3-drill-into-cluster-design.md §3.4
+# ---------------------------------------------------------------------------
+
+
+class DrillRequest(BaseModel):
+    """POST /api/clusters/{cluster_id}/drill body schema."""
+
+    model_config = {"extra": "forbid"}
+    topic: str = Field(min_length=3, max_length=500)
+
+
+class DrillInitiatedOutput(BaseModel):
+    """POST /api/clusters/{cluster_id}/drill response shape.
+
+    202-style; mirrors ``ReplayInitiatedOutput`` (exported from
+    ``app.schemas.validation_suite``) in shape (run_id + poll_url + a
+    contextual id field — `suite_id` for replay, `source_cluster_id` for drill —
+    + tz-aware ``started_at``).
+    """
+
+    run_id: str
+    poll_url: str
+    source_cluster_id: str
+    started_at: datetime

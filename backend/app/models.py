@@ -656,6 +656,21 @@ class RunRow(Base):
     topic_probe_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     seed_agent_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # T3.3 (v0.4.30): records the cluster a 'drill into cluster' action
+    # launched this probe from. NULL for probes not launched via the
+    # drill flow. ondelete=SET NULL so cluster deletion doesn't cascade-
+    # delete probe history. See spec §3.1.
+    source_cluster_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey(
+            "prompt_cluster.id",
+            ondelete="SET NULL",
+            name="fk_run_row_source_cluster_id",
+        ),
+        nullable=True,
+        index=True,
+    )
+
     # Deliberately NO polymorphic_on / polymorphic_identity — SQLAlchemy STI
     # is awkward when neither parent nor subclasses are routinely instantiated
     # by mode-discriminator. PR1 used option (b) from spec § 10.1 (Python

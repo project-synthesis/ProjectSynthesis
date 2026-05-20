@@ -1,0 +1,121 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+
+  interface ClusterRef {
+    id: string;
+    label: string;
+    domain: string;
+    task_type: string;
+  }
+
+  interface Props {
+    cluster: ClusterRef;
+    onClose: () => void;
+    onDrilled: (runId: string) => void;
+  }
+
+  let { cluster, onClose, onDrilled }: Props = $props();
+  let topic = $state(cluster.label);
+  let submitting = $state(false);
+  let error = $state<string | null>(null);
+  let titleEl: HTMLElement;
+
+  onMount(() => {
+    titleEl?.focus();
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  });
+
+  async function launch() {
+    if (submitting) return;
+    if (topic.trim().length < 3) return;
+    submitting = true;
+    error = null;
+    try {
+      const resp = await fetch(`/api/clusters/${cluster.id}/drill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({ detail: 'unknown_error' }));
+        error = body.detail ?? 'drill_failed';
+        submitting = false;
+        return;
+      }
+      const data = await resp.json();
+      onDrilled(data.run_id);
+    } catch (_e) {
+      error = 'network_error';
+      submitting = false;
+    }
+  }
+</script>
+
+<!-- Backdrop: z-50 (modal layer), glass at 92% via color-mix -->
+<div
+  class="fixed inset-0 z-50 flex items-center justify-center"
+  style="background: color-mix(in srgb, var(--color-bg-secondary) 92%, transparent);"
+  onclick={onClose}
+  role="presentation"
+>
+  <!-- Panel: rounded-none (sharp), 1px border-subtle, p-1.5 max -->
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="drill-modal-title"
+    class="rounded-none border border-border-subtle bg-bg-card p-1.5 space-y-1.5 min-w-[320px] max-w-[480px]"
+    style="animation: dialog-in 300ms cubic-bezier(0.16, 1, 0.3, 1);"
+    onclick={(e) => e.stopPropagation()}
+  >
+    <h2
+      id="drill-modal-title"
+      bind:this={titleEl}
+      tabindex="-1"
+      class="text-[11px] font-bold uppercase tracking-wider text-text-primary"
+    >
+      Drill into cluster
+    </h2>
+
+    <div class="flex gap-1 text-[10px]">
+      <span class="chip">{cluster.label}</span>
+      <span class="chip">{cluster.domain}</span>
+      <span class="chip">{cluster.task_type}</span>
+    </div>
+
+    <label class="block text-[10px] text-text-secondary">
+      Topic
+      <input
+        type="text"
+        class="input-field block w-full"
+        bind:value={topic}
+        minlength="3"
+        maxlength="500"
+        required
+        aria-describedby="topic-help"
+      />
+    </label>
+    <p id="topic-help" class="text-[10px] text-text-dim">
+      Pre-filled from cluster label. 3-500 characters.
+    </p>
+
+    {#if error}
+      <p class="text-[10px] text-neon-red">Error: {error}</p>
+    {/if}
+
+    <div class="flex justify-end gap-1.5">
+      <button type="button" class="btn-outline-secondary" onclick={onClose} disabled={submitting}>
+        Cancel
+      </button>
+      <button
+        type="button"
+        class="btn-primary"
+        onclick={launch}
+        disabled={submitting || topic.trim().length < 3}
+      >
+        {submitting ? 'Launching…' : 'Launch'}
+      </button>
+    </div>
+  </div>
+</div>

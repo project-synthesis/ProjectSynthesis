@@ -43,7 +43,7 @@ from app.schemas.mcp_models import (
     SaveSuiteOutput,
     StrategiesOutput,
 )
-from app.schemas.probes import ProbeRunResult
+from app.schemas.probes import DrillInitiatedOutput, ProbeRunResult  # T3.3 (v0.4.30)
 from app.schemas.seed import SeedOutput
 from app.schemas.seed_agent_promotion import RefreshResult  # T3.5
 from app.services.event_notification import notify_event_bus
@@ -1656,6 +1656,36 @@ async def synthesis_refresh_seed_agent(
     """
     from app.tools.refresh_seed_agent import handle_refresh_seed_agent
     return await handle_refresh_seed_agent(agent_name=agent_name)
+
+
+@mcp.tool(structured_output=True)
+async def synthesis_drill_into_cluster(
+    cluster_id: Annotated[str, Field(
+        description="Target PromptCluster.id to drill into.",
+    )],
+    topic: Annotated[str, Field(
+        description="Topic for the new topic_probe run (3-500 chars). "
+                    "Typically derived from cluster.label but operator-editable.",
+        min_length=3,
+        max_length=500,
+    )],
+) -> DrillInitiatedOutput:
+    """Drill from an existing cluster into a new focused topic_probe run.
+
+    Returns ``DrillInitiatedOutput`` shape: ``{run_id, poll_url,
+    source_cluster_id, started_at}``. Caller polls ``poll_url`` for terminal
+    status.
+
+    Error envelopes:
+    * ``cluster_not_found`` — cluster_id does not resolve.
+    * ``cluster_archived`` — cluster.state == 'archived'.
+    * ``invalid_topic`` — topic shorter than 3 chars or longer than 500.
+    """
+    from app.tools.drill_cluster import handle_drill_into_cluster
+    return await handle_drill_into_cluster(
+        cluster_id=cluster_id,
+        topic=topic,
+    )
 
 
 # ---------------------------------------------------------------------------

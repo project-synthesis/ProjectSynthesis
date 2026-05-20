@@ -40,7 +40,7 @@ async def db() -> AsyncGenerator[AsyncSession, None]:
     await engine.dispose()
 
 
-async def test_run_row_table_has_all_18_columns(db: AsyncSession) -> None:
+async def test_run_row_table_has_all_19_columns(db: AsyncSession) -> None:
     """RunRow table has all expected columns from spec section 4.1."""
     conn = await db.connection()
     cols = await conn.run_sync(
@@ -51,6 +51,7 @@ async def test_run_row_table_has_all_18_columns(db: AsyncSession) -> None:
         "project_id", "repo_full_name", "topic", "intent_hint",
         "prompts_generated", "prompt_results", "aggregate", "taxonomy_delta",
         "final_report", "suite_id", "topic_probe_meta", "seed_agent_meta",
+        "source_cluster_id",
     }
     assert cols == expected, f"Column mismatch: extra={cols - expected}, missing={expected - cols}"
 
