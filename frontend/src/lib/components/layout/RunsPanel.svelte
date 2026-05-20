@@ -22,8 +22,35 @@
   let expandedId = $state<string | null>(null);
   let requestId = 0;
 
-  async function fetchRuns(_offset: number, _append: boolean): Promise<void> {
-    throw new Error('RED phase — implement in GREEN');
+  async function fetchRuns(offset: number, append: boolean): Promise<void> {
+    const myRequest = ++requestId;
+    if (offset === 0) {
+      runsLoaded = false;
+      runsError = null;
+    } else {
+      loadingMore = true;
+    }
+    try {
+      const resp = await listRuns({
+        mode: modeFilter !== 'all' ? modeFilter : undefined,
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        project_id: projectStore.currentProjectId ?? undefined,
+        limit: 20,
+        offset,
+      });
+      if (myRequest !== requestId) return;  // stale response — discard
+      runs = append ? [...runs, ...resp.items] : resp.items;
+      hasMore = resp.has_more;  // authoritative; runs.ts:80
+      nextOffset = resp.next_offset;
+      runsLoaded = true;
+      runsError = null;
+    } catch (err) {
+      if (myRequest !== requestId) return;
+      runsError = err instanceof Error ? err.message : 'Failed to load runs';
+      runsLoaded = true;
+    } finally {
+      if (myRequest === requestId && offset > 0) loadingMore = false;
+    }
   }
 
   function resetFilters(): void {
@@ -36,6 +63,29 @@
   }
 
   let sentinelEl: HTMLDivElement;
+
+  // Initial load + reactive re-fetch on filter / project change.
+  $effect(() => {
+    if (!active) return;
+    // Touch all three reactive sources so $effect tracks them
+    void modeFilter;
+    void statusFilter;
+    void projectStore.currentProjectId;
+    expandedId = null;  // collapse open row on filter/project change
+    untrack(() => fetchRuns(0, false));
+  });
+
+  // Scroll-load sentinel observer.
+  onMount(() => {
+    if (typeof IntersectionObserver === 'undefined') return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && hasMore && !loadingMore && nextOffset !== null) {
+        void fetchRuns(nextOffset, true);
+      }
+    }, { rootMargin: '100px' });
+    if (sentinelEl) obs.observe(sentinelEl);
+    return () => obs.disconnect();
+  });
 </script>
 
 <div class="runs-panel">

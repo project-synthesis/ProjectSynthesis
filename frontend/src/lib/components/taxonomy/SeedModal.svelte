@@ -58,9 +58,9 @@
   // State
   // v0.4.22 T2 Cycle 11: third tab `topic_probe` joins generate/provide so
   // SeedModal is the single entry point for all three seed-equivalent flows.
-  // The new tab shares the `.seed-tab` typography (font-mono + 0.05em
-  // letter-spacing) with GENERATE/PROVIDE — canonical font-display migration
-  // for all 3 tabs is deferred to T4 per the spec §6 density-pin table.
+  // The new tab shares the `.seed-tab` typography (font-display + 0.1em
+  // letter-spacing) with GENERATE/PROVIDE — v0.4.31 T4 migration per Probe T2
+  // spec §6 deferred entry; closed in this cycle.
   let mode = $state<'generate' | 'provide' | 'topic_probe'>('generate');
   let projectDescription = $state('');
   let promptsText = $state('');
@@ -803,12 +803,12 @@
     border: none;
     border-right: 1px solid var(--color-border-subtle);
     color: var(--color-text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-display);
     font-size: 11px;
     padding: 8px 12px;
     cursor: pointer;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.1em;
   }
 
   .seed-tab:last-child {
