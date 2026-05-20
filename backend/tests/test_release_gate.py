@@ -18,7 +18,6 @@ import pytest
 from httpx import AsyncClient
 
 from app.models import RunRow, ValidationSuite
-from app.services.validation_suite_service import ValidationSuiteService
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -269,27 +268,31 @@ async def test_list_release_gates_maps_firing_and_nominal(
 # ---------------------------------------------------------------------------
 
 
-async def test_list_release_gates_empty_skips_alarm_call(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_list_release_gates_empty_skips_alarm_call(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Acceptance #4 — when no flagged suites, return []; skip alarm call.
 
-    Constructs a fresh ``ValidationSuiteService`` (NOT the app singleton) so
-    the alarm-cache state is isolated. The service's internal
-    ``async_session_factory()`` opens the real DB session — fine because we
-    expect zero flagged suites in any non-fixture DB.
+    Uses ``app_client`` (which monkey-patches ``async_session_factory``) so
+    the service-internal session opens against the test DB. Spies on the
+    router's module-level ``_service.compute_regression_alarm`` to verify it
+    is NOT invoked when zero flagged suites are present.
     """
-    service = ValidationSuiteService()
+    from app.routers.suites import _service
+    from app.schemas.validation_suite import RegressionAlarmBlock
 
     calls = {"count": 0}
 
     async def spy_compute_regression_alarm(*args: Any, **kwargs: Any) -> Any:
         calls["count"] += 1
-        from app.schemas.validation_suite import RegressionAlarmBlock
         return RegressionAlarmBlock(suites_total=0, suites_in_alarm=0, latest_alarms=[])
 
-    monkeypatch.setattr(service, "compute_regression_alarm", spy_compute_regression_alarm)
+    monkeypatch.setattr(_service, "compute_regression_alarm", spy_compute_regression_alarm)
 
-    result = await service.list_release_gates()
-    assert result == []
+    resp = await app_client.get("/api/suites/release-gates")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
     assert calls["count"] == 0, (
         "compute_regression_alarm must NOT be called when there are zero "
         "flagged suites (optimization branch per spec §3.2)"

@@ -48,6 +48,7 @@ _EXPECTED_VALIDATION_SUITE_COLUMNS = {
     "created_at",
     "retired_at",
     "retired_reason",
+    "is_release_gate",  # T3.1 release-gate (rev 4d16718c337c)
 }
 
 _EXPECTED_VALIDATION_SUITE_INDEX_NAMES = {
@@ -139,8 +140,8 @@ def test_validation_suite_table_exists_post_upgrade(migrated_engine):
     )
 
 
-def test_validation_suite_has_11_columns(migrated_engine):
-    """2. The table has exactly the 11 columns named in spec § 3."""
+def test_validation_suite_has_12_columns(migrated_engine):
+    """2. The table has exactly 12 columns (11 from spec §3 + is_release_gate from T3.1)."""
     inspector = inspect(migrated_engine)
     columns = inspector.get_columns("validation_suite")
     column_names = {col["name"] for col in columns}
