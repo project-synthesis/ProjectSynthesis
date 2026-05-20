@@ -1105,6 +1105,68 @@ async def drill_into_cluster(
 ) -> DrillInitiatedOutput:
     """Drill from an existing cluster into a new focused topic_probe run.
 
-    RED PHASE STUB — full implementation in GREEN (spec §3.2).
+    Spec: ``docs/superpowers/specs/2026-05-19-v0.4.30-t3.3-drill-into-cluster-design.md`` §3.2.
+
+    Gate sequence:
+      1. Cluster must exist → 404 ``cluster_not_found``.
+      2. Cluster state != 'archived' → 409 ``cluster_archived``.
+      3. ``topic`` field validation per ``DrillRequest`` constraints
+         (Pydantic at body-parse time).
+      4. ``run_orchestrator`` registered on app.state → 503
+         ``run_orchestrator_unavailable`` (defensive — matches
+         ``routers/suites.py:553-560`` precedent).
+
+    On all gates passing: mint ``run_id`` + naive UTC ``started_at`` (caller-
+    minted per the ``dispatch_async`` race-safety contract at
+    ``run_orchestrator.py:244-322``), build ``RunRequest`` with
+    ``source_cluster_id`` in payload, call ``await dispatch_async`` (returns
+    ``None``; awaits the RunRow INSERT internally before returning). Mirrors
+    the canonical sibling at ``routers/suites.py:543-617``.
     """
-    raise NotImplementedError("RED phase — implement in GREEN")
+    cluster = await db.get(PromptCluster, cluster_id)
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="cluster_not_found")
+    if cluster.state == "archived":
+        raise HTTPException(status_code=409, detail="cluster_archived")
+
+    # Defensive — symmetric with routers/suites.py:553-560 + routers/probes.py
+    orchestrator = getattr(request.app.state, "run_orchestrator", None)
+    if orchestrator is None:
+        raise HTTPException(
+            status_code=503, detail="run_orchestrator_unavailable",
+        )
+
+    # Caller mints run_id + started_at BEFORE dispatch (per dispatch_async
+    # contract). Naive UTC for SQLite DateTime column compatibility.
+    run_id = uuid.uuid4().hex
+    started_at = datetime.now(UTC).replace(tzinfo=None)
+
+    run_request = RunRequest(
+        mode="topic_probe",
+        payload={
+            "topic": body.topic,
+            "grounding_mode": "codebase",  # matches ProbeRunRequest default
+            "source_cluster_id": cluster_id,
+        },
+    )
+
+    # dispatch_async awaits the initial RunRow INSERT before returning.
+    # Returns None; row state is observable via GET /api/runs/{run_id}.
+    await orchestrator.dispatch_async(
+        mode="topic_probe",
+        request=run_request,
+        run_id=run_id,
+    )
+
+    # Response headers per 202+polling convention (matches routers/suites.py:602-604)
+    poll_url = f"/api/runs/{run_id}"
+    response.headers["Location"] = poll_url
+    response.headers["Retry-After"] = "5"
+
+    return DrillInitiatedOutput(
+        run_id=run_id,
+        poll_url=poll_url,
+        source_cluster_id=cluster_id,
+        # Reattach UTC tzinfo for response — schema is timezone-aware datetime
+        started_at=started_at.replace(tzinfo=UTC),
+    )

@@ -10,9 +10,60 @@ import pytest
 from httpx import AsyncClient
 
 from app.models import PromptCluster, RunRow
+from app.schemas.runs import RunRequest
+from app.services.generators.base import GeneratorResult
 
 
 pytestmark = pytest.mark.integration
+
+
+class _NoopGenerator:
+    """Stub RunGenerator that does nothing — satisfies dispatch_async's
+    spawned ``_run_to_completion`` task without doing real work.
+
+    Mirrors the sibling stub in ``test_drill_cluster.py`` so the integration
+    test's REST + MCP paths can ``dispatch_async`` without spinning up the
+    full topic_probe generator pipeline.
+    """
+    async def run(self, request: RunRequest, *, run_id: str) -> GeneratorResult:
+        return GeneratorResult(
+            terminal_status="completed",
+            prompts_generated=0,
+            prompt_results=[],
+            aggregate={},
+            taxonomy_delta={},
+            final_report="",
+        )
+
+
+@pytest.fixture(autouse=True)
+def installed_orchestrator(app_client):
+    """Install a real RunOrchestrator on app.state + _shared singleton.
+
+    Required for the 503 ``run_orchestrator_unavailable`` guard in the REST
+    endpoint AND for the MCP handler's ``get_run_orchestrator()`` lookup.
+    Mirrors the autouse fixture in ``test_drill_cluster.py``. Teardown
+    restores prior values so cross-test isolation is preserved.
+    """
+    from app.main import app
+    from app.services.run_orchestrator import RunOrchestrator
+    from app.tools import _shared as _tools_shared
+
+    write_queue = app.state.write_queue  # installed by app_client fixture
+    orch = RunOrchestrator(
+        write_queue=write_queue,
+        generators={"topic_probe": _NoopGenerator()},  # type: ignore[dict-item]
+    )
+
+    prev_app_orch = getattr(app.state, "run_orchestrator", None)
+    prev_shared_orch = _tools_shared._run_orchestrator
+    app.state.run_orchestrator = orch
+    _tools_shared.set_run_orchestrator(orch)
+
+    yield orch
+
+    app.state.run_orchestrator = prev_app_orch
+    _tools_shared.set_run_orchestrator(prev_shared_orch)
 
 
 @pytest.fixture
