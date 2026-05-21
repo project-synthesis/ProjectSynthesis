@@ -4,6 +4,7 @@
   import type { RunSummary } from '$lib/api/runs';
   import { formatRelativeTime } from '$lib/utils/formatting';
   import RunDetailInline from './RunDetailInline.svelte';
+  import RunActionMenu from './RunActionMenu.svelte';
 
   interface Props {
     run: RunSummary;
@@ -23,6 +24,33 @@
     partial: 'text-neon-yellow',
     failed: 'text-neon-red',
   };
+
+  // v0.4.32 — operator-writable label takes precedence over the system-set
+  // ``topic``; falls back to the row id for never-named rows.
+  const displayLabel = $derived(run.display_name ?? run.topic ?? run.id);
+
+  // v0.4.32 — kebab menu state + rename state
+  let menuOpen = $state(false);
+  let renaming = $state(false);
+  let renameDraft = $state('');
+  let kebabBtn: HTMLButtonElement | undefined = $state();
+
+  // STUB — full impl in GREEN
+  function openMenu(): void {
+    throw new Error('RED phase — implement in GREEN');
+  }
+  function closeMenu(): void {
+    throw new Error('RED phase — implement in GREEN');
+  }
+  function startRename(): void {
+    throw new Error('RED phase — implement in GREEN');
+  }
+  async function submitRename(): Promise<void> {
+    throw new Error('RED phase — implement in GREEN');
+  }
+  function cancelRename(): void {
+    throw new Error('RED phase — implement in GREEN');
+  }
 </script>
 
 <div class="run-row" class:expanded role="listitem">

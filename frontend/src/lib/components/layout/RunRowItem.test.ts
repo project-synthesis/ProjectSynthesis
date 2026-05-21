@@ -1,6 +1,6 @@
 // frontend/src/lib/components/layout/RunRowItem.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { render, fireEvent } from '@testing-library/svelte';
+import { render, fireEvent, waitFor } from '@testing-library/svelte';
 import RunRowItem from './RunRowItem.svelte';
 import type { RunSummary } from '$lib/api/runs';
 import * as runsApi from '$lib/api/runs';
@@ -84,5 +84,66 @@ describe('RunRowItem', () => {
     expect(btn.getAttribute('aria-expanded')).toBe('true');
     // The RunDetailInline component renders inside the expanded wrapper
     expect(container.querySelector('.run-detail')).toBeTruthy();
+  });
+
+  // v0.4.32 — RunsPanel polish: kebab + rename + delete
+
+  it('Test 12: kebab opens menu with Rename + Delete', async () => {
+    vi.spyOn(runsApi, 'getRun').mockResolvedValue(fullRunFixture as never);
+    const { getByLabelText, getByRole } = render(RunRowItem, {
+      run: sampleRun,
+      expanded: false,
+      onClick: vi.fn(),
+    });
+    const kebab = getByLabelText(/Open actions menu/);
+    await fireEvent.click(kebab);
+    expect(getByRole('menuitem', { name: /Rename/ })).toBeTruthy();
+    expect(getByRole('menuitem', { name: /Delete/ })).toBeTruthy();
+  });
+
+  it('Test 13: Rename enters inline edit mode + replaces topic with input', async () => {
+    vi.spyOn(runsApi, 'getRun').mockResolvedValue(fullRunFixture as never);
+    const { getByLabelText, getByRole, container } = render(RunRowItem, {
+      run: sampleRun,
+      expanded: false,
+      onClick: vi.fn(),
+    });
+    await fireEvent.click(getByLabelText(/Open actions menu/));
+    await fireEvent.click(getByRole('menuitem', { name: /Rename/ }));
+    const input = container.querySelector('input.input-field') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    expect(input.value).toBe(sampleRun.topic); // pre-filled
+  });
+
+  it('Test 14: Enter on rename input submits PATCH', async () => {
+    vi.spyOn(runsApi, 'getRun').mockResolvedValue(fullRunFixture as never);
+    const patchSpy = vi.spyOn(runsApi, 'patchRun').mockResolvedValue({
+      ...sampleRun, display_name: 'New Label',
+    });
+    const { getByLabelText, getByRole, container } = render(RunRowItem, {
+      run: sampleRun,
+      expanded: false,
+      onClick: vi.fn(),
+    });
+    await fireEvent.click(getByLabelText(/Open actions menu/));
+    await fireEvent.click(getByRole('menuitem', { name: /Rename/ }));
+    const input = container.querySelector('input.input-field') as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: 'New Label' } });
+    await fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledWith(sampleRun.id, { display_name: 'New Label' }));
+  });
+
+  it('Test 15: Delete from kebab shows confirm modal', async () => {
+    vi.spyOn(runsApi, 'getRun').mockResolvedValue(fullRunFixture as never);
+    const onDeleteConfirm = vi.fn();
+    const { getByLabelText, getByRole } = render(RunRowItem, {
+      run: sampleRun,
+      expanded: false,
+      onClick: vi.fn(),
+      onDeleteConfirm,
+    });
+    await fireEvent.click(getByLabelText(/Open actions menu/));
+    await fireEvent.click(getByRole('menuitem', { name: /Delete/ }));
+    expect(onDeleteConfirm).toHaveBeenCalledWith(sampleRun.id);
   });
 });

@@ -628,6 +628,10 @@ class RunRow(Base):
 
     # Promoted from probe-mode (Q2 hybrid — query-hot)
     topic: Mapped[str | None] = mapped_column(String, nullable=True)
+    # v0.4.32 — operator-writable label. Separate from `topic` (system-set,
+    # semantic) so renames don't lose audit trail. RunsPanel renders
+    # `display_name ?? topic ?? id`.
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     intent_hint: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Shared output payloads

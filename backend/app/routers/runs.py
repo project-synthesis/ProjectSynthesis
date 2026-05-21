@@ -2,6 +2,10 @@
 
 GET /api/runs — paginated list, filterable by mode/status/project_id, ordered started_at desc
 GET /api/runs/{run_id} — full RunRow detail; 404 on miss
+DELETE /api/runs/{run_id} — v0.4.32 hard-delete; 204 on success, 404 on miss
+PATCH /api/runs/{run_id} — v0.4.32 set display_name; empty string clears
+POST /api/runs/bulk-delete — v0.4.32 bulk-delete in single transaction
+POST /api/runs/bulk-export — v0.4.32 bulk-export JSON
 """
 from __future__ import annotations
 
@@ -13,7 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import RunRow
-from app.schemas.runs import RunListResponse, RunResult, RunSummary
+from app.schemas.runs import (
+    BulkDeleteResponse,
+    BulkIdsRequest,
+    RunListResponse,
+    RunPatch,
+    RunResult,
+    RunSummary,
+)
+from app.services import run_admin
 
 router = APIRouter(prefix="/api", tags=["runs"])
 
@@ -28,6 +40,7 @@ def _serialize_summary(row: RunRow) -> RunSummary:
         project_id=row.project_id,
         repo_full_name=row.repo_full_name,
         topic=row.topic,
+        display_name=row.display_name,
         intent_hint=row.intent_hint,
         prompts_generated=row.prompts_generated or 0,
     )
@@ -44,6 +57,7 @@ def _serialize_full(row: RunRow) -> RunResult:
         project_id=row.project_id,
         repo_full_name=row.repo_full_name,
         topic=row.topic,
+        display_name=row.display_name,
         intent_hint=row.intent_hint,
         prompts_generated=row.prompts_generated or 0,
         prompt_results=row.prompt_results or [],
@@ -102,3 +116,47 @@ async def get_run(
     if row is None:
         raise HTTPException(status_code=404, detail="run_not_found")
     return _serialize_full(row)
+
+
+@router.delete("/runs/{run_id}", status_code=204)
+async def delete_run(run_id: str) -> None:
+    """v0.4.32 — hard-delete a RunRow. 204 on success, 404 if missing."""
+    deleted = await run_admin.delete_run(run_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+
+@router.patch("/runs/{run_id}", response_model=RunSummary)
+async def patch_run(run_id: str, patch: RunPatch) -> RunSummary:
+    """v0.4.32 — set RunRow.display_name. Empty string clears the rename.
+
+    422 from Pydantic validation if display_name > 200 chars (FastAPI default).
+    404 if the RunRow doesn't exist.
+    """
+    updated = await run_admin.rename_run(run_id, patch.display_name)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return _serialize_summary(updated)
+
+
+@router.post("/runs/bulk-delete", response_model=BulkDeleteResponse)
+async def bulk_delete_runs(req: BulkIdsRequest) -> BulkDeleteResponse:
+    """v0.4.32 — bulk-delete RunRows in one transaction.
+
+    422 from Pydantic if ids list is empty or > 200 items (FastAPI default).
+    """
+    result = await run_admin.bulk_delete_runs(req.ids)
+    return BulkDeleteResponse(**result)
+
+
+@router.post("/runs/bulk-export")
+async def bulk_export_runs(
+    req: BulkIdsRequest, db: AsyncSession = Depends(get_db),
+) -> list[RunResult]:
+    """v0.4.32 — read-only bulk export. Returns JSON array of full RunResult shapes.
+
+    Missing ids are silently omitted (NOT errors). 422 if ids empty or > 200 (Pydantic).
+    """
+    result = await db.execute(select(RunRow).where(RunRow.id.in_(req.ids)))
+    rows = list(result.scalars().all())
+    return [_serialize_full(r) for r in rows]

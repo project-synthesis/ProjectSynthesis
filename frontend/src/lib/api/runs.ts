@@ -23,6 +23,8 @@ export interface RunSummary {
   project_id: string | null;
   repo_full_name: string | null;
   topic: string | null;
+  /** v0.4.32 — operator-writable label. Renders as `display_name ?? topic ?? id`. */
+  display_name?: string | null;
   intent_hint: string | null;
   prompts_generated: number;
 }
@@ -122,4 +124,57 @@ export async function listRuns(
  */
 export async function getRun(runId: string): Promise<RunResult> {
   return apiFetch<RunResult>(`/runs/${encodeURIComponent(runId)}`);
+}
+
+// ---------------------------------------------------------------------------
+// v0.4.32 — RunsPanel polish: delete, rename, bulk-delete, bulk-export
+// ---------------------------------------------------------------------------
+
+/**
+ * DELETE /api/runs/{id} — hard-delete a RunRow. Cascade-safe: the suite's
+ * source_run_id FK is `ondelete=SET NULL` so the suite is preserved.
+ */
+export async function deleteRun(id: string): Promise<void> {
+  await apiFetch<void>(`/runs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/**
+ * PATCH /api/runs/{id} — set the operator-writable `display_name` label.
+ * Empty string and `null` both clear the rename.
+ */
+export async function patchRun(
+  id: string,
+  patch: { display_name: string | null },
+): Promise<RunSummary> {
+  return apiFetch<RunSummary>(`/runs/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+}
+
+/**
+ * POST /api/runs/bulk-delete — single-transaction bulk-delete.
+ * Server caps at 200 ids per request.
+ */
+export async function bulkDeleteRuns(
+  ids: string[],
+): Promise<{ deleted: string[]; not_found: string[] }> {
+  return apiFetch<{ deleted: string[]; not_found: string[] }>(`/runs/bulk-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+}
+
+/**
+ * POST /api/runs/bulk-export — read-only JSON export of full RunResult
+ * shapes. Missing ids are silently omitted. Server caps at 200 ids.
+ */
+export async function bulkExportRuns(ids: string[]): Promise<RunResult[]> {
+  return apiFetch<RunResult[]>(`/runs/bulk-export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
 }
