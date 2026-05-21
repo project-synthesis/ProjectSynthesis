@@ -1121,6 +1121,7 @@ class TestClaudeCLIRateLimitParser:
         rather than coercing the day silently. ``datetime.replace`` raises
         ``ValueError`` for impossible dates which the broad ``except`` in
         ``_parse_cli_reset_time`` catches → returns ``None``."""
+        from datetime import datetime
         from unittest.mock import patch
 
         from app.providers.claude_cli import _parse_cli_reset_time
@@ -1130,7 +1131,6 @@ class TestClaudeCLIRateLimitParser:
         # leap); rolled-forward year (2028) IS leap so Feb 29 2028 would
         # actually parse successfully — that's the leap-year happy path
         # covered by the next test.
-        from datetime import datetime
         with patch("app.providers.claude_cli.datetime") as mock_dt:
             # Pretend "now" is mid-2025 (also non-leap), and the rollover
             # target year (2025 if reset is in the future relative to now,
