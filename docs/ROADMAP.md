@@ -157,6 +157,7 @@ With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate 
 - **v0.4.30** — **Probe T3.3 drill-into-cluster** (Probe Tier 3 decomposition, 2026-05-19). Action on seed runs auto-launches a probe scoped to the cluster's `intent_label`. UI feature + service plumbing. — **PLANNED**.
 - **v0.4.32** — **RunsPanel polish sweep** (per-row rename + delete + multi-select + bulk-delete + bulk-export JSON). Closes 4 ROADMAP TBDs from v0.4.31 (lines 162-167 cluster). — **SHIPPED 2026-05-21** (PR #TBD).
 - **v0.4.31** — **Probe Tier 4** (final UI consolidation — substrate already done in P3; was v0.4.29 pre-T3 decomposition shift). — **SHIPPED 2026-05-20** (PR #TBD).
+- **v0.4.35** — **Periodic GC sweep**: `_gc_orphan_runs` + `_gc_stuck_pending_optimizations` now also fire hourly via `_recurring_gc_task`. Each sweep tags log with `phase` (startup/recurring) for ops forensics. — **SHIPPED 2026-05-21**.
 - **TBD** — Foundation P2 Path B (Phase 3 body extraction — deferred indefinitely; needs fresh design cycle; not blocking T3-T4 because they build on the unified substrate from P3, not on Phase 3 isolation).
 - **TBD** — UI affordance for ValidationSuite release-gate toggle (admin-only API in v0.4.28 T3.1; UI suite-card toggle deferred). Could fold into v0.4.29 or later.
 - **TBD** — Universal "Drill into cluster" UI surface (anywhere a cluster appears — `ClusterNavigator`, `ClusterRow`, `ClusterTemplatesSection`, 3D Pattern Graph cluster context menu). v0.4.30 T3.3 shipped the seed-result-view-only version per the ROADMAP "action on seed runs" scoping; this entry tracks the future expansion to all cluster surfaces.
@@ -176,6 +177,10 @@ With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate 
 - **TBD** — RunsPanel: soft-delete + 7-day trash retention. v0.4.32 ships hard-delete only.
 - **TBD** — 8 deferred Sub-project D ring-animation tests (T2.2 transitions + readiness ring tier-tween + size-drift-rebuild) — scoped out of `RingBuilder` as visual polish. No version target; restore alongside any future ring-feature work.
 - **TBD** — Probe → Routine `/schedule` integration (periodic probe re-runs feeding the release-gate machinery from v0.4.28 T3.1). T3.1 reads existing alarm state; this future feature keeps the state fresh on a schedule. No version target.
+- **TBD** — Promote remaining startup-only GC sweeps to recurring: `_gc_archived_zero_member_clusters`, `_gc_orphan_meta_patterns`, `_gc_test_leak_optimizations`, `_gc_reconcile_member_counts`, `_gc_orphan_repo_index_runs`. v0.4.35 promoted only the 2 stuck-state sweeps; others can be promoted incrementally if same long-uptime gap is observed.
+- **TBD** — Configurable GC sweep interval via env var (e.g., `GC_RECURRING_INTERVAL_MINUTES`). v0.4.35 inherits the existing hourly cadence from `_recurring_gc_task`. If operators want shorter intervals for stuck-row sweeps without affecting token/repo sweeps, this would split the cadence.
+- **TBD** — Prometheus-style counter metrics (`gc_orphan_runs_cleaned_total{phase="startup|recurring"}`, etc.). v0.4.35 ships log-only observability. Counter metrics would feed Grafana dashboards.
+- **TBD** — New event-bus events `gc_orphan_swept` / `gc_pending_swept` for SSE consumers. v0.4.35 emits via `logger.info` only. Event-bus would let frontend banners react in real-time to "we just cleaned N stuck rows" notifications.
 
 **Per-phase specs:** each phase gets its own spec → plan → strict 7-dispatch TDD cycle (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → spec-compliance reviewer → code-quality reviewer) per `feedback_tdd_protocol.md`. P1 brainstorm starts immediately after this ROADMAP update lands.
 
