@@ -98,7 +98,7 @@
       aria-expanded={expanded}
       aria-label="{MODE_LABEL[run.mode]} {displayLabel}"
     >
-      <span class="run-mode chip">{MODE_LABEL[run.mode]}</span>
+      <span class="run-mode chip chip-rect">{MODE_LABEL[run.mode]}</span>
       {#if renaming}
         <input
           class="input-field rename-input"

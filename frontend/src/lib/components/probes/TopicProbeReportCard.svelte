@@ -241,25 +241,27 @@
     </span>
   </div>
 
-  <!-- Top 3 prompts ───────────────────────────────────────────── -->
-  <section class="report-section" data-test="report-section" data-section="top3">
-    <h3 class="report-section-title">Top 3 Prompts</h3>
-    <ol class="report-top-list">
-      {#each topPrompts as p}
-        {@const detail = result.prompt_results.find((r) => r.prompt_index === p.prompt_index)}
-        <li class="report-top-item" data-test="report-top-prompt" data-prompt-index={p.prompt_index}>
-          <span class="report-top-score">{p.overall_score.toFixed(1)}</span>
-          <span class="report-top-prompt">{detail?.raw_prompt ?? '—'}</span>
-        </li>
-      {/each}
-    </ol>
-  </section>
+  <!-- Top 3 prompts — hidden when empty (failed/early-abort runs) ───── -->
+  {#if topPrompts.length > 0}
+    <section class="report-section" data-test="report-section" data-section="top3">
+      <h3 class="report-section-title">Top 3 Prompts</h3>
+      <ol class="report-top-list">
+        {#each topPrompts as p}
+          {@const detail = result.prompt_results.find((r) => r.prompt_index === p.prompt_index)}
+          <li class="report-top-item" data-test="report-top-prompt" data-prompt-index={p.prompt_index}>
+            <span class="report-top-score">{p.overall_score.toFixed(1)}</span>
+            <span class="report-top-prompt">{detail?.raw_prompt ?? '—'}</span>
+          </li>
+        {/each}
+      </ol>
+    </section>
+  {/if}
 
-  <!-- Score distribution ─────────────────────────────────────── -->
-  <section class="report-section" data-test="report-section" data-section="distribution">
-    <h3 class="report-section-title">Score Distribution</h3>
-    <div class="report-distribution">
-      {#if distribution}
+  <!-- Score distribution — hidden when no distribution data ────────── -->
+  {#if distribution}
+    <section class="report-section" data-test="report-section" data-section="distribution">
+      <h3 class="report-section-title">Score Distribution</h3>
+      <div class="report-distribution">
         <div class="report-dist-row">
           <span class="report-dist-label">Excellent</span>
           <span class="report-dist-val">{distribution.excellent}</span>
@@ -276,11 +278,9 @@
           <span class="report-dist-label">Poor</span>
           <span class="report-dist-val">{distribution.poor}</span>
         </div>
-      {:else}
-        <span class="report-dist-empty">No score distribution available.</span>
-      {/if}
-    </div>
-  </section>
+      </div>
+    </section>
+  {/if}
 
   <!-- Taxonomy delta ─────────────────────────────────────────── -->
   <!--
@@ -304,31 +304,35 @@
       </div>
     {/if}
   {/snippet}
-  <section class="report-section" data-test="report-section" data-section="taxonomy">
-    <h3 class="report-section-title">Taxonomy Delta</h3>
-    <div class="report-delta">
-      {@render tagRow('Domains', taxonomy.domains_created)}
-      {@render tagRow('Sub-domains', taxonomy.sub_domains_created)}
-      <div class="report-delta-row">
-        <span class="report-delta-label">Clusters touched</span>
-        <span class="report-delta-num">{taxonomy.clusters_touched}</span>
+  <!-- Taxonomy delta — hidden when nothing changed (no domains, no
+       sub-domains, no clusters touched). ─────────────────────────── -->
+  {#if taxonomy.domains_created.length > 0 || taxonomy.sub_domains_created.length > 0 || taxonomy.clusters_touched > 0}
+    <section class="report-section" data-test="report-section" data-section="taxonomy">
+      <h3 class="report-section-title">Taxonomy Delta</h3>
+      <div class="report-delta">
+        {@render tagRow('Domains', taxonomy.domains_created)}
+        {@render tagRow('Sub-domains', taxonomy.sub_domains_created)}
+        {#if taxonomy.clusters_touched > 0}
+          <div class="report-delta-row">
+            <span class="report-delta-label">Clusters touched</span>
+            <span class="report-delta-num">{taxonomy.clusters_touched}</span>
+          </div>
+        {/if}
       </div>
-    </div>
-  </section>
+    </section>
+  {/if}
 
-  <!-- Recommended follow-ups ───────────────────────────────── -->
-  <section class="report-section" data-test="report-section" data-section="followups">
-    <h3 class="report-section-title">Recommended Follow-ups</h3>
-    {#if followups.length > 0}
+  <!-- Recommended follow-ups — hidden when none ─────────────────── -->
+  {#if followups.length > 0}
+    <section class="report-section" data-test="report-section" data-section="followups">
+      <h3 class="report-section-title">Recommended Follow-ups</h3>
       <ul class="report-followups">
         {#each followups as f}
           <li data-test="report-followup">{f}</li>
         {/each}
       </ul>
-    {:else}
-      <span class="report-empty">No follow-ups recommended.</span>
-    {/if}
-  </section>
+    </section>
+  {/if}
 
   <!-- Actions ──────────────────────────────────────────────── -->
   <div class="report-actions">
@@ -373,8 +377,14 @@
   .report-card {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 12px;
+    /* Tightened to sidebar-compatible spacing per layout-and-accessibility.md:
+       padding `p-3+` (12px+) is banned everywhere; `p-1.5` (6px) is the
+       maximum for sidebar/panel chrome. Same for vertical section gap
+       (`space-y-1.5` 6px ceiling). The card now feels at home inline in
+       RunDetailInline (Runs panel inline-expand) without losing its
+       structure for the standalone probe-result + seed-result contexts. */
+    gap: 6px;
+    padding: 6px;
     background: var(--color-bg-secondary);
     border: 1px solid var(--color-border-subtle);
     font-family: var(--font-mono);
@@ -414,7 +424,9 @@
     font-family: var(--font-display);
     font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.08em;
+    /* Canon: 0.1em per SKILL.md typography "Section heading" rule.
+       Was 0.08em — minor drift, corrected. */
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--color-text-dim);
     margin: 0;
@@ -492,12 +504,10 @@
     font-weight: 600;
   }
 
-  .report-dist-empty,
-  .report-empty {
-    font-size: 10px;
-    color: var(--color-text-dim);
-    padding: 4px;
-  }
+  /* `.report-dist-empty` + `.report-empty` rules removed — their consumers
+     (the {:else} branches for "No score distribution available." / "No
+     follow-ups recommended.") were deleted in favor of hiding the entire
+     section when empty (cleaner UX for failed/partial runs). */
 
   .report-delta {
     display: flex;
