@@ -354,7 +354,11 @@
           class="replay-row"
           data-test="replay-row"
           role="row"
-          use:tooltip={`started ${fmt(r.started_at)} · completed ${fmt(r.completed_at)}`}
+          use:tooltip={
+            r.completed_at
+              ? `started ${fmt(r.started_at)} · finished ${fmt(r.completed_at)}`
+              : `started ${fmt(r.started_at)} · still running`
+          }
         >
           <span role="cell" class="col-id">{r.id}</span>
           <span role="cell" class="col-status" data-status={r.status}>{r.status}</span>

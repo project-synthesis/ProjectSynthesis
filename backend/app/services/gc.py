@@ -81,7 +81,7 @@ async def run_startup_gc(
             total += await _gc_archived_zero_member_clusters(write_db)
             total += await _gc_orphan_meta_patterns(write_db)
             total += await _gc_orphan_probe_runs(write_db)  # legacy no-op (PR1; deleted PR2)
-            total += await _gc_orphan_runs(write_db)  # P3: sweeps topic_probe + seed_agent
+            total += await _gc_orphan_runs(write_db)  # P3: sweeps all RunRow modes (topic_probe + seed_agent + replay_run)
             total += await _gc_orphan_repo_index_runs(write_db)
             total += await _gc_test_leak_optimizations(write_db)
             total += await _gc_reconcile_member_counts(write_db)
@@ -106,7 +106,7 @@ async def run_startup_gc(
     total_cleaned += await _gc_archived_zero_member_clusters(db)
     total_cleaned += await _gc_orphan_meta_patterns(db)
     total_cleaned += await _gc_orphan_probe_runs(db)  # legacy no-op (PR1; deleted PR2)
-    total_cleaned += await _gc_orphan_runs(db)  # P3: sweeps topic_probe + seed_agent
+    total_cleaned += await _gc_orphan_runs(db)  # P3: sweeps all RunRow modes (topic_probe + seed_agent + replay_run)
     total_cleaned += await _gc_orphan_repo_index_runs(db)
     # v0.4.12: defense-in-depth against test-leak (Optimization rows
     # with non-uuid IDs). Production code uses uuid4() exclusively;
@@ -365,12 +365,21 @@ async def _gc_orphan_runs(db: AsyncSession) -> int:
     """Sweep stale ``status='running'`` RunRow rows past ``RUN_ORPHAN_TTL_HOURS``.
 
     Foundation P3 (v0.4.18) — supersedes ``_gc_orphan_probe_runs``. Sweeps
-    both ``topic_probe`` and ``seed_agent`` mode rows in one pass. Rows in
-    ``status='running'`` whose ``started_at`` predates ``RUN_ORPHAN_TTL_HOURS``
-    are stragglers from client-disconnect or server-restart scenarios; the
-    orchestrator coroutine that was managing them died with the previous
-    process. Marks them ``status='failed'``, ``error='orphaned (ttl exceeded)'``,
-    ``completed_at=now``.
+    **all RunRow modes** in one pass (``topic_probe``, ``seed_agent``,
+    ``replay_run``, and any future mode) — the query has no mode filter, so
+    every row in ``status='running'`` past TTL gets flipped to ``failed``.
+    Rows in ``status='running'`` whose ``started_at`` predates
+    ``RUN_ORPHAN_TTL_HOURS`` are stragglers from client-disconnect or
+    server-restart scenarios; the orchestrator coroutine that was managing
+    them died with the previous process. Marks them ``status='failed'``,
+    ``error='orphaned (ttl exceeded)'``, ``completed_at=now``.
+
+    **Limitation**: this sweep only runs at backend startup
+    (``run_startup_gc``). Long-running services that never restart can
+    accumulate orphaned ``running`` rows in the meantime; the rows will be
+    cleaned on next restart but remain ``running`` (and visibly cyan in
+    the suite-replay table / runs panel) until then. A future cycle could
+    add a periodic background sweep — see ROADMAP TBD.
 
     Caller is responsible for committing — composes inside
     ``run_startup_gc._do_sweep`` batched commit. Mirrors the
