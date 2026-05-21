@@ -19,11 +19,15 @@ Plan: docs/superpowers/plans/2026-05-06-foundation-p3-substrate-unification.md C
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import StreamingResponse
 
 from app.config import PROMPTS_DIR
 from app.database import get_db
@@ -31,6 +35,9 @@ from app.models import RunRow
 from app.routers.runs import _serialize_full, _serialize_summary
 from app.schemas.runs import RunListResponse, RunRequest, RunResult
 from app.schemas.seed import SeedClusterRef, SeedOutput, SeedRequest
+from app.services.event_bus import event_bus
+from app.utils.asyncio_helpers import _swallow_task_exception
+from app.utils.sse import format_sse
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +68,33 @@ def _build_failed_output(summary: str) -> SeedOutput:
 
 
 @router.post("/api/seed", response_model=SeedOutput)
-async def seed_taxonomy(body: SeedRequest, request: Request) -> SeedOutput:
+async def seed_taxonomy(body: SeedRequest, request: Request):
+    """Content-negotiated seed entry point.
+
+    Branches on the request's ``Accept`` header:
+
+    -   ``Accept: text/event-stream`` → SSE stream emitting
+        ``seed_started`` (carrying the minted ``run_id``), zero or more
+        ``seed_batch_progress`` events filtered to this run, and a
+        terminal ``seed_completed`` or ``seed_failed`` event closing the
+        stream. Mirrors the canonical pattern used by ``POST /api/probes``
+        (Foundation P3 Cycle 11).
+    -   Anything else (``Accept: application/json``, ``*/*``, missing
+        header) → existing synchronous ``SeedOutput`` JSON response,
+        byte-identical to v0.4.33.
+
+    v0.4.34 closes the last open Foundation P3 "out of scope" deferred
+    item (Q3 Path 1 marked "additive if needed"). Default behaviour is
+    preserved for back-compat; opting in to SSE requires the canonical
+    Accept header.
+    """
+    accept = request.headers.get("accept", "").lower()
+    if "text/event-stream" in accept:
+        return _seed_sse(body, request)
+    return await _seed_sync(body, request)
+
+
+async def _seed_sync(body: SeedRequest, request: Request) -> SeedOutput:
     """Synchronous seed run (sync semantics preserved per spec Q3 Path 1).
 
     Persists ``RunRow`` at start, awaits ``RunOrchestrator.run`` to
@@ -80,20 +113,7 @@ async def seed_taxonomy(body: SeedRequest, request: Request) -> SeedOutput:
             "RunOrchestrator unavailable; seed runs are degraded.",
         )
 
-    # Resolve routing tier + provider from app.state for the generator's
-    # early-failure gate. Mirrors handle_seed:64-80.
-    routing = getattr(request.app.state, "routing", None)
-    if routing is not None:
-        from app.services.routing import RoutingContext
-        decision = routing.resolve(RoutingContext(caller="rest"))
-        tier = decision.tier
-        provider = decision.provider
-    else:
-        tier = "passthrough"
-        provider = None
-
-    context_service = getattr(request.app.state, "context_service", None)
-
+    tier, provider, context_service = _resolve_seed_payload_context(request)
     payload = body.model_dump()
     payload["tier"] = tier
     payload["provider"] = provider
@@ -152,6 +172,112 @@ async def seed_taxonomy(body: SeedRequest, request: Request) -> SeedOutput:
         summary=aggregate.get("summary", ""),
         duration_ms=duration_ms,
         run_id=run_row.id,
+    )
+
+
+def _resolve_seed_payload_context(
+    request: Request,
+) -> tuple[str, Any, Any]:
+    """Resolve ``(tier, provider, context_service)`` from app.state.
+
+    Shared between ``_seed_sync`` and ``_seed_sse`` so the generator's
+    early-failure gate (no project_description + no prompts + no
+    provider → status='failed') fires identically on both branches.
+    Mirrors handle_seed:64-80.
+    """
+    routing = getattr(request.app.state, "routing", None)
+    if routing is not None:
+        from app.services.routing import RoutingContext
+        decision = routing.resolve(RoutingContext(caller="rest"))
+        tier = decision.tier
+        provider = decision.provider
+    else:
+        tier = "passthrough"
+        provider = None
+    context_service = getattr(request.app.state, "context_service", None)
+    return tier, provider, context_service
+
+
+def _seed_sse(body: SeedRequest, request: Request) -> StreamingResponse:
+    """Race-free SSE stream on ``POST /api/seed``.
+
+    Mirrors the canonical pattern at ``backend/app/routers/probes.py``
+    (Foundation P3 Cycle 11 / v0.4.18) byte-for-byte: subscribe BEFORE
+    dispatching the run so the buffer captures any events the orchestrator
+    publishes during ``_create_row`` + generator start. The 500ms
+    ring-buffer replay inside ``_RunSubscription`` is defense-in-depth.
+
+    Terminates on ``seed_completed`` or ``seed_failed``; per-prompt
+    ``seed_batch_progress`` events stream through to the client filtered
+    to this run's ``run_id`` (cross-run progress is excluded by the
+    per-run subscription).
+    """
+    orchestrator = getattr(request.app.state, "run_orchestrator", None)
+    if orchestrator is None:
+        # Degraded path — emit a single seed_failed event so the SSE
+        # client observes a terminal event instead of a hanging stream.
+        async def _degraded_stream():
+            yield format_sse("seed_failed", {
+                "run_id": None,
+                "summary": "RunOrchestrator unavailable; seed runs are degraded.",
+            })
+        return StreamingResponse(
+            _degraded_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    tier, provider, context_service = _resolve_seed_payload_context(request)
+    payload = body.model_dump()
+    payload["tier"] = tier
+    payload["provider"] = provider
+    payload["context_service"] = context_service
+
+    run_request = RunRequest(mode="seed_agent", payload=payload)
+
+    run_id = str(uuid.uuid4())
+
+    # Subscribe FIRST so the buffer captures any events the orchestrator
+    # publishes during _create_row + generator start. The 500ms ring-buffer
+    # replay inside _RunSubscription is defense-in-depth for any caller
+    # that subscribes after dispatch (e.g., reconnecting clients).
+    subscription = event_bus.subscribe_for_run(run_id)
+
+    # Kick off run as background task with pre-allocated run_id.
+    run_task: asyncio.Task[Any] = asyncio.create_task(
+        orchestrator.run("seed_agent", run_request, run_id=run_id),
+    )
+    # Suppress "Task exception was never retrieved" warnings — the SSE
+    # consumer doesn't await the task itself; the orchestrator handles
+    # its own failure marking under asyncio.shield, and the bus events
+    # carry seed_failed for the client.
+    run_task.add_done_callback(_swallow_task_exception)
+
+    async def event_stream():
+        try:
+            async for event in subscription:
+                yield format_sse(event.kind, event.payload)
+                # Termination on terminal events only.
+                if event.kind in ("seed_completed", "seed_failed"):
+                    break
+        finally:
+            await subscription.aclose()
+            # If the client disconnects, run_task may still be running;
+            # the orchestrator handles its own cancellation/cleanup via
+            # ``asyncio.shield`` in ``_mark_failed``.
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
