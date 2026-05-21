@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.31 — 2026-05-20
+
 ### Added
 
 - **T4 final UI consolidation** (closes Probe Tier 3-4 decomposition arc v0.4.28-v0.4.31): new `RunsPanel.svelte` sidebar tab (between History and Clusters) shows all `RunRow` entries (probe / seed / replay) on the unified Foundation-P3 substrate via existing `GET /api/runs`. Filter chips (mode + status, 5-status typed enum incl. `partial`) + scroll-load via IntersectionObserver mirror the HistoryPanel pattern. Click-to-expand row reveals mode-appropriate detail: `topic_probe` → `TopicProbeReportCard`; `seed_agent` → cluster rows with `DrillButton` (v0.4.30); `replay_run` → compact replay-aggregate summary. `runs.ts` `ListRunsParams.mode` extended to 3-mode union (added `'replay_run'`); `.status` typed as 4-value enum. `ActivityBar` + `Navigator` local `Activity` unions both extended (lockstep — Navigator declares its own). SeedModal `.seed-tab` typography migrated from `font-mono + 0.05em` → `font-display + 0.1em` (closes Probe T2 spec §6 deferred entry). Zero backend changes — pure-frontend cycle on existing P3 endpoints. Spec: `docs/superpowers/specs/2026-05-20-v0.4.31-probe-tier-4-design.md`.
