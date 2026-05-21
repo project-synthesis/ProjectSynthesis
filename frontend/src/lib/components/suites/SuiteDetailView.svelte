@@ -273,37 +273,46 @@
     {/if}
   </div>
 
-  <!-- ── Suite meta row — full ValidationSuiteOut field surfacing ─── -->
+  <!-- ── Suite meta row — full ValidationSuiteOut field surfacing ───
+       Long opaque IDs (run, repo, proj) are tooltipped rather than
+       visibly rendered — operators can't read a truncated 36-char
+       UUID anyway and the borderless key:value rows keep the panel
+       quiet. Short, scannable fields (created, p50, task types) stay
+       visible. Retired-state still surfaces visibly because the dim
+       + neon-red treatment is load-bearing. -->
   <div class="detail-meta-row" data-test="suite-meta">
     {#if suite.source_run_id}
-      <span class="meta-chip" data-field="source_run_id">
-        <span class="meta-key">run</span><span class="meta-val">{suite.source_run_id}</span>
+      <span class="meta-pair" data-field="source_run_id"
+        use:tooltip={`run ${suite.source_run_id}`}>
+        <span class="meta-key">run</span><span class="meta-val">{suite.source_run_id.slice(0, 8)}…</span>
       </span>
     {/if}
     {#if suite.repo_full_name}
-      <span class="meta-chip" data-field="repo_full_name">
+      <span class="meta-pair" data-field="repo_full_name"
+        use:tooltip={`repo ${suite.repo_full_name}`}>
         <span class="meta-key">repo</span><span class="meta-val">{suite.repo_full_name}</span>
       </span>
     {/if}
     {#if suite.project_id}
-      <span class="meta-chip" data-field="project_id">
-        <span class="meta-key">proj</span><span class="meta-val">{suite.project_id}</span>
+      <span class="meta-pair" data-field="project_id"
+        use:tooltip={`proj ${suite.project_id}`}>
+        <span class="meta-key">proj</span><span class="meta-val">{suite.project_id.slice(0, 8)}…</span>
       </span>
     {/if}
-    <span class="meta-chip" data-field="created_at">
+    <span class="meta-pair" data-field="created_at">
       <span class="meta-key">created</span><span class="meta-val">{fmt(suite.created_at)}</span>
     </span>
-    <span class="meta-chip" data-field="baseline_distribution"
+    <span class="meta-pair" data-field="baseline_distribution"
       use:tooltip={`p5 ${suite.baseline_scores.p5_overall.toFixed(2)} · p50 ${suite.baseline_scores.p50_overall.toFixed(2)} · p95 ${suite.baseline_scores.p95_overall.toFixed(2)}`}>
       <span class="meta-key">p50</span><span class="meta-val">{suite.baseline_scores.p50_overall.toFixed(2)}</span>
     </span>
     {#each taskTypeChips as chip (chip)}
-      <span class="meta-chip" data-field="task_type">
+      <span class="meta-pair meta-pair--tasktype" data-field="task_type">
         <span class="meta-val">{chip}</span>
       </span>
     {/each}
     {#if suite.retired_at}
-      <span class="meta-chip meta-chip--retired" data-field="retired_at"
+      <span class="meta-pair meta-pair--retired" data-field="retired_at"
         use:tooltip={suite.retired_reason ? `Retired: ${suite.retired_reason}` : 'Retired'}>
         <span class="meta-key">retired</span><span class="meta-val">{fmt(suite.retired_at)}</span>
       </span>
@@ -325,24 +334,31 @@
     </div>
   {/if}
 
-  <!-- ── Replay history ─────────────────────────────────────────── -->
+  <!-- ── Replay history ─────────────────────────────────────────────
+       Shrunk from 5 columns (replay/status/started/completed/prompts)
+       to 4 (replay/status/started/prompts) — `completed` was redundant
+       with `started` at sidebar widths and pushed the grid past the
+       container. Full timestamp pair is still available via tooltip. -->
   <div class="replay-history" data-test="replay-history" role="table" aria-label="Replay history">
     <div class="replay-row replay-row--head" role="row">
       <span role="columnheader" class="col-id">replay</span>
       <span role="columnheader" class="col-status">status</span>
       <span role="columnheader" class="col-started">started</span>
-      <span role="columnheader" class="col-completed">completed</span>
       <span role="columnheader" class="col-prompts">prompts</span>
     </div>
     {#if replayItems.length === 0}
       <p class="empty-note">No replays yet. Trigger one from the suite menu.</p>
     {:else}
       {#each replayItems as r (r.id)}
-        <div class="replay-row" data-test="replay-row" role="row">
+        <div
+          class="replay-row"
+          data-test="replay-row"
+          role="row"
+          use:tooltip={`started ${fmt(r.started_at)} · completed ${fmt(r.completed_at)}`}
+        >
           <span role="cell" class="col-id">{r.id}</span>
           <span role="cell" class="col-status" data-status={r.status}>{r.status}</span>
           <span role="cell" class="col-started">{fmt(r.started_at)}</span>
-          <span role="cell" class="col-completed">{fmt(r.completed_at)}</span>
           <span role="cell" class="col-prompts">{r.prompts_generated}</span>
         </div>
       {/each}
@@ -428,9 +444,14 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 20px;
+    gap: 6px;
+    /* Was a fixed 20px row — the baseline · tolerance line is too long
+       for the narrow sidebar at one row, so let the header wrap to two
+       lines when needed instead of overflowing horizontally. */
+    min-height: 20px;
     padding: 0 4px;
     border-bottom: 1px solid var(--color-border-subtle);
+    flex-wrap: wrap;
   }
 
   .detail-label {
@@ -438,56 +459,71 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
+    flex: 1 1 auto;
   }
 
   .detail-meta {
     color: var(--color-text-dim);
-    white-space: nowrap;
+    /* Was `white-space: nowrap` — that prevented the meta line from
+       wrapping at narrow widths and pushed the parent wider. Now wraps
+       naturally below the label when the row can't fit both. */
+    flex-shrink: 0;
   }
 
   /* ── Suite meta row ─────────────────────────────────────────────
-     Chip-style surfacing of every ValidationSuiteOut field that
-     doesn't get its own visible row. h-5 chips with 4px gap, mono
-     numerics, single-line. Spec § 6 density-pin canon (p-1.5 for
-     parent, 1px subtle border on individual chips). */
+     Borderless key:value pairs replacing the prior heavy-bordered
+     `.meta-chip` cards. Each pair fits on one line as `KEY value`,
+     wrapping naturally at narrow sidebar widths. The bordered
+     rectangle-per-field treatment turned the meta region into 5+
+     visual "data cards" stacked vertically — too much chrome for
+     supplemental fields when the primary baseline / tolerance line
+     already sits in `.detail-header`. Spec § 6 IDE-density principle:
+     data-ink ratio over chrome. */
   .detail-meta-row {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px;
+    gap: 4px 8px;        /* row-gap 4px · column-gap 8px */
     padding: 0 4px;
-  }
-
-  .meta-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: 18px;
-    padding: 0 4px;
-    border: 1px solid var(--color-border-subtle);
-    background: var(--color-bg-secondary, transparent);
     font-size: 9px;
     color: var(--color-text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    max-width: 280px;
-    text-overflow: ellipsis;
   }
 
-  .meta-chip .meta-key {
+  .meta-pair {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .meta-pair .meta-key {
     color: var(--color-text-dim);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
 
-  .meta-chip .meta-val {
+  .meta-pair .meta-val {
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .meta-chip--retired {
+  /* Task-type chips remain visibly chipped (they encode discrete
+     categorical data — code, summarization, qa, etc. — and reading
+     them as labels is the point). Light pill treatment, no border. */
+  .meta-pair--tasktype .meta-val {
+    padding: 0 6px;
+    background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
+    color: var(--color-text-secondary);
+  }
+
+  .meta-pair--retired {
     color: var(--color-neon-red, #ff3366);
-    border-color: var(--color-neon-red, #ff3366);
+  }
+  .meta-pair--retired .meta-key {
+    color: var(--color-neon-red, #ff3366);
   }
 
   /* When the suite is retired the entire detail surface fades — keeps
@@ -544,14 +580,29 @@
       border-color 200ms ease;
   }
 
+  /* Tables now use flexible (fr-based) grid columns so they fit the
+     ~270px Navigator sidebar without overflow. Each column carries
+     `min-width: 0` via the cell rule below so long IDs/timestamps
+     truncate with ellipsis instead of pushing the grid wider. */
   .replay-row {
-    grid-template-columns: 1fr 90px 130px 130px 60px;
+    grid-template-columns: 1.4fr 0.7fr 0.9fr 0.5fr;
     gap: 4px;
   }
 
   .prompt-row {
-    grid-template-columns: 40px 80px 80px 80px;
+    grid-template-columns: 28px 1fr 1fr 1fr;
     gap: 4px;
+  }
+
+  /* Every cell truncates rather than overflowing the grid. */
+  .replay-row > [role='cell'],
+  .replay-row > [role='columnheader'],
+  .prompt-row > [role='cell'],
+  .prompt-row > [role='columnheader'] {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .replay-row:last-child,
