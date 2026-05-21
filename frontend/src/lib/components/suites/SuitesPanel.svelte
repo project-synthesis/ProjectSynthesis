@@ -141,12 +141,9 @@
     gap: 6px;
   }
 
-  .panel-error {
-    /* `.empty-note` chromatic baseline is `text-dim`; firing-state errors
-       inherit the same row layout but paint with neon-red so failed loads
-       surface visually. */
-    color: var(--color-neon-red, #ff3366);
-  }
+  /* `.panel-error` is now a global utility in app.css (.empty-note + .panel-error
+     applies the neon-red color universally across sidebar panels). Local
+     definition removed to avoid duplication. */
 
   .suite-list {
     display: flex;

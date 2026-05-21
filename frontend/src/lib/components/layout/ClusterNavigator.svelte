@@ -321,7 +321,7 @@
         {/each}
       {/if}
     {:else if error}
-      <p class="empty-note" style="color: var(--color-neon-red);">{error}</p>
+      <p class="empty-note panel-error">{error}</p>
     {:else if !loaded}
       <p class="empty-note">Loading...</p>
     {:else if totalFamilies === 0 && !hasVisibleTemplates}

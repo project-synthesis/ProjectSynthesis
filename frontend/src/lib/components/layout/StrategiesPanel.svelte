@@ -78,7 +78,7 @@
   }
 </script>
 
-<div class="panel">
+<div class="panel strategies-panel">
   <header class="panel-header">
     <span class="section-heading">Strategies</span>
   </header>

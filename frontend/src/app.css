@@ -309,6 +309,12 @@ input:focus, textarea:focus, select:focus {
   line-height: 1.5;
   margin: 0 0 6px;
 }
+/* Error-state modifier for empty-note rows. Use as
+   `<p class="empty-note panel-error">{error}</p>` to surface
+   failed-load chrome consistently across all sidebar panels. */
+.panel-error {
+  color: var(--color-neon-red);
+}
 .data-value.neon-yellow {
   color: var(--color-neon-yellow);
 }

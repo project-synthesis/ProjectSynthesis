@@ -632,7 +632,7 @@
               {/if}
             </form>
             {#if apiKeyError}
-              <p class="empty-note" style="color: var(--color-neon-red); padding: 0 4px;">{apiKeyError}</p>
+              <p class="empty-note panel-error" style="padding: 0 4px;">{apiKeyError}</p>
             {/if}
           </div>
         {/if}
