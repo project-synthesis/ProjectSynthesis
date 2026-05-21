@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.gc import (
     _gc_expired_github_tokens,
@@ -145,3 +146,202 @@ async def test_run_recurring_gc_cleans_both_categories(db_session) -> None:
     # which is fine; the next hourly tick sweeps it.
     names = {r[0] for r in repos}
     assert "already/dead" not in names, "orphan linked_repo not swept"
+
+
+# v0.4.35 — phase-tagged sweep tests + recurring-sweep wiring tests
+
+
+class TestPhaseTaggedSweeps:
+    """Both stuck-state sweeps gain a `phase: str = "startup"` kwarg that
+    tags `logger.info` so startup vs recurring cleanups are grep-able.
+
+    Pinned via `caplog` substring matches (not full-string equality) so
+    later log-text drift in unrelated parts of the message doesn't break
+    these tests. Spec §5 AC1-4.
+    """
+
+    async def test_gc_orphan_runs_default_phase_logs_startup(
+        self, db_session: AsyncSession, caplog,
+    ) -> None:
+        """AC #1: `_gc_orphan_runs(db)` with no phase kwarg → log contains `GC[startup]:`."""
+        # Set up: 1 orphan RunRow past TTL.
+        from datetime import datetime, timedelta, timezone
+        from app.models import RunRow
+        from app.services.gc import RUN_ORPHAN_TTL_HOURS, _gc_orphan_runs
+
+        # Naive UTC matches the DateTime columns in models.py (per gc.py:_utcnow()).
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=RUN_ORPHAN_TTL_HOURS + 1)
+        row = RunRow(
+            id="rr-orphan-1",
+            mode="topic_probe",
+            status="running",
+            started_at=cutoff,
+        )
+        db_session.add(row)
+        await db_session.commit()
+
+        with caplog.at_level("INFO", logger="app.services.gc"):
+            cleaned = await _gc_orphan_runs(db_session)
+        assert cleaned == 1
+        assert any("GC[startup]:" in rec.message for rec in caplog.records), \
+            f"Expected 'GC[startup]:' in logs; got: {[r.message for r in caplog.records]}"
+
+    async def test_gc_orphan_runs_phase_recurring_logs_recurring(
+        self, db_session: AsyncSession, caplog,
+    ) -> None:
+        """AC #2: `_gc_orphan_runs(db, phase='recurring')` → log contains `GC[recurring]:`."""
+        from datetime import datetime, timedelta, timezone
+        from app.models import RunRow
+        from app.services.gc import RUN_ORPHAN_TTL_HOURS, _gc_orphan_runs
+
+        # Naive UTC matches the DateTime columns in models.py (per gc.py:_utcnow()).
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=RUN_ORPHAN_TTL_HOURS + 1)
+        row = RunRow(
+            id="rr-orphan-2",
+            mode="topic_probe",
+            status="running",
+            started_at=cutoff,
+        )
+        db_session.add(row)
+        await db_session.commit()
+
+        with caplog.at_level("INFO", logger="app.services.gc"):
+            cleaned = await _gc_orphan_runs(db_session, phase="recurring")
+        assert cleaned == 1
+        assert any("GC[recurring]:" in rec.message for rec in caplog.records), \
+            f"Expected 'GC[recurring]:' in logs; got: {[r.message for r in caplog.records]}"
+
+    async def test_gc_stuck_pending_default_phase_logs_startup(
+        self, db_session: AsyncSession, caplog,
+    ) -> None:
+        """AC #3: `_gc_stuck_pending_optimizations(db)` no phase → log contains `GC[startup]:`."""
+        from datetime import datetime, timedelta, timezone
+        from app.models import Optimization
+        from app.services.gc import (
+            _STUCK_PENDING_AGE_HOURS,
+            _gc_stuck_pending_optimizations,
+        )
+
+        # Naive UTC matches the DateTime columns in models.py (per gc.py:_utcnow()).
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=_STUCK_PENDING_AGE_HOURS + 1)
+        opt = Optimization(
+            id="opt-stuck-1",
+            trace_id="tr-stuck-1",
+            raw_prompt="test",
+            status="pending",
+            optimized_prompt=None,
+            created_at=cutoff,
+        )
+        db_session.add(opt)
+        await db_session.commit()
+
+        with caplog.at_level("INFO", logger="app.services.gc"):
+            cleaned = await _gc_stuck_pending_optimizations(db_session)
+        assert cleaned == 1
+        assert any("GC[startup]:" in rec.message for rec in caplog.records), \
+            f"Expected 'GC[startup]:' in logs; got: {[r.message for r in caplog.records]}"
+
+    async def test_gc_stuck_pending_phase_recurring_logs_recurring(
+        self, db_session: AsyncSession, caplog,
+    ) -> None:
+        """AC #4: `_gc_stuck_pending_optimizations(db, phase='recurring')` → log contains `GC[recurring]:`."""
+        from datetime import datetime, timedelta, timezone
+        from app.models import Optimization
+        from app.services.gc import (
+            _STUCK_PENDING_AGE_HOURS,
+            _gc_stuck_pending_optimizations,
+        )
+
+        # Naive UTC matches the DateTime columns in models.py (per gc.py:_utcnow()).
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=_STUCK_PENDING_AGE_HOURS + 1)
+        opt = Optimization(
+            id="opt-stuck-2",
+            trace_id="tr-stuck-2",
+            raw_prompt="test",
+            status="pending",
+            optimized_prompt=None,
+            created_at=cutoff,
+        )
+        db_session.add(opt)
+        await db_session.commit()
+
+        with caplog.at_level("INFO", logger="app.services.gc"):
+            cleaned = await _gc_stuck_pending_optimizations(db_session, phase="recurring")
+        assert cleaned == 1
+        assert any("GC[recurring]:" in rec.message for rec in caplog.records), \
+            f"Expected 'GC[recurring]:' in logs; got: {[r.message for r in caplog.records]}"
+
+    async def test_run_recurring_gc_sweeps_orphan_runs_and_stuck_pending(
+        self, db_session: AsyncSession, caplog,
+    ) -> None:
+        """AC #5 + #6: `run_recurring_gc` now calls both new sweeps with
+        `phase='recurring'` AND still calls the existing 2 sweeps.
+
+        Regression guard: existing `_gc_expired_github_tokens` +
+        `_gc_orphan_linked_repos` calls survive the extension.
+        """
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import patch, AsyncMock
+        from app.models import RunRow, Optimization
+        from app.services.gc import (
+            RUN_ORPHAN_TTL_HOURS,
+            _STUCK_PENDING_AGE_HOURS,
+            run_recurring_gc,
+        )
+
+        # Set up: 1 stuck row of each type so both new sweeps have rows to clean.
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff_runs = now_naive - timedelta(hours=RUN_ORPHAN_TTL_HOURS + 1)
+        cutoff_pending = now_naive - timedelta(hours=_STUCK_PENDING_AGE_HOURS + 1)
+        db_session.add_all([
+            RunRow(
+                id="rr-recurring-1",
+                mode="seed_agent",
+                status="running",
+                started_at=cutoff_runs,
+            ),
+            Optimization(
+                id="opt-recurring-1",
+                trace_id="tr-recurring-1",
+                raw_prompt="t",
+                status="pending",
+                optimized_prompt=None,
+                created_at=cutoff_pending,
+            ),
+        ])
+        await db_session.commit()
+
+        # Stub the WriteQueue path so we exercise the legacy direct-db branch
+        # (more deterministic for caplog assertions than going through the
+        # writer's submit() machinery in a unit test).
+        with patch(
+            "app.services.gc._gc_expired_github_tokens",
+            new=AsyncMock(return_value=0),
+        ) as mock_tokens, patch(
+            "app.services.gc._gc_orphan_linked_repos",
+            new=AsyncMock(return_value=0),
+        ) as mock_repos:
+            with caplog.at_level("INFO", logger="app.services.gc"):
+                await run_recurring_gc(db_session)  # write_queue=None → legacy direct-db fall-through
+
+        # Regression: existing 2 sweeps still called.
+        mock_tokens.assert_awaited_once_with(db_session)
+        mock_repos.assert_awaited_once_with(db_session)
+
+        # New: both stuck-state sweeps logged with [recurring].
+        log_text = " ".join(rec.message for rec in caplog.records)
+        assert "GC[recurring]:" in log_text, \
+            f"Expected 'GC[recurring]:' in logs; got: {log_text!r}"
+
+        # Verify the rows were actually flipped/deleted.
+        from sqlalchemy import select
+        refreshed_run = (await db_session.execute(
+            select(RunRow).where(RunRow.id == "rr-recurring-1")
+        )).scalar_one()
+        assert refreshed_run.status == "failed"
+
+        remaining_pending = (await db_session.execute(
+            select(Optimization).where(Optimization.id == "opt-recurring-1")
+        )).scalar_one_or_none()
+        assert remaining_pending is None, \
+            "stuck pending optimization should have been deleted"
