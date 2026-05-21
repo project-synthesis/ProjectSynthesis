@@ -671,8 +671,20 @@ async def run_single_prompt(
         # --- Phase 3.5: Suggest (matches pipeline.py Phase 4) ---
         # Generate 3 actionable suggestions for the optimized prompt.
         # Previously skipped for seeds, breaking refinement UX (empty suggestions panel).
+        #
+        # Cooperative cancellation: skip the Haiku suggest call entirely
+        # when a sibling has hit a rate limit. Without this gate, a 429
+        # raised here is swallowed by the broad `except` below — silently
+        # dropping suggestions for the row AND burning a Haiku subprocess
+        # round-trip ($0.0003 / call) that is guaranteed to fail. Matches
+        # the gates before Optimize (line ~495) and Score (line ~545).
         suggestions_list: list | None = None
-        if optimized_scores and analysis.weaknesses is not None:
+        if rate_limit_event is not None and rate_limit_event.is_set():
+            logger.debug(
+                "Suggest phase skipped for prompt %d (cooperative cancel)",
+                prompt_index,
+            )
+        elif optimized_scores and analysis.weaknesses is not None:
             try:
                 import json as _json
                 suggest_msg = prompt_loader.render("suggest.md", {

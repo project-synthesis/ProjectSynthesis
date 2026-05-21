@@ -935,3 +935,117 @@ class TestClassificationAgreement:
 
         agreement = get_classification_agreement()
         assert agreement.total == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests — Rate-limit cooperative cancellation
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimitCooperativeCancel:
+    """run_single_prompt must honor the shared rate_limit_event across phase gates.
+
+    The batch orchestrator owns one ``asyncio.Event`` per batch. When any
+    prompt's call surfaces a rate limit, the event is set and every other
+    in-flight prompt must bail at its next phase gate to a passthrough-
+    fallback row instead of burning guaranteed-429 LLM calls. Gates exist
+    before Optimize (~line 495), Score (~line 545), and Suggest (~line 686).
+    """
+
+    async def test_pre_optimize_gate_bails_to_passthrough(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+    ) -> None:
+        """When the event is set before Phase 2 starts, run_single_prompt
+        returns a passthrough-fallback row WITHOUT calling Optimize/Score/Suggest.
+        Only the Analyze call completes (it ran before the gate)."""
+        mock_provider.complete_parsed.side_effect = [_analysis()]
+
+        event = asyncio.Event()
+        event.set()  # tripped before run_single_prompt even starts
+
+        result: PendingOptimization = await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            rate_limit_event=event,
+        )
+
+        assert result.status == "completed", f"run failed: {result.error}"
+        assert result.routing_tier == "passthrough_fallback"
+        assert result.scoring_mode == "heuristic"
+        assert result.rate_limit_meta is not None
+        assert result.rate_limit_meta.get("rate_limited") is True
+        # Analyze ran; Optimize/Score/Suggest were skipped — only 1 LLM call.
+        assert mock_provider.complete_parsed.call_count == 1
+
+    async def test_pre_score_gate_preserves_optimized_prompt(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+    ) -> None:
+        """When the event is set AFTER Optimize but before Score, the row
+        carries the optimized prompt + heuristic-only scoring. Score/Suggest
+        LLM calls do not fire."""
+        event = asyncio.Event()
+
+        # Side-effect chain: Analyze returns, then Optimize sets the event
+        # mid-flight (simulating a sibling tripping it during our optimize).
+        async def _optimize_then_trip(**kw: Any) -> Any:
+            event.set()
+            return _optimization()
+
+        mock_provider.complete_parsed.side_effect = [_analysis()]
+        # complete_parsed_streaming is used for Optimize (streaming=True);
+        # override it so we can trip the event right when Optimize resolves.
+        mock_provider.complete_parsed_streaming.side_effect = _optimize_then_trip
+
+        result: PendingOptimization = await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            rate_limit_event=event,
+        )
+
+        assert result.status == "completed", f"run failed: {result.error}"
+        assert result.routing_tier == "passthrough_fallback"
+        assert result.scoring_mode == "heuristic"
+        # The optimized prompt from Phase 2 IS preserved (not a raw passthrough).
+        assert result.optimized_prompt is not None
+        assert result.optimized_prompt != "Write a function that sorts a list"
+        assert result.rate_limit_meta is not None
+        assert result.rate_limit_meta.get("fallback") == "cooperative_cancel"
+        # Analyze + Optimize ran; Score + Suggest did not.
+        assert mock_provider.complete_parsed.call_count == 1  # Analyze only
+
+    async def test_no_event_runs_full_pipeline(
+        self,
+        mock_provider: AsyncMock,
+        prompt_loader: PromptLoader,
+        mock_embedding_service: AsyncMock,
+    ) -> None:
+        """Control case: rate_limit_event=None must not change behavior.
+
+        Back-compat for legacy callers that don't pass the event.
+        """
+        mock_provider.complete_parsed.side_effect = [
+            _analysis(), _optimization(), _scores(), _suggestions(),
+        ]
+
+        result: PendingOptimization = await run_single_prompt(
+            raw_prompt="Write a function that sorts a list",
+            provider=mock_provider,
+            prompt_loader=prompt_loader,
+            embedding_service=mock_embedding_service,
+            rate_limit_event=None,
+        )
+
+        assert result.status == "completed", f"run failed: {result.error}"
+        assert result.routing_tier == "internal"  # NOT passthrough_fallback
+        assert result.scoring_mode == "hybrid"
+        assert result.rate_limit_meta is None  # No rate-limit tagging
