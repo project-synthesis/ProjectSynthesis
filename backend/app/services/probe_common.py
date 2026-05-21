@@ -1,19 +1,17 @@
 """v0.4.17 P2 — Cross-cutting utilities + ContextVar for the probe service.
 
-Canonical home for symbols that don't belong to any single probe-pipeline
-phase: the ``current_probe_id`` ContextVar (used for cross-module event
-correlation), helper functions used during grounding/running/reporting
-(``_apply_scope_filter``, ``_truncate``, ``_commit_with_retry``,
-``_stub_dimension_scores``).
+Canonical home for the ``current_run_id`` ContextVar (used for
+cross-module event correlation) and helper functions used during
+grounding/running/reporting (``_apply_scope_filter``, ``_truncate``,
+``_commit_with_retry``, ``_stub_dimension_scores``).
 
 This module is a leaf: it has no inter-module dependencies on the other
 v0.4.17 P2 split modules (``probe_phases``, ``probe_phase_5``).
 
-ContextVar identity is preserved across the split: ``probe_service.py``
-re-imports ``current_probe_id`` from this module so the legacy
-``from app.services.probe_service import current_probe_id`` keeps working
-(Python re-import is a name binding -- same object, same ContextVar
-instance).
+History: the v0.4.18 Foundation P3 rename introduced a backward-compat
+``current_probe_id`` alias of the same ContextVar object. The alias was
+retired in v0.4.34 (16 release cycles later — well beyond the "2+ release
+cycles" migration window). ``current_run_id`` is now the only name.
 """
 from __future__ import annotations
 
@@ -29,15 +27,14 @@ from app.schemas.pipeline_contracts import DimensionScores
 logger = logging.getLogger(__name__)
 
 # Foundation P3 (v0.4.18): canonical ContextVar renamed to current_run_id.
-# current_probe_id retained as alias of the SAME object -- preserves the
-# `legacy.current_probe_id is common.current_probe_id` identity test in
-# tests/test_probe_service_module_split_v0_4_17.py.
+# The v0.4.18 rename introduced ``current_probe_id`` as a backward-compat
+# alias "for 2+ release cycles"; the alias was retired in v0.4.34 (16
+# release cycles later — migration window closed).
 # C4<->C7 dependency resolution -- declare ContextVar where it is SET (here).
-# C7's probe_event_correlation.py re-exports + adds inject_probe_id helper.
+# C7's probe_event_correlation.py imports + adds the inject_probe_id helper.
 current_run_id: ContextVar[str | None] = ContextVar(
     "current_run_id", default=None,
 )
-current_probe_id = current_run_id  # backward-compat alias
 
 
 def _apply_scope_filter(files: list[str], scope: str) -> list[str]:
@@ -127,7 +124,6 @@ def _stub_dimension_scores() -> DimensionScores:
 
 __all__ = [
     "current_run_id",
-    "current_probe_id",
     "_apply_scope_filter",
     "_truncate",
     "_commit_with_retry",
