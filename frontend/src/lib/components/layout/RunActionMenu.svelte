@@ -5,12 +5,25 @@
   lands in GREEN.
 -->
 <script lang="ts">
+  import { onMount } from 'svelte';
+
   interface Props {
     onRename: () => void;
     onDelete: () => void;
     onClose: () => void;
   }
   let { onRename, onDelete, onClose }: Props = $props();
+
+  onMount(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    }
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  });
 </script>
 
 <div
