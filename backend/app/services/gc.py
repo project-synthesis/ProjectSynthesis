@@ -142,8 +142,18 @@ async def run_startup_gc(
 _STUCK_PENDING_AGE_HOURS = 24 * 7
 
 
-async def _gc_stuck_pending_optimizations(db: AsyncSession) -> int:
+async def _gc_stuck_pending_optimizations(
+    db: AsyncSession,
+    *,
+    phase: str = "startup",
+) -> int:
     """Delete optimizations stuck in ``status='pending'`` past the grace window.
+
+    Args:
+        phase: "startup" (default; called from ``run_startup_gc``) or
+            "recurring" (called from ``run_recurring_gc`` hourly). Tag
+            flows into the log line so ops can distinguish boot cleanups
+            from mid-uptime cleanups for stuck-row forensics.
 
     Mirrors ``_gc_failed_optimizations`` for the symmetric class — a
     ``pending`` row with ``optimized_prompt IS NULL`` and ``created_at``
@@ -200,8 +210,8 @@ async def _gc_stuck_pending_optimizations(db: AsyncSession) -> int:
     )
 
     logger.info(
-        "GC: deleted %d stuck pending optimizations (older than %d hours)",
-        len(pending_ids), _STUCK_PENDING_AGE_HOURS,
+        "GC[%s]: deleted %d stuck pending optimizations (older than %d hours)",
+        phase, len(pending_ids), _STUCK_PENDING_AGE_HOURS,
     )
     return len(pending_ids)
 
@@ -363,8 +373,18 @@ async def _gc_orphan_probe_runs(db: AsyncSession) -> int:
     return 0
 
 
-async def _gc_orphan_runs(db: AsyncSession) -> int:
+async def _gc_orphan_runs(
+    db: AsyncSession,
+    *,
+    phase: str = "startup",
+) -> int:
     """Sweep stale ``status='running'`` RunRow rows past ``RUN_ORPHAN_TTL_HOURS``.
+
+    Args:
+        phase: "startup" (default; called from ``run_startup_gc``) or
+            "recurring" (called from ``run_recurring_gc`` hourly). Tag
+            flows into the log line so ops can distinguish boot cleanups
+            from mid-uptime cleanups for stuck-row forensics.
 
     Foundation P3 (v0.4.18) — supersedes ``_gc_orphan_probe_runs``. Sweeps
     **all RunRow modes** in one pass (``topic_probe``, ``seed_agent``,
@@ -408,8 +428,9 @@ async def _gc_orphan_runs(db: AsyncSession) -> int:
     cleaned = result.rowcount or 0  # type: ignore[attr-defined]
     if cleaned:
         logger.info(
-            "GC: marked %d orphan run_row rows as failed "
-            "(status='running' past TTL=%dh)", cleaned, RUN_ORPHAN_TTL_HOURS,
+            "GC[%s]: marked %d orphan run_row rows as failed "
+            "(status='running' past TTL=%dh)",
+            phase, cleaned, RUN_ORPHAN_TTL_HOURS,
         )
     return cleaned
 
@@ -624,6 +645,15 @@ async def run_recurring_gc(
             total = 0
             total += await _gc_expired_github_tokens(write_db)
             total += await _gc_orphan_linked_repos(write_db)
+            # v0.4.35: promote 2 startup-only sweeps to also fire hourly.
+            # Closes the stuck-mid-uptime gap diagnosed during v0.4.34's
+            # image 8/9 stuck-replay debug. Both sweeps are idempotent
+            # (UPDATE WHERE TTL exceeded / SELECT-then-DELETE); concurrent
+            # startup-sweep + recurring-tick fire is safe.
+            total += await _gc_orphan_runs(write_db, phase="recurring")
+            total += await _gc_stuck_pending_optimizations(
+                write_db, phase="recurring",
+            )
             if total > 0:
                 await write_db.commit()
             return total
@@ -642,6 +672,10 @@ async def run_recurring_gc(
 
     total_cleaned += await _gc_expired_github_tokens(db)
     total_cleaned += await _gc_orphan_linked_repos(db)
+    # v0.4.35: same 2 sweep additions as the WriteQueue branch above. Both
+    # sweeps idempotent under concurrent startup + recurring firing.
+    total_cleaned += await _gc_orphan_runs(db, phase="recurring")
+    total_cleaned += await _gc_stuck_pending_optimizations(db, phase="recurring")
 
     if total_cleaned > 0:
         await db.commit()
