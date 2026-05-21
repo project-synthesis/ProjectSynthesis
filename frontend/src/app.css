@@ -484,3 +484,53 @@ input:focus, textarea:focus, select:focus {
 .chip.chip-rect {
   border-radius: 6px;
 }
+
+/* v0.4.32 brand-globals: .btn-outline-danger per component-patterns.md:27 */
+.btn-outline-danger {
+  background: transparent;
+  color: var(--color-neon-red);
+  border: 1px solid color-mix(in srgb, var(--color-neon-red) 20%, transparent);
+  padding: 0 8px;
+  height: 20px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 18px;
+  border-radius: 0;
+  cursor: pointer;
+  transition: all 200ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn-outline-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-neon-red) 5%, transparent);
+  border-color: color-mix(in srgb, var(--color-neon-red) 30%, transparent);
+}
+.btn-outline-danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* v0.4.32 brand-globals: .btn-icon per component-patterns.md:29 */
+.btn-icon {
+  background: transparent;
+  color: var(--color-text-dim);
+  border: none;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 0;
+  cursor: pointer;
+  transition: color 200ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-icon:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+.btn-icon:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

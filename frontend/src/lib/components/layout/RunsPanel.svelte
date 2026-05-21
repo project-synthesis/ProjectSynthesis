@@ -22,6 +22,29 @@
   let expandedId = $state<string | null>(null);
   let requestId = 0;
 
+  // v0.4.32 — selection / rename / bulk-action state
+  let selectMode = $state(false);
+  let selectedIds = $state(new Set<string>());
+  let confirmDeleteIds = $state<string[] | null>(null);
+  let bulkActionInFlight = $state(false);
+
+  // STUB — full impl in GREEN
+  function toggleSelectMode(): void {
+    throw new Error('RED phase — implement in GREEN');
+  }
+  function toggleRowSelection(_id: string): void {
+    throw new Error('RED phase — implement in GREEN');
+  }
+  function selectAll(): void {
+    throw new Error('RED phase — implement in GREEN');
+  }
+  async function executeBulkDelete(): Promise<void> {
+    throw new Error('RED phase — implement in GREEN');
+  }
+  async function executeBulkExport(): Promise<void> {
+    throw new Error('RED phase — implement in GREEN');
+  }
+
   async function fetchRuns(offset: number, append: boolean): Promise<void> {
     const myRequest = ++requestId;
     if (offset === 0) {

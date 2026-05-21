@@ -154,3 +154,15 @@
     color: var(--color-text-primary);
   }
 }
+
+/* v0.4.32 brand-globals: dropdown-enter per component-patterns.md:214 */
+@keyframes dropdown-enter {
+  from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+/* v0.4.32 brand-globals: dropdown-exit per component-patterns.md:216 */
+@keyframes dropdown-exit {
+  from { opacity: 1; transform: translateY(0)    scale(1); }
+  to   { opacity: 0; transform: translateY(-4px) scale(0.96); }
+}

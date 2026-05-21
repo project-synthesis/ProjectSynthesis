@@ -180,4 +180,90 @@ describe('RunsPanel', () => {
     const args = spy.mock.calls[spy.mock.calls.length - 1]?.[0];
     expect(args?.project_id).toBe('proj-new');
   });
+
+  // v0.4.32 — RunsPanel polish: select-mode + bulk actions
+
+  it('Test 15: select-mode toggle reveals checkboxes', async () => {
+    vi.spyOn(runsApi, 'listRuns').mockResolvedValue(makeResp([makeRun({ id: 'r1' })]));
+    const { findByRole, container } = render(RunsPanel, { active: true });
+    await findByRole('listitem');
+    // No checkbox until select-mode on
+    expect(container.querySelector('input[type="checkbox"][aria-label*="Select row"]')).toBeNull();
+    const toggle = container.querySelector('button[aria-label="Toggle select mode"]') as HTMLButtonElement;
+    expect(toggle).toBeTruthy();
+    await fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(container.querySelector('input[type="checkbox"][aria-label*="Select row"]')).toBeTruthy();
+    });
+  });
+
+  it('Test 16: select-all checkbox selects all visible rows', async () => {
+    vi.spyOn(runsApi, 'listRuns').mockResolvedValue(makeResp([
+      makeRun({ id: 'r1' }), makeRun({ id: 'r2' }), makeRun({ id: 'r3' }),
+    ]));
+    const { findAllByRole, container } = render(RunsPanel, { active: true });
+    await findAllByRole('listitem');
+    const toggle = container.querySelector('button[aria-label="Toggle select mode"]') as HTMLButtonElement;
+    await fireEvent.click(toggle);
+    const selectAllBox = container.querySelector('input[type="checkbox"][aria-label="Select all"]') as HTMLInputElement;
+    expect(selectAllBox).toBeTruthy();
+    await fireEvent.click(selectAllBox);
+    await waitFor(() => {
+      const boxes = Array.from(container.querySelectorAll('input[type="checkbox"][aria-label*="Select row"]')) as HTMLInputElement[];
+      expect(boxes.length).toBe(3);
+      expect(boxes.every(b => b.checked)).toBe(true);
+    });
+  });
+
+  it('Test 17: bulk-delete success removes selected rows + clears selection', async () => {
+    vi.spyOn(runsApi, 'listRuns').mockResolvedValue(makeResp([
+      makeRun({ id: 'r1' }), makeRun({ id: 'r2' }),
+    ]));
+    const bulkSpy = vi.spyOn(runsApi, 'bulkDeleteRuns').mockResolvedValue({
+      deleted: ['r1', 'r2'], not_found: [],
+    });
+    const { findAllByRole, container, getByRole } = render(RunsPanel, { active: true });
+    await findAllByRole('listitem');
+    const toggle = container.querySelector('button[aria-label="Toggle select mode"]') as HTMLButtonElement;
+    await fireEvent.click(toggle);
+    const selectAllBox = container.querySelector('input[type="checkbox"][aria-label="Select all"]') as HTMLInputElement;
+    await fireEvent.click(selectAllBox);
+    // Bulk action bar appears
+    const deleteBtn = await waitFor(() => getByRole('button', { name: /Delete 2/ }));
+    await fireEvent.click(deleteBtn);
+    // Confirm modal
+    const confirmBtn = await waitFor(() => getByRole('button', { name: /Confirm/i }));
+    await fireEvent.click(confirmBtn);
+    await waitFor(() => expect(bulkSpy).toHaveBeenCalledWith(['r1', 'r2']));
+    // Rows gone
+    await waitFor(() => {
+      const items = container.querySelectorAll('[role="listitem"]');
+      expect(items.length).toBe(0);
+    });
+  });
+
+  it('Test 18: bulk-export triggers download with predictable filename', async () => {
+    vi.spyOn(runsApi, 'listRuns').mockResolvedValue(makeResp([
+      makeRun({ id: 'r1' }),
+    ]));
+    const exportSpy = vi.spyOn(runsApi, 'bulkExportRuns').mockResolvedValue([
+      { ...makeRun({ id: 'r1' }), prompt_results: [], aggregate: {}, taxonomy_delta: {}, final_report: '', suite_id: null, topic_probe_meta: null, seed_agent_meta: null, error: null } as never,
+    ]);
+    // Spy on URL.createObjectURL + click
+    const createUrl = vi.fn().mockReturnValue('blob:fake');
+    const revokeUrl = vi.fn();
+    vi.stubGlobal('URL', { ...URL, createObjectURL: createUrl, revokeObjectURL: revokeUrl });
+
+    const { findAllByRole, container, getByRole } = render(RunsPanel, { active: true });
+    await findAllByRole('listitem');
+    const toggle = container.querySelector('button[aria-label="Toggle select mode"]') as HTMLButtonElement;
+    await fireEvent.click(toggle);
+    const selectAllBox = container.querySelector('input[type="checkbox"][aria-label="Select all"]') as HTMLInputElement;
+    await fireEvent.click(selectAllBox);
+    const exportBtn = await waitFor(() => getByRole('button', { name: /Export 1/ }));
+    await fireEvent.click(exportBtn);
+    await waitFor(() => expect(exportSpy).toHaveBeenCalledWith(['r1']));
+    await waitFor(() => expect(createUrl).toHaveBeenCalled());
+    vi.unstubAllGlobals();
+  });
 });
