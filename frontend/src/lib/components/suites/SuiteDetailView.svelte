@@ -251,7 +251,7 @@
   <div class="detail-actions" data-test="suite-detail-actions">
     <button
       type="button"
-      class="detail-btn detail-btn--replay"
+      class="btn-outline-secondary detail-btn--replay"
       onclick={handleReplay}
       disabled={replaying || isRetired}
       aria-label="Replay suite"
@@ -262,7 +262,7 @@
     {#if !isRetired}
       <button
         type="button"
-        class="detail-btn detail-btn--retire"
+        class="btn-outline-danger"
         onclick={openRetireModal}
         disabled={replaying}
         aria-label="Retire suite"
@@ -414,8 +414,11 @@
   .suite-detail-view {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 8px;
+    /* Sidebar canon cap is 6px per layout-and-accessibility.md:80
+       (`p-1.5` is the ceiling for sidebar/panel content; `space-y-1.5`
+       is the ceiling for section gaps). Was 8px on both. */
+    gap: 6px;
+    padding: 6px;
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-text-primary);
@@ -594,8 +597,12 @@
   }
 
   .empty-note {
-    padding: 8px;
-    color: var(--color-text-dim);
+    /* Inherits `padding: 4px 6px` + `color: text-dim` from the global
+       `.empty-note` rule in app.css. Only the italicized prose
+       treatment is local — failed-load empty rows aren't italicized
+       (they use `.panel-error` styling), so this italic only fires
+       inside the per-prompt / replay-history tables when they have
+       no rows yet. */
     font-style: italic;
   }
 
@@ -611,34 +618,22 @@
     padding: 0 4px;
   }
 
-  .detail-btn {
-    height: 20px;
-    padding: 0 8px;
-    line-height: 18px;
-    background: transparent;
-    border: 1px solid var(--color-border-subtle);
-    color: var(--color-text-secondary);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    cursor: pointer;
-    box-sizing: border-box;
-    /* Atomic-event multi-property hover transition — spec § 6 axiom 5. */
-    transition:
-      background 200ms cubic-bezier(0.16, 1, 0.3, 1),
-      border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-      color 200ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
+  /* Buttons now use canonical `.btn-outline-secondary` (Replay baseline)
+     and `.btn-outline-danger` (Retire — full destructive recipe from
+     app.css). The local `.detail-btn` baseline (font-mono + uppercase +
+     letter-spacing + missing border-radius/weight) was a non-canonical
+     reinvention of `.btn-outline-secondary`; removed in favor of the
+     global. Only the `.detail-btn--replay` modifier survives — it
+     overrides the gray secondary baseline to neon-blue (Replay = the
+     "analysis" semantic; there's no global blue-tier button variant).
+     Retire uses `.btn-outline-danger` directly with no local modifier.
 
-  .detail-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  /* Medium tier — Recipe A (border + bg tint, NO translateY lift). */
+     Recipe A hover (border + bg tint, no translateY lift) is baked into
+     `.btn-outline-secondary` already; the blue-tint override below paints
+     the same recipe in neon-blue. */
   .detail-btn--replay {
     color: var(--color-neon-blue, #4d8eff);
+    border-color: color-mix(in srgb, var(--color-neon-blue, #4d8eff) 30%, transparent);
   }
 
   .detail-btn--replay:hover:not(:disabled) {
@@ -650,21 +645,6 @@
   .detail-btn--replay:active:not(:disabled) {
     /* Contraction — inset contour with muted accent. */
     box-shadow: inset 0 0 0 1px rgba(77, 142, 255, 0.4);
-  }
-
-  /* Destructive — Recipe A with neon-red chromatic encoding. */
-  .detail-btn--retire {
-    color: var(--color-neon-red, #ff3366);
-    border-color: color-mix(in srgb, var(--color-neon-red, #ff3366) 25%, transparent);
-  }
-
-  .detail-btn--retire:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-neon-red, #ff3366) 12%, transparent);
-    border-color: var(--color-neon-red, #ff3366);
-  }
-
-  .detail-btn--retire:active:not(:disabled) {
-    border-color: color-mix(in srgb, var(--color-neon-red, #ff3366) 40%, transparent);
   }
 
   /* ── Retire modal body ─────────────────────────────────────────── */
@@ -692,7 +672,9 @@
     font-family: var(--font-display);
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.08em;
+    /* Canon: 0.1em per SKILL.md typography "Section heading" rule.
+       Was 0.08em — minor drift, corrected. */
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--color-text-secondary);
   }
