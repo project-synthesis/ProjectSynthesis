@@ -50,30 +50,52 @@
   role="menu"
   aria-label="Run actions"
 >
-  <button class="menu-item btn-icon" role="menuitem" onclick={onRename}>Rename</button>
-  <button class="menu-item btn-icon menu-item-danger" role="menuitem" onclick={onDelete}>Delete</button>
+  <button type="button" class="menu-item" role="menuitem" onclick={onRename}>Rename</button>
+  <button type="button" class="menu-item menu-item-danger" role="menuitem" onclick={onDelete}>Delete</button>
 </div>
 
 <style>
   .run-action-menu {
+    /* Anchor to the bottom-right of the kebab's positioned parent
+       (`.run-row-content` has `position: relative`). The menu drops
+       directly below the kebab and aligns to the row's right edge. */
     position: absolute;
+    top: 100%;
+    right: 0;
     z-index: 100;
+    min-width: 96px;
     background: var(--color-bg-card);
     border: 1px solid var(--color-border-subtle);
-    padding: 4px 0;
-    min-width: 120px;
+    /* Flat per layout-and-accessibility.md "Any border-radius on sidebar
+       elements ... is banned". No rounding. */
+    border-radius: 0;
+    padding: 2px 0;
     animation: dropdown-enter 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .menu-item {
     display: block;
     width: 100%;
     text-align: left;
-    padding: 4px 12px;
+    /* Tight ultra-compact density: same 20px height as other panel chrome
+       (select-toggle, btn-icon, chip), 8px horizontal padding mirrors
+       .btn-outline-secondary. */
+    height: 20px;
+    padding: 0 8px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    cursor: pointer;
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
     font-size: 11px;
-    height: 24px;
+    line-height: 20px;
+    transition: background-color 200ms ease, color 200ms ease;
   }
   .menu-item:hover {
     background: color-mix(in srgb, var(--color-neon-cyan) 8%, transparent);
   }
   .menu-item-danger { color: var(--color-neon-red); }
+  .menu-item-danger:hover {
+    background: color-mix(in srgb, var(--color-neon-red) 8%, transparent);
+  }
 </style>

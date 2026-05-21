@@ -488,7 +488,12 @@ input:focus, textarea:focus, select:focus {
   line-height: 14px;
 }
 .chip.chip-rect {
-  border-radius: 6px;
+  /* Flat per layout-and-accessibility.md line 33:
+     "Any border-radius on sidebar elements, data rows, or toolbar controls"
+     is banned. The chip-rect modifier supersedes the pill default for chips
+     used in toolbars + sidebar chrome (where this rule applies). The default
+     `.chip` (9999px) is reserved for rare standalone data tokens. */
+  border-radius: 0;
 }
 
 /* v0.4.32 brand-globals: .btn-outline-danger per component-patterns.md:27 */

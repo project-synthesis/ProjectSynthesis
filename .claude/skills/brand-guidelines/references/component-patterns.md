@@ -53,10 +53,12 @@
 | Variant | Class | Border Radius | Font | Size |
 |---------|-------|---------------|------|------|
 | Chip (pill) | `.chip` | 9999px | Geist Mono | 10px |
-| Chip (rect) | `.chip.chip-rect` | 6px | Geist Mono | 10px |
+| Chip (rect / toolbar) | `.chip.chip-rect` | **0px (flat)** | Geist Mono | 10px |
 | Badge | `.badge` | 6px | Geist Mono | 10px |
 | Badge (small) | `.badge-sm` | 9999px | Geist Mono | 9px |
 | Tag chip | `.tag-chip` | 9999px | Geist Mono | 10px |
+
+**`.chip-rect` rationale.** `layout-and-accessibility.md` "Border Radius System" bans `rounded-md` (6px) outright and forbids ANY border-radius on sidebar / data-row / toolbar controls. The `.chip-rect` modifier is the flat (`0px`) variant intended for chips that live inside `role="toolbar"` regions, sidebar filter rows, or anywhere the toolbar-control ban applies. Default `.chip` (pill, `9999px`) remains valid for **rare standalone data tokens** outside those contexts (per the same doc's "Border Radius System" → Full tier note). When in doubt — and especially for filter chips, mode-discriminator chips, or any chip cluster inside a panel-chrome region — use `.chip.chip-rect`. The earlier 6px value documented here was inconsistent with the broader flat-edge mandate and has been corrected.
 
 **Tag chip colors:** neon-green at 60% opacity, with green-tinted background and border.
 
