@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.32 — 2026-05-20
+
 ### Added
 
 - **v0.4.32 RunsPanel polish sweep** — closes 4 RunsPanel TBDs from v0.4.31. Backend adds `RunRow.display_name` operator-writable column (Alembic migration with DESC-index preservation per T3.3 lesson), plus 4 new endpoints — `DELETE /api/runs/{id}` (hard-delete; `ValidationSuite.source_run_id` is `SET NULL` so the suite is preserved), `PATCH /api/runs/{id}` (set display_name; empty string clears), `POST /api/runs/bulk-delete` (single-transaction all-or-none), `POST /api/runs/bulk-export` (returns JSON array; capped at 200 ids per request). All persistence routes through `WriteQueue.submit()` with `AsyncSession`-aware closures per canonical pattern. Frontend adds select-mode toggle + checkbox column + select-all + per-row kebab action menu with Rename/Delete + inline rename input + confirm modal for destructive ops + sticky `BulkActionBar` with Delete N / Export N (JSON) / Clear. RunsPanel + RunRowItem render `display_name ?? topic ?? id`. Browser download filename pattern: `runs-export-YYYY-MM-DD-HHMMSS.json` (UTC). Two new global brand classes promoted to `app.css` (`.btn-outline-danger`, `.btn-icon`) and two new global keyframes added to `shared-keyframes.css` (`dropdown-enter`, `dropdown-exit`) per `brand-guidelines/component-patterns.md` references that were documented but not yet defined. Spec: `docs/superpowers/specs/2026-05-21-v0.4.32-runs-panel-polish-design.md`.
