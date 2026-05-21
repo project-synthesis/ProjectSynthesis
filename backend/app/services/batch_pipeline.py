@@ -549,8 +549,7 @@ async def run_single_prompt(
             heur_opt = HeuristicScorer.score_prompt(
                 optimization.optimized_prompt, original=raw_prompt,
             )
-            from app.schemas.pipeline_contracts import DimensionScores as _DS  # noqa: N814
-            _scores_opt = _DS(**heur_opt)
+            _scores_opt = DimensionScores(**heur_opt)
             return PendingOptimization(
                 id=opt_id,
                 trace_id=trace_id,
@@ -852,12 +851,10 @@ def _build_passthrough_fallback_pending(
     ``reset_at_iso`` so the SSE event chain + final report can render
     the rate-limit context globally.
     """
-    from app.services.heuristic_scorer import HeuristicScorer
-
     heur = HeuristicScorer.score_prompt(raw_prompt)
     # F3.1 default weights -- compute_overall takes a DimensionScores
-    # instance; build it from the dict.
-    from app.schemas.pipeline_contracts import DimensionScores
+    # instance; build it from the dict. Both classes are imported at
+    # module top.
     scores = DimensionScores(**heur)
     overall = scores.compute_overall(task_type=None)  # default weights
 
