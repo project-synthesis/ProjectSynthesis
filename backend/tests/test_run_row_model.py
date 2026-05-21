@@ -40,15 +40,19 @@ async def db() -> AsyncGenerator[AsyncSession, None]:
     await engine.dispose()
 
 
-async def test_run_row_table_has_all_19_columns(db: AsyncSession) -> None:
-    """RunRow table has all expected columns from spec section 4.1."""
+async def test_run_row_table_has_all_20_columns(db: AsyncSession) -> None:
+    """RunRow table has all expected columns from spec section 4.1.
+
+    v0.4.32 added display_name (20th column) — operator-writable label
+    distinct from system-set `topic`.
+    """
     conn = await db.connection()
     cols = await conn.run_sync(
         lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("run_row")}
     )
     expected = {
         "id", "mode", "status", "started_at", "completed_at", "error",
-        "project_id", "repo_full_name", "topic", "intent_hint",
+        "project_id", "repo_full_name", "topic", "display_name", "intent_hint",
         "prompts_generated", "prompt_results", "aggregate", "taxonomy_delta",
         "final_report", "suite_id", "topic_probe_meta", "seed_agent_meta",
         "source_cluster_id",
