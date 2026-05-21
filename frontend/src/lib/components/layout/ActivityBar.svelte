@@ -70,6 +70,14 @@
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><path d="M13.5 2.5l2 2-9 9H4.5v-2l9-9z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       {:else if act.id === 'history'}
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 5v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      {:else if act.id === 'runs'}
+        <!-- Runs — playhead-on-rows glyph. Three stacked rows (mirrors the
+             RunsPanel list density) with a left-edge play-triangle on the
+             top row, evoking the unified RunRow surface across probe / seed
+             / replay modes. 1.5px stroke matches the history/clusters canon
+             weight; filled triangle differentiates from the suites tab
+             (which uses dot indicators on full-width rects). -->
+        <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 4l3 1.5L3 7z" fill="currentColor" stroke="none"/><line x1="7.5" y1="5.5" x2="15" y2="5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="3" y1="9.5" x2="15" y2="9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="3" y1="13.5" x2="15" y2="13.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
       {:else if act.id === 'clusters'}
         <svg class="icon-svg" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="4" cy="13" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="14" cy="13" r="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 6.5L5 11.5M10 6.5L13 11.5M5.5 13L12.5 13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
       {:else if act.id === 'suites'}
