@@ -819,7 +819,7 @@ The takeaway is a working principle now captured in `.claude/skills/brand-guidel
 ---
 
 ### `Accept`-header content negotiation for SSE on `POST /api/seed` — deferred from Foundation P3 (2026-05-06)
-**Status:** Exploring (deferred from Foundation P3 brainstorm). No version target.
+**Status:** **SHIPPED 2026-05-21 (v0.4.34)** — PR # TBD (back-fill on merge). Closes the last open Foundation P3 "out of scope" deferred item.
 **Context:** P3 (v0.4.18) keeps `POST /api/seed` synchronous to preserve byte-for-byte backward compat with all existing callers (REST, MCP `synthesis_seed`, frontend `SeedModal`, CLI). Live UI updates flow through the existing `/api/events` global SSE bus filtered by the additive `run_id` field, which suffices for the T4 history surface. Future clients that prefer SSE on the POST itself (parity with `POST /api/probes`) can be served via HTTP content negotiation: `Accept: application/json` → sync as today; `Accept: text/event-stream` → SSE stream of `seed_*` events terminating on `seed_completed`/`seed_failed`. Strictly additive — old callers unchanged.
 
 **Trigger:** any of the following.
@@ -834,7 +834,7 @@ The takeaway is a working principle now captured in `.claude/skills/brand-guidel
 ---
 
 ### `current_probe_id` → `current_run_id` ContextVar rename completion — deferred from Foundation P3 (2026-05-06)
-**Status:** Exploring (cleanup follow-up). No version target.
+**Status:** **SHIPPED 2026-05-21 (v0.4.34)** — PR # TBD (back-fill on merge). 16 release cycles post-v0.4.18 — migration window closed.
 **Context:** Foundation P3 (v0.4.18) renames the `current_probe_id` ContextVar (declared in `services/probe_service.py`, re-exported by `services/probe_event_correlation.py`) to `current_run_id` as part of the substrate unification — every taxonomy event fired during a run now correlates via the unified ContextVar regardless of mode. To preserve byte-for-byte backward compat for any out-of-tree consumer or test patching `current_probe_id` directly, P3 keeps the old name as a re-export alias of the new one. The alias is dead weight after a few release cycles confirm no in-tree callers use the old name.
 
 **Trigger:** 2+ release cycles post-v0.4.18 with zero in-tree references to `current_probe_id` (verified via grep) and no external bug reports about ContextVar correlation. Then drop the re-export shim and let any remaining stragglers update to the canonical name.
