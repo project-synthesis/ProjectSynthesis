@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.33 — 2026-05-21
+
 ### Changed
 
 - **Brand-guideline reconciliation — `.chip.chip-rect` redefined as flat (0px), not 6px.** `component-patterns.md` "Chips & Badges" table previously documented `.chip.chip-rect` at `6px` border-radius. `layout-and-accessibility.md` "Border Radius System" simultaneously declared `rounded-md` (6px) banned in 2D UI and forbade any border-radius on sidebar / data-row / toolbar controls. The two documents contradicted each other in exactly the contexts where `.chip-rect` is used (RunsPanel toolbar filter chips, per-row mode chips). Resolved by updating `app.css` `.chip.chip-rect { border-radius: 0 }` and rewriting the brand-guidelines table entry to document the flat variant with a rationale block linking the two documents. Default `.chip` (pill, 9999px) is preserved for rare standalone data tokens outside toolbar/sidebar chrome.
