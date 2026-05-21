@@ -39,6 +39,7 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.models import RunRow
+from app.utils.asyncio_helpers import _swallow_task_exception
 from app.schemas.pipeline_contracts import SCORING_FORMULA_VERSION
 from app.schemas.probes import (
     ProbeAggregate,
@@ -319,18 +320,6 @@ async def post_probe(
             "X-Accel-Buffering": "no",
         },
     )
-
-
-def _swallow_task_exception(task: "asyncio.Task[Any]") -> None:
-    """Drain any exception from the orchestrator task so asyncio doesn't
-    log "Task exception was never retrieved" — the orchestrator already
-    persisted the failure to the row and emitted ``probe_failed`` on the
-    bus, so the SSE stream surfaces it to the client.
-    """
-    try:
-        task.result()
-    except (asyncio.CancelledError, BaseException):  # noqa: BLE001
-        pass
 
 
 # ---------------------------------------------------------------------------
