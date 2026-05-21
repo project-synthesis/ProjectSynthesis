@@ -14,6 +14,8 @@
   }
   let { onRename, onDelete, onClose }: Props = $props();
 
+  let menuEl: HTMLDivElement | undefined = $state();
+
   onMount(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -21,12 +23,29 @@
         onClose();
       }
     }
+    function handleClick(e: MouseEvent) {
+      // Outside-click closes the popover. Skip when the click target is
+      // inside the menu OR matches the kebab trigger (the kebab's onclick
+      // sets menuOpen=true and we shouldn't immediately close it again).
+      const target = e.target as Node | null;
+      if (target && menuEl && menuEl.contains(target)) return;
+      // The capture-phase listener fires BEFORE the kebab button's
+      // synchronous re-open, so we delay a tick to let same-tick events settle.
+      queueMicrotask(() => onClose());
+    }
     document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
+    // Use the capture phase so we observe clicks before stopPropagation
+    // anywhere else in the tree could swallow them.
+    document.addEventListener('mousedown', handleClick, true);
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+      document.removeEventListener('mousedown', handleClick, true);
+    };
   });
 </script>
 
 <div
+  bind:this={menuEl}
   class="run-action-menu"
   role="menu"
   aria-label="Run actions"

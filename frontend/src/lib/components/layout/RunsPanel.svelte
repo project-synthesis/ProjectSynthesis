@@ -172,32 +172,36 @@
   });
 </script>
 
-<div class="runs-panel">
-  <div class="filter-row" role="toolbar" aria-label="Run filters">
-    <div class="filter-group" role="group" aria-label="Mode filter">
-      <button class="chip chip-rect" class:active={modeFilter === 'all'} onclick={() => modeFilter = 'all'}>All</button>
-      <button class="chip chip-rect" class:active={modeFilter === 'topic_probe'} onclick={() => modeFilter = 'topic_probe'}>Probe</button>
-      <button class="chip chip-rect" class:active={modeFilter === 'seed_agent'} onclick={() => modeFilter = 'seed_agent'}>Seed</button>
-      <button class="chip chip-rect" class:active={modeFilter === 'replay_run'} onclick={() => modeFilter = 'replay_run'}>Replay</button>
-    </div>
-    <div class="filter-group" role="group" aria-label="Status filter">
-      <button class="chip chip-rect" class:active={statusFilter === 'all'} onclick={() => statusFilter = 'all'}>All</button>
-      <button class="chip chip-rect" class:active={statusFilter === 'running'} onclick={() => statusFilter = 'running'}>Running</button>
-      <button class="chip chip-rect" class:active={statusFilter === 'completed'} onclick={() => statusFilter = 'completed'}>Completed</button>
-      <button class="chip chip-rect" class:active={statusFilter === 'partial'} onclick={() => statusFilter = 'partial'}>Partial</button>
-      <button class="chip chip-rect" class:active={statusFilter === 'failed'} onclick={() => statusFilter = 'failed'}>Failed</button>
-    </div>
-  </div>
-
-  <div class="select-mode-row">
+<div class="panel runs-panel">
+  <header class="panel-header">
+    <span class="section-heading">Runs</span>
     <button
-      class="btn-outline-secondary"
+      type="button"
+      class="select-toggle"
       aria-label="Toggle select mode"
       aria-pressed={selectMode}
       onclick={toggleSelectMode}
     >
-      {selectMode ? 'Cancel select' : 'Select'}
+      {selectMode ? 'Cancel' : 'Select'}
     </button>
+  </header>
+
+  <div class="filter-region">
+    <div class="filter-row" role="toolbar" aria-label="Run filters">
+      <div class="filter-group" role="group" aria-label="Mode filter">
+        <button class="chip chip-rect" class:active={modeFilter === 'all'} onclick={() => modeFilter = 'all'}>All</button>
+        <button class="chip chip-rect" class:active={modeFilter === 'topic_probe'} onclick={() => modeFilter = 'topic_probe'}>Probe</button>
+        <button class="chip chip-rect" class:active={modeFilter === 'seed_agent'} onclick={() => modeFilter = 'seed_agent'}>Seed</button>
+        <button class="chip chip-rect" class:active={modeFilter === 'replay_run'} onclick={() => modeFilter = 'replay_run'}>Replay</button>
+      </div>
+      <div class="filter-group" role="group" aria-label="Status filter">
+        <button class="chip chip-rect" class:active={statusFilter === 'all'} onclick={() => statusFilter = 'all'}>All</button>
+        <button class="chip chip-rect" class:active={statusFilter === 'running'} onclick={() => statusFilter = 'running'}>Running</button>
+        <button class="chip chip-rect" class:active={statusFilter === 'completed'} onclick={() => statusFilter = 'completed'}>Completed</button>
+        <button class="chip chip-rect" class:active={statusFilter === 'partial'} onclick={() => statusFilter = 'partial'}>Partial</button>
+        <button class="chip chip-rect" class:active={statusFilter === 'failed'} onclick={() => statusFilter = 'failed'}>Failed</button>
+      </div>
+    </div>
     {#if selectMode}
       <label class="select-all-wrap">
         <input
@@ -209,48 +213,49 @@
         <span class="text-[10px]">Select all</span>
       </label>
     {/if}
+    <BulkActionBar
+      count={selectedIds.size}
+      onDelete={() => { confirmDeleteIds = Array.from(selectedIds); }}
+      onExport={executeBulkExport}
+      onClear={() => { selectedIds = new Set(); }}
+      inFlight={bulkActionInFlight}
+    />
   </div>
 
-  <BulkActionBar
-    count={selectedIds.size}
-    onDelete={() => { confirmDeleteIds = Array.from(selectedIds); }}
-    onExport={executeBulkExport}
-    onClear={() => { selectedIds = new Set(); }}
-    inFlight={bulkActionInFlight}
-  />
-
-  {#if runsError}
-    <div class="runs-error">
-      <p class="text-[10px] text-neon-red">Failed to load runs: {runsError}</p>
-      <button class="btn-outline-secondary" onclick={() => fetchRuns(0, false)}>Retry</button>
-    </div>
-  {:else if !runsLoaded}
-    <p class="text-[10px] text-text-dim">Loading runs…</p>
-  {:else if runs.length === 0}
-    <div class="runs-empty">
-      <p class="text-[10px] text-text-dim">No runs match the current filters.</p>
-      <button class="btn-outline-secondary" onclick={resetFilters}>Reset filters</button>
-    </div>
-  {:else}
-    <div class="runs-list" role="list">
-      {#each runs as run (run.id)}
-        <RunRowItem
-          {run}
-          expanded={expandedId === run.id}
-          onClick={() => handleRowClick(run.id)}
-          {selectMode}
-          selected={selectedIds.has(run.id)}
-          onToggleSelect={() => toggleRowSelection(run.id)}
-          onDeleteConfirm={(id) => { confirmDeleteIds = [id]; }}
-        />
-      {/each}
-      {#if hasMore}
-        <div bind:this={sentinelEl} class="runs-sentinel" aria-hidden="true">
-          {#if loadingMore}<span class="text-[10px] text-text-dim">Loading more…</span>{/if}
-        </div>
-      {/if}
-    </div>
-  {/if}
+  <div class="panel-body">
+    {#if runsError}
+      <div class="runs-error">
+        <p class="text-[10px] text-neon-red">Failed to load runs: {runsError}</p>
+        <button class="btn-outline-secondary" onclick={() => fetchRuns(0, false)}>Retry</button>
+      </div>
+    {:else if !runsLoaded}
+      <p class="text-[10px] text-text-dim">Loading runs…</p>
+    {:else if runs.length === 0}
+      <div class="runs-empty">
+        <p class="text-[10px] text-text-dim">No runs match the current filters.</p>
+        <button class="btn-outline-secondary" onclick={resetFilters}>Reset filters</button>
+      </div>
+    {:else}
+      <div class="runs-list" role="list">
+        {#each runs as run (run.id)}
+          <RunRowItem
+            {run}
+            expanded={expandedId === run.id}
+            onClick={() => handleRowClick(run.id)}
+            {selectMode}
+            selected={selectedIds.has(run.id)}
+            onToggleSelect={() => toggleRowSelection(run.id)}
+            onDeleteConfirm={(id) => { confirmDeleteIds = [id]; }}
+          />
+        {/each}
+        {#if hasMore}
+          <div bind:this={sentinelEl} class="runs-sentinel" aria-hidden="true">
+            {#if loadingMore}<span class="text-[10px] text-text-dim">Loading more…</span>{/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </div>
 </div>
 
 {#if confirmDeleteIds !== null}
@@ -293,8 +298,17 @@
 {/if}
 
 <style>
-  .runs-panel { padding: 6px; }
-  .filter-row { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 6px; }
+  /* Canonical panel chrome inherited from app.css .panel/.panel-header/.panel-body. */
+  .panel-body { padding: 4px 6px 6px; }
+  .filter-region {
+    flex-shrink: 0;
+    padding: 6px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .filter-row { display: flex; flex-direction: column; gap: 6px; }
   .filter-group { display: flex; gap: 4px; flex-wrap: wrap; }
   .chip.chip-rect.active {
     background: color-mix(in srgb, var(--color-neon-cyan) 12%, transparent);
@@ -306,17 +320,37 @@
   }
   .runs-list { display: flex; flex-direction: column; gap: 2px; }
   .runs-sentinel { padding: 6px 0; min-height: 24px; }
-  .select-mode-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 6px;
-  }
   .select-all-wrap {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     cursor: pointer;
+  }
+
+  /* Ghost-style select toggle mirroring HistoryPanel's .select-toggle.
+     Lives in .panel-header alongside the section heading. */
+  .select-toggle {
+    height: 20px;
+    padding: 0 8px;
+    line-height: 18px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--color-text-secondary);
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 0;
+    cursor: pointer;
+    transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
+  }
+  .select-toggle:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-subtle);
+    color: var(--color-text-primary);
+  }
+  .select-toggle:focus-visible {
+    outline: 1px solid rgba(0, 229, 255, 0.3);
+    outline-offset: 2px;
   }
   .confirm-modal-scrim {
     position: fixed;

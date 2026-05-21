@@ -156,6 +156,9 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    /* Anchor for RunActionMenu's `position: absolute` popover so it lands
+       on the row instead of the nearest positioned ancestor (e.g. viewport). */
+    position: relative;
   }
   .row-checkbox {
     width: 16px;
