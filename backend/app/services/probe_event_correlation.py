@@ -11,6 +11,7 @@ ContextVar rename and downstream consumers still read ``context.probe_id``
 verbatim — semantic key carries the run id of the in-flight probe / seed
 run).
 """
+
 from app.services.probe_common import current_run_id  # noqa: F401
 
 __all__ = ["inject_probe_id"]

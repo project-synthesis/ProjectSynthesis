@@ -23,6 +23,7 @@ See:
   - ``docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md`` § 6.2
   - ``docs/specs/topic-probe-2026-04-29.md`` § 4.6 (pre-Foundation contract)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,7 +40,6 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.models import RunRow
-from app.utils.asyncio_helpers import _swallow_task_exception
 from app.schemas.pipeline_contracts import SCORING_FORMULA_VERSION
 from app.schemas.probes import (
     ProbeAggregate,
@@ -52,6 +52,7 @@ from app.schemas.probes import (
 )
 from app.schemas.runs import RunRequest
 from app.services.event_bus import event_bus
+from app.utils.asyncio_helpers import _swallow_task_exception
 from app.utils.sse import format_sse
 
 # Foundation P3 Cycle 14 (v0.4.18) — ``get_probe_service`` re-export
@@ -106,9 +107,7 @@ def _serialize_full(row: RunRow) -> ProbeRunResult:
     column (P3 unified storage) — those used to live as dedicated
     columns on the legacy ``probe_run`` table.
     """
-    prompt_results = [
-        ProbePromptResult(**r) for r in (row.prompt_results or [])
-    ]
+    prompt_results = [ProbePromptResult(**r) for r in (row.prompt_results or [])]
     agg_dict = row.aggregate or {
         "scoring_formula_version": SCORING_FORMULA_VERSION,
     }
@@ -232,7 +231,8 @@ async def post_probe(
         # Surfaces only if lifespan failed to register the orchestrator
         # (e.g., WriteQueue init failed). Probe-mode SSE cannot proceed.
         raise HTTPException(
-            status_code=503, detail="run_orchestrator_unavailable",
+            status_code=503,
+            detail="run_orchestrator_unavailable",
         )
 
     run_request = RunRequest(mode="topic_probe", payload=body.model_dump())
@@ -350,11 +350,7 @@ async def list_probes(
     total_q = select(func.count()).select_from(base.subquery())
     total = (await db.execute(total_q)).scalar_one()
 
-    page_q = (
-        base.order_by(RunRow.started_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+    page_q = base.order_by(RunRow.started_at.desc()).limit(limit).offset(offset)
     rows = (await db.execute(page_q)).scalars().all()
     items = [_serialize_summary(r) for r in rows]
 
