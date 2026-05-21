@@ -34,17 +34,11 @@ def test_probe_service_class_deleted() -> None:
     """``from app.services.probe_service import ProbeService`` must raise
     ``ImportError`` — the class body is gone post-Cycle 14.
 
-    The module itself remains (it re-exports ``current_probe_id`` for
-    backward-compat per spec § 8.3 + the ``test_run_id_contextvar`` and
-    ``test_probe_service_module_split_v0_4_17`` invariants), but the
-    class identity is removed.
+    Post-v0.4.34: the ``probe_service`` module itself is also deleted
+    (its sole remaining purpose was the ``current_probe_id`` alias
+    re-export, which was retired with the alias). Importing the module
+    OR the class raises ``ImportError``.
     """
-    module = importlib.import_module("app.services.probe_service")
-    assert not hasattr(module, "ProbeService"), (
-        "ProbeService class still present in probe_service.py after Cycle 14 — "
-        "expected deletion per spec § 8.3"
-    )
-
     with pytest.raises(ImportError):
         from app.services.probe_service import ProbeService  # type: ignore[attr-defined]  # noqa: F401
 
@@ -215,18 +209,23 @@ def test_no_remaining_probe_run_imports_in_app() -> None:
 
 
 def test_probe_service_module_helpers_still_accessible() -> None:
-    """``current_probe_id`` and the 9 helper symbols from P2 Path A must
-    remain importable from their canonical homes
-    (``probe_common``/``probe_phases``/``probe_phase_5``).
+    """The 9 helper symbols from P2 Path A must remain importable from
+    their canonical homes (``probe_common``/``probe_phases``/``probe_phase_5``).
 
     Per spec § 8.3 + plan Cycle 14 Constraints: deleting ``ProbeService``
     must not retire the leaf modules — they're consumed by
     ``TopicProbeGenerator``.
+
+    Post-v0.4.34: ``current_probe_id`` removed from the probe_common
+    symbol-presence loop (alias retired); ``current_run_id`` remains as
+    the canonical name. The Spec § 8.3 ``probe_service.current_probe_id``
+    re-export invariant block is also deleted — the alias contract no
+    longer exists.
     """
-    # probe_common — ContextVar + 4 helpers
+    # probe_common — ContextVar + 4 helpers (current_run_id is the only
+    # ContextVar name post-v0.4.34; current_probe_id alias retired)
     common = importlib.import_module("app.services.probe_common")
     for name in (
-        "current_probe_id",
         "current_run_id",
         "_apply_scope_filter",
         "_truncate",
@@ -254,17 +253,3 @@ def test_probe_service_module_helpers_still_accessible() -> None:
         assert hasattr(phase_5, name), (
             f"probe_phase_5 missing post-Cycle 14: {name}"
         )
-
-    # Spec § 8.3 compatibility: current_probe_id must still be accessible
-    # via probe_service.py (re-exported), even though ProbeService class
-    # is gone — test_probe_service_module_split_v0_4_17 + test_run_id_contextvar
-    # depend on this identity invariant.
-    legacy = importlib.import_module("app.services.probe_service")
-    assert hasattr(legacy, "current_probe_id"), (
-        "probe_service.current_probe_id no longer importable — breaks "
-        "test_run_id_contextvar identity invariant"
-    )
-    assert legacy.current_probe_id is common.current_probe_id, (
-        "ContextVar identity broken — probe_service.current_probe_id "
-        "is not the same object as probe_common.current_probe_id"
-    )
