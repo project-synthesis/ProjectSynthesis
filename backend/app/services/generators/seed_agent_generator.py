@@ -29,6 +29,7 @@ import uuid
 from typing import Any
 
 from app.schemas.runs import RunRequest
+from app.services.event_bus import event_bus
 from app.services.generators.base import GeneratorResult
 
 logger = logging.getLogger(__name__)
@@ -91,13 +92,21 @@ class SeedAgentGenerator:
         t0 = time.monotonic()
 
         # ---- Decision event: seed_started (handle_seed:94-109) ----
-        self._log_decision("seed_started", run_id, {
+        seed_started_payload = {
             "batch_id": batch_id,
             "tier": tier,
             "project_description": (project_description or "")[:200],
             "prompt_count_target": prompt_count if not prompts else len(prompts),
             "has_user_prompts": prompts is not None,
-        })
+        }
+        self._log_decision("seed_started", run_id, seed_started_payload)
+        # v0.4.34: also publish on the event bus so the SSE consumer on
+        # POST /api/seed (Accept: text/event-stream branch) can iterate
+        # the per-run subscription. Additive — does not change the
+        # existing seed_batch_progress contract the frontend consumes.
+        event_bus.publish(
+            "seed_started", {"run_id": run_id, **seed_started_payload},
+        )
 
         # ---- EARLY-FAILURE PATH (handle_seed:193-204) ----
         # Preserves today's HTTP 200 with status='failed' semantics: we
@@ -107,11 +116,15 @@ class SeedAgentGenerator:
                 "Requires project_description with a provider, "
                 "or user-provided prompts."
             )
-            self._log_decision("seed_failed", run_id, {
+            seed_failed_payload = {
                 "batch_id": batch_id,
                 "phase": "input_validation",
                 "summary": summary,
-            })
+            }
+            self._log_decision("seed_failed", run_id, seed_failed_payload)
+            event_bus.publish(
+                "seed_failed", {"run_id": run_id, **seed_failed_payload},
+            )
             return GeneratorResult(
                 terminal_status="failed",
                 prompts_generated=0,
@@ -141,13 +154,17 @@ class SeedAgentGenerator:
                 generated_prompts = list(gen_result.prompts)
             except Exception as exc:
                 logger.error("Seed generation failed: %s", exc, exc_info=True)
-                self._log_decision("seed_failed", run_id, {
+                seed_failed_payload = {
                     "batch_id": batch_id,
                     "phase": "generate",
                     "error_type": type(exc).__name__,
                     "error_message": str(exc)[:200],
                     "prompts_completed_before_failure": 0,
-                })
+                }
+                self._log_decision("seed_failed", run_id, seed_failed_payload)
+                event_bus.publish(
+                    "seed_failed", {"run_id": run_id, **seed_failed_payload},
+                )
                 return GeneratorResult(
                     terminal_status="failed",
                     prompts_generated=0,
@@ -214,13 +231,17 @@ class SeedAgentGenerator:
             )
         except Exception as exc:
             logger.error("Seed batch execution failed: %s", exc, exc_info=True)
-            self._log_decision("seed_failed", run_id, {
+            seed_failed_payload = {
                 "batch_id": batch_id,
                 "phase": "optimize",
                 "error_type": type(exc).__name__,
                 "error_message": str(exc)[:200],
                 "prompts_completed_before_failure": 0,
-            })
+            }
+            self._log_decision("seed_failed", run_id, seed_failed_payload)
+            event_bus.publish(
+                "seed_failed", {"run_id": run_id, **seed_failed_payload},
+            )
             return GeneratorResult(
                 terminal_status="failed",
                 prompts_generated=len(generated_prompts),
@@ -243,13 +264,17 @@ class SeedAgentGenerator:
         except Exception as exc:
             logger.error("Seed persist failed: %s", exc, exc_info=True)
             completed = sum(1 for r in results if r.status == "completed")
-            self._log_decision("seed_failed", run_id, {
+            seed_failed_payload = {
                 "batch_id": batch_id,
                 "phase": "persist",
                 "error_type": type(exc).__name__,
                 "error_message": str(exc)[:200],
                 "prompts_completed_before_failure": completed,
-            })
+            }
+            self._log_decision("seed_failed", run_id, seed_failed_payload)
+            event_bus.publish(
+                "seed_failed", {"run_id": run_id, **seed_failed_payload},
+            )
             return GeneratorResult(
                 terminal_status="partial",  # some succeeded but persist crashed
                 prompts_generated=len(generated_prompts),
@@ -309,16 +334,24 @@ class SeedAgentGenerator:
 
         # Decision event: seed_completed or seed_failed
         decision_name = "seed_completed" if terminal != "failed" else "seed_failed"
-        self._log_decision(decision_name, run_id, {
+        # v0.4.34: terminal payload mirrors SeedOutput fields so the SSE
+        # consumer's terminator can surface the result shape directly.
+        terminal_payload = {
             "batch_id": batch_id,
             "terminal_status": terminal,
+            "status": terminal,
             "prompts_optimized": completed,
             "prompts_failed": failed,
             "clusters_created": clusters_created,
             "domains_touched": domains_touched,
+            "summary": summary,
             "total_duration_ms": duration_ms,
             "tier": tier,
-        })
+        }
+        self._log_decision(decision_name, run_id, terminal_payload)
+        event_bus.publish(
+            decision_name, {"run_id": run_id, **terminal_payload},
+        )
 
         return GeneratorResult(
             terminal_status=terminal,  # type: ignore[arg-type]
