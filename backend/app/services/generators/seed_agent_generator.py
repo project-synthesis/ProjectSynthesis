@@ -21,6 +21,7 @@ Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-desi
 Plan:  docs/superpowers/plans/2026-05-06-foundation-p3-substrate-unification.md
        Cycle 7
 """
+
 from __future__ import annotations
 
 import logging
@@ -68,7 +69,10 @@ class SeedAgentGenerator:
         self._write_queue = write_queue
 
     async def run(
-        self, request: RunRequest, *, run_id: str,
+        self,
+        request: RunRequest,
+        *,
+        run_id: str,
     ) -> GeneratorResult:
         """Execute the seed flow. Publish progress + decision events.
 
@@ -105,17 +109,15 @@ class SeedAgentGenerator:
         # the per-run subscription. Additive — does not change the
         # existing seed_batch_progress contract the frontend consumes.
         event_bus.publish(
-            "seed_started", {"run_id": run_id, **seed_started_payload},
+            "seed_started",
+            {"run_id": run_id, **seed_started_payload},
         )
 
         # ---- EARLY-FAILURE PATH (handle_seed:193-204) ----
         # Preserves today's HTTP 200 with status='failed' semantics: we
         # return a GeneratorResult rather than raising. Spec § 5.5.
         if not prompts and (not project_description or not provider):
-            summary = (
-                "Requires project_description with a provider, "
-                "or user-provided prompts."
-            )
+            summary = "Requires project_description with a provider, or user-provided prompts."
             seed_failed_payload = {
                 "batch_id": batch_id,
                 "phase": "input_validation",
@@ -123,7 +125,8 @@ class SeedAgentGenerator:
             }
             self._log_decision("seed_failed", run_id, seed_failed_payload)
             event_bus.publish(
-                "seed_failed", {"run_id": run_id, **seed_failed_payload},
+                "seed_failed",
+                {"run_id": run_id, **seed_failed_payload},
             )
             return GeneratorResult(
                 terminal_status="failed",
@@ -163,7 +166,8 @@ class SeedAgentGenerator:
                 }
                 self._log_decision("seed_failed", run_id, seed_failed_payload)
                 event_bus.publish(
-                    "seed_failed", {"run_id": run_id, **seed_failed_payload},
+                    "seed_failed",
+                    {"run_id": run_id, **seed_failed_payload},
                 )
                 return GeneratorResult(
                     terminal_status="failed",
@@ -178,10 +182,14 @@ class SeedAgentGenerator:
                     final_report=None,
                 )
 
-        self._log_decision("seed_explore_complete", run_id, {
-            "batch_id": batch_id,
-            "prompts_count": len(generated_prompts),
-        })
+        self._log_decision(
+            "seed_explore_complete",
+            run_id,
+            {
+                "batch_id": batch_id,
+                "prompts_count": len(generated_prompts),
+            },
+        )
 
         # ---- Phase 3: Run batch + persist + taxonomy assign ----
         # Mirror handle_seed:206-360. Function-local imports so the test
@@ -200,6 +208,7 @@ class SeedAgentGenerator:
         _taxonomy_engine = None
         try:
             from app.services.taxonomy import get_engine
+
             _taxonomy_engine = get_engine()
         except Exception:
             logger.debug("Taxonomy engine unavailable for seed enrichment")
@@ -207,6 +216,7 @@ class SeedAgentGenerator:
         _domain_resolver = None
         try:
             from app.services.domain_resolver import get_domain_resolver
+
             _domain_resolver = get_domain_resolver()
         except Exception:
             logger.debug("Domain resolver unavailable for seed enrichment")
@@ -240,7 +250,8 @@ class SeedAgentGenerator:
             }
             self._log_decision("seed_failed", run_id, seed_failed_payload)
             event_bus.publish(
-                "seed_failed", {"run_id": run_id, **seed_failed_payload},
+                "seed_failed",
+                {"run_id": run_id, **seed_failed_payload},
             )
             return GeneratorResult(
                 terminal_status="failed",
@@ -273,7 +284,8 @@ class SeedAgentGenerator:
             }
             self._log_decision("seed_failed", run_id, seed_failed_payload)
             event_bus.publish(
-                "seed_failed", {"run_id": run_id, **seed_failed_payload},
+                "seed_failed",
+                {"run_id": run_id, **seed_failed_payload},
             )
             return GeneratorResult(
                 terminal_status="partial",  # some succeeded but persist crashed
@@ -282,10 +294,7 @@ class SeedAgentGenerator:
                 aggregate={
                     "prompts_optimized": completed,
                     "prompts_failed": len(results) - completed,
-                    "summary": (
-                        f"Optimized {completed} prompts but persist failed: "
-                        f"{exc}"
-                    ),
+                    "summary": (f"Optimized {completed} prompts but persist failed: {exc}"),
                 },
                 taxonomy_delta={"domains_touched": [], "clusters_created": 0},
                 final_report=None,
@@ -294,11 +303,14 @@ class SeedAgentGenerator:
         # ---- Taxonomy integration (handle_seed:339-357) ----
         try:
             taxonomy_result = await batch_taxonomy_assign(
-                results, self._write_queue, batch_id,
+                results,
+                self._write_queue,
+                batch_id,
             )
         except Exception as exc:
             logger.warning(
-                "Taxonomy integration failed (non-fatal): %s", exc,
+                "Taxonomy integration failed (non-fatal): %s",
+                exc,
             )
             taxonomy_result = {
                 "clusters_assigned": 0,
@@ -350,7 +362,8 @@ class SeedAgentGenerator:
         }
         self._log_decision(decision_name, run_id, terminal_payload)
         event_bus.publish(
-            decision_name, {"run_id": run_id, **terminal_payload},
+            decision_name,
+            {"run_id": run_id, **terminal_payload},
         )
 
         return GeneratorResult(
@@ -398,6 +411,7 @@ class SeedAgentGenerator:
         """
         try:
             from app.services.taxonomy.event_logger import get_event_logger
+
             get_event_logger().log_decision(
                 path="hot",
                 op="seed",

@@ -7,6 +7,7 @@ duplicating the helper across two routers.
 
 Single-responsibility leaf module — no inter-app imports beyond stdlib.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +28,10 @@ def _swallow_task_exception(task: "asyncio.Task[Any]") -> None:
     """
     try:
         task.result()
-    except (asyncio.CancelledError, BaseException):  # noqa: BLE001
+    except BaseException:  # noqa: BLE001
+        # Catches ``asyncio.CancelledError`` plus any other exception; the
+        # SSE branches deliberately swallow all of them since the
+        # orchestrator already persisted state + emitted a terminal event.
         pass
 
 

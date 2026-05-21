@@ -165,9 +165,7 @@ async def _seed_sync(body: SeedRequest, request: Request) -> SeedOutput:
         # batch_taxonomy_assign's TaxonomyAssignSummary.clusters). The
         # SeedModal drill-into-cluster UI consumes these to dispatch a
         # focused topic_probe per cluster.
-        clusters=[
-            SeedClusterRef(**c) for c in taxonomy_delta.get("clusters", [])
-        ],
+        clusters=[SeedClusterRef(**c) for c in taxonomy_delta.get("clusters", [])],
         clusters_created=taxonomy_delta.get("clusters_created", 0),
         summary=aggregate.get("summary", ""),
         duration_ms=duration_ms,
@@ -188,6 +186,7 @@ def _resolve_seed_payload_context(
     routing = getattr(request.app.state, "routing", None)
     if routing is not None:
         from app.services.routing import RoutingContext
+
         decision = routing.resolve(RoutingContext(caller="rest"))
         tier = decision.tier
         provider = decision.provider
@@ -217,10 +216,14 @@ def _seed_sse(body: SeedRequest, request: Request) -> StreamingResponse:
         # Degraded path — emit a single seed_failed event so the SSE
         # client observes a terminal event instead of a hanging stream.
         async def _degraded_stream():
-            yield format_sse("seed_failed", {
-                "run_id": None,
-                "summary": "RunOrchestrator unavailable; seed runs are degraded.",
-            })
+            yield format_sse(
+                "seed_failed",
+                {
+                    "run_id": None,
+                    "summary": "RunOrchestrator unavailable; seed runs are degraded.",
+                },
+            )
+
         return StreamingResponse(
             _degraded_stream(),
             media_type="text/event-stream",
@@ -285,7 +288,8 @@ def _seed_sse(body: SeedRequest, request: Request) -> StreamingResponse:
 async def list_seed_runs(
     status: str | None = Query(None, description="Filter by run status."),
     project_id: str | None = Query(
-        None, description="Filter by project node id.",
+        None,
+        description="Filter by project node id.",
     ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -306,11 +310,7 @@ async def list_seed_runs(
     total_q = select(func.count()).select_from(base.subquery())
     total = (await db.execute(total_q)).scalar_one()
 
-    page_q = (
-        base.order_by(RunRow.started_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+    page_q = base.order_by(RunRow.started_at.desc()).limit(limit).offset(offset)
     rows = (await db.execute(page_q)).scalars().all()
     items = [_serialize_summary(r) for r in rows]
 
@@ -340,6 +340,7 @@ async def list_seed_agents() -> list[dict]:
     agent selector in the Phase 4 frontend.
     """
     from app.services.agent_loader import AgentLoader
+
     loader = AgentLoader(PROMPTS_DIR / "seed-agents")
     return [
         {

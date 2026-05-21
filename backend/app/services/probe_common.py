@@ -13,6 +13,7 @@ History: the v0.4.18 Foundation P3 rename introduced a backward-compat
 retired in v0.4.34 (16 release cycles later — well beyond the "2+ release
 cycles" migration window). ``current_run_id`` is now the only name.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,7 +34,8 @@ logger = logging.getLogger(__name__)
 # C4<->C7 dependency resolution -- declare ContextVar where it is SET (here).
 # C7's probe_event_correlation.py imports + adds the inject_probe_id helper.
 current_run_id: ContextVar[str | None] = ContextVar(
-    "current_run_id", default=None,
+    "current_run_id",
+    default=None,
 )
 
 
@@ -81,7 +83,8 @@ async def _commit_with_retry(
             if attempt > 0:
                 logger.info(
                     "probe %s commit succeeded on attempt %d",
-                    probe_id, attempt + 1,
+                    probe_id,
+                    attempt + 1,
                 )
             return
         except _sa_exc.OperationalError as exc:
@@ -90,7 +93,10 @@ async def _commit_with_retry(
                 raise
             logger.warning(
                 "probe %s commit hit lock (attempt %d/%d); backing off %.1fs",
-                probe_id, attempt + 1, max_attempts, delay,
+                probe_id,
+                attempt + 1,
+                max_attempts,
+                delay,
             )
             try:
                 await db.rollback()
