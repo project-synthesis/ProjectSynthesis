@@ -4,6 +4,14 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+
+- **Accept-header SSE on `POST /api/seed`** — clients sending `Accept: text/event-stream` now receive an SSE stream emitting `seed_started`, `seed_batch_progress` (filtered to the request's `run_id`), and a terminal `seed_completed` or `seed_failed` event. Mirrors the canonical pattern already used by `POST /api/probes` (T3.3 era) and `POST /api/refine`. Default `Accept` and `Accept: application/json` continue to return the synchronous `SeedOutput` JSON response unchanged. Closes the last open Foundation P3 "out of scope" deferred item (Q3 Path 1 marked "additive if needed"). `_swallow_task_exception` lifted to `backend/app/utils/asyncio_helpers.py` so both routers share one implementation.
+
+### Removed
+
+- **`current_probe_id` ContextVar alias retired.** The v0.4.18 Foundation P3 rename moved the canonical name from `current_probe_id` to `current_run_id` and kept the old name as a backward-compat alias "for 2+ release cycles" — 16 release cycles later (v0.4.18 → v0.4.34), the migration window is closed. All in-tree consumers (`probe_event_correlation.py`, tests) now import `current_run_id` directly. The `backend/app/services/probe_service.py` shim file (sole purpose: re-export the alias) is deleted. Hypothetical out-of-tree code importing `current_probe_id` from `app.services.probe_common`, `app.services.probe_service`, or `app.services.probe_event_correlation` will fail at import — migrate to `current_run_id`.
+
 ## v0.4.33 — 2026-05-21
 
 ### Changed
