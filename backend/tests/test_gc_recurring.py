@@ -65,6 +65,7 @@ async def test_expired_github_tokens_are_deleted(db_session) -> None:
     assert count == 1, f"expected 1 deletion, got {count}"
 
     from sqlalchemy import select
+
     remaining = await db_session.execute(select(GitHubToken.session_id))
     remaining_ids = {r[0] for r in remaining.all()}
     assert remaining_ids == {"s-grace", "s-legacy", "s-live"}
@@ -98,6 +99,7 @@ async def test_orphan_linked_repos_are_deleted(db_session) -> None:
     assert count == 1, f"expected 1 orphan deletion, got {count}"
 
     from sqlalchemy import select
+
     remaining = await db_session.execute(select(LinkedRepo.full_name))
     remaining_names = {r[0] for r in remaining.all()}
     assert remaining_names == {"octocat/hello-world"}
@@ -116,25 +118,32 @@ async def test_run_recurring_gc_cleans_both_categories(db_session) -> None:
 
     now = _now()
     # Orphan linked repo (no token) + expired token with orphan repo
-    db_session.add(GitHubToken(
-        session_id="victim",
-        token_encrypted=b"x",
-        expires_at=now - timedelta(hours=2),
-        refresh_token_expires_at=now - timedelta(days=2),
-    ))
-    db_session.add(LinkedRepo(
-        session_id="victim",
-        full_name="doomed/repo",
-    ))
-    db_session.add(LinkedRepo(
-        session_id="already-orphan",
-        full_name="already/dead",
-    ))
+    db_session.add(
+        GitHubToken(
+            session_id="victim",
+            token_encrypted=b"x",
+            expires_at=now - timedelta(hours=2),
+            refresh_token_expires_at=now - timedelta(days=2),
+        )
+    )
+    db_session.add(
+        LinkedRepo(
+            session_id="victim",
+            full_name="doomed/repo",
+        )
+    )
+    db_session.add(
+        LinkedRepo(
+            session_id="already-orphan",
+            full_name="already/dead",
+        )
+    )
     await db_session.commit()
 
     await run_recurring_gc(db_session)
 
     from sqlalchemy import select
+
     tokens = (await db_session.execute(select(GitHubToken.session_id))).all()
     repos = (await db_session.execute(select(LinkedRepo.full_name))).all()
     assert tokens == [], "expected all expired tokens swept"
@@ -161,11 +170,14 @@ class TestPhaseTaggedSweeps:
     """
 
     async def test_gc_orphan_runs_default_phase_logs_startup(
-        self, db_session: AsyncSession, caplog,
+        self,
+        db_session: AsyncSession,
+        caplog,
     ) -> None:
         """AC #1: `_gc_orphan_runs(db)` with no phase kwarg → log contains `GC[startup]:`."""
         # Set up: 1 orphan RunRow past TTL.
         from datetime import datetime, timedelta, timezone
+
         from app.models import RunRow
         from app.services.gc import RUN_ORPHAN_TTL_HOURS, _gc_orphan_runs
 
@@ -183,14 +195,18 @@ class TestPhaseTaggedSweeps:
         with caplog.at_level("INFO", logger="app.services.gc"):
             cleaned = await _gc_orphan_runs(db_session)
         assert cleaned == 1
-        assert any("GC[startup]:" in rec.message for rec in caplog.records), \
+        assert any("GC[startup]:" in rec.message for rec in caplog.records), (
             f"Expected 'GC[startup]:' in logs; got: {[r.message for r in caplog.records]}"
+        )
 
     async def test_gc_orphan_runs_phase_recurring_logs_recurring(
-        self, db_session: AsyncSession, caplog,
+        self,
+        db_session: AsyncSession,
+        caplog,
     ) -> None:
         """AC #2: `_gc_orphan_runs(db, phase='recurring')` → log contains `GC[recurring]:`."""
         from datetime import datetime, timedelta, timezone
+
         from app.models import RunRow
         from app.services.gc import RUN_ORPHAN_TTL_HOURS, _gc_orphan_runs
 
@@ -208,14 +224,18 @@ class TestPhaseTaggedSweeps:
         with caplog.at_level("INFO", logger="app.services.gc"):
             cleaned = await _gc_orphan_runs(db_session, phase="recurring")
         assert cleaned == 1
-        assert any("GC[recurring]:" in rec.message for rec in caplog.records), \
+        assert any("GC[recurring]:" in rec.message for rec in caplog.records), (
             f"Expected 'GC[recurring]:' in logs; got: {[r.message for r in caplog.records]}"
+        )
 
     async def test_gc_stuck_pending_default_phase_logs_startup(
-        self, db_session: AsyncSession, caplog,
+        self,
+        db_session: AsyncSession,
+        caplog,
     ) -> None:
         """AC #3: `_gc_stuck_pending_optimizations(db)` no phase → log contains `GC[startup]:`."""
         from datetime import datetime, timedelta, timezone
+
         from app.models import Optimization
         from app.services.gc import (
             _STUCK_PENDING_AGE_HOURS,
@@ -238,14 +258,18 @@ class TestPhaseTaggedSweeps:
         with caplog.at_level("INFO", logger="app.services.gc"):
             cleaned = await _gc_stuck_pending_optimizations(db_session)
         assert cleaned == 1
-        assert any("GC[startup]:" in rec.message for rec in caplog.records), \
+        assert any("GC[startup]:" in rec.message for rec in caplog.records), (
             f"Expected 'GC[startup]:' in logs; got: {[r.message for r in caplog.records]}"
+        )
 
     async def test_gc_stuck_pending_phase_recurring_logs_recurring(
-        self, db_session: AsyncSession, caplog,
+        self,
+        db_session: AsyncSession,
+        caplog,
     ) -> None:
         """AC #4: `_gc_stuck_pending_optimizations(db, phase='recurring')` → log contains `GC[recurring]:`."""
         from datetime import datetime, timedelta, timezone
+
         from app.models import Optimization
         from app.services.gc import (
             _STUCK_PENDING_AGE_HOURS,
@@ -268,11 +292,14 @@ class TestPhaseTaggedSweeps:
         with caplog.at_level("INFO", logger="app.services.gc"):
             cleaned = await _gc_stuck_pending_optimizations(db_session, phase="recurring")
         assert cleaned == 1
-        assert any("GC[recurring]:" in rec.message for rec in caplog.records), \
+        assert any("GC[recurring]:" in rec.message for rec in caplog.records), (
             f"Expected 'GC[recurring]:' in logs; got: {[r.message for r in caplog.records]}"
+        )
 
     async def test_run_recurring_gc_sweeps_orphan_runs_and_stuck_pending(
-        self, db_session: AsyncSession, caplog,
+        self,
+        db_session: AsyncSession,
+        caplog,
     ) -> None:
         """AC #5 + #6: `run_recurring_gc` now calls both new sweeps with
         `phase='recurring'` AND still calls the existing 2 sweeps.
@@ -281,11 +308,12 @@ class TestPhaseTaggedSweeps:
         `_gc_orphan_linked_repos` calls survive the extension.
         """
         from datetime import datetime, timedelta, timezone
-        from unittest.mock import patch, AsyncMock
-        from app.models import RunRow, Optimization
+        from unittest.mock import AsyncMock, patch
+
+        from app.models import Optimization, RunRow
         from app.services.gc import (
-            RUN_ORPHAN_TTL_HOURS,
             _STUCK_PENDING_AGE_HOURS,
+            RUN_ORPHAN_TTL_HOURS,
             run_recurring_gc,
         )
 
@@ -293,34 +321,39 @@ class TestPhaseTaggedSweeps:
         now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
         cutoff_runs = now_naive - timedelta(hours=RUN_ORPHAN_TTL_HOURS + 1)
         cutoff_pending = now_naive - timedelta(hours=_STUCK_PENDING_AGE_HOURS + 1)
-        db_session.add_all([
-            RunRow(
-                id="rr-recurring-1",
-                mode="seed_agent",
-                status="running",
-                started_at=cutoff_runs,
-            ),
-            Optimization(
-                id="opt-recurring-1",
-                trace_id="tr-recurring-1",
-                raw_prompt="t",
-                status="pending",
-                optimized_prompt=None,
-                created_at=cutoff_pending,
-            ),
-        ])
+        db_session.add_all(
+            [
+                RunRow(
+                    id="rr-recurring-1",
+                    mode="seed_agent",
+                    status="running",
+                    started_at=cutoff_runs,
+                ),
+                Optimization(
+                    id="opt-recurring-1",
+                    trace_id="tr-recurring-1",
+                    raw_prompt="t",
+                    status="pending",
+                    optimized_prompt=None,
+                    created_at=cutoff_pending,
+                ),
+            ]
+        )
         await db_session.commit()
 
         # Stub the WriteQueue path so we exercise the legacy direct-db branch
         # (more deterministic for caplog assertions than going through the
         # writer's submit() machinery in a unit test).
-        with patch(
-            "app.services.gc._gc_expired_github_tokens",
-            new=AsyncMock(return_value=0),
-        ) as mock_tokens, patch(
-            "app.services.gc._gc_orphan_linked_repos",
-            new=AsyncMock(return_value=0),
-        ) as mock_repos:
+        with (
+            patch(
+                "app.services.gc._gc_expired_github_tokens",
+                new=AsyncMock(return_value=0),
+            ) as mock_tokens,
+            patch(
+                "app.services.gc._gc_orphan_linked_repos",
+                new=AsyncMock(return_value=0),
+            ) as mock_repos,
+        ):
             with caplog.at_level("INFO", logger="app.services.gc"):
                 await run_recurring_gc(db_session)  # write_queue=None → legacy direct-db fall-through
 
@@ -330,18 +363,15 @@ class TestPhaseTaggedSweeps:
 
         # New: both stuck-state sweeps logged with [recurring].
         log_text = " ".join(rec.message for rec in caplog.records)
-        assert "GC[recurring]:" in log_text, \
-            f"Expected 'GC[recurring]:' in logs; got: {log_text!r}"
+        assert "GC[recurring]:" in log_text, f"Expected 'GC[recurring]:' in logs; got: {log_text!r}"
 
         # Verify the rows were actually flipped/deleted.
         from sqlalchemy import select
-        refreshed_run = (await db_session.execute(
-            select(RunRow).where(RunRow.id == "rr-recurring-1")
-        )).scalar_one()
+
+        refreshed_run = (await db_session.execute(select(RunRow).where(RunRow.id == "rr-recurring-1"))).scalar_one()
         assert refreshed_run.status == "failed"
 
-        remaining_pending = (await db_session.execute(
-            select(Optimization).where(Optimization.id == "opt-recurring-1")
-        )).scalar_one_or_none()
-        assert remaining_pending is None, \
-            "stuck pending optimization should have been deleted"
+        remaining_pending = (
+            await db_session.execute(select(Optimization).where(Optimization.id == "opt-recurring-1"))
+        ).scalar_one_or_none()
+        assert remaining_pending is None, "stuck pending optimization should have been deleted"
