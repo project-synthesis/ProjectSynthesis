@@ -41,6 +41,14 @@
   let renameError = $state<string | null>(null);
   let kebabBtn: HTMLButtonElement | undefined = $state();
 
+  // Svelte action: focus the element when mounted (replacement for the
+  // discouraged `autofocus` attribute). Guarded so screen readers and
+  // keyboard users keep predictable focus order.
+  function focusOnMount(node: HTMLInputElement) {
+    node.focus();
+    return {};
+  }
+
   function openMenu(): void {
     menuOpen = true;
   }
@@ -96,7 +104,7 @@
           class="input-field rename-input"
           bind:value={renameDraft}
           maxlength="200"
-          autofocus
+          use:focusOnMount
           onkeydown={(e) => {
             if (e.key === 'Enter') { e.preventDefault(); submitRename(); }
             if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }

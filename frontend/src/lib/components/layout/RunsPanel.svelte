@@ -254,13 +254,20 @@
 </div>
 
 {#if confirmDeleteIds !== null}
-  <div class="confirm-modal-scrim" onclick={() => { confirmDeleteIds = null; }}>
+  <div
+    class="confirm-modal-scrim"
+    role="presentation"
+    onclick={() => { confirmDeleteIds = null; }}
+    onkeydown={(e) => { if (e.key === 'Escape') confirmDeleteIds = null; }}
+  >
     <div
       class="confirm-modal"
       role="dialog"
+      tabindex={-1}
       aria-modal="true"
       aria-labelledby="confirm-title"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); confirmDeleteIds = null; } }}
     >
       <h3 id="confirm-title" class="text-[11px]" style="text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--font-display);">
         Confirm delete
