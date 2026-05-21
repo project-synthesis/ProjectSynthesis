@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.35 — 2026-05-21
+
 ### Added
 
 - **Periodic GC sweep for stuck-state rows** — promotes `_gc_orphan_runs` (stale `RunRow.status='running'` past TTL=1h) and `_gc_stuck_pending_optimizations` (stale `Optimization.status='pending'` past TTL=168h) from startup-only to ALSO fire hourly via the existing `_recurring_gc_task` (`backend/app/main.py:384`). Closes the gap diagnosed during v0.4.34's stuck-replay debug: long-uptime services accumulated orphaned `running` rows past TTL with no automatic cleanup until next restart. Both sweep functions gain a `phase: str = "startup"` kwarg; `logger.info` messages now tag the phase as `GC[startup]:` or `GC[recurring]:` so ops can grep + dashboard the two paths separately. Default `phase="startup"` preserves back-compat for all existing direct callers (`run_startup_gc` + tests). Idempotency holds under concurrent startup + recurring firing: `_gc_orphan_runs` UPDATEs WHERE TTL-exceeded (matches each row once); `_gc_stuck_pending_optimizations` SELECTs-then-DELETEs (SELECT empty on 2nd pass). No new background task, no new file, no env var. Spec: `docs/superpowers/specs/2026-05-21-v0.4.35-periodic-gc-sweep-design.md`.
