@@ -1,9 +1,10 @@
 <!-- frontend/src/lib/components/layout/RunsPanel.svelte -->
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { listRuns, type RunSummary } from '$lib/api/runs';
+  import { listRuns, bulkDeleteRuns, bulkExportRuns, type RunSummary } from '$lib/api/runs';
   import { projectStore } from '$lib/stores/project.svelte';
   import RunRowItem from './RunRowItem.svelte';
+  import BulkActionBar from './BulkActionBar.svelte';
 
   interface Props {
     active?: boolean;
@@ -28,21 +29,78 @@
   let confirmDeleteIds = $state<string[] | null>(null);
   let bulkActionInFlight = $state(false);
 
-  // STUB — full impl in GREEN
   function toggleSelectMode(): void {
-    throw new Error('RED phase — implement in GREEN');
+    selectMode = !selectMode;
+    if (!selectMode) {
+      selectedIds = new Set();
+    }
   }
-  function toggleRowSelection(_id: string): void {
-    throw new Error('RED phase — implement in GREEN');
+
+  function toggleRowSelection(id: string): void {
+    if (selectedIds.has(id)) {
+      selectedIds.delete(id);
+    } else {
+      selectedIds.add(id);
+    }
+    selectedIds = new Set(selectedIds);  // trigger reactivity
   }
+
   function selectAll(): void {
-    throw new Error('RED phase — implement in GREEN');
+    if (runs.every(r => selectedIds.has(r.id))) {
+      // All selected → clear
+      selectedIds = new Set();
+    } else {
+      selectedIds = new Set(runs.map(r => r.id));
+    }
   }
+
   async function executeBulkDelete(): Promise<void> {
-    throw new Error('RED phase — implement in GREEN');
+    if (confirmDeleteIds === null || confirmDeleteIds.length === 0) return;
+    bulkActionInFlight = true;
+    try {
+      const result = await bulkDeleteRuns(confirmDeleteIds);
+      // Remove deleted from runs[]
+      const deletedSet = new Set(result.deleted);
+      runs = runs.filter(r => !deletedSet.has(r.id));
+      if (result.not_found.length > 0) {
+        runsError = `${result.not_found.length} runs were not found (already deleted).`;
+      }
+      selectedIds = new Set();
+      selectMode = false;
+      confirmDeleteIds = null;
+    } catch (err) {
+      runsError = err instanceof Error ? err.message : 'Bulk delete failed';
+    } finally {
+      bulkActionInFlight = false;
+    }
   }
+
   async function executeBulkExport(): Promise<void> {
-    throw new Error('RED phase — implement in GREEN');
+    if (selectedIds.size === 0) return;
+    bulkActionInFlight = true;
+    try {
+      const ids = Array.from(selectedIds);
+      const data = await bulkExportRuns(ids);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `runs-export-${formatExportTimestamp()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      runsError = err instanceof Error ? err.message : 'Bulk export failed';
+    } finally {
+      bulkActionInFlight = false;
+    }
+  }
+
+  function formatExportTimestamp(): string {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}-${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
   }
 
   async function fetchRuns(offset: number, append: boolean): Promise<void> {
@@ -131,6 +189,36 @@
     </div>
   </div>
 
+  <div class="select-mode-row">
+    <button
+      class="btn-outline-secondary"
+      aria-label="Toggle select mode"
+      aria-pressed={selectMode}
+      onclick={toggleSelectMode}
+    >
+      {selectMode ? 'Cancel select' : 'Select'}
+    </button>
+    {#if selectMode}
+      <label class="select-all-wrap">
+        <input
+          type="checkbox"
+          aria-label="Select all"
+          checked={runs.length > 0 && runs.every(r => selectedIds.has(r.id))}
+          onchange={selectAll}
+        />
+        <span class="text-[10px]">Select all</span>
+      </label>
+    {/if}
+  </div>
+
+  <BulkActionBar
+    count={selectedIds.size}
+    onDelete={() => { confirmDeleteIds = Array.from(selectedIds); }}
+    onExport={executeBulkExport}
+    onClear={() => { selectedIds = new Set(); }}
+    inFlight={bulkActionInFlight}
+  />
+
   {#if runsError}
     <div class="runs-error">
       <p class="text-[10px] text-neon-red">Failed to load runs: {runsError}</p>
@@ -150,6 +238,10 @@
           {run}
           expanded={expandedId === run.id}
           onClick={() => handleRowClick(run.id)}
+          {selectMode}
+          selected={selectedIds.has(run.id)}
+          onToggleSelect={() => toggleRowSelection(run.id)}
+          onDeleteConfirm={(id) => { confirmDeleteIds = [id]; }}
         />
       {/each}
       {#if hasMore}
@@ -160,6 +252,38 @@
     </div>
   {/if}
 </div>
+
+{#if confirmDeleteIds !== null}
+  <div class="confirm-modal-scrim" onclick={() => { confirmDeleteIds = null; }}>
+    <div
+      class="confirm-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-title"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 id="confirm-title" class="text-[11px]" style="text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--font-display);">
+        Confirm delete
+      </h3>
+      <p class="text-[11px]">
+        Delete {confirmDeleteIds.length} run{confirmDeleteIds.length === 1 ? '' : 's'}?
+        This cannot be undone.
+      </p>
+      <div class="confirm-actions">
+        <button class="btn-outline-secondary" onclick={() => { confirmDeleteIds = null; }}>
+          Cancel
+        </button>
+        <button
+          class="btn-outline-danger"
+          onclick={executeBulkDelete}
+          disabled={bulkActionInFlight}
+        >
+          Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .runs-panel { padding: 6px; }
@@ -175,4 +299,39 @@
   }
   .runs-list { display: flex; flex-direction: column; gap: 2px; }
   .runs-sentinel { padding: 6px 0; min-height: 24px; }
+  .select-mode-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+  }
+  .select-all-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+  .confirm-modal-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: scrim-in 200ms ease-out;
+  }
+  .confirm-modal {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border-subtle);
+    padding: 16px;
+    min-width: 280px;
+    animation: dialog-in 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .confirm-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 12px;
+  }
 </style>
