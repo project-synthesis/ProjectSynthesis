@@ -74,6 +74,7 @@ async def run_startup_gc(
     behind the ``write_queue is None`` branch.
     """
     if write_queue is not None:
+
         async def _do_sweep(write_db: AsyncSession) -> int:
             total = 0
             total += await _gc_failed_optimizations(write_db)
@@ -92,7 +93,8 @@ async def run_startup_gc(
             return total
 
         total_cleaned = await write_queue.submit(
-            _do_sweep, operation_label="gc_startup_commit",
+            _do_sweep,
+            operation_label="gc_startup_commit",
         )
         if total_cleaned > 0:
             logger.info("Startup GC: cleaned %d records total", total_cleaned)
@@ -193,25 +195,17 @@ async def _gc_stuck_pending_optimizations(
     # cascade keeps the FK constraints quiet under audit-hook RAISE).
     from app.models import Feedback, OptimizationPattern, RefinementTurn
 
-    await db.execute(
-        delete(Feedback).where(Feedback.optimization_id.in_(pending_ids))
-    )
-    await db.execute(
-        delete(RefinementTurn).where(RefinementTurn.optimization_id.in_(pending_ids))
-    )
-    await db.execute(
-        delete(OptimizationPattern).where(
-            OptimizationPattern.optimization_id.in_(pending_ids)
-        )
-    )
+    await db.execute(delete(Feedback).where(Feedback.optimization_id.in_(pending_ids)))
+    await db.execute(delete(RefinementTurn).where(RefinementTurn.optimization_id.in_(pending_ids)))
+    await db.execute(delete(OptimizationPattern).where(OptimizationPattern.optimization_id.in_(pending_ids)))
 
-    await db.execute(
-        delete(Optimization).where(Optimization.id.in_(pending_ids))
-    )
+    await db.execute(delete(Optimization).where(Optimization.id.in_(pending_ids)))
 
     logger.info(
         "GC[%s]: deleted %d stuck pending optimizations (older than %d hours)",
-        phase, len(pending_ids), _STUCK_PENDING_AGE_HOURS,
+        phase,
+        len(pending_ids),
+        _STUCK_PENDING_AGE_HOURS,
     )
     return len(pending_ids)
 
@@ -238,19 +232,11 @@ async def _gc_failed_optimizations(db: AsyncSession) -> int:
     # Delete any dependent records first (feedbacks, refinement turns, patterns)
     from app.models import Feedback, OptimizationPattern, RefinementTurn
 
-    await db.execute(
-        delete(Feedback).where(Feedback.optimization_id.in_(failed_ids))
-    )
-    await db.execute(
-        delete(RefinementTurn).where(RefinementTurn.optimization_id.in_(failed_ids))
-    )
-    await db.execute(
-        delete(OptimizationPattern).where(OptimizationPattern.optimization_id.in_(failed_ids))
-    )
+    await db.execute(delete(Feedback).where(Feedback.optimization_id.in_(failed_ids)))
+    await db.execute(delete(RefinementTurn).where(RefinementTurn.optimization_id.in_(failed_ids)))
+    await db.execute(delete(OptimizationPattern).where(OptimizationPattern.optimization_id.in_(failed_ids)))
 
-    await db.execute(
-        delete(Optimization).where(Optimization.id.in_(failed_ids))
-    )
+    await db.execute(delete(Optimization).where(Optimization.id.in_(failed_ids)))
 
     logger.info("GC: deleted %d failed optimizations", len(failed_ids))
     return len(failed_ids)
@@ -286,29 +272,17 @@ async def _gc_archived_zero_member_clusters(db: AsyncSession) -> int:
     safe_ids = []
     for cid in candidate_ids:
         # Check for optimization references
-        opt_ref = await db.execute(
-            select(Optimization.id).where(
-                Optimization.cluster_id == cid
-            ).limit(1)
-        )
+        opt_ref = await db.execute(select(Optimization.id).where(Optimization.cluster_id == cid).limit(1))
         if opt_ref.scalar_one_or_none():
             continue
 
         # Check for optimization_pattern references
-        op_ref = await db.execute(
-            select(OptimizationPattern.id).where(
-                OptimizationPattern.cluster_id == cid
-            ).limit(1)
-        )
+        op_ref = await db.execute(select(OptimizationPattern.id).where(OptimizationPattern.cluster_id == cid).limit(1))
         if op_ref.scalar_one_or_none():
             continue
 
         # Check for child cluster references
-        child_ref = await db.execute(
-            select(PromptCluster.id).where(
-                PromptCluster.parent_id == cid
-            ).limit(1)
-        )
+        child_ref = await db.execute(select(PromptCluster.id).where(PromptCluster.parent_id == cid).limit(1))
         if child_ref.scalar_one_or_none():
             continue
 
@@ -320,18 +294,15 @@ async def _gc_archived_zero_member_clusters(db: AsyncSession) -> int:
     # Delete associated meta_patterns first
     from app.models import MetaPattern
 
-    await db.execute(
-        delete(MetaPattern).where(MetaPattern.cluster_id.in_(safe_ids))
-    )
+    await db.execute(delete(MetaPattern).where(MetaPattern.cluster_id.in_(safe_ids)))
 
     # Delete the clusters
-    await db.execute(
-        delete(PromptCluster).where(PromptCluster.id.in_(safe_ids))
-    )
+    await db.execute(delete(PromptCluster).where(PromptCluster.id.in_(safe_ids)))
 
     logger.info(
         "GC: deleted %d archived zero-member clusters (of %d candidates)",
-        len(safe_ids), len(candidate_ids),
+        len(safe_ids),
+        len(candidate_ids),
     )
     return len(safe_ids)
 
@@ -340,13 +311,7 @@ async def _gc_orphan_meta_patterns(db: AsyncSession) -> int:
     """Delete meta_patterns whose cluster no longer exists."""
     from app.models import MetaPattern, PromptCluster
 
-    result = await db.execute(
-        delete(MetaPattern).where(
-            ~MetaPattern.cluster_id.in_(
-                select(PromptCluster.id)
-            )
-        )
-    )
+    result = await db.execute(delete(MetaPattern).where(~MetaPattern.cluster_id.in_(select(PromptCluster.id))))
     count = result.rowcount  # type: ignore[attr-defined]
     if count > 0:
         logger.info("GC: deleted %d orphan meta_patterns", count)
@@ -428,9 +393,10 @@ async def _gc_orphan_runs(
     cleaned = result.rowcount or 0  # type: ignore[attr-defined]
     if cleaned:
         logger.info(
-            "GC[%s]: marked %d orphan run_row rows as failed "
-            "(status='running' past TTL=%dh)",
-            phase, cleaned, RUN_ORPHAN_TTL_HOURS,
+            "GC[%s]: marked %d orphan run_row rows as failed (status='running' past TTL=%dh)",
+            phase,
+            cleaned,
+            RUN_ORPHAN_TTL_HOURS,
         )
     return cleaned
 
@@ -489,31 +455,35 @@ async def _gc_orphan_repo_index_runs(db: AsyncSession) -> int:
             indexed_at_aware = meta.indexed_at
             if indexed_at_aware.tzinfo is None:
                 indexed_at_aware = indexed_at_aware.replace(tzinfo=timezone.utc)
-            age_minutes = int(
-                (now - indexed_at_aware).total_seconds() / 60
-            )
+            age_minutes = int((now - indexed_at_aware).total_seconds() / 60)
         try:
             await _publish_phase_change(
-                meta.repo_full_name, meta.branch,
-                phase="error", status="error",
+                meta.repo_full_name,
+                meta.branch,
+                phase="error",
+                status="error",
                 files_seen=meta.files_seen or 0,
                 files_total=meta.files_total or 0,
             )
         except Exception:
             logger.debug(
-                "orphan recovery SSE publish failed", exc_info=True,
+                "orphan recovery SSE publish failed",
+                exc_info=True,
             )
-        _emit_decision_event("repo_index_recovered", {
-            "repo_full_name": meta.repo_full_name,
-            "branch": meta.branch,
-            "previous_indexed_at_iso": prev_iso,
-            "age_minutes": age_minutes,
-            "reason": "orphan_recovery",
-        })
+        _emit_decision_event(
+            "repo_index_recovered",
+            {
+                "repo_full_name": meta.repo_full_name,
+                "branch": meta.branch,
+                "previous_indexed_at_iso": prev_iso,
+                "age_minutes": age_minutes,
+                "reason": "orphan_recovery",
+            },
+        )
     if stuck:
         logger.info(
-            "GC: flipped %d orphan repo_index_meta rows to status='error' "
-            "(crashed mid-build)", len(stuck),
+            "GC: flipped %d orphan repo_index_meta rows to status='error' (crashed mid-build)",
+            len(stuck),
         )
     return len(stuck)
 
@@ -544,6 +514,7 @@ async def _gc_test_leak_optimizations(db: AsyncSession) -> int:
     from sqlalchemy import func as _func
 
     from app.models import Optimization
+
     # uuid4 always has length 36 + hyphens at positions 8/13/18/23.
     _UUID_GLOB = "________-____-____-____-____________"  # noqa: N806 — local constant
     result = await db.execute(
@@ -600,9 +571,11 @@ async def _gc_reconcile_member_counts(db: AsyncSession) -> int:
         .where(PromptCluster.state.in_(("candidate", "active", "mature")))
         .values(
             member_count=(
-                select(_count_func()).where(
+                select(_count_func())
+                .where(
                     Optimization.cluster_id == PromptCluster.id,
-                ).scalar_subquery()
+                )
+                .scalar_subquery()
             ),
         )
     )
@@ -622,6 +595,7 @@ async def _gc_reconcile_member_counts(db: AsyncSession) -> int:
 def _count_func():
     """Lazy import for sqlalchemy.func.count to avoid top-level dep."""
     from sqlalchemy import func as _f
+
     return _f.count()
 
 
@@ -641,6 +615,7 @@ async def run_recurring_gc(
     serialize against every other backend writer.
     """
     if write_queue is not None:
+
         async def _do_sweep(write_db: AsyncSession) -> int:
             total = 0
             total += await _gc_expired_github_tokens(write_db)
@@ -652,14 +627,16 @@ async def run_recurring_gc(
             # startup-sweep + recurring-tick fire is safe.
             total += await _gc_orphan_runs(write_db, phase="recurring")
             total += await _gc_stuck_pending_optimizations(
-                write_db, phase="recurring",
+                write_db,
+                phase="recurring",
             )
             if total > 0:
                 await write_db.commit()
             return total
 
         total_cleaned = await write_queue.submit(
-            _do_sweep, operation_label="gc_recurring_commit",
+            _do_sweep,
+            operation_label="gc_recurring_commit",
         )
         if total_cleaned > 0:
             logger.info("Recurring GC: cleaned %d records total", total_cleaned)
@@ -685,7 +662,8 @@ async def run_recurring_gc(
 
 
 async def _gc_expired_github_tokens(
-    db: AsyncSession, grace_hours: int = 24,
+    db: AsyncSession,
+    grace_hours: int = 24,
 ) -> int:
     """Delete GitHubToken rows whose access token AND refresh token have both expired.
 
@@ -709,8 +687,7 @@ async def _gc_expired_github_tokens(
     stmt = select(GitHubToken.id).where(
         GitHubToken.expires_at.is_not(None),
         GitHubToken.expires_at < now,
-        (GitHubToken.refresh_token_expires_at.is_(None))
-        | (GitHubToken.refresh_token_expires_at < cutoff),
+        (GitHubToken.refresh_token_expires_at.is_(None)) | (GitHubToken.refresh_token_expires_at < cutoff),
     )
     result = await db.execute(stmt)
     expired_ids = [r[0] for r in result.all()]
@@ -718,9 +695,7 @@ async def _gc_expired_github_tokens(
     if not expired_ids:
         return 0
 
-    await db.execute(
-        delete(GitHubToken).where(GitHubToken.id.in_(expired_ids))
-    )
+    await db.execute(delete(GitHubToken).where(GitHubToken.id.in_(expired_ids)))
     logger.info("Recurring GC: deleted %d expired github_tokens", len(expired_ids))
     return len(expired_ids)
 
@@ -738,17 +713,13 @@ async def _gc_orphan_linked_repos(db: AsyncSession) -> int:
     """
     from app.models import GitHubToken, LinkedRepo
 
-    stmt = select(LinkedRepo.id).where(
-        ~LinkedRepo.session_id.in_(select(GitHubToken.session_id))
-    )
+    stmt = select(LinkedRepo.id).where(~LinkedRepo.session_id.in_(select(GitHubToken.session_id)))
     result = await db.execute(stmt)
     orphan_ids = [r[0] for r in result.all()]
 
     if not orphan_ids:
         return 0
 
-    await db.execute(
-        delete(LinkedRepo).where(LinkedRepo.id.in_(orphan_ids))
-    )
+    await db.execute(delete(LinkedRepo).where(LinkedRepo.id.in_(orphan_ids)))
     logger.info("Recurring GC: deleted %d orphan linked_repos", len(orphan_ids))
     return len(orphan_ids)
