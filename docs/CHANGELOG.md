@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.34 — 2026-05-21
+
 ### Added
 
 - **Accept-header SSE on `POST /api/seed`** — clients sending `Accept: text/event-stream` now receive an SSE stream emitting `seed_started`, `seed_batch_progress` (filtered to the request's `run_id`), and a terminal `seed_completed` or `seed_failed` event. Mirrors the canonical pattern already used by `POST /api/probes` (T3.3 era) and `POST /api/refine`. Default `Accept` and `Accept: application/json` continue to return the synchronous `SeedOutput` JSON response unchanged. Closes the last open Foundation P3 "out of scope" deferred item (Q3 Path 1 marked "additive if needed"). `_swallow_task_exception` lifted to `backend/app/utils/asyncio_helpers.py` so both routers share one implementation.
