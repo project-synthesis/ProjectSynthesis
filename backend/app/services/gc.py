@@ -81,7 +81,9 @@ async def run_startup_gc(
             total += await _gc_archived_zero_member_clusters(write_db)
             total += await _gc_orphan_meta_patterns(write_db)
             total += await _gc_orphan_probe_runs(write_db)  # legacy no-op (PR1; deleted PR2)
-            total += await _gc_orphan_runs(write_db)  # P3: sweeps all RunRow modes (topic_probe + seed_agent + replay_run)
+            # P3: _gc_orphan_runs sweeps ALL RunRow modes (topic_probe,
+            # seed_agent, replay_run); query has no mode filter.
+            total += await _gc_orphan_runs(write_db)
             total += await _gc_orphan_repo_index_runs(write_db)
             total += await _gc_test_leak_optimizations(write_db)
             total += await _gc_reconcile_member_counts(write_db)

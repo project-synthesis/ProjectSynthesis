@@ -31,19 +31,6 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, TypedDict
 
-
-class _RateLimitedFlag(TypedDict):
-    """Orchestrator-local rate-limit state.
-
-    Captured the first time a prompt in the batch surfaces a
-    ``ProviderRateLimitError`` (via ``PendingOptimization.rate_limit_meta``).
-    Subsequent slots short-circuit before issuing their LLM call.
-    """
-
-    hit: bool
-    reset_at_iso: str | None
-    provider: str | None
-
 from app.providers.base import LLMProvider
 from app.services.embedding_service import EmbeddingService
 from app.services.event_bus import event_bus
@@ -60,6 +47,19 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+
+class _RateLimitedFlag(TypedDict):
+    """Orchestrator-local rate-limit state.
+
+    Captured the first time a prompt in the batch surfaces a
+    ``ProviderRateLimitError`` (via ``PendingOptimization.rate_limit_meta``).
+    Subsequent slots short-circuit before issuing their LLM call.
+    """
+
+    hit: bool
+    reset_at_iso: str | None
+    provider: str | None
 
 
 BATCH_CONCURRENCY_BY_TIER: dict[str, int] = {
