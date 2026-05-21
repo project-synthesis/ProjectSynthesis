@@ -338,7 +338,7 @@
   <div class="report-actions">
     <button
       type="button"
-      class="report-btn report-btn--save"
+      class="btn-primary report-btn--save"
       class:report-btn--flash={saveFlash}
       onclick={handleSave}
       disabled={saving}
@@ -350,7 +350,7 @@
     {#if showReplay}
       <button
         type="button"
-        class="report-btn report-btn--replay"
+        class="btn-outline-secondary report-btn--replay"
         onclick={handleReplay}
         disabled={replaying}
         aria-label="Replay suite"
@@ -361,7 +361,7 @@
 
     <button
       type="button"
-      class="report-btn report-btn--copy copy-flash"
+      class="btn-outline-secondary report-btn--copy copy-flash"
       class:report-btn--copied={copyFlash.triggered}
       data-test={copyFlash.triggered ? 'copy-flash' : undefined}
       data-state={copyFlash.triggered ? 'copy-flash' : undefined}
@@ -569,59 +569,13 @@
     border-top: 1px solid var(--color-border-subtle);
   }
 
-  .report-btn {
-    background: transparent;
-    border: 1px solid var(--color-border-subtle);
-    color: var(--color-text-secondary);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 4px 12px;
-    cursor: pointer;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    height: 20px;
-    box-sizing: border-box;
-    /* Atomic-event multi-property hover transition — spec §6 line 1133-1140,
-       axiom 5 (multi-property transitions fire simultaneously as one
-       atomic event). */
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  .report-btn:hover:not(:disabled) {
-    color: var(--color-text-primary);
-    border-color: var(--color-text-secondary);
-  }
-
-  .report-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .report-btn--save {
-    color: var(--color-neon-purple);
-    border-color: var(--color-neon-purple);
-    background: color-mix(in srgb, var(--color-neon-purple) 8%, transparent);
-  }
-
-  /* Hero-tier hover lift + 14% fill — spec §6 line 1126.
-     Active resets translateY(0) per Hero contour-intensity recipe. */
-  .report-btn--save:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-neon-purple) 14%, transparent);
-    color: var(--color-neon-purple);
-    border-color: var(--color-neon-purple);
-    transform: translateY(-1px);
-  }
-
-  .report-btn--save:active:not(:disabled) {
-    transform: translateY(0);
-    transition: background 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 150ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
+  /* Buttons now use canonical `.btn-primary` (Save Suite) and
+     `.btn-outline-secondary` (Copy md / Replay) globals from app.css.
+     The local `.report-btn--save` / `.report-btn--copy` / `.report-btn--replay`
+     modifier classes below carry only the report-specific concerns
+     (forge-spark flash, copy-flash green tint, replay neon-blue tint)
+     — base sizing/typography/border-radius/transitions all come from
+     the global recipes. */
 
   /* `forge-spark` one-shot fires when --flash class is added by the
      handleSave() handler — 250ms ease-out per spec §6. */
@@ -629,11 +583,13 @@
     animation: forge-spark 250ms ease-out;
   }
 
-  /* Replay — Medium tier (spec §6 line 1127). Resting `1px solid border-subtle`,
-     Hover `1px solid neon-blue + 12% fill`. No translateY lift — Medium tier;
-     lift is Hero-only per `component-patterns.md` Recipe E. */
+  /* Replay — Medium tier (spec §6 line 1127). Overrides the gray
+     .btn-outline-secondary baseline to neon-blue color + border so the
+     "analysis" semantic registers. No translateY lift — Medium tier;
+     Hero lift is reserved for .btn-primary per Recipe E. */
   .report-btn--replay {
     color: var(--color-neon-blue);
+    border-color: color-mix(in srgb, var(--color-neon-blue) 30%, transparent);
   }
 
   .report-btn--replay:hover:not(:disabled) {
