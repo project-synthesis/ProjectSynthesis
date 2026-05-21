@@ -29,7 +29,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
+
+
+class _RateLimitedFlag(TypedDict):
+    """Orchestrator-local rate-limit state.
+
+    Captured the first time a prompt in the batch surfaces a
+    ``ProviderRateLimitError`` (via ``PendingOptimization.rate_limit_meta``).
+    Subsequent slots short-circuit before issuing their LLM call.
+    """
+
+    hit: bool
+    reset_at_iso: str | None
+    provider: str | None
 
 from app.providers.base import LLMProvider
 from app.services.embedding_service import EmbeddingService
@@ -102,7 +115,11 @@ async def run_batch(
     # 429), and abort any prompts that haven't started yet so the caller
     # can surface ``reset_at`` to the user without burning the rest of
     # the budget on certain-to-fail attempts.
-    _rate_limited_flag = {"hit": False, "reset_at_iso": None, "provider": None}
+    _rate_limited_flag: _RateLimitedFlag = {
+        "hit": False,
+        "reset_at_iso": None,
+        "provider": None,
+    }
 
     # Shared event for cooperative cancellation: when set, in-flight
     # prompts that haven't started their next LLM call yet can bail

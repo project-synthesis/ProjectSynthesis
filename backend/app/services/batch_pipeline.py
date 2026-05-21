@@ -30,6 +30,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from app.config import DATA_DIR
@@ -837,7 +838,7 @@ def _build_passthrough_fallback_pending(
     raw_prompt: str,
     duration_ms: int,
     provider_name: str,
-    reset_at: Any,
+    reset_at: datetime | None,
     estimated_wait_seconds: int | None,
     repo_full_name: str | None,
     project_id: str | None,
