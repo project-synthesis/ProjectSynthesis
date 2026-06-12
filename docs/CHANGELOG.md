@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.37 — 2026-06-12
+
 ### Added
 - **Replay runs capture their optimized outputs** — every replay `prompt_results[]` row now persists `optimized_prompt` (≤20,000 chars) and `changes_summary` (≤8,000 chars) plus an `output_truncated` flag; rate-limited and failed rows carry both keys with `null` values so consumers can distinguish "no output" from "not captured (pre-v0.4.37 replay)" by key presence.
 - **Self-contained suite snapshots** — `prompts_snapshot[]` entries gain `baseline_optimized_prompt`: the source optimization's full-length output (≤20,000 chars, fetched from the `Optimization` row — not the run's 1,000-char excerpt) captured at save time so provenance survives row deletion. Additive JSON, no migration; pre-v0.4.37 suites degrade gracefully.
