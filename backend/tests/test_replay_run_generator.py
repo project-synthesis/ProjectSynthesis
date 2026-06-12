@@ -54,6 +54,7 @@ Surface contract pinned by these tests (spec §5):
 """
 from __future__ import annotations
 
+import asyncio as _asyncio
 import json
 import uuid
 from collections.abc import AsyncGenerator
@@ -70,6 +71,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+import app.services.generators.replay_run_generator as replay_mod
 from app.models import Base, ValidationSuite
 from app.schemas.runs import RunRequest
 from app.services.batch_pipeline import PendingOptimization
@@ -1033,3 +1035,316 @@ __all__ = [
     "test_replay_run_generator_final_report_is_non_none_stub",
     "test_replay_run_generator_persists_via_replay_run_persist_op_label_and_is_registered_in_lifespan",
 ]
+
+
+# ===========================================================================
+# v0.4.36 Cycle 1 — concurrent executor (spec §3, tests §3.8 items 1-8 + 4b)
+# ===========================================================================
+
+
+def _patch_run_single_prompt_concurrent(
+    monkeypatch,
+    *,
+    behavior,
+):
+    """Patch ``batch_pipeline.run_single_prompt`` keyed by ``prompt_index``.
+
+    ``behavior(idx)`` is an async callable returning a PendingOptimization
+    (or raising). Tracks in-flight concurrency in the returned dict.
+    """
+    import app.services.batch_pipeline as batch_mod
+
+    state = {"in_flight": 0, "max_in_flight": 0, "calls": []}
+
+    async def _fake(*args, **kwargs):
+        idx = kwargs["prompt_index"]
+        state["calls"].append(idx)
+        state["in_flight"] += 1
+        state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+        try:
+            return await behavior(idx)
+        finally:
+            state["in_flight"] -= 1
+
+    monkeypatch.setattr(batch_mod, "run_single_prompt", _fake)
+    return state
+
+
+def _capture_prompt_completed_events(monkeypatch) -> list[dict]:
+    """Capture ``probe_prompt_completed`` payloads in publish order."""
+    from app.services.event_bus import event_bus
+
+    captured: list[dict] = []
+    _orig = event_bus.publish
+
+    def _spy(kind, payload, *a, **kw):
+        if kind == "probe_prompt_completed":
+            captured.append(dict(payload))
+        return _orig(kind, payload, *a, **kw)
+
+    monkeypatch.setattr(event_bus, "publish", _spy)
+    return captured
+
+
+def _rl_pending(idx: int) -> PendingOptimization:
+    """Bail-gate-style pending: completed + heuristic score + rate_limit_meta."""
+    p = _build_pending(idx=idx, overall=4.2)
+    p.status = "completed"
+    p.rate_limit_meta = {
+        "rate_limited": True,
+        "fallback": "passthrough",
+        "provider": "claude_cli",
+        "reset_at_iso": None,
+    }
+    return p
+
+
+async def test_probe_prompt_concurrency_constant_contract() -> None:
+    """AC-1: importable, immutable, mirrors BATCH_CONCURRENCY_BY_TIER."""
+    from app.services.generators._constants import (
+        DEFAULT_PROMPT_CONCURRENCY,
+        PROBE_PROMPT_CONCURRENCY,
+    )
+
+    from app.services.batch_orchestrator import BATCH_CONCURRENCY_BY_TIER
+
+    assert dict(PROBE_PROMPT_CONCURRENCY) == BATCH_CONCURRENCY_BY_TIER
+    assert DEFAULT_PROMPT_CONCURRENCY == 5
+    with pytest.raises(TypeError):
+        PROBE_PROMPT_CONCURRENCY["internal"] = 99  # type: ignore[index]
+
+
+async def test_replay_runs_prompts_concurrently_capped_at_tier(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-2: max simultaneous run_single_prompt == 10 (internal) and > 1."""
+    n = 15
+    suite = await _seed_suite(db, n_prompts=n)
+    release = _asyncio.Event()
+
+    async def _behavior(idx):
+        await release.wait()
+        return _build_pending(idx=idx)
+
+    state = _patch_run_single_prompt_concurrent(monkeypatch, behavior=_behavior)
+    gen = _make_generator(write_queue=write_queue)
+    task = _asyncio.create_task(
+        gen.run(_make_request(suite_id=suite.id), run_id="rid-c1"),
+    )
+    # Wait until the semaphore admits its full quota.
+    for _ in range(200):
+        if state["max_in_flight"] >= 10:
+            break
+        await _asyncio.sleep(0.01)
+    assert state["max_in_flight"] == 10, state
+    assert state["in_flight"] == 10  # 5 queued behind the semaphore
+    release.set()
+    result = await task
+    assert len(result.prompt_results) == n
+    assert state["max_in_flight"] == 10  # never exceeded the cap
+
+
+async def test_position_correspondence_under_out_of_order_completion(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-3: slot i holds prompt i even when i=0 finishes LAST."""
+    n = 6
+    suite = await _seed_suite(db, n_prompts=n)
+
+    async def _behavior(idx):
+        await _asyncio.sleep((n - idx) * 0.02)  # idx 0 slowest
+        p = _build_pending(idx=idx)
+        p.overall_score = float(idx)
+        return p
+
+    _patch_run_single_prompt_concurrent(monkeypatch, behavior=_behavior)
+    gen = _make_generator(write_queue=write_queue)
+    result = await gen.run(_make_request(suite_id=suite.id), run_id="rid-c2")
+    for i, row in enumerate(result.prompt_results):
+        assert row["raw_prompt_idx"] == i
+        assert row["overall_score"] == float(i), (
+            f"slot {i} holds the wrong prompt's result: {row['overall_score']}"
+        )
+
+
+async def test_failure_isolation_under_concurrency(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-4: one Exception fails its row only; terminal status partial."""
+    n = 4
+    suite = await _seed_suite(db, n_prompts=n)
+
+    async def _behavior(idx):
+        if idx == 1:
+            raise RuntimeError("boom-1")
+        await _asyncio.sleep(0.01)
+        return _build_pending(idx=idx)
+
+    _patch_run_single_prompt_concurrent(monkeypatch, behavior=_behavior)
+    gen = _make_generator(write_queue=write_queue)
+    result = await gen.run(_make_request(suite_id=suite.id), run_id="rid-c3")
+    assert result.terminal_status == "partial"
+    assert result.prompt_results[1]["status"] == "failed"
+    assert "boom-1" in result.prompt_results[1]["error"]
+    assert all(
+        result.prompt_results[i]["status"] == "completed"
+        for i in (0, 2, 3)
+    )
+
+
+async def test_first_429_short_circuits_unstarted_prompts(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-5 pre-start path: prompts past the cap never call the provider."""
+    n = 15  # cap=10 → 5 pre-start slots
+    suite = await _seed_suite(db, n_prompts=n)
+    release = _asyncio.Event()
+
+    async def _behavior(idx):
+        if idx == 0:
+            return _rl_pending(0)  # trips the event while 1-9 are in flight
+        await release.wait()
+        return _build_pending(idx=idx)
+
+    state = _patch_run_single_prompt_concurrent(monkeypatch, behavior=_behavior)
+    gen = _make_generator(write_queue=write_queue)
+    task = _asyncio.create_task(
+        gen.run(_make_request(suite_id=suite.id), run_id="rid-c4"),
+    )
+    await _asyncio.sleep(0.05)  # let prompt 0 trip the event
+    release.set()
+    result = await task
+
+    assert sorted(state["calls"]) == list(range(10)), (
+        "prompts 10-14 must short-circuit without calling the provider"
+    )
+    for i in range(10, 15):
+        row = result.prompt_results[i]
+        assert row["status"] == "failed" and row["error"] == "rate_limited"
+        assert row["overall_score"] is None
+    assert result.aggregate["replay_rate_limited_count"] == 6  # idx 0 + 10-14
+    assert result.terminal_status == "partial"
+
+
+async def test_in_flight_rate_limited_pending_projected_scoreless(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-5/AC-7 projection guard: bail-gate rows never enter latest_mean."""
+    n = 3  # all in-flight (n <= cap) — the invisible-degradation case
+    suite = await _seed_suite(db, n_prompts=n)
+
+    async def _behavior(idx):
+        if idx == 0:
+            return _rl_pending(0)
+        await _asyncio.sleep(0.01)
+        p = _build_pending(idx=idx)
+        p.overall_score = 8.0
+        return p
+
+    _patch_run_single_prompt_concurrent(monkeypatch, behavior=_behavior)
+    gen = _make_generator(write_queue=write_queue)
+    result = await gen.run(_make_request(suite_id=suite.id), run_id="rid-c5")
+
+    row0 = result.prompt_results[0]
+    assert row0["status"] == "failed" and row0["error"] == "rate_limited"
+    assert row0["overall_score"] is None, (
+        "heuristic 4.2 must NOT survive projection — it would poison latest_mean"
+    )
+    assert result.aggregate["replay_rate_limited_count"] == 1
+    assert result.aggregate["mean_overall"] == pytest.approx(8.0)
+    assert result.terminal_status == "partial", (
+        "N <= cap all-in-flight degradation must never classify as completed"
+    )
+
+
+async def test_all_rate_limited_classifies_failed(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-5 homogeneous fixture: every row rate-limited → terminal 'failed'."""
+    n = 3
+    suite = await _seed_suite(db, n_prompts=n)
+
+    async def _behavior(idx):
+        return _rl_pending(idx)
+
+    _patch_run_single_prompt_concurrent(monkeypatch, behavior=_behavior)
+    gen = _make_generator(write_queue=write_queue)
+    result = await gen.run(_make_request(suite_id=suite.id), run_id="rid-c6")
+    assert result.terminal_status == "failed"
+    assert result.aggregate["replay_rate_limited_count"] == n
+
+
+async def test_progress_counter_monotonic_under_out_of_order(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-6: current == 1..N in publish order; idx is a permutation."""
+    n = 5
+    suite = await _seed_suite(db, n_prompts=n)
+    events = _capture_prompt_completed_events(monkeypatch)
+
+    async def _behavior(idx):
+        await _asyncio.sleep((n - idx) * 0.02)
+        return _build_pending(idx=idx)
+
+    _patch_run_single_prompt_concurrent(monkeypatch, behavior=_behavior)
+    gen = _make_generator(write_queue=write_queue)
+    await gen.run(_make_request(suite_id=suite.id), run_id="rid-c7")
+
+    assert [e["current"] for e in events] == list(range(1, n + 1))
+    assert sorted(e["idx"] for e in events) == list(range(n))
+    assert [e["idx"] for e in events] != list(range(n)), (
+        "fixture must actually complete out of order for this test to bite"
+    )
+    assert all(e["total"] == n for e in events)
+
+
+async def test_cancellation_propagates_to_caller(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-8: cancelling the run cancels children and raises CancelledError."""
+    suite = await _seed_suite(db, n_prompts=4)
+    never = _asyncio.Event()
+
+    async def _behavior(idx):
+        await never.wait()
+        return _build_pending(idx=idx)
+
+    state = _patch_run_single_prompt_concurrent(monkeypatch, behavior=_behavior)
+    gen = _make_generator(write_queue=write_queue)
+    task = _asyncio.create_task(
+        gen.run(_make_request(suite_id=suite.id), run_id="rid-c8"),
+    )
+    for _ in range(100):
+        if state["in_flight"] == 4:
+            break
+        await _asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(_asyncio.CancelledError):
+        await task
+    await _asyncio.sleep(0.05)
+    assert state["in_flight"] == 0, "children must not leak past cancellation"
+
+
+async def test_concurrency_one_is_observationally_sequential(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-9: cap=1 reproduces the pre-change sequential behavior."""
+    n = 4
+    suite = await _seed_suite(db, n_prompts=n)
+    monkeypatch.setattr(
+        replay_mod, "PROBE_PROMPT_CONCURRENCY", {"internal": 1},
+    )
+    events = _capture_prompt_completed_events(monkeypatch)
+
+    async def _behavior(idx):
+        await _asyncio.sleep(0.005)
+        return _build_pending(idx=idx)
+
+    state = _patch_run_single_prompt_concurrent(monkeypatch, behavior=_behavior)
+    gen = _make_generator(write_queue=write_queue)
+    result = await gen.run(_make_request(suite_id=suite.id), run_id="rid-c9")
+
+    assert state["max_in_flight"] == 1
+    assert [e["idx"] for e in events] == list(range(n))      # in order
+    assert [e["current"] for e in events] == [i + 1 for i in range(n)]
+    assert result.terminal_status == "completed"
