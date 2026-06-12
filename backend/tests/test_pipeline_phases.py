@@ -557,7 +557,7 @@ class TestPersistAndPropagateViaQueue:
 #   transitional risk surfaced by integrate concern #2 — the legacy
 #   ``(db, inputs)`` path is still in use by ``pipeline.py`` until cycle 5
 #   migrates it. Verifies whether ``database is locked`` is recoverable via
-#   ``WriterLockedAsyncSession`` or surfaces to the caller. Findings inform
+#   ``AsyncSession`` or surfaces to the caller. Findings inform
 #   cycle 5 migration scope.
 # * Test #3 — provenance writes after commit: pins the v0.4.5 invariant
 #   surfaced by integrate concern #3 (full ``auto_injected_*`` propagation)
@@ -580,7 +580,7 @@ class TestPersistAndPropagateOperate:
     cycle 4 ``persist_and_propagate``.
 
     Test #1 uses ``writer_engine_file`` for real WAL contention. Test #2
-    uses a separate file-mode engine + ``WriterLockedAsyncSession`` to
+    uses a separate file-mode engine + ``AsyncSession`` to
     exercise the legacy path without the queue. Tests #3-5 use the
     in-memory queue fixture (logic-only, no contention required).
 

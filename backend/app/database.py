@@ -1,4 +1,4 @@
-"""Async SQLAlchemy engine + ``WriterLockedAsyncSession``.
+"""Async SQLAlchemy engines (read + writer) for Project Synthesis.
 
 # Per-connection PRAGMA hook (SQLite)
 
@@ -16,30 +16,20 @@ synchronous, and cache_size are per-connection settings. By applying them when t
 underlying SQLite connection is first opened, the PRAGMAs persist for the lifetime
 of the connection, remaining active across all pool checkouts and post-commit queries.
 
-# Writer-lock architecture
+# Write architecture (v0.4.13+, class retired v0.4.36)
 
-Every backend `AsyncSession` is a ``WriterLockedAsyncSession`` — a subclass that
-**automatically** holds the process-wide ``db_writer_lock`` for the entire
-write-transaction span (from first ``flush()`` until ``commit()`` /
-``rollback()`` / ``close()``).
+ALL writes route through the ``WriteQueue`` worker against the dedicated
+``writer_engine`` (pool_size=1) — see ``services/write_queue.py``. The
+read engine serves SELECT-only sessions; WAL allows unlimited concurrent
+readers. The read-engine audit hook (below) RAISEs on any drift write
+outside the ``migration_mode`` / ``cold_path_mode`` allow-list
+(``WRITE_QUEUE_AUDIT_HOOK_RAISE``, default True since v0.4.22).
 
-This eliminates SQLite "database is locked" lock storms at the architectural
-layer rather than via per-call-site mutex wrapping. The lock is opaque to
-business logic — every existing ``async with async_session_factory() as db:
-... await db.commit()`` call site is now serialized correctly without code
-changes. ``busy_timeout`` and any application-level retry loops become
-defense-in-depth backstops, not load-bearing primitives.
-
-Read-only sessions (SELECT-only, no flush) never acquire the lock — WAL
-allows unlimited concurrent readers.
-
-Reentrancy: ``flush()`` is called internally from ``commit()``. The session
-tracks lock-held state via an instance flag so the inner ``flush()`` skips
-re-acquisition (asyncio.Lock is not reentrant; without this guard the
-session would deadlock on its own commit).
-
-Cross-process contention (e.g. MCP server) is NOT covered — those processes
-write via HTTP POST events, not direct DB writes, so they don't compete here.
+The legacy v0.4.13 defense-in-depth flush-serializer session class was
+retired in v0.4.36 after its time gate passed (RAISE-in-prod since
+2026-05-16 with zero audit events and zero "database is locked" errors —
+it was dead code serializing every read-engine flush for no benefit; see
+CHANGELOG v0.4.36).
 
 # Pool hardening
 
@@ -50,13 +40,11 @@ write via HTTP POST events, not direct DB writes, so they don't compete here.
   timeout, distinct from PRAGMA ``busy_timeout`` but synced to ``Settings.DB_LOCK_TIMEOUT_SECONDS``.
 """
 
-import asyncio
 import logging
 import re
 import traceback
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -88,10 +76,9 @@ if "sqlite" in str(engine.url):
         post-commit transactions.
 
         ``busy_timeout`` is a defense-in-depth backstop. The primary
-        write-contention defense is ``WriterLockedAsyncSession`` (see below)
-        which holds ``db_writer_lock`` across the entire write transaction.
-        With the lock in place, no write should ever wait for the SQLite
-        writer slot — the lock funnels writers one at a time.
+        write-contention defense is the single-writer ``WriteQueue`` (see
+        ``services/write_queue.py``) — within this process no two writers
+        ever compete for the SQLite writer slot.
         """
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
@@ -102,99 +89,7 @@ if "sqlite" in str(engine.url):
         cursor.close()
 
 
-# Process-wide writer mutex.  See ``WriterLockedAsyncSession`` below for the
-# automatic-acquisition contract; manual ``async with db_writer_lock:`` wrapping
-# is no longer needed for routine write paths (it's redundant — the session
-# subclass handles it).
-db_writer_lock = asyncio.Lock()
-
-
-class WriterLockedAsyncSession(AsyncSession):
-    """``AsyncSession`` that auto-acquires ``db_writer_lock`` for the
-    entire write-transaction span.
-
-    Lock lifecycle:
-
-    1. First ``flush()`` (explicit OR autoflush triggered by a query) acquires
-       the lock if not already held.
-    2. ``commit()`` / ``rollback()`` releases the lock after the underlying
-       SQLAlchemy operation completes.
-    3. ``close()`` is a safety net: if a session closes without an explicit
-       commit/rollback (e.g. async-context-manager exit on an exception), the
-       lock is released here.
-
-    The lock-held state is tracked on the session instance so reentrant calls
-    (``commit()`` internally calls ``flush()``) skip re-acquisition. This is
-    necessary because ``asyncio.Lock`` is not reentrant — a naive subclass that
-    locked both ``flush`` and ``commit`` independently would deadlock on its
-    own ``commit()`` call.
-
-    Read-only sessions (no flush ever fires) never acquire the lock —
-    SQLite WAL allows unlimited concurrent readers.
-    """
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._writer_lock_held: bool = False
-
-    async def _acquire_writer_lock(self) -> None:
-        if not self._writer_lock_held:
-            await db_writer_lock.acquire()
-            self._writer_lock_held = True
-
-    def _release_writer_lock(self) -> None:
-        if self._writer_lock_held:
-            try:
-                db_writer_lock.release()
-            except RuntimeError:
-                # Lock was already released (e.g. by close() after rollback).
-                # Benign — the goal is "lock is not held"; we don't care which
-                # path released it.
-                logger.debug("db_writer_lock already released")
-            finally:
-                self._writer_lock_held = False
-
-    async def flush(self, objects: Any = None) -> Any:  # type: ignore[override]
-        # Only acquire the writer lock when there are actually pending
-        # changes. SQLAlchemy issues an autoflush before SELECT queries
-        # on every session -- including read-only ones. Without this
-        # gate, a session that does SELECTs only would acquire the lock
-        # at the first autoflush and HOLD it until close() (we only
-        # release on commit/rollback/close). That starves any other
-        # writer in the process for the read-session's full lifetime.
-        # Read-only paths must not acquire the writer lock; only paths
-        # that actually mutate state.
-        has_pending = bool(self.new or self.dirty or self.deleted)
-        if has_pending:
-            await self._acquire_writer_lock()
-        return await super().flush(objects)
-
-    async def commit(self) -> None:  # type: ignore[override]
-        try:
-            return await super().commit()
-        finally:
-            self._release_writer_lock()
-
-    async def rollback(self) -> None:  # type: ignore[override]
-        try:
-            return await super().rollback()
-        finally:
-            self._release_writer_lock()
-
-    async def close(self) -> None:  # type: ignore[override]
-        # Safety net: a session entered a write transaction but exited without
-        # explicit commit/rollback (e.g. async-context-manager `__aexit__` on
-        # exception). Release the lock to prevent process-wide writer
-        # starvation.
-        try:
-            return await super().close()
-        finally:
-            self._release_writer_lock()
-
-
-async_session_factory = async_sessionmaker(
-    engine, class_=WriterLockedAsyncSession, expire_on_commit=False
-)
+async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -235,7 +130,8 @@ async def dispose() -> None:
 # max_overflow=0` is used exclusively by the WriteQueue worker. The main
 # `engine` above stays unchanged for read paths. This eliminates within-
 # backend WAL writer-slot races that defeated the v0.4.12 stack
-# (busy_timeout + WriterLockedAsyncSession + per-callsite mutex + retries).
+# (busy_timeout + the legacy flush-serializer session class + per-callsite
+# mutex + retries; that class was retired in v0.4.36).
 #
 # Read paths continue to use `async_session_factory()` against the main
 # engine. WAL allows unlimited concurrent readers — read-side concurrency

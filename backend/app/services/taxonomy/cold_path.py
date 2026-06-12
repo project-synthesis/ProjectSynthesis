@@ -557,13 +557,13 @@ async def execute_cold_path(
                 decision="lock_acquired",
                 context={"cold_path_run_id": run_id},
             )
-            # v0.4.13 cycle 9 (HIGH-3, C-v4-3): cold path performs a full
-            # refit via the read engine (writes flow through
-            # ``WriterLockedAsyncSession`` — kept for v0.4.16 Cycle 1 as
-            # defense-in-depth; retired in v0.4.16.x patch after the 7-day
-            # quiet-period gate).  Toggle ``cold_path_mode`` so the
-            # read-engine audit hook bypasses cleanly.  ``finally`` clears
-            # the flag even under exception.
+            # Cold path performs a full refit via the READ engine — these
+            # writes are legitimate and allow-listed: toggle ``cold_path_mode``
+            # so the read-engine audit hook bypasses cleanly. ``finally``
+            # clears the flag even under exception. (The legacy
+            # flush-serializer session class that once covered these
+            # flushes was retired in v0.4.36; serialization is provided by
+            # engine._warm_path_lock + _COLD_PATH_LOCK above.)
             from app.database import read_engine_meta
             read_engine_meta.cold_path_mode = True
             try:
@@ -2499,9 +2499,9 @@ async def execute_umap_projection(
     Also assigns OKLab colors to newly positioned nodes and updates
     domain node UMAP positions from their children.
 
-    v0.4.13 cycle 9: writes occur on ``WriterLockedAsyncSession`` against
-    the read engine — toggle ``cold_path_mode`` so the audit hook
-    bypasses on the UPDATE statements that persist coordinates + colors.
+    v0.4.13 cycle 9: writes occur on the read engine — toggle
+    ``cold_path_mode`` so the audit hook bypasses on the UPDATE
+    statements that persist coordinates + colors.
 
     Returns:
         Number of clusters that received UMAP coordinates.
