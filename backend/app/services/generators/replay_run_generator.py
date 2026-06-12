@@ -43,6 +43,7 @@ Plan: ``docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md`` Cycle 6.
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -105,7 +106,10 @@ class ReplayRunGenerator:
         self._write_queue = write_queue
 
     async def run(
-        self, request: RunRequest, *, run_id: str,
+        self,
+        request: RunRequest,
+        *,
+        run_id: str,
     ) -> GeneratorResult:
         """Execute one replay run (spec §5).
 
@@ -255,15 +259,16 @@ class ReplayRunGenerator:
             historical_stats = None
             try:
                 from app.services.optimization_service import OptimizationService
+
                 svc = OptimizationService(read_db)
                 historical_stats = await svc.get_score_distribution(
                     exclude_scoring_modes=["heuristic"],
                 )
             except Exception as _hs_exc:
                 logger.debug(
-                    "replay_run %s: historical_stats prefetch failed (%s) — "
-                    "per-prompt fetch will fall back",
-                    payload.get("suite_id"), _hs_exc,
+                    "replay_run %s: historical_stats prefetch failed (%s) — per-prompt fetch will fall back",
+                    payload.get("suite_id"),
+                    _hs_exc,
                 )
         finally:
             await session_ctx.__aexit__(None, None, None)
@@ -280,19 +285,18 @@ class ReplayRunGenerator:
         # ``None``, and operators replaying without a current repo
         # pinned should not see a spurious warning.
         warnings: list[str] = []
-        repo_drift = bool(
-            suite_repo_full_name
-            and repo_full_name
-            and suite_repo_full_name != repo_full_name
-        )
+        repo_drift = bool(suite_repo_full_name and repo_full_name and suite_repo_full_name != repo_full_name)
         if repo_drift:
             warnings.append("repo_drift")
-            event_bus.publish("probe_warning", {
-                "run_id": run_id,
-                "code": "repo_drift",
-                "suite_repo": suite_repo_full_name,
-                "current_repo": repo_full_name,
-            })
+            event_bus.publish(
+                "probe_warning",
+                {
+                    "run_id": run_id,
+                    "code": "repo_drift",
+                    "suite_repo": suite_repo_full_name,
+                    "current_repo": repo_full_name,
+                },
+            )
 
         # ---- Step 3: concurrent per-prompt fan-out (v0.4.36, spec §3.3) ----
         #
@@ -325,7 +329,8 @@ class ReplayRunGenerator:
 
         tier = "internal"
         concurrency = PROBE_PROMPT_CONCURRENCY.get(
-            tier, DEFAULT_PROMPT_CONCURRENCY,
+            tier,
+            DEFAULT_PROMPT_CONCURRENCY,
         )
         total_prompts = len(prompts_snapshot)
         prompt_results: list[dict[str, Any] | None] = [None] * total_prompts
@@ -343,6 +348,9 @@ class ReplayRunGenerator:
                 if _bo_raw is not None:
                     try:
                         return float(_bo_raw)
+                    # NOTE: parens are load-bearing — runtime is Python 3.12
+                    # (PEP 758 bare form needs 3.14; ruff's py314
+                    # target-version would strip them, see pyproject.toml).
                     except (TypeError, ValueError):
                         return None
             return None
@@ -355,18 +363,21 @@ class ReplayRunGenerator:
             # requires monotonicity under out-of-order completion. ``idx``
             # keeps row identity for the SuiteDetailView diff renderer.
             progress["completed"] += 1
-            event_bus.publish("probe_prompt_completed", {
-                "run_id": run_id,
-                "probe_id": run_id,
-                "idx": idx,
-                "current": progress["completed"],
-                "total": total_prompts,
-                "optimization_id": "",  # replay does not persist
-                "intent_label": result_row.get("intent_label"),
-                "overall_score": result_row.get("overall_score"),
-                "delta": result_row.get("delta"),
-                "status": result_row.get("status"),
-            })
+            event_bus.publish(
+                "probe_prompt_completed",
+                {
+                    "run_id": run_id,
+                    "probe_id": run_id,
+                    "idx": idx,
+                    "current": progress["completed"],
+                    "total": total_prompts,
+                    "optimization_id": "",  # replay does not persist
+                    "intent_label": result_row.get("intent_label"),
+                    "overall_score": result_row.get("overall_score"),
+                    "delta": result_row.get("delta"),
+                    "status": result_row.get("status"),
+                },
+            )
 
         async def _run_one(idx: int, prompt_row: dict[str, Any]) -> None:
             raw_prompt = str(prompt_row.get("raw_prompt", ""))
@@ -425,7 +436,9 @@ class ReplayRunGenerator:
                                     "replay_run %s prompt %d rate-limited "
                                     "(provider=%s, reset_at=%s) — "
                                     "short-circuiting unstarted prompts",
-                                    run_id, idx, meta.get("provider"),
+                                    run_id,
+                                    idx,
+                                    meta.get("provider"),
                                     meta.get("reset_at_iso"),
                                 )
                             # Projection guard (spec §3.4): bail-gate rows
@@ -436,10 +449,7 @@ class ReplayRunGenerator:
                                 idx=idx,
                                 raw_prompt=raw_prompt,
                                 baseline_overall=baseline_overall,
-                                intent_label=(
-                                    getattr(pending, "intent_label", None)
-                                    or intent_fallback
-                                ),
+                                intent_label=(getattr(pending, "intent_label", None) or intent_fallback),
                             )
                         else:
                             result_row = _project_pending_to_result(
@@ -455,8 +465,10 @@ class ReplayRunGenerator:
                         # derive from BaseException and propagate to the
                         # gather sweep below.
                         logger.warning(
-                            "replay_run %s prompt %d raised (%s) — marking "
-                            "failed", run_id, idx, exc,
+                            "replay_run %s prompt %d raised (%s) — marking failed",
+                            run_id,
+                            idx,
+                            exc,
                         )
                         result_row = {
                             "raw_prompt_idx": idx,
@@ -475,27 +487,22 @@ class ReplayRunGenerator:
                 prompt_results[idx] = result_row
                 _publish_completed(idx, result_row)
 
-        tasks = [
-            asyncio.create_task(_run_one(i, row))
-            for i, row in enumerate(prompts_snapshot)
-        ]
+        tasks = [asyncio.create_task(_run_one(i, row)) for i, row in enumerate(prompts_snapshot)]
         outcomes = await asyncio.gather(*tasks, return_exceptions=True)
         # BaseException sweep BEFORE the dense-list assertion — a
         # cancellation must surface as CancelledError, never as a spurious
         # RuntimeError from a half-filled results list.
         for outcome in outcomes:
             if isinstance(outcome, BaseException) and not isinstance(
-                outcome, Exception,
+                outcome,
+                Exception,
             ):
                 raise outcome
         if any(r is None for r in prompt_results):
             raise RuntimeError(
-                "replay executor slot invariant violated — sparse results "
-                f"list for run {run_id}",
+                f"replay executor slot invariant violated — sparse results list for run {run_id}",
             )
-        dense_results: list[dict[str, Any]] = [
-            r for r in prompt_results if r is not None
-        ]
+        dense_results: list[dict[str, Any]] = [r for r in prompt_results if r is not None]
 
         # ---- Step 4: aggregate ----
         aggregate = compute_run_aggregate(dense_results)
@@ -513,16 +520,16 @@ class ReplayRunGenerator:
         # accumulate as future warning types land, e.g., ``baseline_stale``).
         completed_count = aggregate.get("completed_count", 0)
         failed_count = aggregate.get("failed_count", 0)
-        rate_limited_count = sum(
-            1 for r in dense_results if r.get("error") == "rate_limited"
+        rate_limited_count = sum(1 for r in dense_results if r.get("error") == "rate_limited")
+        aggregate.update(
+            {
+                "replay_warnings": warnings,
+                "replay_suite_id": suite_id,
+                "replay_n_completed": completed_count,
+                "replay_n_failed": failed_count,
+                "replay_rate_limited_count": rate_limited_count,
+            }
         )
-        aggregate.update({
-            "replay_warnings": warnings,
-            "replay_suite_id": suite_id,
-            "replay_n_completed": completed_count,
-            "replay_n_failed": failed_count,
-            "replay_rate_limited_count": rate_limited_count,
-        })
 
         # ---- Step 5: JSONL trace (spec §9 trace tagging) ----
         # Emitted BEFORE returning so the orchestrator's terminal persist
@@ -550,10 +557,7 @@ class ReplayRunGenerator:
         # aggregate + the per-prompt rows; a one-line marker here keeps
         # operator log readers (grep on ``suite_id=``) able to discriminate
         # replay terminal rows from seed_agent rows.
-        final_report = (
-            f"# Replay — suite_id={suite_id}\n"
-            f"See SuiteDetailView for the baseline-vs-latest diff."
-        )
+        final_report = f"# Replay — suite_id={suite_id}\nSee SuiteDetailView for the baseline-vs-latest diff."
 
         return GeneratorResult(
             terminal_status=terminal,  # type: ignore[arg-type]
@@ -645,6 +649,7 @@ def _project_pending_to_result(
     if overall_raw is not None:
         try:
             overall_score = float(overall_raw)
+        # NOTE: parens are load-bearing on Python 3.12 (see _baseline_for).
         except (TypeError, ValueError):
             overall_score = None
 
@@ -667,9 +672,7 @@ def _project_pending_to_result(
         "overall_score": overall_score,
         "dimensions": dimensions,
         "task_type": getattr(pending, "task_type", None),
-        "intent_label": (
-            getattr(pending, "intent_label", None) or intent_label_fallback
-        ),
+        "intent_label": (getattr(pending, "intent_label", None) or intent_label_fallback),
         "divergence_flags": getattr(pending, "heuristic_flags", None),
         "baseline_overall": baseline_overall,
         "delta": delta,

@@ -7,6 +7,7 @@ executor (spec: docs/superpowers/specs/
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
+
 from __future__ import annotations
 
 from types import MappingProxyType
@@ -19,9 +20,7 @@ from app.services.batch_orchestrator import BATCH_CONCURRENCY_BY_TIER
 # (internal=10 / api=5 / sampling=2) proven by seed batches in production.
 # MappingProxyType over a copy: immutable view, decoupled from accidental
 # mutation of the orchestrator's table.
-PROBE_PROMPT_CONCURRENCY: Final[Mapping[str, int]] = MappingProxyType(
-    dict(BATCH_CONCURRENCY_BY_TIER)
-)
+PROBE_PROMPT_CONCURRENCY: Final[Mapping[str, int]] = MappingProxyType(dict(BATCH_CONCURRENCY_BY_TIER))
 
 # Fallback when a generator passes an unknown tier label.
 DEFAULT_PROMPT_CONCURRENCY: Final[int] = 5
