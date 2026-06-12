@@ -46,4 +46,6 @@ pytest-cov==7.0.0
 
 # Linting
 ruff==0.15.6
+# hnswlib builds from sdist; CI sets HNSWLIB_NO_NATIVE=1 for a portable
+# binary (cache-key bust 2026-06-12 — see workflows).
 hnswlib>=0.8.0
