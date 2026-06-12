@@ -227,4 +227,71 @@ describe('suitesStore', () => {
     expect(postEventCalls.some((u) => u.includes('/api/suites'))).toBe(true);
     expect(postEventCalls.some((u) => u.includes('/api/health'))).toBe(true);
   });
+
+  // ── v0.4.37 §4.4 — once-per-selection liveness check ─────────────────
+
+  const detailWithRefs = {
+    id: 'suite-1',
+    source_run_id: 'run-1',
+    label: 'liveness-suite',
+    tolerance_abs: 0.5,
+    project_id: null,
+    repo_full_name: null,
+    created_at: '2026-06-12T00:00:00Z',
+    retired_at: null,
+    retired_reason: null,
+    prompts_snapshot: [
+      { raw_prompt: 'a', intent_label: null, original_optimization_id: 'opt-1' },
+      { raw_prompt: 'b', intent_label: null, original_optimization_id: 'opt-1' }, // dupe → deduped
+      { raw_prompt: 'c', intent_label: null, original_optimization_id: 'opt-2' },
+      { raw_prompt: 'd', intent_label: null, original_optimization_id: null },    // null → skipped
+    ],
+    baseline_scores: {
+      mean_overall: 7.5, p5_overall: 7.0, p50_overall: 7.5, p95_overall: 8.0,
+      per_prompt: [], task_type_distribution: {},
+    },
+  };
+
+  const emptyReplays = {
+    total: 0, count: 0, offset: 0, items: [], has_more: false, next_offset: null,
+  };
+
+  it('loadDetail fires one deduped liveness check and stores alive ids + trace map', async () => {
+    const fetchSpy = mockFetch([
+      // Order matters: includes()-matching means the replays handler must
+      // precede the bare suite-detail handler.
+      { match: '/api/optimizations/exists', response: { alive: ['opt-1'], trace_ids: { 'opt-1': 'tr-1' } } },
+      { match: '/api/suites/suite-1/replays', response: emptyReplays },
+      { match: '/api/suites/suite-1', response: detailWithRefs },
+    ]);
+
+    const { suitesStore } = await loadStore();
+    await suitesStore.loadDetail('suite-1');
+
+    const existsCalls = fetchSpy.mock.calls.filter(([u]) =>
+      String(u).includes('/optimizations/exists'),
+    );
+    expect(existsCalls).toHaveLength(1);
+    expect(JSON.parse((existsCalls[0][1] as RequestInit).body as string)).toEqual({
+      ids: ['opt-1', 'opt-2'],
+    });
+    expect(suitesStore.aliveOriginalIds).toEqual(new Set(['opt-1']));
+    expect(suitesStore.originalTraceIds).toEqual({ 'opt-1': 'tr-1' });
+  });
+
+  it('liveness failure degrades to null (no tombstones, no history links)', async () => {
+    mockFetch([
+      { match: '/api/optimizations/exists', status: 500, response: { detail: 'boom' } },
+      { match: '/api/suites/suite-1/replays', response: emptyReplays },
+      { match: '/api/suites/suite-1', response: detailWithRefs },
+    ]);
+
+    const { suitesStore } = await loadStore();
+    await suitesStore.loadDetail('suite-1');
+
+    expect(suitesStore.aliveOriginalIds).toBeNull();
+    expect(suitesStore.originalTraceIds).toEqual({});
+    // The detail itself still loaded — liveness is best-effort.
+    expect(suitesStore.detail?.id).toBe('suite-1');
+  });
 });
