@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,11 @@ from app.database import get_db
 from app.dependencies.rate_limit import RateLimit
 from app.dependencies.write_queue import get_write_queue
 from app.models import Feedback, Optimization, OptimizationPattern
-from app.services.optimization_service import VALID_SORT_COLUMNS, OptimizationService
+from app.services.optimization_service import (
+    VALID_SORT_COLUMNS,
+    OptimizationService,
+    SuiteReferencedError,
+)
 from app.services.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
@@ -240,6 +245,20 @@ def _summarize_enrichment(
     )
 
 
+def _suite_referenced_response(exc: SuiteReferencedError) -> JSONResponse:
+    """409 envelope per spec §3.3 — the structured error IS the body root
+    (not nested under FastAPI's ``detail``), so REST clients and the live
+    E2E (AC-20) read ``{error, blocked, hint}`` directly."""
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": "suite_referenced",
+            "blocked": exc.blocked,
+            "hint": "retry with force=true or retire the suite",
+        },
+    )
+
+
 class DeleteOptimizationResponse(BaseModel):
     """Envelope returned by ``DELETE /api/optimizations/{id}``.
 
@@ -263,14 +282,21 @@ class DeleteOptimizationResponse(BaseModel):
     )
 
 
-@router.delete("/optimizations/{optimization_id}")
+@router.delete(
+    "/optimizations/{optimization_id}",
+    response_model=DeleteOptimizationResponse,
+)
 async def delete_optimization(
     optimization_id: str = Path(
         ..., description="Optimization id to delete (uuid)."
     ),
+    force: bool = Query(
+        False,
+        description="Override the live-suite provenance guard (v0.4.37 §3.3).",
+    ),
     db: AsyncSession = Depends(get_db),
     write_queue: WriteQueue = Depends(get_write_queue),
-) -> DeleteOptimizationResponse:
+) -> DeleteOptimizationResponse | JSONResponse:
     """Delete one optimization and cascade dependents.
 
     Translates the service's "silent no-op on unknown id" into a proper
@@ -292,9 +318,15 @@ async def delete_optimization(
     if exists.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Optimization not found")
 
-    result = await svc.delete_optimizations(
-        [optimization_id], reason="user_request",
-    )
+    try:
+        result = await svc.delete_optimizations(
+            [optimization_id],
+            reason="user_request",
+            source="api_single",
+            force=force,
+        )
+    except SuiteReferencedError as exc:
+        return _suite_referenced_response(exc)
     return DeleteOptimizationResponse(
         deleted=result.deleted,
         requested=1,
@@ -322,6 +354,10 @@ class BulkDeleteRequest(BaseModel):
         default="user_request",
         max_length=64,
         description="Audit-trail reason propagated on the optimization_deleted event.",
+    )
+    force: bool = Field(
+        default=False,
+        description="Override the live-suite provenance guard (v0.4.37 §3.3).",
     )
 
 
@@ -354,7 +390,7 @@ async def bulk_delete_optimizations(
     body: BulkDeleteRequest,
     db: AsyncSession = Depends(get_db),
     write_queue: WriteQueue = Depends(get_write_queue),
-) -> DeleteOptimizationsResponse:
+) -> DeleteOptimizationsResponse | JSONResponse:
     """Delete 1-100 optimizations in a single call.
 
     Thin HTTP translator on top of
@@ -371,10 +407,67 @@ async def bulk_delete_optimizations(
     through the writer engine via the queue worker.
     """
     svc = OptimizationService(db, write_queue=write_queue)
-    result = await svc.delete_optimizations(body.ids, reason=body.reason)
+    try:
+        result = await svc.delete_optimizations(
+            body.ids, reason=body.reason, source="api_bulk", force=body.force,
+        )
+    except SuiteReferencedError as exc:
+        return _suite_referenced_response(exc)
     return DeleteOptimizationsResponse(
         deleted=result.deleted,
         requested=len(body.ids),
         affected_cluster_ids=sorted(result.affected_cluster_ids),
         affected_project_ids=sorted(result.affected_project_ids),
+    )
+
+
+class ExistsRequest(BaseModel):
+    """Request body for POST /api/optimizations/exists (v0.4.37 §3.5)."""
+
+    ids: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Optimization ids to liveness-check (1-100 at a time).",
+    )
+
+
+class ExistsResponse(BaseModel):
+    """Alive subset of the requested ids.
+
+    ``trace_ids`` maps alive ids to their ``trace_id`` so the frontend can
+    reuse the canonical history-row open path (``GET /api/optimize/
+    {trace_id}``) for the OPEN IN HISTORY affordance — the suite snapshot
+    only stores the optimization id, and no GET-by-id REST endpoint exists.
+    """
+
+    alive: list[str] = Field(
+        default_factory=list, description="Ids whose rows still exist.",
+    )
+    trace_ids: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of alive id -> trace_id (rows without a trace_id are omitted).",
+    )
+
+
+@router.post("/optimizations/exists", response_model=ExistsResponse)
+async def optimizations_exist(
+    body: ExistsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ExistsResponse:
+    """Batched liveness check (v0.4.37 §3.5).
+
+    POST-with-body deliberately — 100 ids ≈ 3.6 KB would risk proxy URL
+    limits as a GET. Read-only; called once per suite selection by the
+    SuiteDetailView tombstone + OPEN IN HISTORY affordances.
+    """
+    rows = (
+        await db.execute(
+            select(Optimization.id, Optimization.trace_id)
+            .where(Optimization.id.in_(body.ids))
+        )
+    ).all()
+    return ExistsResponse(
+        alive=[row.id for row in rows],
+        trace_ids={row.id: row.trace_id for row in rows if row.trace_id},
     )

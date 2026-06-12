@@ -30,7 +30,7 @@ from sqlalchemy import Select, func, select, update
 
 from app import config as _config_mod
 from app import database as _database_mod
-from app.models import RunRow, ValidationSuite
+from app.models import Optimization, RunRow, ValidationSuite
 from app.schemas.runs import RunListResponse, RunSummary
 from app.schemas.validation_suite import (
     RegressionAlarmBlock,
@@ -41,6 +41,7 @@ from app.schemas.validation_suite import (
     ValidationSuiteOut,
 )
 from app.services.event_bus import event_bus
+from app.services.generators._constants import REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -148,6 +149,7 @@ class SuiteRetireInputs:
 
 def _build_prompts_snapshot(
     prompt_results: list[dict[str, Any]],
+    baseline_outputs: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Project per-prompt ``RunRow.prompt_results`` rows into the snapshot shape.
 
@@ -159,24 +161,42 @@ def _build_prompts_snapshot(
     different generators (topic_probe vs future seed_agent forks) emit
     slightly different per-prompt shapes. Only ``raw_prompt`` is a hard
     requirement; the rest gracefully default to ``None``.
+
+    Parameters
+    ----------
+    baseline_outputs : dict[str, str] | None
+        v0.4.37 §3.2 — ``{optimization_id: optimized_prompt}`` map fetched
+        by ``create_from_run``'s read session from the referenced
+        ``Optimization`` rows. This helper stays a pure sync function — the
+        map is a parameter, NOT DB access. ``RunRow.prompt_results``'
+        ``result_text`` is truncated to 1,000 chars by the probe generator
+        and MUST NOT be used as the baseline output (spec §3.2 sourcing
+        clause — the obvious implementation is explicitly banned).
     """
-    return [
-        {
+    outputs = baseline_outputs or {}
+    snapshot: list[dict[str, Any]] = []
+    for r in prompt_results:
+        opt_id = r.get("optimization_id")
+        baseline_output: str | None = outputs.get(opt_id) if opt_id else None
+        if (
+            baseline_output is not None
+            and len(baseline_output) > REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS
+        ):
+            baseline_output = baseline_output[:REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS]
+        snapshot.append({
             # Finding 20: ``ReplayRunGenerator`` writes ``raw_prompt``;
             # ``TopicProbeGenerator`` writes ``prompt_text`` (canonical post
             # Finding 16+17 fix). Read both keys with ``raw_prompt`` taking
             # precedence so suites forked from EITHER generator carry real
-            # prompt content (not empty strings) in their snapshot — and
-            # downstream replays + UI prompt display + regression alarm
-            # calibration all see the real prompt text.
+            # prompt content in their snapshot.
             "raw_prompt": (
                 r.get("raw_prompt") or r.get("prompt_text") or ""
             ),
             "intent_label": r.get("intent_label"),
-            "original_optimization_id": r.get("optimization_id"),
-        }
-        for r in prompt_results
-    ]
+            "original_optimization_id": opt_id,
+            "baseline_optimized_prompt": baseline_output,
+        })
+    return snapshot
 
 
 def _derive_per_prompt_from_results(
@@ -233,7 +253,10 @@ def _build_baseline_scores(
 
 
 def _build_snapshot_inputs(
-    run: RunRow, label: str, tolerance_abs: float,
+    run: RunRow,
+    label: str,
+    tolerance_abs: float,
+    baseline_outputs: dict[str, str] | None = None,
 ) -> SuiteSnapshotInputs:
     """Build the frozen snapshot from a hydrated RunRow.
 
@@ -245,9 +268,13 @@ def _build_snapshot_inputs(
     Delegates shape projection to :func:`_build_prompts_snapshot` and
     :func:`_build_baseline_scores` so each transformation is a pure,
     independently-testable helper.
+
+    v0.4.37 §3.2: ``baseline_outputs`` is the {id: optimized_prompt} map
+    threaded from create_from_run's read session into
+    _build_prompts_snapshot.
     """
     prompt_results: list[dict[str, Any]] = list(run.prompt_results or [])
-    prompts_snapshot = _build_prompts_snapshot(prompt_results)
+    prompts_snapshot = _build_prompts_snapshot(prompt_results, baseline_outputs)
     baseline_scores = _build_baseline_scores(
         dict(run.aggregate or {}), prompt_results,
     )
@@ -625,10 +652,35 @@ class ValidationSuiteService:
             if not aggregate or "mean_overall" not in aggregate:
                 raise ValueError("run_missing_aggregate")
 
+            # v0.4.37 §3.2 — fetch the referenced Optimization rows INSIDE
+            # the same short read session so the snapshot carries the FULL
+            # baseline optimized output. RunRow.prompt_results' result_text
+            # is truncated to 1,000 chars by the probe generator — fetching
+            # the source rows is the only correct sourcing (AC-4 pins this
+            # with a >1,000-char fidelity test).
+            ref_ids = [
+                r.get("optimization_id")
+                for r in (run.prompt_results or [])
+                if r.get("optimization_id")
+            ]
+            baseline_outputs: dict[str, str] = {}
+            if ref_ids:
+                opt_rows = await read_db.execute(
+                    select(Optimization.id, Optimization.optimized_prompt)
+                    .where(Optimization.id.in_(ref_ids))
+                )
+                baseline_outputs = {
+                    row.id: row.optimized_prompt
+                    for row in opt_rows
+                    if row.optimized_prompt is not None
+                }
+
             # Build the frozen snapshot while the session is still open —
             # detaching the ORM instance and reading attributes outside the
             # session would trigger MissingGreenlet on lazy-loaded columns.
-            snapshot = _build_snapshot_inputs(run, label, tolerance_abs)
+            snapshot = _build_snapshot_inputs(
+                run, label, tolerance_abs, baseline_outputs=baseline_outputs,
+            )
         finally:
             await session_ctx.__aexit__(None, None, None)
 

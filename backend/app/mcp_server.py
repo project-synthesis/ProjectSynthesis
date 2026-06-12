@@ -1360,6 +1360,14 @@ async def synthesis_delete(
     optimization_id: Annotated[
         str, Field(description="ID of the optimization to delete (uuid)."),
     ],
+    force: Annotated[bool, Field(
+        default=False,
+        description=(
+            "Override the live-suite provenance guard (v0.4.37). Without "
+            "it, deleting an optimization referenced by a live validation "
+            "suite fails with a structured suite_referenced error."
+        ),
+    )] = False,
     ctx: Context | None = None,
 ) -> DeleteOptimizationOutput:
     """Delete one optimization and cascade dependents.
@@ -1374,8 +1382,10 @@ async def synthesis_delete(
     Returns the cluster / project ids affected by the delete so callers
     can surface a "cluster X will rebalance" hint. Raises an error when
     the id doesn't exist — a typo shouldn't masquerade as a no-op.
+    Deletes referenced by a LIVE validation suite are blocked unless
+    force=true (v0.4.37 provenance guard); forced deletes are audit-logged.
     """
-    return await handle_delete(optimization_id)
+    return await handle_delete(optimization_id, force=force)
 
 
 @mcp.tool(structured_output=True)

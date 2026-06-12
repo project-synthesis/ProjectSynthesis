@@ -39,6 +39,11 @@ class PromptSnapshotItem(BaseModel):
     raw_prompt: str
     intent_label: str | None = None
     original_optimization_id: str | None = None
+    # v0.4.37 §3.2 — full-length baseline optimized output (≤20,000 chars),
+    # captured from the source Optimization row at save time so provenance
+    # survives row deletion. None for pre-v0.4.37 suites and for sources
+    # without output. Additive JSON — no migration.
+    baseline_optimized_prompt: str | None = None
 
 
 class PerPromptScore(BaseModel):
