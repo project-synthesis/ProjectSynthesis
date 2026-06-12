@@ -504,7 +504,10 @@ describe('SuiteDetailView', () => {
       intent_hint: null,
       prompts_generated: 2,
       prompt_results: [
-        { prompt_index: 0, overall_score: 7.5, raw_prompt: 'prompt 1' },
+        // Production shape: replay rows carry `raw_prompt_idx` only.
+        { raw_prompt_idx: 0, overall_score: 7.5, raw_prompt: 'prompt 1' },
+        // Legacy alias coverage: `prompt_index` must still join (tolerant
+        // fallback pinned by the live-replay diff regression of 2026-06-12).
         { prompt_index: 1, overall_score: 7.2, raw_prompt: 'prompt 2' },
       ],
     };

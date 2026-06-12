@@ -4,6 +4,9 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Fixed
+- **SuiteDetailView per-prompt diff table rendered `—` for every LATEST/Δ cell** — the component joined baseline rows against `prompt_results[].prompt_index`, but replay rows have always carried `raw_prompt_idx` (the generator's slot index), so the keyed lookup never matched. The join now keys on `raw_prompt_idx` with `prompt_index` tolerated as a legacy alias; the `RunResult` type and the test fixture were corrected to the production shape (the fixture's wrong key is why unit tests passed while production rendered em-dashes). Latent since the view shipped — surfaced by the first successful suite replay during v0.4.36 live verification.
+
 ## v0.4.36 — 2026-06-12
 
 ### Added

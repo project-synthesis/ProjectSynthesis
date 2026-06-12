@@ -43,7 +43,10 @@ export interface RunSummary {
 export interface RunResult extends RunSummary {
   error: string | null;
   prompt_results: Array<{
-    prompt_index: number;
+    // Replay rows carry `raw_prompt_idx` (the backend's slot index);
+    // `prompt_index` survives as a legacy alias in older payloads/tests.
+    raw_prompt_idx?: number;
+    prompt_index?: number;
     overall_score: number;
     raw_prompt?: string;
     [key: string]: unknown;

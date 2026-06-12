@@ -59,7 +59,11 @@
    */
   export interface SuiteReplayRow extends RunSummary {
     prompt_results?: Array<{
-      prompt_index: number;
+      // Replay rows carry `raw_prompt_idx` (the generator's slot index);
+      // `prompt_index` is accepted as a legacy/test alias. At least one
+      // must be present for the per-prompt join to pair the row.
+      raw_prompt_idx?: number;
+      prompt_index?: number;
       overall_score: number;
       raw_prompt?: string;
     }>;
@@ -91,14 +95,19 @@
     }
   }
 
-  // Pair baseline + latest per-prompt scores. Index-aligned join — both
-  // payloads order by `raw_prompt_idx` / `prompt_index` ascending, so a
-  // positional zip is safe. Empty when no replay carries prompt_results.
+  // Pair baseline + latest per-prompt scores. Keyed join on the row's
+  // slot index: replay rows carry `raw_prompt_idx` (the only key the
+  // backend emits — see replay_run_generator `_project_pending_to_result`);
+  // `prompt_index` is tolerated as a legacy/test alias. Empty when no
+  // replay carries prompt_results.
   const perPromptRows = $derived.by(() => {
     const baseline = suite.baseline_scores.per_prompt ?? [];
     const latest = latestReplay?.prompt_results ?? [];
     return baseline.map((b) => {
-      const l = latest.find((x) => x.prompt_index === b.raw_prompt_idx) ?? null;
+      const l =
+        latest.find(
+          (x) => (x.raw_prompt_idx ?? x.prompt_index) === b.raw_prompt_idx,
+        ) ?? null;
       const baselineScore = b.overall;
       const latestScore = l?.overall_score ?? null;
       const delta = latestScore != null ? latestScore - baselineScore : null;
