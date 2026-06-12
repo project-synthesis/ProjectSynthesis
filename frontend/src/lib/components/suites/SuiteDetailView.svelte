@@ -117,7 +117,7 @@
       const lr = l as Record<string, unknown> | null;
       const snap = snapshot[b.raw_prompt_idx] ?? null;
       const baselineScore = b.overall;
-      const latestScore = (l?.overall_score ?? null) as number | null;
+      const latestScore = l?.overall_score ?? null;
       const delta = latestScore != null ? latestScore - baselineScore : null;
       return {
         idx: b.raw_prompt_idx,
@@ -930,21 +930,28 @@
   }
   .row-chevron:hover { color: var(--color-text-primary); }
 
-  .diff-btn {
-    height: 16px;
-    padding: 0 4px;
+  /* Shared chrome for the two row affordances (DIFF / OPEN IN HISTORY):
+     identical 1px contour + mono type + cyan hover so they can't drift. */
+  .diff-btn,
+  .open-history-btn {
     background: transparent;
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-secondary);
     font-family: var(--font-mono);
-    font-size: 8px;
     letter-spacing: 0.06em;
     cursor: pointer;
     transition: border-color 200ms ease, color 200ms ease;
   }
-  .diff-btn:hover:not(:disabled) {
+  .diff-btn:hover:not(:disabled),
+  .open-history-btn:hover {
     border-color: var(--color-neon-cyan, #00e5ff);
     color: var(--color-neon-cyan, #00e5ff);
+  }
+
+  .diff-btn {
+    height: 16px;
+    padding: 0 4px;
+    font-size: 8px;
   }
   .diff-btn:disabled {
     opacity: 0.4;
@@ -1010,23 +1017,13 @@
     color: var(--color-text-dim);
   }
 
+  /* Chrome + hover shared with .diff-btn — see the grouped rules above. */
   .open-history-btn {
     align-self: flex-start;
     height: 18px;
     padding: 0 6px;
-    background: transparent;
-    border: 1px solid var(--color-border-subtle);
-    color: var(--color-text-secondary);
-    font-family: var(--font-mono);
     font-size: 9px;
-    letter-spacing: 0.06em;
     text-transform: uppercase;
-    cursor: pointer;
-    transition: border-color 200ms ease, color 200ms ease;
-  }
-  .open-history-btn:hover {
-    border-color: var(--color-neon-cyan, #00e5ff);
-    color: var(--color-neon-cyan, #00e5ff);
   }
 
   /* RUN meta-link — text-link treatment, no chrome (the meta row is
