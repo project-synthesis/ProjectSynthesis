@@ -4,9 +4,18 @@
   interface Props {
     original: string;
     optimized: string;
+    /** Split-view header captions (v0.4.37) — default to the legacy
+     *  ORIGINAL / OPTIMIZED so all row-backed diff tabs are unchanged. */
+    originalLabel?: string;
+    optimizedLabel?: string;
   }
 
-  let { original, optimized }: Props = $props();
+  let {
+    original,
+    optimized,
+    originalLabel = 'ORIGINAL',
+    optimizedLabel = 'OPTIMIZED',
+  }: Props = $props();
 
   type DiffMode = 'unified' | 'split';
   let mode = $state<DiffMode>('unified');
@@ -166,13 +175,13 @@
     <div class="split-container">
       <!-- Left header -->
       <div class="split-header split-header--left">
-        <span class="split-label">ORIGINAL</span>
+        <span class="split-label">{originalLabel}</span>
         <span class="split-count stat--removed">-{stats.removed}</span>
       </div>
       <div class="split-divider-header"></div>
       <!-- Right header -->
       <div class="split-header split-header--right">
-        <span class="split-label">OPTIMIZED</span>
+        <span class="split-label">{optimizedLabel}</span>
         <span class="split-count stat--added">+{stats.added}</span>
       </div>
 

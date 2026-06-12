@@ -86,3 +86,30 @@ export async function deleteOptimizations(
     body: JSON.stringify({ ids, reason }),
   });
 }
+
+export type ExistsResult = {
+  alive: string[];
+  trace_ids: Record<string, string>;
+};
+
+/**
+ * POST /api/optimizations/exists — batched liveness check (1-100 ids).
+ * v0.4.37 §3.5/§4.4: backs the suite-detail tombstone + OPEN IN HISTORY
+ * affordances; called once per suite selection. `trace_ids` maps alive
+ * ids to their trace_id so callers can reuse the canonical history open
+ * path (`GET /api/optimize/{trace_id}`).
+ */
+export async function checkOptimizationsExist(
+  ids: string[],
+): Promise<ExistsResult> {
+  if (ids.length < MIN_BULK || ids.length > MAX_BULK) {
+    throw new ApiError(
+      422,
+      `Liveness check requires ${MIN_BULK}-${MAX_BULK} ids at a time.`,
+    );
+  }
+  return apiFetch<ExistsResult>('/optimizations/exists', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+}

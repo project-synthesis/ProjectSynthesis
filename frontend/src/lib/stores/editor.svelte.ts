@@ -19,6 +19,17 @@ export interface Tab {
   optimizationId?: string;
 }
 
+/** Payload backing an inline (non-row-backed) diff tab — v0.4.37 §4.2. */
+export interface InlineDiffPayload {
+  /** `${suiteId}:${promptIdx}` — drives the `diff-inline-${key}` tab id. */
+  key: string;
+  title: string;
+  before: string;
+  after: string;
+  beforeLabel?: string;
+  afterLabel?: string;
+}
+
 class EditorStore {
   tabs = $state<Tab[]>([
     { id: PROMPT_TAB_ID, title: 'Prompt', type: 'prompt', pinned: true },
@@ -28,6 +39,14 @@ class EditorStore {
 
   /** Per-optimization result cache: optimization ID → data. */
   private _resultCache = $state<Record<string, OptimizationResult>>({});
+
+  /** Per-tab inline diff payloads: tab id → payload (v0.4.37 §4.2). */
+  private _inlineDiffCache = $state<Record<string, InlineDiffPayload>>({});
+
+  /** Inline diff payload for a tab id; null for row-backed diff tabs. */
+  getInlineDiff(tabId: string): InlineDiffPayload | null {
+    return this._inlineDiffCache[tabId] ?? null;
+  }
 
   get activeTab(): Tab | undefined {
     return this.tabs.find((t) => t.id === this.activeTabId);
@@ -107,6 +126,13 @@ class EditorStore {
       }
     }
 
+    // Clean up the inline-diff payload (payload-backed diff tabs).
+    if (tab && this._inlineDiffCache[tab.id]) {
+      const nextInline = { ...this._inlineDiffCache };
+      delete nextInline[tab.id];
+      this._inlineDiffCache = nextInline;
+    }
+
     if (this.activeTabId === id) {
       // Prefer the Prompt tab as the natural fallback so closing a result
       // returns the user to the editor — not to a sibling pinned tab like
@@ -169,6 +195,19 @@ class EditorStore {
     });
   }
 
+  /**
+   * Open (or reactivate) a payload-backed diff tab (v0.4.37 §4.2).
+   * Tab id scheme `diff-inline-${key}` mirrors the row-backed
+   * `diff-${optimizationId}` scheme above — reopening the same key
+   * reactivates the existing tab instead of duplicating. The payload is
+   * refreshed on every call so a re-replayed suite diffs fresh content.
+   */
+  openInlineDiff(payload: InlineDiffPayload) {
+    const id = `diff-inline-${payload.key}`;
+    this._inlineDiffCache = { ...this._inlineDiffCache, [id]: payload };
+    this.openTab({ id, title: `~ ${payload.title}`, type: 'diff' });
+  }
+
   /** Open (or activate) the pattern graph mindmap tab. */
   openMindmap() {
     this.openTab({
@@ -182,6 +221,7 @@ class EditorStore {
   closeAllResults() {
     this.tabs = this.tabs.filter((t) => t.pinned);
     this._resultCache = {};
+    this._inlineDiffCache = {};
     this.activeTabId = PROMPT_TAB_ID;
   }
 
@@ -213,6 +253,7 @@ class EditorStore {
     ];
     this.activeTabId = PROMPT_TAB_ID;
     this._resultCache = {};
+    this._inlineDiffCache = {};
   }
 }
 

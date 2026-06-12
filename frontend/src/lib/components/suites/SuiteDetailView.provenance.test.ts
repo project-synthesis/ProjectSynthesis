@@ -79,7 +79,10 @@ function makeSuite(overrides: Record<string, unknown> = {}) {
 
 function makeLatestReplay(promptRow: Record<string, unknown>) {
   return {
-    id: 'rr-1', mode: 'replay_run', status: 'completed',
+    // `as const` pins the union-typed literals so the fixture satisfies
+    // the component's `SuiteReplayRow | RunResult` prop without widening
+    // to `string` (type-only — no runtime/assertion change).
+    id: 'rr-1', mode: 'replay_run' as const, status: 'completed' as const,
     started_at: '2026-06-12T01:00:00Z', completed_at: '2026-06-12T01:05:00Z',
     project_id: null, repo_full_name: null, topic: null, intent_hint: null,
     prompts_generated: 1,

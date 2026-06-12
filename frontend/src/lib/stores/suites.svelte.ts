@@ -54,6 +54,7 @@ import {
   type ValidationSuiteOut,
 } from '$lib/api/suites';
 import { getHealth } from '$lib/api/client';
+import { checkOptimizationsExist } from '$lib/api/optimizations';
 import { getRun, type RunListResponse, type RunResult } from '$lib/api/runs';
 
 /** Mirrors backend `RegressionAlarmEntry`. */
@@ -97,6 +98,13 @@ class SuitesStore {
   // 202 dispatch response (which only carries run_id + poll_url).
   latestReplay = $state<RunResult | null>(null);
 
+  // v0.4.37 §4.4 — liveness of the snapshot's original_optimization_ids,
+  // resolved by ONE batched POST /api/optimizations/exists per suite
+  // selection. `null` = not checked / check failed: the UI renders
+  // NEITHER tombstones NOR history links rather than lying.
+  aliveOriginalIds = $state<Set<string> | null>(null);
+  originalTraceIds = $state<Record<string, string>>({});
+
   // ── Loading / error transients ───────────────────────────────────
   loading = $state(false);
   error = $state<string | null>(null);
@@ -138,6 +146,8 @@ class SuitesStore {
       this.detail = null;
       this.replays = null;
       this.latestReplay = null;
+      this.aliveOriginalIds = null;
+      this.originalTraceIds = {};
       return;
     }
     await this.loadDetail(suiteId);
@@ -157,6 +167,30 @@ class SuitesStore {
       ]);
       this.detail = detail;
       this.replays = replays;
+
+      // v0.4.37 §4.4 — once-per-selection liveness check (deduped,
+      // capped at the endpoint's 100-id boundary).
+      const refIds = Array.from(
+        new Set(
+          (detail.prompts_snapshot ?? [])
+            .map((p) => p.original_optimization_id)
+            .filter((id): id is string => !!id),
+        ),
+      ).slice(0, 100);
+      if (refIds.length === 0) {
+        this.aliveOriginalIds = new Set();
+        this.originalTraceIds = {};
+      } else {
+        try {
+          const exists = await checkOptimizationsExist(refIds);
+          this.aliveOriginalIds = new Set(exists.alive);
+          this.originalTraceIds = exists.trace_ids;
+        } catch {
+          // Best-effort — degrade to "unknown" (no tombstones, no links).
+          this.aliveOriginalIds = null;
+          this.originalTraceIds = {};
+        }
+      }
 
       // Resolve the most recent terminal replay (status `completed` or
       // `partial` — `failed` rows may have no aggregate; `running` rows

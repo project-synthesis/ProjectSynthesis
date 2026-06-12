@@ -144,16 +144,26 @@
             <ForgeArtifact />
           {/if}
         {:else if tab.type === 'diff'}
-          {@const diffResult = editorStore.activeResult ?? forgeStore.result}
-          {#if diffResult?.raw_prompt && diffResult?.optimized_prompt}
+          {@const inlineDiff = editorStore.getInlineDiff(tab.id)}
+          {#if inlineDiff}
             <DiffView
-              original={diffResult.raw_prompt}
-              optimized={diffResult.optimized_prompt}
+              original={inlineDiff.before}
+              optimized={inlineDiff.after}
+              originalLabel={inlineDiff.beforeLabel}
+              optimizedLabel={inlineDiff.afterLabel}
             />
           {:else}
-            <div class="placeholder-panel">
-              <span class="placeholder-label">No diff available — forge a prompt first</span>
-            </div>
+            {@const diffResult = editorStore.activeResult ?? forgeStore.result}
+            {#if diffResult?.raw_prompt && diffResult?.optimized_prompt}
+              <DiffView
+                original={diffResult.raw_prompt}
+                optimized={diffResult.optimized_prompt}
+              />
+            {:else}
+              <div class="placeholder-panel">
+                <span class="placeholder-label">No diff available — forge a prompt first</span>
+              </div>
+            {/if}
           {/if}
         {:else if tab.type === 'mindmap'}
           <SemanticTopology />

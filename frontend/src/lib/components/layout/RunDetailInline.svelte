@@ -14,6 +14,9 @@
   // `state_referenced_locally`); the closure also keeps the promise reactive
   // to prop swaps when the parent re-uses this component for a different row.
   const fullPromise = $derived(getRun(run.id));
+
+  // v0.4.37 §4.3 — replay per-prompt expansion state.
+  let expandedPromptIdx = $state<number | null>(null);
 </script>
 
 {#await fullPromise}
@@ -52,6 +55,48 @@
           <span class="text-[10px]">Baseline: {agg.baseline_mean.toFixed(2)}</span>
         {/if}
       </div>
+      {#if (full.prompt_results ?? []).length > 0}
+        <!-- v0.4.37 §4.3 — per-prompt list. Pre-v0.4.37 rows lack the
+             output keys entirely and degrade: no output section, no dead
+             affordances (key-presence discriminator). -->
+        <div class="replay-prompts" role="list" data-test="replay-prompt-list">
+          {#each full.prompt_results ?? [] as row, i (i)}
+            {@const idx = row.raw_prompt_idx ?? row.prompt_index ?? i}
+            <div class="replay-prompt-row" role="listitem" data-test="replay-prompt-row">
+              <button
+                type="button"
+                class="replay-prompt-head"
+                aria-expanded={expandedPromptIdx === idx}
+                onclick={() => { expandedPromptIdx = expandedPromptIdx === idx ? null : idx; }}
+              >
+                <span class="rp-idx">{idx}</span>
+                <span class="rp-intent">{row.intent_label ?? '—'}</span>
+                <span class="rp-score">{row.overall_score != null ? row.overall_score.toFixed(1) : '—'}</span>
+                <span class="rp-status" data-status={row.status ?? 'completed'}>{row.status ?? '—'}</span>
+              </button>
+              {#if expandedPromptIdx === idx}
+                <div class="replay-prompt-body" data-test="replay-prompt-body">
+                  {#if row.raw_prompt}
+                    <!-- Backend truncates raw_prompt at 1,000 chars — render
+                         as-is with an ellipsis marker at the boundary. -->
+                    <pre class="rp-prompt">{row.raw_prompt}{row.raw_prompt.length >= 1000 ? '…' : ''}</pre>
+                  {/if}
+                  {#if row.dimensions}
+                    <div class="rp-dims" data-test="replay-prompt-dims">
+                      {#each Object.entries(row.dimensions) as [dim, val] (dim)}
+                        <span class="rp-dim-chip">{dim} {val != null ? val.toFixed(1) : '—'}</span>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if row.changes_summary}
+                    <pre class="rp-changes" data-test="replay-prompt-changes">{row.changes_summary}</pre>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
     {:else}
       <p class="text-[10px] text-text-dim">Replay in progress.</p>
     {/if}
@@ -73,4 +118,60 @@
   .seed-cluster-label { font-size: 11px; }
   .seed-cluster-meta { font-family: var(--font-mono); font-size: 10px; }
   .replay-summary { display: flex; flex-direction: column; gap: 2px; }
+
+  /* ── v0.4.37 §4.3 — replay per-prompt list (20px rows, zero-effects) ── */
+  .replay-prompts { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+  .replay-prompt-row { border: 1px solid var(--color-border-subtle); }
+  .replay-prompt-head {
+    display: grid;
+    grid-template-columns: 24px 1fr 36px 64px;
+    gap: 4px;
+    align-items: center;
+    width: 100%;
+    height: 20px;
+    padding: 0 4px;
+    background: transparent;
+    border: none;
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .replay-prompt-head:hover { background: color-mix(in srgb, var(--color-bg-hover) 40%, transparent); }
+  .replay-prompt-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rp-idx { color: var(--color-text-dim); }
+  .rp-status { color: var(--color-text-dim); }
+  .rp-status[data-status='completed'] { color: var(--color-neon-green, #22ff88); }
+  .rp-status[data-status='failed'] { color: var(--color-neon-red, #ff3366); }
+  .replay-prompt-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+  .rp-prompt, .rp-changes {
+    margin: 0;
+    max-height: 140px;
+    overflow: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--color-text-primary);
+  }
+  .rp-changes { color: var(--color-text-secondary); }
+  .rp-dims { display: flex; flex-wrap: wrap; gap: 4px; }
+  .rp-dim-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    padding: 0 4px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border-subtle);
+  }
 </style>
