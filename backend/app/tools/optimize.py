@@ -316,7 +316,7 @@ async def _persist_sampling_failure(
     """
     error_msg = f"Sampling pipeline failed: {type(exc).__name__}: {exc}"
 
-    async def _persist(db):  # type: ignore[no-untyped-def]
+    async def _persist(db):
         db.add(Optimization(
             id=str(uuid.uuid4()),
             raw_prompt=prompt,

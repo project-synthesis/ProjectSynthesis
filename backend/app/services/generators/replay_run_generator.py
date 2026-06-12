@@ -351,8 +351,9 @@ class ReplayRunGenerator:
                     try:
                         return float(_bo_raw)
                     # NOTE: parens are load-bearing — runtime is Python 3.12
-                    # (PEP 758 bare form needs 3.14; ruff's py314
-                    # target-version would strip them, see pyproject.toml).
+                    # (PEP 758 bare form needs 3.14). Ruff's target-version
+                    # was fixed to py312 in this same release, so the guard
+                    # is now redundant — kept as belt-and-braces.
                     except (TypeError, ValueError):  # fmt: skip
                         return None
             return None
@@ -657,6 +658,8 @@ def _project_pending_to_result(
         try:
             overall_score = float(overall_raw)
         # NOTE: parens are load-bearing on Python 3.12 (see _baseline_for).
+        # Ruff's target-version was fixed to py312 in this same release, so
+        # the guard is now redundant — kept as belt-and-braces.
         except (TypeError, ValueError):  # fmt: skip
             overall_score = None
 

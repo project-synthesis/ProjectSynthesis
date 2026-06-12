@@ -351,7 +351,7 @@ async def resolve_post_analyze_state(
                     "writing. trace_id=%s",
                     _first_word, heuristic_task_type, trace_id,
                 )
-                analysis.task_type = "writing"  # type: ignore[assignment]
+                analysis.task_type = "writing"
                 effective_task_type = "writing"
 
     # Phase 1.5: Post-LLM domain reconciliation — MUST run BEFORE
