@@ -60,3 +60,24 @@ def test_build_prompts_snapshot_empty_when_both_missing() -> None:
 
     out = _build_prompts_snapshot([{"intent_label": "test"}])
     assert out[0]["raw_prompt"] == ""
+
+
+def test_build_prompts_snapshot_threads_baseline_outputs_map() -> None:
+    """v0.4.37 §3.2: the {id: optimized_prompt} map populates
+    baseline_optimized_prompt by original_optimization_id."""
+    from app.services.validation_suite_service import _build_prompts_snapshot
+
+    out = _build_prompts_snapshot(
+        [{"raw_prompt": "p", "optimization_id": "opt-1"}],
+        baseline_outputs={"opt-1": "full optimized output"},
+    )
+    assert out[0]["baseline_optimized_prompt"] == "full optimized output"
+
+
+def test_build_prompts_snapshot_default_map_yields_none() -> None:
+    """Backward compat: single-positional-arg call sites keep working and
+    emit the key with None (additive JSON, no migration)."""
+    from app.services.validation_suite_service import _build_prompts_snapshot
+
+    out = _build_prompts_snapshot([{"raw_prompt": "p"}])
+    assert out[0]["baseline_optimized_prompt"] is None

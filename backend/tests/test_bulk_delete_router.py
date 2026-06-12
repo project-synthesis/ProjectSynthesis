@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import select
 
-from app.models import Optimization
+from app.models import AuditLog, Optimization, ValidationSuite
 from app.services.event_bus import event_bus
 from tests.conftest import drain_events_nonblocking as _drain_events_nonblocking
 
@@ -212,3 +212,96 @@ async def test_bulk_delete_emits_single_taxonomy_changed_event(
     taxonomy_events = [e for e in events if e.get("event") == "taxonomy_changed"]
     assert len(taxonomy_events) == 1
     assert taxonomy_events[0]["data"].get("trigger") == "bulk_delete"
+
+
+# ===========================================================================
+# v0.4.37 Cycle 1 — provenance guard on POST /api/optimizations/delete
+# ===========================================================================
+
+
+async def _seed_referencing_suite_v37(db_session, opt_id: str, label: str) -> str:
+    suite_id = str(uuid.uuid4())
+    db_session.add(ValidationSuite(
+        id=suite_id,
+        source_run_id=None,
+        label=label,
+        prompts_snapshot=[{
+            "raw_prompt": "p",
+            "intent_label": None,
+            "original_optimization_id": opt_id,
+        }],
+        baseline_scores={"mean_overall": 7.0, "per_prompt": []},
+        tolerance_abs=0.5,
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    ))
+    await db_session.commit()
+    return suite_id
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_referenced_returns_409_and_deletes_nothing(
+    app_client, db_session,
+):
+    """AC-5: a bulk batch containing ONE referenced id 409s atomically —
+    the unreferenced sibling survives too (guard raises pre-DELETE)."""
+    referenced = str(uuid.uuid4())
+    sibling = str(uuid.uuid4())
+    for oid in (referenced, sibling):
+        db_session.add(Optimization(id=oid, raw_prompt="raw", status="completed"))
+    await db_session.commit()
+    suite_id = await _seed_referencing_suite_v37(db_session, referenced, "bulk-guard")
+
+    resp = await app_client.post(
+        "/api/optimizations/delete", json={"ids": [referenced, sibling]},
+    )
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["error"] == "suite_referenced"
+    assert body["blocked"] == [{
+        "optimization_id": referenced,
+        "suite_id": suite_id,
+        "suite_label": "bulk-guard",
+    }]
+    assert body["hint"] == "retry with force=true or retire the suite"
+    for oid in (referenced, sibling):
+        row = (await db_session.execute(
+            select(Optimization).where(Optimization.id == oid)
+        )).scalar_one_or_none()
+        assert row is not None, f"{oid} must survive the blocked bulk delete"
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_force_body_field_overrides_guard(
+    app_client, db_session,
+):
+    """AC-7: force=true in the bulk body deletes the referenced row.
+
+    RED-gate teeth: pre-GREEN the 200/deleted=1 half passes trivially —
+    ``BulkDeleteRequest`` has no extra-forbid config, so the unknown
+    ``force`` field is silently dropped against the guard-less endpoint.
+    The audit-row assertion is what makes this test genuinely fail in RED
+    (no ``optimizations_deleted`` audit write exists anywhere pre-GREEN).
+    """
+    referenced = str(uuid.uuid4())
+    db_session.add(Optimization(id=referenced, raw_prompt="raw", status="completed"))
+    await db_session.commit()
+    suite_id = await _seed_referencing_suite_v37(db_session, referenced, "bulk-forced")
+
+    resp = await app_client.post(
+        "/api/optimizations/delete",
+        json={"ids": [referenced], "force": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted"] == 1
+    audit_rows = list((await db_session.execute(
+        select(AuditLog).where(AuditLog.action == "optimizations_deleted")
+    )).scalars().all())
+    assert len(audit_rows) == 1
+    detail = audit_rows[0].detail
+    assert detail["forced"] is True
+    assert detail["source"] == "api_bulk"
+    assert detail["suite_refs"] == [{
+        "optimization_id": referenced,
+        "suite_id": suite_id,
+        "suite_label": "bulk-forced",
+    }]
