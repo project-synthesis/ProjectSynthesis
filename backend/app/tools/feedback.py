@@ -30,7 +30,7 @@ async def handle_feedback(
     except ValueError:
         wq = None
 
-    async def _persist(db):  # type: ignore[no-untyped-def]
+    async def _persist(db):
         svc = FeedbackService(db)
         fb = await svc.create_feedback(
             optimization_id=optimization_id,

@@ -355,8 +355,8 @@ async def lifespan(app: FastAPI):
     try:
         from app.database import async_session_factory
         from app.services.adaptation_tracker import AdaptationTracker
-        async with async_session_factory() as db:  # type: ignore[assignment]
-            tracker = AdaptationTracker(db)  # type: ignore[arg-type]
+        async with async_session_factory() as db:
+            tracker = AdaptationTracker(db)
             await tracker.cleanup_orphaned_affinities()
     except Exception as exc:
         logger.debug("Strategy affinity cleanup skipped: %s", exc)
@@ -365,8 +365,8 @@ async def lifespan(app: FastAPI):
     try:
         from app.database import async_session_factory
         from app.services.gc import run_startup_gc
-        async with async_session_factory() as db:  # type: ignore[assignment]
-            await run_startup_gc(db)  # type: ignore[arg-type]
+        async with async_session_factory() as db:
+            await run_startup_gc(db)
     except Exception as exc:
         logger.debug("Startup GC skipped: %s", exc)
 
@@ -395,8 +395,8 @@ async def lifespan(app: FastAPI):
         while True:
             try:
                 wq = getattr(app.state, "write_queue", None)
-                async with async_session_factory() as db:  # type: ignore[assignment]
-                    await run_recurring_gc(db, write_queue=wq)  # type: ignore[arg-type]
+                async with async_session_factory() as db:
+                    await run_recurring_gc(db, write_queue=wq)
                 # v0.4.16 P1b — sweep idle entries from the per-(repo, branch)
                 # lock registry. Independent of the DB sweep above and
                 # never raises because the helper itself is wrapped in
@@ -1842,7 +1842,7 @@ async def lifespan(app: FastAPI):
         from app.database import async_session_factory, read_engine_meta
         from app.models import Optimization
 
-        async def _mark_interrupted(db):  # type: ignore[no-untyped-def]
+        async def _mark_interrupted(db):
             await db.execute(
                 update(Optimization)
                 .where(Optimization.status == "running")
@@ -1864,14 +1864,14 @@ async def lifespan(app: FastAPI):
                 )
                 read_engine_meta.migration_mode = True
                 try:
-                    async with async_session_factory() as db:  # type: ignore[assignment]
+                    async with async_session_factory() as db:
                         await _mark_interrupted(db)
                 finally:
                     read_engine_meta.migration_mode = False
         else:
             read_engine_meta.migration_mode = True
             try:
-                async with async_session_factory() as db:  # type: ignore[assignment]
+                async with async_session_factory() as db:
                     await _mark_interrupted(db)
             finally:
                 read_engine_meta.migration_mode = False

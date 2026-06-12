@@ -1242,7 +1242,7 @@ async def phase_reconcile(
                 .where(PromptCluster.parent_id.in_(stale_ids))
                 .values(parent_id=canonical.id)
             )
-            reparent_count = int(reparent_result.rowcount or 0)  # type: ignore[arg-type]
+            reparent_count = int(reparent_result.rowcount or 0)
             # Archive stale generals with provenance.
             for sg in stale:
                 sg.state = "archived"

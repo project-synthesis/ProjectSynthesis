@@ -139,7 +139,7 @@ async def handle_prepare(
     from app.tools._shared import get_write_queue
     pending_id = str(uuid.uuid4())
 
-    async def _persist_pending(db):  # type: ignore[no-untyped-def]
+    async def _persist_pending(db):
         pending = Optimization(
             id=pending_id,
             raw_prompt=prompt,
