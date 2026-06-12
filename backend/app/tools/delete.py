@@ -46,9 +46,7 @@ async def handle_delete(
         write_queue = None
 
     async with async_session_factory() as db:
-        probe = await db.execute(
-            select(Optimization.id).where(Optimization.id == optimization_id)
-        )
+        probe = await db.execute(select(Optimization.id).where(Optimization.id == optimization_id))
         if probe.scalar_one_or_none() is None:
             raise ValueError(f"Optimization not found: {optimization_id}")
 
@@ -63,10 +61,12 @@ async def handle_delete(
         except SuiteReferencedError as exc:
             raise ValueError(
                 "suite_referenced: "
-                + json.dumps({
-                    "blocked": exc.blocked,
-                    "hint": "retry with force=true or retire the suite",
-                })
+                + json.dumps(
+                    {
+                        "blocked": exc.blocked,
+                        "hint": "retry with force=true or retire the suite",
+                    }
+                )
             ) from exc
 
         return DeleteOptimizationOutput(

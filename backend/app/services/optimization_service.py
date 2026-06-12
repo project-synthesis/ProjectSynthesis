@@ -54,9 +54,7 @@ class SuiteReferencedError(Exception):
 
     def __init__(self, blocked: list[dict[str, str]]) -> None:
         self.blocked = blocked
-        super().__init__(
-            f"{len(blocked)} optimization reference(s) held by live validation suites"
-        )
+        super().__init__(f"{len(blocked)} optimization reference(s) held by live validation suites")
 
 
 # ---------------------------------------------------------------------------
@@ -119,16 +117,12 @@ class OptimizationService:
 
     async def get_by_id(self, optimization_id: str) -> Optimization | None:
         """Return the Optimization with *optimization_id*, or None if not found."""
-        result = await self._session.execute(
-            select(Optimization).where(Optimization.id == optimization_id)
-        )
+        result = await self._session.execute(select(Optimization).where(Optimization.id == optimization_id))
         return result.scalar_one_or_none()
 
     async def get_by_trace_id(self, trace_id: str) -> Optimization | None:
         """Return the Optimization whose *trace_id* matches, or None."""
-        result = await self._session.execute(
-            select(Optimization).where(Optimization.trace_id == trace_id)
-        )
+        result = await self._session.execute(select(Optimization).where(Optimization.trace_id == trace_id))
         return result.scalar_one_or_none()
 
     # ------------------------------------------------------------------
@@ -166,8 +160,7 @@ class OptimizationService:
         """
         if sort_by not in VALID_SORT_COLUMNS:
             raise ValueError(
-                "Invalid sort column: %s. Must be one of: %s"
-                % (sort_by, ", ".join(sorted(VALID_SORT_COLUMNS)))
+                "Invalid sort column: %s. Must be one of: %s" % (sort_by, ", ".join(sorted(VALID_SORT_COLUMNS)))
             )
 
         # Build base filter predicates
@@ -202,7 +195,13 @@ class OptimizationService:
 
         logger.debug(
             "list_optimizations: total=%d count=%d offset=%d sort=%s/%s project_id=%s status=%s",
-            total, count, offset, sort_by, sort_order, project_id, status,
+            total,
+            count,
+            offset,
+            sort_by,
+            sort_order,
+            project_id,
+            status,
         )
 
         return {
@@ -244,17 +243,15 @@ class OptimizationService:
         for col_attr in col_attrs:
             agg_exprs.extend(
                 [
-                    func.count(col_attr),          # count of non-null values
-                    func.avg(col_attr),             # mean
+                    func.count(col_attr),  # count of non-null values
+                    func.avg(col_attr),  # mean
                     func.avg(col_attr * col_attr),  # E[x²]
                 ]
             )
 
         stmt = select(*agg_exprs)
         if exclude_scoring_modes:
-            stmt = stmt.where(
-                Optimization.scoring_mode.notin_(exclude_scoring_modes)
-            )
+            stmt = stmt.where(Optimization.scoring_mode.notin_(exclude_scoring_modes))
 
         row = (await self._session.execute(stmt)).one()
 
@@ -266,7 +263,7 @@ class OptimizationService:
             mean_sq_val: float = float(row[base + 2] or 0.0)
 
             # Population variance = E[x²] - (E[x])²
-            variance = mean_sq_val - mean_val ** 2
+            variance = mean_sq_val - mean_val**2
             # Guard against tiny negative float due to floating-point precision
             stddev = math.sqrt(max(variance, 0.0)) if count_val > 0 else 0.0
 
@@ -418,11 +415,13 @@ class OptimizationService:
                 ref = entry.get("original_optimization_id")
                 if ref and ref in existing_ids and (ref, suite_id) not in seen_pairs:
                     seen_pairs.add((ref, suite_id))
-                    suite_refs.append({
-                        "optimization_id": ref,
-                        "suite_id": suite_id,
-                        "suite_label": suite_label,
-                    })
+                    suite_refs.append(
+                        {
+                            "optimization_id": ref,
+                            "suite_id": suite_id,
+                            "suite_label": suite_label,
+                        }
+                    )
         if suite_refs and not force:
             blocked_ids = sorted({r["optimization_id"] for r in suite_refs})
             # Denials are NOT audited (nothing was deleted; the 409 body
@@ -431,7 +430,10 @@ class OptimizationService:
             logger.warning(
                 "Delete blocked by live suite reference(s) "
                 "(source=%s, force=False): %d id(s) across %d reference(s): %s",
-                source, len(blocked_ids), len(suite_refs), blocked_ids,
+                source,
+                len(blocked_ids),
+                len(suite_refs),
+                blocked_ids,
             )
             raise SuiteReferencedError(suite_refs)
 
@@ -442,22 +444,20 @@ class OptimizationService:
         # operation_label='optimization_bulk_delete'.
         # ------------------------------------------------------------------
         if self._write_queue is not None:
+
             async def _do_delete(write_db: AsyncSession) -> int:
-                deleted = await write_db.execute(
-                    delete(Optimization).where(Optimization.id.in_(ids))
-                )
+                deleted = await write_db.execute(delete(Optimization).where(Optimization.id.in_(ids)))
                 rc = int(deleted.rowcount or 0)
                 await write_db.commit()
                 return rc
 
             result.deleted = await self._write_queue.submit(
-                _do_delete, operation_label="optimization_bulk_delete",
+                _do_delete,
+                operation_label="optimization_bulk_delete",
             )
         else:
             # Legacy: write through self._session directly.
-            deleted = await self._session.execute(
-                delete(Optimization).where(Optimization.id.in_(ids))
-            )
+            deleted = await self._session.execute(delete(Optimization).where(Optimization.id.in_(ids)))
             result.deleted = int(deleted.rowcount or 0)
             await self._session.commit()
 
@@ -482,6 +482,7 @@ class OptimizationService:
         # migrations) we just skip the marking.
         try:
             from app.services.taxonomy.engine import get_engine
+
             try:
                 engine = get_engine()
             except RuntimeError:
@@ -541,7 +542,10 @@ class OptimizationService:
 
         logger.info(
             "Deleted %d optimizations (requested=%d, reason=%s, clusters=%d)",
-            result.deleted, len(ids), reason, len(result.affected_cluster_ids),
+            result.deleted,
+            len(ids),
+            reason,
+            len(result.affected_cluster_ids),
         )
         return result
 
@@ -550,7 +554,8 @@ class OptimizationService:
     # ------------------------------------------------------------------
 
     async def get_enrichment_profile_effectiveness(
-        self, limit: int = 200,
+        self,
+        limit: int = 200,
     ) -> dict[str, dict[str, float]]:
         """Aggregate recent completed optimizations by ``enrichment_profile``.
 
@@ -606,11 +611,14 @@ class OptimizationService:
             if not isinstance(profile, str) or not profile:
                 continue
 
-            bucket = profile_data.setdefault(profile, {
-                "count": 0,
-                "overall_scores": [],
-                "improvement_scores": [],
-            })
+            bucket = profile_data.setdefault(
+                profile,
+                {
+                    "count": 0,
+                    "overall_scores": [],
+                    "improvement_scores": [],
+                },
+            )
             bucket["count"] += 1
             if isinstance(overall_score, (int, float)):
                 bucket["overall_scores"].append(float(overall_score))
@@ -626,9 +634,7 @@ class OptimizationService:
             if overall:
                 entry["avg_overall_score"] = round(sum(overall) / len(overall), 4)
             if improvement:
-                entry["avg_improvement_score"] = round(
-                    sum(improvement) / len(improvement), 4
-                )
+                entry["avg_improvement_score"] = round(sum(improvement) / len(improvement), 4)
             summary[profile] = entry
         return summary
 
