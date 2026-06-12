@@ -395,8 +395,14 @@ class OptimizationService:
         # whose Optimization row still exists, so dead references
         # (snapshots pointing at already-deleted rows) can never block
         # (AC-6) and the single-delete 404-first probe stays consistent.
-        # Suites are few (single-digit) and snapshots small — a per-call
-        # Python loop over live suites needs no index.
+        # Suites are few (single-digit) — a per-call Python loop over
+        # live suites needs no index. Post-§3.2 snapshots can reach
+        # ~500 KB (25 x 20 K baseline outputs): still a few-ms JSON parse
+        # on a rare user-initiated op; switch to a JSON-function id
+        # extraction if suite counts ever grow. Known benign TOCTOU: a
+        # suite created between this read and the queued DELETE will not
+        # block — post-v0.4.37 snapshots are self-contained, so the worst
+        # case is an immediate tombstone, not data loss.
         # ------------------------------------------------------------------
         existing_ids = {opt_id for opt_id, _, _ in rows}
         suite_refs: list[dict[str, str]] = []
@@ -529,6 +535,7 @@ class OptimizationService:
                     "optimizations_deleted",
                     detail={
                         "ids_count": len(ids),
+                        "deleted": result.deleted,
                         "ids": list(ids[:20]),
                         "reason": reason,
                         "source": source,
