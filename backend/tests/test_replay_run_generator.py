@@ -35,7 +35,9 @@ Surface contract pinned by these tests (spec §5):
 * Retired suite (``retired_at is not None``) raises ``ValueError("suite_retired")``.
 * Repo drift (``suite.repo_full_name != request.payload["repo_full_name"]``)
   emits a ``probe_warning(code='repo_drift', ...)`` event — informational only.
-* Per-prompt SEQUENTIAL loop with try/except (NOT ``asyncio.TaskGroup``).
+* Per-prompt CONCURRENT fan-out (v0.4.36, semaphore-capped per
+  ``PROBE_PROMPT_CONCURRENCY``) with per-prompt try/except (still NOT
+  ``asyncio.TaskGroup``).
   ``batch_pipeline.run_single_prompt`` is the canonical primitive (A2-compliant).
 * Per-prompt dict uses ``"overall_score"`` key (canonical input contract of
   ``compute_run_aggregate`` extracted from ``topic_probe_generator.py:414-418``)
@@ -614,14 +616,16 @@ async def test_replay_run_generator_emits_probe_warning_on_repo_drift(
 async def test_replay_run_generator_sequential_per_prompt_with_try_except(
     db, write_queue, monkeypatch,
 ) -> None:
-    """Spec §5 lines 715-722 — SEQUENTIAL loop with per-iteration try/except
+    """Spec §5 lines 715-722 — per-prompt try/except failure isolation
     (matching ``TopicProbeGenerator`` Phase 3 canonical pattern at
     ``topic_probe_generator.py:185-215``). ``asyncio.TaskGroup`` was REJECTED:
     a single child's non-rate-limit exception propagates BaseExceptionGroup
     that aborts siblings, leaving inconsistent state with partial assignments.
+    v0.4.36 replaced the sequential loop with the concurrent fan-out
+    (semaphore-capped per ``PROBE_PROMPT_CONCURRENCY``); the per-prompt
+    ``try/except Exception`` isolation contract is unchanged.
 
-    Per spec §5: the canonical pattern is a ``for idx, item in enumerate(...)``
-    loop wrapping each ``batch_pipeline.run_single_prompt`` call in
+    Per spec §5: each ``batch_pipeline.run_single_prompt`` call is wrapped in
     ``try/except Exception`` so one prompt's failure does NOT abort siblings.
     The failed prompt's result row carries ``status='failed'`` + ``error``;
     completed prompts proceed unchanged.
@@ -676,14 +680,16 @@ async def test_replay_run_generator_position_correspondence(
     detail view) can pair ``prompt_results[i]`` with
     ``baseline_scores.per_prompt[i]`` by index.
 
-    Spec §3 key invariant 2 (positional correspondence): sequential per-prompt
-    execution with ``raw_prompt_idx=idx`` tagging preserves positional
-    correspondence by construction. Pinned here for N=10 to exercise the
-    invariant beyond the small-N happy paths.
+    Spec §3 key invariant 2 (positional correspondence): per-prompt
+    execution with ``raw_prompt_idx=idx`` tagging plus the preallocated
+    index-addressed results list preserves positional correspondence by
+    construction. Pinned here for N=10 to exercise the invariant beyond
+    the small-N happy paths.
 
-    The spec ships replay as sequential per-iteration — concurrency is
-    DEFERRED to T3 (``PROBE_PROMPT_CONCURRENCY`` is forward-declared per spec
-    §5 concurrency note + §10 Cycle 6).
+    v0.4.36 ships the concurrent executor; ``PROBE_PROMPT_CONCURRENCY``
+    landed with it. This test pins the invariant for the in-order fixture
+    path; ``test_position_correspondence_under_out_of_order_completion``
+    pins it under adversarial completion order.
     """
     n = 10
     suite = await _seed_suite(db, n_prompts=n)
@@ -1101,12 +1107,11 @@ def _rl_pending(idx: int) -> PendingOptimization:
 
 async def test_probe_prompt_concurrency_constant_contract() -> None:
     """AC-1: importable, immutable, mirrors BATCH_CONCURRENCY_BY_TIER."""
+    from app.services.batch_orchestrator import BATCH_CONCURRENCY_BY_TIER
     from app.services.generators._constants import (
         DEFAULT_PROMPT_CONCURRENCY,
         PROBE_PROMPT_CONCURRENCY,
     )
-
-    from app.services.batch_orchestrator import BATCH_CONCURRENCY_BY_TIER
 
     assert dict(PROBE_PROMPT_CONCURRENCY) == BATCH_CONCURRENCY_BY_TIER
     assert DEFAULT_PROMPT_CONCURRENCY == 5

@@ -860,7 +860,7 @@ def _build_passthrough_fallback_pending(
     productive and the user can re-run the full LLM pipeline after
     the rate limit lifts.
 
-    The row carries ``heuristic_flags.rate_limited=True`` plus
+    The row carries ``rate_limit_meta.rate_limited=True`` plus
     ``reset_at_iso`` so the SSE event chain + final report can render
     the rate-limit context globally.
     """
