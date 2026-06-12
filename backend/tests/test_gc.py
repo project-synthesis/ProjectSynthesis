@@ -38,14 +38,12 @@ from app.models import (
     OptimizationPattern,
     PromptCluster,
     RefinementTurn,
-    RunRow,
 )
 from app.services.gc import (
     _STUCK_PENDING_AGE_HOURS,
     _gc_archived_zero_member_clusters,
     _gc_failed_optimizations,
     _gc_orphan_meta_patterns,
-    _gc_orphan_probe_runs,
     _gc_stuck_pending_optimizations,
     run_startup_gc,
 )
@@ -571,47 +569,3 @@ class TestRunStartupGC:
         """Orchestrator on a fresh DB must not raise and must not commit."""
         # Should simply log and return without touching anything.
         await run_startup_gc(db_session)
-
-
-# ---------------------------------------------------------------------------
-# _gc_orphan_probe_runs
-# ---------------------------------------------------------------------------
-
-class TestGCOrphanProbeRuns:
-    """Foundation P3 (v0.4.18): ``_gc_orphan_probe_runs`` is a no-op stub.
-
-    Superseded by ``_gc_orphan_runs`` which sweeps both ``topic_probe`` and
-    ``seed_agent`` mode rows in one pass. Pre-Cycle 14 the legacy helper had
-    to be a no-op specifically to avoid double-processing — the
-    Python-alias subclass selected ALL ``run_row`` rows regardless of mode
-    so a real implementation here plus ``_gc_orphan_runs`` would have
-    UPDATEd the same row set twice. Cycle 14 retired that alias; the no-op
-    body is now just a back-compat shim until the helper itself is deleted.
-
-    See ``test_gc_runs.py`` for the live contract on ``_gc_orphan_runs``.
-    """
-
-    async def test_legacy_helper_is_no_op_after_p3(self, db_session):
-        """v0.4.18 Foundation P3: the legacy helper returns 0 even when
-        orphan rows are present. ``_gc_orphan_runs`` covers what it did."""
-        old = datetime.now(timezone.utc) - timedelta(hours=2)
-
-        db_session.add(RunRow(
-            id="orphan-old",
-            mode="topic_probe",
-            topic="x",
-            intent_hint="explore",
-            repo_full_name="o/r",
-            topic_probe_meta={"scope": "**/*", "commit_sha": None},
-            started_at=old,
-            status="running",
-        ))
-        await db_session.commit()
-
-        cleaned = await _gc_orphan_probe_runs(db_session)
-        assert cleaned == 0  # No-op; row is left untouched here.
-
-    async def test_no_orphans_returns_zero(self, db_session):
-        """Idempotent: safe to call on a DB with no orphan rows."""
-        cleaned = await _gc_orphan_probe_runs(db_session)
-        assert cleaned == 0

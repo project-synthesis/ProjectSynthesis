@@ -129,7 +129,7 @@ Shared: `app/utils/sse.py` (`format_sse()`), `app/dependencies/rate_limit.py` (i
 - **`event_bus.subscribe_for_run(run_id)`** — filtered async iterator with 500ms ring-buffer replay; coexists with existing `EventBus` without modifying `publish()`. Non-dict-sentinel-safe. Backs race-free SSE on `POST /api/probes` (subscribe-before-dispatch) + the bus→ctx progress bridge for `synthesis_probe` (AC-C6-3)
 - **ContextVar:** `current_run_id` declared canonically at `services/probe_common.py`. The v0.4.18 rename also introduced a `current_probe_id` backward-compat alias of the same ContextVar object; that alias was retired in v0.4.34 (16 release cycles after introduction — well beyond the "2+ release cycles" migration window).
 - **Deletions:** `ProbeRun` ORM class + `ProbeService` class deleted. `services/probe_service.py` (2270 → 37 LOC re-export shim) carried the `current_probe_id` alias re-export until v0.4.34, when both the alias and the shim file were removed. 51 `ProbeRun` references in 8 test files rewritten; 2 obsolete test files (~2210 LOC) deleted
-- **GC:** `_gc_orphan_runs(db) -> int` sweeps both modes; legacy `_gc_orphan_probe_runs` is a no-op returning 0
+- **GC:** `_gc_orphan_runs(db, *, phase=...)` sweeps both modes (startup + hourly recurring since v0.4.35); the legacy probe-run GC no-op shim and its TTL alias were deleted in v0.4.36
 
 ## Topic Probe (Tier 1, v0.4.12 — runs on the v0.4.18 substrate)
 
