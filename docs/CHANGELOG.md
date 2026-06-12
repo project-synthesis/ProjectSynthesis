@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.36 — 2026-06-12
+
 ### Added
 - **Concurrent per-prompt replay execution** — `ReplayRunGenerator` fans prompts out through an `asyncio.Semaphore` capped by the new `PROBE_PROMPT_CONCURRENCY` tier mapping (`services/generators/_constants.py`, mirroring the proven seed-batch caps: internal=10 / api=5 / sampling=2). A 25-prompt suite that previously ran ~30 minutes worst-case now completes in roughly the time of its 3 slowest prompts. Position correspondence is preserved via a preallocated index-addressed results list; one prompt's failure still fails only its own row. Rate-limit containment hardens the seed-batch pattern for the measurement workload: the first 429 trips a shared event (in-flight prompts bail at the existing `batch_pipeline` phase gates, unstarted prompts short-circuit), and a projection guard converts every rate-limited pending into a score-less failed row so heuristic fallback scores never enter the regression baseline's `latest_mean`. Runs degraded by rate limiting terminate `partial` (or `failed`) and carry the additive `replay_rate_limited_count` aggregate key. The `probe_prompt_completed.current` field is now a monotonic completed-counter (required by the MCP progress bridge under out-of-order completion); `idx` continues to identify the row. Spec: `docs/superpowers/specs/2026-06-12-v0.4.36-replay-parallelism-and-debt-retirement-design.md`.
 - Installed the read-engine audit hook in the MCP server process lifespan (previously backend-only), bringing MCP-process writes under the same `WriteOnReadEngineError` discipline as the backend (cross-referenced in the `WriterLockedAsyncSession` retirement entry under Removed).
