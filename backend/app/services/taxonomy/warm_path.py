@@ -1079,13 +1079,9 @@ async def execute_warm_path(
     submits for Phase 4.5). When ``write_queue`` is None, the legacy
     ``session_factory`` path is used unchanged.
 
-    Concurrency contract: every ``AsyncSession`` opened via
-    ``session_factory()`` is a ``WriterLockedAsyncSession`` (see
-    ``app/database.py``). The session subclass automatically holds
-    ``db_writer_lock`` for the entire write-transaction span (first
-    ``flush()`` to ``commit()``/``rollback()``/``close()``), so the warm
-    cycle's writes serialize correctly against probe/seed batches and
-    other process-mate writers without explicit lock wrapping here.
+    Concurrency contract: the legacy session_factory dispatch path writes
+    through plain AsyncSession sessions on the read engine; the WriteQueue
+    path is the production default and the audit hook guards drift writes.
 
     Args:
         engine: TaxonomyEngine instance.

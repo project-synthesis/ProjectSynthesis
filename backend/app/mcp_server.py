@@ -228,6 +228,31 @@ except Exception:
 # scheduling (no preemption between the check and assignment).  If the
 # server were ever embedded in a threaded ASGI host, a threading.Lock
 # would be needed instead.
+
+
+def _install_audit_hook_once() -> None:
+    """Install the read-engine audit hook in the MCP process (v0.4.36).
+
+    After the v0.4.36 retirement of the legacy flush-serializer session
+    class, any un-queued read-engine write in this process must fail
+    loudly under RAISE instead of being unguarded AND unobserved (the
+    backend has had this hook since v0.4.13; the MCP process never did).
+    Mirrors main.py's install with the same already-installed
+    RuntimeError swallow.
+    """
+    try:
+        from app.database import engine as _read_engine
+        from app.database import install_read_engine_audit_hook
+
+        install_read_engine_audit_hook(_read_engine)
+        logger.info("MCP lifespan: read-engine audit hook installed")
+    except RuntimeError as _hook_exc:
+        logger.warning(
+            "MCP audit hook install skipped (already installed): %s",
+            _hook_exc,
+        )
+
+
 _process_initialized = False
 
 
@@ -238,6 +263,8 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
     if not _process_initialized:
         _process_initialized = True
+
+        _install_audit_hook_once()
 
         # SQLite PRAGMAs are applied to every pool checkout by the event hook
         # in app.database — see app/database.py. No throwaway connect() needed.
