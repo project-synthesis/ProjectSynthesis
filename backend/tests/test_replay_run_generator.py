@@ -3,7 +3,7 @@
 Plan:  ``docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md`` Cycle 6 Task 6.1
 Spec:  ``docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md``
        §2 components (services/generators/replay_run_generator.py + _aggregate.py),
-       §5 ReplayRunGenerator body (sequential per-prompt, full collaborator graph,
+       §5 ReplayRunGenerator body (concurrent fan-out since v0.4.36, full collaborator graph,
        ``PendingOptimization.trace_id`` correlation, non-None final_report stub),
        §9 ``phase="replay_run"`` trace tagging,
        §10 Cycle 6 (replay's 30-min worst case + ContextEnrichmentService usage).
@@ -609,7 +609,7 @@ async def test_replay_run_generator_emits_probe_warning_on_repo_drift(
 
 
 # ===========================================================================
-# Test 6 — sequential per-prompt loop with try/except (1 failure isolated)
+# Test 6 — per-prompt try/except failure isolation (concurrent fan-out since v0.4.36)
 # ===========================================================================
 
 
@@ -653,7 +653,7 @@ async def test_replay_run_generator_sequential_per_prompt_with_try_except(
     result = await gen.run(request, run_id="rid-6")
 
     assert len(result.prompt_results) == 3, (
-        f"sequential loop must produce one entry per snapshot prompt, "
+        f"executor must produce one entry per snapshot prompt, "
         f"got {len(result.prompt_results)}"
     )
     statuses = [r.get("status") for r in result.prompt_results]
@@ -1152,9 +1152,28 @@ async def test_replay_runs_prompts_concurrently_capped_at_tier(
 async def test_position_correspondence_under_out_of_order_completion(
     db, write_queue, monkeypatch,
 ) -> None:
-    """AC-3: slot i holds prompt i even when i=0 finishes LAST."""
+    """AC-3: slot i holds prompt i even when i=0 finishes LAST.
+
+    ALSO pins baseline/delta pairing under out-of-order completion: each
+    index gets a DISTINCT baseline (``_baseline_scores`` defaults every
+    index to a uniform 7.5, which would hide a slot/baseline swap), so
+    ``baseline_overall`` and ``delta`` must track the slot index too.
+    """
     n = 6
     suite = await _seed_suite(db, n_prompts=n)
+
+    # Distinct per-index baselines: per_prompt[i]["overall"] = 5.0 + i * 0.5.
+    # Reassign the whole JSON column so SQLAlchemy change-detection fires;
+    # commit via the ``db`` fixture so the generator's read session (same
+    # shared-URI in-memory DB) sees the mutated suite row.
+    baseline = dict(suite.baseline_scores)
+    per_prompt = [dict(entry) for entry in baseline["per_prompt"]]
+    for i, entry in enumerate(per_prompt):
+        entry["overall"] = 5.0 + i * 0.5
+    baseline["per_prompt"] = per_prompt
+    suite.baseline_scores = baseline
+    db.add(suite)
+    await db.commit()
 
     async def _behavior(idx):
         await _asyncio.sleep((n - idx) * 0.02)  # idx 0 slowest
@@ -1169,6 +1188,12 @@ async def test_position_correspondence_under_out_of_order_completion(
         assert row["raw_prompt_idx"] == i
         assert row["overall_score"] == float(i), (
             f"slot {i} holds the wrong prompt's result: {row['overall_score']}"
+        )
+        assert row["baseline_overall"] == pytest.approx(5.0 + i * 0.5), (
+            f"slot {i} paired with the wrong baseline: {row['baseline_overall']}"
+        )
+        assert row["delta"] == pytest.approx(float(i) - (5.0 + i * 0.5)), (
+            f"slot {i} delta mispaired: {row['delta']}"
         )
 
 
