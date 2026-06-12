@@ -3,8 +3,8 @@
 Plan: docs/superpowers/plans/2026-05-06-foundation-p3-substrate-unification.md Cycle 5
 Spec: docs/superpowers/specs/2026-05-06-foundation-p3-substrate-unification-design.md § 5.6
 
-Pins the contract for the unified ``_gc_orphan_runs`` sweep that
-supersedes ``_gc_orphan_probe_runs`` — sweeps both ``topic_probe`` and
+Pins the contract for the unified ``_gc_orphan_runs`` sweep (the legacy
+probe-run shim was deleted in v0.4.36) — sweeps both ``topic_probe`` and
 ``seed_agent`` mode rows whose ``status='running'`` predates
 ``RUN_ORPHAN_TTL_HOURS`` ago.
 """
@@ -76,10 +76,3 @@ async def test_gc_orphan_runs_returns_zero_when_no_orphans(db: AsyncSession) -> 
     from app.services.gc import _gc_orphan_runs
     n = await _gc_orphan_runs(db)
     assert n == 0
-
-
-async def test_probe_orphan_ttl_hours_is_alias_of_run_orphan_ttl_hours(db: AsyncSession) -> None:
-    """Backward-compat alias for the constant rename."""
-    from app.services.gc import PROBE_ORPHAN_TTL_HOURS, RUN_ORPHAN_TTL_HOURS
-    assert PROBE_ORPHAN_TTL_HOURS is RUN_ORPHAN_TTL_HOURS or \
-           PROBE_ORPHAN_TTL_HOURS == RUN_ORPHAN_TTL_HOURS

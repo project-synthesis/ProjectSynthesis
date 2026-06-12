@@ -45,10 +45,6 @@ logger = logging.getLogger(__name__)
 # marks them failed at startup. Runs are user-driven (typical <30min).
 RUN_ORPHAN_TTL_HOURS = 1
 
-# Backward-compat alias preserved for v0.4.18 (PR1). Deleted in PR2 once
-# the legacy ``_gc_orphan_probe_runs`` no-op stub is removed.
-PROBE_ORPHAN_TTL_HOURS = RUN_ORPHAN_TTL_HOURS
-
 
 def _utcnow() -> datetime:
     """Naive UTC now — matches the DateTime columns in models.py which store naive UTC."""
@@ -81,7 +77,6 @@ async def run_startup_gc(
             total += await _gc_stuck_pending_optimizations(write_db)  # v0.4.22 D1
             total += await _gc_archived_zero_member_clusters(write_db)
             total += await _gc_orphan_meta_patterns(write_db)
-            total += await _gc_orphan_probe_runs(write_db)  # legacy no-op (PR1; deleted PR2)
             # P3: _gc_orphan_runs sweeps ALL RunRow modes (topic_probe,
             # seed_agent, replay_run); query has no mode filter.
             total += await _gc_orphan_runs(write_db)
@@ -109,7 +104,6 @@ async def run_startup_gc(
     total_cleaned += await _gc_stuck_pending_optimizations(db)  # v0.4.22 D1
     total_cleaned += await _gc_archived_zero_member_clusters(db)
     total_cleaned += await _gc_orphan_meta_patterns(db)
-    total_cleaned += await _gc_orphan_probe_runs(db)  # legacy no-op (PR1; deleted PR2)
     total_cleaned += await _gc_orphan_runs(db)  # P3: sweeps all RunRow modes (topic_probe + seed_agent + replay_run)
     total_cleaned += await _gc_orphan_repo_index_runs(db)
     # v0.4.12: defense-in-depth against test-leak (Optimization rows
@@ -318,26 +312,6 @@ async def _gc_orphan_meta_patterns(db: AsyncSession) -> int:
     return count
 
 
-async def _gc_orphan_probe_runs(db: AsyncSession) -> int:
-    """Legacy alias — superseded by ``_gc_orphan_runs`` in Foundation P3 (v0.4.18).
-
-    Returns 0; the unified ``_gc_orphan_runs`` sweep covers both
-    ``topic_probe`` and ``seed_agent`` mode rows on the unified
-    ``run_row`` table. The signature is preserved (``db: AsyncSession) -> int``)
-    so the helper still composes inside ``run_startup_gc._do_sweep`` without
-    behavioural drift, and one downstream test
-    (``tests/test_gc.py::TestGCOrphanProbeRuns``) still pins the no-op contract.
-
-    Pre-Cycle 14 (v0.4.18 PR1) this helper had to be a no-op specifically to
-    avoid double-processing — the Python-alias subclass ``ProbeRun`` selected
-    ALL ``run_row`` rows regardless of mode (no STI discriminator filter), so
-    a real implementation here plus ``_gc_orphan_runs`` would have UPDATEd the
-    same row set twice. PR2 retires the alias entirely; the no-op body is now
-    just a back-compat shim until the helper itself is deleted.
-    """
-    return 0
-
-
 async def _gc_orphan_runs(
     db: AsyncSession,
     *,
@@ -351,7 +325,8 @@ async def _gc_orphan_runs(
             flows into the log line so ops can distinguish boot cleanups
             from mid-uptime cleanups for stuck-row forensics.
 
-    Foundation P3 (v0.4.18) — supersedes ``_gc_orphan_probe_runs``. Sweeps
+    Foundation P3 (v0.4.18) — the unified sweep; its legacy probe-run
+    predecessor was deleted in v0.4.36. Sweeps
     **all RunRow modes** in one pass (``topic_probe``, ``seed_agent``,
     ``replay_run``, and any future mode) — the query has no mode filter, so
     every row in ``status='running'`` past TTL gets flipped to ``failed``.
@@ -370,7 +345,7 @@ async def _gc_orphan_runs(
 
     Caller is responsible for committing — composes inside
     ``run_startup_gc._do_sweep`` batched commit. Mirrors the
-    ``_gc_failed_optimizations`` / legacy ``_gc_orphan_probe_runs`` pattern.
+    ``_gc_failed_optimizations`` pattern.
 
     Idempotent: safe to call on a DB with no orphan rows.
 
@@ -413,7 +388,7 @@ async def _gc_orphan_repo_index_runs(db: AsyncSession) -> int:
 
     Outer caller (``run_startup_gc``) commits at the end of the sweep —
     this helper does NOT commit internally, matching the
-    ``_gc_orphan_probe_runs`` convention.
+    ``_gc_orphan_runs`` convention.
 
     Cycle 2 will additionally:
       * publish ``index_phase_changed`` SSE per stuck row,
