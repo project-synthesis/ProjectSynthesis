@@ -13,6 +13,7 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ### Fixed
 - Corrected the `_build_passthrough_fallback_pending` docstring to reference `rate_limit_meta.rate_limited` (the actual attribute) instead of the nonexistent `heuristic_flags.rate_limited`.
+- Fixed a CI-only `Illegal instruction` crash (exit 132) in the HNSW-backend tests: `hnswlib` ships sdist-only and compiled with `-march=native`, so the shared pip cache served CPU-specific wheels to runners lacking those instructions. Both workflows now build it with `HNSWLIB_NO_NATIVE=1` (portable binary) and the cache key was busted via `requirements.txt`.
 - Corrected `[tool.ruff] target-version` from `py314` to `py312` to match the actual runtime — under the previous setting `ruff format` rewrote `except (A, B):` clauses to the PEP 758 bare form, a SyntaxError on Python 3.12.
 
 ### Removed

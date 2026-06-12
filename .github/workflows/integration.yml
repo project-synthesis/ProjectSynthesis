@@ -23,5 +23,11 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      # HNSWLIB_NO_NATIVE: hnswlib ships sdist-only; without this flag its
+      # setup.py compiles with -march=native, and the pip cache then serves
+      # a CPU-specific wheel to runners lacking those instructions (SIGILL,
+      # exit 132 — observed 2026-06-12 in embedding_index HNSW-backend tests).
       - run: pip install -r requirements.txt
+        env:
+          HNSWLIB_NO_NATIVE: "1"
       - run: pytest tests/test_integration.py -q --tb=short
