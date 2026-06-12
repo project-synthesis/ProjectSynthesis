@@ -54,7 +54,7 @@ import {
   type ValidationSuiteOut,
 } from '$lib/api/suites';
 import { getHealth } from '$lib/api/client';
-import { checkOptimizationsExist } from '$lib/api/optimizations';
+import { checkOptimizationsExist, MAX_BULK } from '$lib/api/optimizations';
 import { getRun, type RunListResponse, type RunResult } from '$lib/api/runs';
 
 /** Mirrors backend `RegressionAlarmEntry`. */
@@ -160,32 +160,54 @@ class SuitesStore {
    * baseline vs latest and surface warnings.
    */
   async loadDetail(suiteId: string): Promise<void> {
+    // Unknown-state contract: reset liveness at ENTRY so the UI renders
+    // NEITHER tombstones NOR history links during the round-trip — a
+    // stale alive-set from the previously selected suite must never
+    // describe the new one.
+    this.aliveOriginalIds = null;
+    this.originalTraceIds = {};
     try {
       const [detail, replays] = await Promise.all([
         getSuite(suiteId),
         getSuiteReplays(suiteId),
       ]);
+      // Stale-selection bail after every await (generation-guard
+      // precedent: RunsPanel `requestId` / observatory `_fetchGeneration`).
+      // `select()` sets `selectedSuiteId` synchronously BEFORE delegating
+      // here, so a mismatch means the user switched suites mid-flight and
+      // this response describes a suite no longer on screen — discard.
+      if (this.selectedSuiteId !== suiteId) return;
       this.detail = detail;
       this.replays = replays;
 
-      // v0.4.37 §4.4 — once-per-selection liveness check (deduped,
-      // capped at the endpoint's 100-id boundary).
+      // v0.4.37 §4.4 — once-per-selection liveness check (deduped).
       const refIds = Array.from(
         new Set(
           (detail.prompts_snapshot ?? [])
             .map((p) => p.original_optimization_id)
             .filter((id): id is string => !!id),
         ),
-      ).slice(0, 100);
+      );
       if (refIds.length === 0) {
         this.aliveOriginalIds = new Set();
         this.originalTraceIds = {};
+      } else if (refIds.length > MAX_BULK) {
+        // Above the endpoint's 100-id bulk boundary, degrade the WHOLE
+        // suite's liveness to unknown (the entry reset already holds:
+        // null alive-set + empty trace map → no tombstones, no history
+        // links) rather than slice the list and lie about an arbitrary
+        // subset. Suites cap at 25 prompts in practice, so this branch
+        // is a hard-boundary defense only — chunked multi-call
+        // resolution is YAGNI until a real surface produces >100
+        // distinct originals.
       } else {
         try {
           const exists = await checkOptimizationsExist(refIds);
+          if (this.selectedSuiteId !== suiteId) return;
           this.aliveOriginalIds = new Set(exists.alive);
           this.originalTraceIds = exists.trace_ids;
         } catch {
+          if (this.selectedSuiteId !== suiteId) return;
           // Best-effort — degrade to "unknown" (no tombstones, no links).
           this.aliveOriginalIds = null;
           this.originalTraceIds = {};
@@ -201,8 +223,11 @@ class SuitesStore {
       );
       if (latestTerminal) {
         try {
-          this.latestReplay = await getRun(latestTerminal.id);
+          const latest = await getRun(latestTerminal.id);
+          if (this.selectedSuiteId !== suiteId) return;
+          this.latestReplay = latest;
         } catch {
+          if (this.selectedSuiteId !== suiteId) return;
           // Detail fetch is best-effort — the panel still renders the
           // baseline + replay-history without warnings if /api/runs/{id}
           // is transiently unavailable.
@@ -212,6 +237,8 @@ class SuitesStore {
         this.latestReplay = null;
       }
     } catch (err) {
+      // A stale failure must not surface as the CURRENT suite's error.
+      if (this.selectedSuiteId !== suiteId) return;
       this.error = err instanceof Error ? err.message : 'Failed to load suite detail';
     }
   }
