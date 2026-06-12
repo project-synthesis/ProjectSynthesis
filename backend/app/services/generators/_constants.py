@@ -25,4 +25,16 @@ PROBE_PROMPT_CONCURRENCY: Final[Mapping[str, int]] = MappingProxyType(dict(BATCH
 # Fallback when a generator passes an unknown tier label.
 DEFAULT_PROMPT_CONCURRENCY: Final[int] = 5
 
-__all__ = ["DEFAULT_PROMPT_CONCURRENCY", "PROBE_PROMPT_CONCURRENCY"]
+# v0.4.37 §3.1 — replay output capture caps. DB p99 of optimized_prompt
+# ≈ 5.7K chars (max observed 7.1K) — 20K is comfortable headroom. Observed
+# max changes_summary is 5,492 chars — a 4K cap would truncate real data
+# today, hence 8K.
+REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS: Final[int] = 20_000
+REPLAY_CHANGES_SUMMARY_MAX_CHARS: Final[int] = 8_000
+
+__all__ = [
+    "DEFAULT_PROMPT_CONCURRENCY",
+    "PROBE_PROMPT_CONCURRENCY",
+    "REPLAY_CHANGES_SUMMARY_MAX_CHARS",
+    "REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS",
+]

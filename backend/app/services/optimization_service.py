@@ -13,12 +13,13 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import asc, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Optimization
+from app.models import Optimization, ValidationSuite
+from app.services.audit_logger import log_event
 from app.services.event_bus import event_bus
 
 if TYPE_CHECKING:
@@ -40,6 +41,23 @@ class DeleteOptimizationsResult:
     deleted: int = 0
     affected_cluster_ids: set[str] = field(default_factory=set)
     affected_project_ids: set[str] = field(default_factory=set)
+
+
+class SuiteReferencedError(Exception):
+    """A non-forced delete targeted ids referenced by LIVE validation suites.
+
+    v0.4.37 §3.3. ``blocked`` carries one entry per (optimization, suite)
+    pair: ``{"optimization_id": ..., "suite_id": ..., "suite_label": ...}``.
+    Routers map this to a 409 with the structured envelope; the MCP handler
+    re-raises it as a user-facing ValueError.
+    """
+
+    def __init__(self, blocked: list[dict[str, str]]) -> None:
+        self.blocked = blocked
+        super().__init__(
+            f"{len(blocked)} optimization reference(s) held by live validation suites"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -303,6 +321,8 @@ class OptimizationService:
         ids: list[str],
         *,
         reason: str = "user_request",
+        source: Literal["api_single", "api_bulk", "mcp"],
+        force: bool = False,
     ) -> DeleteOptimizationsResult:
         """Delete optimizations by id and cascade to all dependents.
 
@@ -330,6 +350,17 @@ class OptimizationService:
                 downstream consumers and audit trails
                 (e.g. ``"user_request"``, ``"bulk_reset"``,
                 ``"gc_sweep"``).
+            source: Caller identity threaded by the three delete surfaces
+                (v0.4.37 §3.3) so the audit write happens INSIDE this
+                chokepoint — no three-site drift. Required keyword.
+            force: Override the live-suite provenance guard. Forced deletes
+                are audited with ``forced: true`` + the overridden
+                ``suite_refs``.
+
+        Raises:
+            SuiteReferencedError: when ``force`` is False and any requested
+                id (whose row still exists — dead refs protect nothing) is
+                referenced by a live suite's ``prompts_snapshot``.
 
         Returns:
             ``DeleteOptimizationsResult`` with ``deleted`` count and the set
@@ -360,6 +391,49 @@ class OptimizationService:
                 result.affected_cluster_ids.add(cluster_id)
             if project_id:
                 result.affected_project_ids.add(project_id)
+
+        # ------------------------------------------------------------------
+        # v0.4.37 §3.3 — provenance guard. Intersect live suites' snapshot
+        # references with the requested ids. ``rows`` only contains ids
+        # whose Optimization row still exists, so dead references
+        # (snapshots pointing at already-deleted rows) can never block
+        # (AC-6) and the single-delete 404-first probe stays consistent.
+        # Suites are few (single-digit) and snapshots small — a per-call
+        # Python loop over live suites needs no index.
+        # ------------------------------------------------------------------
+        existing_ids = {opt_id for opt_id, _, _ in rows}
+        suite_refs: list[dict[str, str]] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        suite_rows = (
+            await self._session.execute(
+                select(
+                    ValidationSuite.id,
+                    ValidationSuite.label,
+                    ValidationSuite.prompts_snapshot,
+                ).where(ValidationSuite.retired_at.is_(None))
+            )
+        ).all()
+        for suite_id, suite_label, prompts_snapshot in suite_rows:
+            for entry in prompts_snapshot or []:
+                ref = entry.get("original_optimization_id")
+                if ref and ref in existing_ids and (ref, suite_id) not in seen_pairs:
+                    seen_pairs.add((ref, suite_id))
+                    suite_refs.append({
+                        "optimization_id": ref,
+                        "suite_id": suite_id,
+                        "suite_label": suite_label,
+                    })
+        if suite_refs and not force:
+            blocked_ids = sorted({r["optimization_id"] for r in suite_refs})
+            # Denials are NOT audited (nothing was deleted; the 409 body
+            # tells the caller everything) — they get this ops-visibility
+            # warning instead (spec §3.4).
+            logger.warning(
+                "Delete blocked by live suite reference(s) "
+                "(source=%s, force=False): %d id(s) across %d reference(s): %s",
+                source, len(blocked_ids), len(suite_refs), blocked_ids,
+            )
+            raise SuiteReferencedError(suite_refs)
 
         # ------------------------------------------------------------------
         # v0.4.13 cycle 8: route the DELETE + commit through the
@@ -438,6 +512,32 @@ class OptimizationService:
                     "affected_projects": list(result.affected_project_ids),
                 },
             )
+
+        # ------------------------------------------------------------------
+        # v0.4.37 §3.4 — audit trail. ONE row per completed user-initiated
+        # delete operation (not per id), written INSIDE the chokepoint so
+        # the three surfaces cannot drift. ``suite_refs`` is populated only
+        # on forced deletes that overrode the guard (non-forced deletes
+        # that reach this line had zero live references by construction).
+        # Best-effort: an audit failure must not undo a committed delete.
+        # ------------------------------------------------------------------
+        if result.deleted > 0:
+            try:
+                await log_event(
+                    self._session if self._write_queue is None else None,
+                    "optimizations_deleted",
+                    detail={
+                        "ids_count": len(ids),
+                        "ids": list(ids[:20]),
+                        "reason": reason,
+                        "source": source,
+                        "forced": force,
+                        "suite_refs": suite_refs,
+                    },
+                    write_queue=self._write_queue,
+                )
+            except Exception:  # noqa: BLE001 — delete already committed
+                logger.exception("audit write for optimizations_deleted failed")
 
         logger.info(
             "Deleted %d optimizations (requested=%d, reason=%s, clusters=%d)",

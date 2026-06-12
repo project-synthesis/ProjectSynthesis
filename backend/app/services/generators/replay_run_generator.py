@@ -63,6 +63,8 @@ from app.services.generators._aggregate import compute_run_aggregate
 from app.services.generators._constants import (
     DEFAULT_PROMPT_CONCURRENCY,
     PROBE_PROMPT_CONCURRENCY,
+    REPLAY_CHANGES_SUMMARY_MAX_CHARS,
+    REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS,
 )
 from app.services.generators.base import GeneratorResult
 
@@ -481,6 +483,9 @@ class ReplayRunGenerator:
                             "task_type": None,
                             "intent_label": intent_fallback,
                             "divergence_flags": None,
+                            "optimized_prompt": None,
+                            "changes_summary": None,
+                            "output_truncated": False,
                             "baseline_overall": baseline_overall,
                             "delta": None,
                             "status": "failed",
@@ -577,6 +582,21 @@ class ReplayRunGenerator:
         )
 
 
+def _truncate_output_field(value: Any, cap: int) -> tuple[str | None, bool]:
+    """Clamp an output field to ``cap`` chars (spec §3.1).
+
+    Returns ``(clamped_value, was_truncated)``. ``None`` passes through
+    untouched — score-less rows have no output by construction and the
+    key-presence discriminator needs the literal ``None``.
+    """
+    if value is None:
+        return None, False
+    text = str(value)
+    if len(text) > cap:
+        return text[:cap], True
+    return text, False
+
+
 def _rate_limited_row(
     *,
     idx: int,
@@ -602,6 +622,9 @@ def _rate_limited_row(
         "task_type": None,
         "intent_label": intent_label,
         "divergence_flags": None,
+        "optimized_prompt": None,
+        "changes_summary": None,
+        "output_truncated": False,
         "baseline_overall": baseline_overall,
         "delta": None,
         "status": "failed",
@@ -642,6 +665,9 @@ def _project_pending_to_result(
       sign of delta is the regression-direction signal.
     * Status mirrors ``pending.status`` so the aggregate's
       completed/failed counts honour rate-limit fallback rows.
+    * v0.4.37 §3.1: ``optimized_prompt`` (≤20,000 chars) +
+      ``changes_summary`` (≤8,000 chars) + ``output_truncated`` —
+      key-presence discriminator vs pre-v0.4.37 rows.
 
     Parameters
     ----------
@@ -675,6 +701,19 @@ def _project_pending_to_result(
         "conciseness": getattr(pending, "score_conciseness", None),
     }
 
+    # v0.4.37 §3.1 — output capture. Post-v0.4.37 rows ALWAYS carry both
+    # keys (None for score-less rows); pre-v0.4.37 rows lack the keys
+    # entirely. The frontend uses key presence to distinguish "not captured
+    # (old replay)" from "no output (rate-limited/failed)" (spec §4.1).
+    optimized_prompt, _opt_cut = _truncate_output_field(
+        getattr(pending, "optimized_prompt", None),
+        REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS,
+    )
+    changes_summary, _cs_cut = _truncate_output_field(
+        getattr(pending, "changes_summary", None),
+        REPLAY_CHANGES_SUMMARY_MAX_CHARS,
+    )
+
     return {
         "raw_prompt_idx": idx,
         "raw_prompt": raw_prompt[:1000],
@@ -684,6 +723,9 @@ def _project_pending_to_result(
         "task_type": getattr(pending, "task_type", None),
         "intent_label": (getattr(pending, "intent_label", None) or intent_label_fallback),
         "divergence_flags": getattr(pending, "heuristic_flags", None),
+        "optimized_prompt": optimized_prompt,
+        "changes_summary": changes_summary,
+        "output_truncated": _opt_cut or _cs_cut,
         "baseline_overall": baseline_overall,
         "delta": delta,
         "status": getattr(pending, "status", "completed"),
