@@ -18,8 +18,9 @@ of the connection, remaining active across all pool checkouts and post-commit qu
 
 # Write architecture (v0.4.13+, class retired v0.4.36)
 
-ALL writes route through the ``WriteQueue`` worker against the dedicated
-``writer_engine`` (pool_size=1) — see ``services/write_queue.py``. The
+All writes outside the two allow-listed paths below route through the
+``WriteQueue`` worker against the dedicated ``writer_engine``
+(pool_size=1) — see ``services/write_queue.py``. The
 read engine serves SELECT-only sessions; WAL allows unlimited concurrent
 readers. The read-engine audit hook (below) RAISEs on any drift write
 outside the ``migration_mode`` / ``cold_path_mode`` allow-list
