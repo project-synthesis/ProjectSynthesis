@@ -480,6 +480,13 @@ class TestReentrancy:
 class TestAuditHook:
     @pytest.mark.asyncio
     async def test_install_idempotent_via_explicit_uninstall(self, writer_engine_inmem):
+        # v0.4.36 hermetic guard: any earlier test that drives the real MCP
+        # lifespan (e.g. via the in-memory fastmcp Client) installs the
+        # read-engine audit hook process-once (spec §4.3 AC-13) and — per the
+        # singleton invariant — never uninstalls it. Clear any such leaked
+        # listener so this test pins install/uninstall semantics rather than
+        # suite ordering. Idempotent no-op when nothing is installed.
+        uninstall_read_engine_audit_hook()
         install_read_engine_audit_hook(writer_engine_inmem)
         try:
             with pytest.raises(RuntimeError, match="already installed"):
