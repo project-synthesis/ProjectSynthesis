@@ -144,4 +144,58 @@ describe('EditorStore', () => {
       expect(editorStore.activeFeedback).toBeNull();
     });
   });
+
+  describe('openInlineDiff (v0.4.37)', () => {
+    const payload = {
+      key: 'suite-1:0',
+      title: 'my-suite #0',
+      before: 'baseline output',
+      after: 'latest output',
+      beforeLabel: 'BASELINE',
+      afterLabel: 'LATEST',
+    };
+
+    it('opens a diff-type tab with id diff-inline-${key} and ~ title prefix', () => {
+      editorStore.openInlineDiff(payload);
+      const tab = editorStore.tabs.find((t) => t.id === 'diff-inline-suite-1:0');
+      expect(tab).toBeDefined();
+      expect(tab?.type).toBe('diff');
+      expect(tab?.title).toBe('~ my-suite #0');
+      expect(editorStore.activeTabId).toBe('diff-inline-suite-1:0');
+    });
+
+    it('exposes the payload via getInlineDiff keyed by tab id', () => {
+      editorStore.openInlineDiff(payload);
+      expect(editorStore.getInlineDiff('diff-inline-suite-1:0')).toEqual(payload);
+      // Row-backed diff tabs have no inline payload.
+      expect(editorStore.getInlineDiff('diff-opt-1')).toBeNull();
+    });
+
+    it('reopening the same key reactivates instead of duplicating', () => {
+      editorStore.openInlineDiff(payload);
+      editorStore.setActive(PROMPT_TAB_ID);
+      editorStore.openInlineDiff({ ...payload, after: 'newer output' });
+      const matches = editorStore.tabs.filter((t) => t.id === 'diff-inline-suite-1:0');
+      expect(matches).toHaveLength(1);
+      expect(editorStore.activeTabId).toBe('diff-inline-suite-1:0');
+      // Latest payload wins so a re-replayed suite diffs fresh content.
+      expect(editorStore.getInlineDiff('diff-inline-suite-1:0')?.after).toBe('newer output');
+    });
+
+    it('closeTab cleans the inline payload cache', () => {
+      editorStore.openInlineDiff(payload);
+      editorStore.closeTab('diff-inline-suite-1:0');
+      expect(editorStore.getInlineDiff('diff-inline-suite-1:0')).toBeNull();
+      expect(editorStore.tabs.find((t) => t.id === 'diff-inline-suite-1:0')).toBeUndefined();
+    });
+
+    it('closeAllResults and _reset clear inline payloads', () => {
+      editorStore.openInlineDiff(payload);
+      editorStore.closeAllResults();
+      expect(editorStore.getInlineDiff('diff-inline-suite-1:0')).toBeNull();
+      editorStore.openInlineDiff(payload);
+      editorStore._reset();
+      expect(editorStore.getInlineDiff('diff-inline-suite-1:0')).toBeNull();
+    });
+  });
 });

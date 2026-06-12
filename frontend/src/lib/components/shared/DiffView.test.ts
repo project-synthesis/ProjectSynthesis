@@ -73,6 +73,17 @@ describe('DiffView', () => {
     expect(screen.getByText('-0')).toBeInTheDocument();
   });
 
+  it('split headers render custom originalLabel / optimizedLabel props', async () => {
+    const user = userEvent.setup();
+    render(DiffView, {
+      props: { original, optimized, originalLabel: 'BASELINE', optimizedLabel: 'LATEST' },
+    });
+    await user.click(screen.getByRole('button', { name: /split/i }));
+    expect(screen.getByText('BASELINE')).toBeInTheDocument();
+    expect(screen.getByText('LATEST')).toBeInTheDocument();
+    expect(screen.queryByText('ORIGINAL')).not.toBeInTheDocument();
+  });
+
   it('renders line markers in unified mode', () => {
     render(DiffView, { props: { original: 'old line\n', optimized: 'new line\n' } });
     // "-" marker for removed and "+" marker for added lines in unified table cells

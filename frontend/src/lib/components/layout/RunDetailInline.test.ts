@@ -110,4 +110,90 @@ describe('RunDetailInline', () => {
     const { findByText } = render(RunDetailInline, { run });
     await findByText(/Replay in progress/);
   });
+
+  it('v0.4.37: replay branch lists per-prompt rows with score and status', async () => {
+    vi.spyOn(runsApi, 'getRun').mockResolvedValue(makeFull({
+      mode: 'replay_run',
+      suite_id: 'suite-9',
+      aggregate: { mean_overall: 7.2 },
+      prompt_results: [
+        { raw_prompt_idx: 0, overall_score: 7.5, intent_label: 'general',
+          status: 'completed', raw_prompt: 'replay prompt zero',
+          dimensions: { clarity: 7.5 }, optimized_prompt: 'out', changes_summary: 'tightened' },
+        { raw_prompt_idx: 1, overall_score: null, intent_label: null,
+          status: 'failed', raw_prompt: 'replay prompt one',
+          dimensions: null, optimized_prompt: null, changes_summary: null },
+      ],
+    } as Partial<RunResult>));
+    const run: RunSummary = {
+      id: 'rr-rp', mode: 'replay_run', status: 'completed',
+      started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
+      project_id: null, repo_full_name: null, topic: null, intent_hint: null,
+      prompts_generated: 2,
+    };
+    const { container } = render(RunDetailInline, { props: { run } });
+    await waitFor(() => {
+      expect(container.querySelectorAll('[data-test="replay-prompt-row"]')).toHaveLength(2);
+    });
+    const rows = container.querySelectorAll('[data-test="replay-prompt-row"]');
+    expect(rows[0].textContent).toContain('7.5');
+    expect(rows[0].textContent).toContain('general');
+    expect(rows[1].textContent).toContain('failed');
+  });
+
+  it('v0.4.37: expanding a replay row shows raw_prompt + changes_summary', async () => {
+    vi.spyOn(runsApi, 'getRun').mockResolvedValue(makeFull({
+      mode: 'replay_run', suite_id: 's', aggregate: { mean_overall: 7.2 },
+      prompt_results: [
+        { raw_prompt_idx: 0, overall_score: 7.5, status: 'completed',
+          raw_prompt: 'expandable raw prompt', dimensions: { clarity: 7.0 },
+          optimized_prompt: 'o', changes_summary: 'restructured sections' },
+      ],
+    } as Partial<RunResult>));
+    const run: RunSummary = {
+      id: 'rr-ex', mode: 'replay_run', status: 'completed',
+      started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
+      project_id: null, repo_full_name: null, topic: null, intent_hint: null,
+      prompts_generated: 1,
+    };
+    const { container } = render(RunDetailInline, { props: { run } });
+    await waitFor(() => {
+      expect(container.querySelector('[data-test="replay-prompt-row"]')).not.toBeNull();
+    });
+    (container.querySelector('[data-test="replay-prompt-row"] button') as HTMLElement).click();
+    await waitFor(() => {
+      const body = container.querySelector('[data-test="replay-prompt-body"]');
+      expect(body?.textContent).toContain('expandable raw prompt');
+      expect(body?.textContent).toContain('restructured sections');
+      expect(body?.textContent).toContain('clarity 7.0');
+    });
+  });
+
+  it('v0.4.37: pre-v0.4.37 replay rows render without output affordances', async () => {
+    vi.spyOn(runsApi, 'getRun').mockResolvedValue(makeFull({
+      mode: 'replay_run', suite_id: 's', aggregate: { mean_overall: 7.2 },
+      prompt_results: [
+        // Pre-v0.4.37 shape: NO optimized_prompt / changes_summary keys.
+        { raw_prompt_idx: 0, overall_score: 7.5, status: 'completed',
+          raw_prompt: 'old replay prompt', dimensions: { clarity: 7.0 } },
+      ],
+    } as Partial<RunResult>));
+    const run: RunSummary = {
+      id: 'rr-old', mode: 'replay_run', status: 'completed',
+      started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
+      project_id: null, repo_full_name: null, topic: null, intent_hint: null,
+      prompts_generated: 1,
+    };
+    const { container } = render(RunDetailInline, { props: { run } });
+    await waitFor(() => {
+      expect(container.querySelector('[data-test="replay-prompt-row"]')).not.toBeNull();
+    });
+    (container.querySelector('[data-test="replay-prompt-row"] button') as HTMLElement).click();
+    await waitFor(() => {
+      const body = container.querySelector('[data-test="replay-prompt-body"]');
+      expect(body?.textContent).toContain('old replay prompt');
+      // No changes-summary section, no dead affordances.
+      expect(container.querySelector('[data-test="replay-prompt-changes"]')).toBeNull();
+    });
+  });
 });
