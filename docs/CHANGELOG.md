@@ -4,6 +4,16 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- **Replay runs capture their optimized outputs** — every replay `prompt_results[]` row now persists `optimized_prompt` (≤20,000 chars) and `changes_summary` (≤8,000 chars) plus an `output_truncated` flag; rate-limited and failed rows carry both keys with `null` values so consumers can distinguish "no output" from "not captured (pre-v0.4.37 replay)" by key presence.
+- **Self-contained suite snapshots** — `prompts_snapshot[]` entries gain `baseline_optimized_prompt`: the source optimization's full-length output (≤20,000 chars, fetched from the `Optimization` row — not the run's 1,000-char excerpt) captured at save time so provenance survives row deletion. Additive JSON, no migration; pre-v0.4.37 suites degrade gracefully.
+- **Provenance guard on optimization deletes** — deleting an optimization referenced by a live validation suite returns 409 with a structured `{error: "suite_referenced", blocked, hint}` envelope on both REST surfaces and a matching error from `synthesis_delete`, unless `force=true`. Dead references (suites pointing at already-deleted rows) never block. Denials emit a `logger.warning`.
+- **Optimization-delete audit trail** — every completed user-initiated delete (REST single, REST bulk, MCP) writes one `audit_log` row (`action='optimizations_deleted'`) with ids, reason, caller source, `forced` flag, and any overridden suite references. GC sweeps stay on their existing `GC[phase]:` log convention.
+- **`POST /api/optimizations/exists`** — batched liveness check (≤100 ids) returning the alive subset plus a `trace_ids` map; backs the suite-detail tombstone and OPEN IN HISTORY affordances.
+
+### Changed
+- `synthesis_delete` now routes its write through the MCP-process WriteQueue (previously a legacy read-engine commit) and gains a `force` argument.
+
 ### Fixed
 - **SuiteDetailView per-prompt diff table rendered `—` for every LATEST/Δ cell** — the component joined baseline rows against `prompt_results[].prompt_index`, but replay rows have always carried `raw_prompt_idx` (the generator's slot index), so the keyed lookup never matched. The join now keys on `raw_prompt_idx` with `prompt_index` tolerated as a legacy alias; the `RunResult` type and the test fixture were corrected to the production shape (the fixture's wrong key is why unit tests passed while production rendered em-dashes). Latent since the view shipped — surfaced by the first successful suite replay during v0.4.36 live verification.
 
