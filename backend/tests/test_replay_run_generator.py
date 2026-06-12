@@ -77,6 +77,10 @@ import app.services.generators.replay_run_generator as replay_mod
 from app.models import Base, ValidationSuite
 from app.schemas.runs import RunRequest
 from app.services.batch_pipeline import PendingOptimization
+from app.services.generators._constants import (
+    REPLAY_CHANGES_SUMMARY_MAX_CHARS,
+    REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS,
+)
 from app.services.generators.base import GeneratorResult, RunGenerator
 
 # The not-yet-existing module — every import below raises
@@ -1378,3 +1382,98 @@ async def test_concurrency_one_is_observationally_sequential(
     assert [e["idx"] for e in events] == list(range(n))      # in order
     assert [e["current"] for e in events] == [i + 1 for i in range(n)]
     assert result.terminal_status == "completed"
+
+
+# ===========================================================================
+# v0.4.37 Cycle 1 — replay output capture (spec §3.1, AC-1 + AC-2)
+# ===========================================================================
+
+
+async def test_output_capture_caps_contract() -> None:
+    """AC-1/AC-2 precondition: caps live in generators/_constants.py with the
+    spec-locked values (20_000 / 8_000)."""
+    assert REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS == 20_000
+    assert REPLAY_CHANGES_SUMMARY_MAX_CHARS == 8_000
+
+
+async def test_projection_carries_output_fields() -> None:
+    """AC-1: a scored pending's optimized_prompt + changes_summary survive
+    projection un-truncated, with output_truncated=False."""
+    pending = _build_pending(idx=0)
+    pending.optimized_prompt = "optimized text body"
+    pending.changes_summary = "made it better"
+
+    row = replay_mod._project_pending_to_result(
+        idx=0, raw_prompt="raw", pending=pending, baseline_overall=None,
+    )
+    assert row["optimized_prompt"] == "optimized text body"
+    assert row["changes_summary"] == "made it better"
+    assert row["output_truncated"] is False
+
+
+async def test_projection_truncates_at_caps_and_flags() -> None:
+    """AC-2: a 25,000-char output persists exactly 20,000 chars and a
+    9,000-char changes_summary persists exactly 8,000, with
+    output_truncated=True."""
+    pending = _build_pending(idx=0)
+    pending.optimized_prompt = "x" * 25_000
+    pending.changes_summary = "y" * 9_000
+
+    row = replay_mod._project_pending_to_result(
+        idx=0, raw_prompt="raw", pending=pending, baseline_overall=None,
+    )
+    assert len(row["optimized_prompt"]) == 20_000
+    assert len(row["changes_summary"]) == 8_000
+    assert row["output_truncated"] is True
+
+
+async def test_rate_limited_row_carries_none_output_keys() -> None:
+    """AC-1 key-presence discriminator: score-less rate-limited rows carry
+    BOTH keys with None values (post-v0.4.37 rows always have the keys)."""
+    row = replay_mod._rate_limited_row(
+        idx=0, raw_prompt="raw", baseline_overall=None, intent_label=None,
+    )
+    assert "optimized_prompt" in row and row["optimized_prompt"] is None
+    assert "changes_summary" in row and row["changes_summary"] is None
+    assert row["output_truncated"] is False
+
+
+async def test_failed_row_envelope_carries_none_output_keys(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-1: the inline failed-row envelope (per-prompt exception path)
+    carries both keys with None values — end-to-end through run()."""
+    suite = await _seed_suite(db, n_prompts=1)
+    _patch_run_single_prompt(
+        monkeypatch, raises_at_idx={0: RuntimeError("boom")},
+    )
+    gen = _make_generator(write_queue=write_queue)
+    result = await gen.run(_make_request(suite_id=suite.id), run_id="run-f1")
+
+    row = result.prompt_results[0]
+    assert row["status"] == "failed"
+    assert "optimized_prompt" in row and row["optimized_prompt"] is None
+    assert "changes_summary" in row and row["changes_summary"] is None
+
+
+async def test_end_to_end_replay_rows_carry_output_keys(
+    db, write_queue, monkeypatch,
+) -> None:
+    """AC-1 happy path: every persisted prompt_results row carries the
+    output keys with real values."""
+    suite = await _seed_suite(db, n_prompts=2)
+    pendings = []
+    for i in range(2):
+        p = _build_pending(idx=i)
+        p.optimized_prompt = f"optimized {i}"
+        p.changes_summary = f"summary {i}"
+        pendings.append(p)
+    _patch_run_single_prompt(monkeypatch, pendings=pendings)
+    gen = _make_generator(write_queue=write_queue)
+    result = await gen.run(_make_request(suite_id=suite.id), run_id="run-h1")
+
+    assert result.terminal_status == "completed"
+    for i, row in enumerate(result.prompt_results):
+        assert row["optimized_prompt"] == f"optimized {i}"
+        assert row["changes_summary"] == f"summary {i}"
+        assert row["output_truncated"] is False

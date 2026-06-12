@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import (
+    AuditLog,
     Feedback,
     MetaPattern,
     Optimization,
@@ -24,9 +25,10 @@ from app.models import (
     PromptTemplate,
     RefinementBranch,
     RefinementTurn,
+    ValidationSuite,
 )
 from app.services.event_bus import event_bus
-from app.services.optimization_service import OptimizationService
+from app.services.optimization_service import OptimizationService, SuiteReferencedError
 from tests.conftest import drain_events_nonblocking
 
 
@@ -112,7 +114,9 @@ async def test_cascades_all_dependents(db_session):
     ids = await _seed_opt_with_dependents(db_session, cluster_id=cluster_id)
 
     svc = OptimizationService(db_session)
-    result = await svc.delete_optimizations([ids["opt_id"]], reason="test")
+    result = await svc.delete_optimizations(
+        [ids["opt_id"]], reason="test", source="api_bulk",
+    )
 
     assert result.deleted == 1
     assert result.affected_cluster_ids == {cluster_id}
@@ -170,7 +174,9 @@ async def test_nulls_template_source_optimization_id(db_session):
     template_id = template.id
 
     svc = OptimizationService(db_session)
-    result = await svc.delete_optimizations([opt_id], reason="test")
+    result = await svc.delete_optimizations(
+        [opt_id], reason="test", source="api_bulk",
+    )
     assert result.deleted == 1
 
     # Template survives; source_optimization_id is NULL.
@@ -214,7 +220,7 @@ async def test_emits_event_per_deleted_row(db_session):
     try:
         svc = OptimizationService(db_session)
         result = await svc.delete_optimizations(
-            [id_a, id_b], reason="bulk_reset",
+            [id_a, id_b], reason="bulk_reset", source="api_bulk",
         )
         assert result.deleted == 2
 
@@ -256,7 +262,9 @@ async def test_returns_affected_cluster_ids(db_session):
     id_b2 = (await _seed_opt_with_dependents(db_session, cluster_id=cluster_b))["opt_id"]
 
     svc = OptimizationService(db_session)
-    result = await svc.delete_optimizations([id_a, id_b1, id_b2])
+    result = await svc.delete_optimizations(
+        [id_a, id_b1, id_b2], source="api_bulk",
+    )
 
     assert result.deleted == 3
     assert result.affected_cluster_ids == {cluster_a, cluster_b}
@@ -266,7 +274,7 @@ async def test_unknown_ids_are_silently_skipped(db_session):
     """Deleting ids that don't exist returns 0 and emits no events."""
     svc = OptimizationService(db_session)
     result = await svc.delete_optimizations(
-        [str(uuid.uuid4()), str(uuid.uuid4())],
+        [str(uuid.uuid4()), str(uuid.uuid4())], source="api_bulk",
     )
     assert result.deleted == 0
     assert result.affected_cluster_ids == set()
@@ -275,7 +283,7 @@ async def test_unknown_ids_are_silently_skipped(db_session):
 async def test_empty_ids_is_noop(db_session):
     """Empty id list returns empty result without touching the DB."""
     svc = OptimizationService(db_session)
-    result = await svc.delete_optimizations([])
+    result = await svc.delete_optimizations([], source="api_bulk")
     assert result.deleted == 0
     assert result.affected_cluster_ids == set()
     assert result.affected_project_ids == set()
@@ -306,7 +314,7 @@ async def test_publishes_taxonomy_changed_on_bulk_delete(db_session):
     try:
         svc = OptimizationService(db_session)
         result = await svc.delete_optimizations(
-            [id_a, id_b], reason="bulk_reset",
+            [id_a, id_b], reason="bulk_reset", source="api_bulk",
         )
         assert result.deleted == 2
 
@@ -333,7 +341,9 @@ async def test_no_taxonomy_changed_event_when_nothing_deleted(db_session):
     event_bus._subscribers.add(queue)
     try:
         svc = OptimizationService(db_session)
-        result = await svc.delete_optimizations([str(uuid.uuid4())])
+        result = await svc.delete_optimizations(
+            [str(uuid.uuid4())], source="api_bulk",
+        )
         assert result.deleted == 0
 
         taxonomy_events = [
@@ -344,3 +354,185 @@ async def test_no_taxonomy_changed_event_when_nothing_deleted(db_session):
         event_bus._subscribers.discard(queue)
 
     assert taxonomy_events == []
+
+
+# ===========================================================================
+# v0.4.37 Cycle 1 — provenance guard + audit trail (spec §3.3 + §3.4)
+# ===========================================================================
+
+
+async def _seed_suite_row(
+    db_session,
+    *,
+    ref_ids: list[str],
+    label: str = "guard-suite",
+    retired: bool = False,
+) -> str:
+    """Insert a ValidationSuite whose snapshot references ``ref_ids``."""
+    suite_id = str(uuid.uuid4())
+    db_session.add(ValidationSuite(
+        id=suite_id,
+        source_run_id=None,
+        label=label,
+        prompts_snapshot=[
+            {
+                "raw_prompt": f"prompt for {rid}",
+                "intent_label": None,
+                "original_optimization_id": rid,
+            }
+            for rid in ref_ids
+        ],
+        baseline_scores={"mean_overall": 7.5, "per_prompt": []},
+        tolerance_abs=0.5,
+        created_at=_utcnow_naive(),
+        retired_at=_utcnow_naive() if retired else None,
+        retired_reason="test" if retired else None,
+    ))
+    await db_session.commit()
+    return suite_id
+
+
+async def _seed_plain_opt(db_session) -> str:
+    opt_id = str(uuid.uuid4())
+    db_session.add(Optimization(
+        id=opt_id, raw_prompt="raw", optimized_prompt="opt", status="completed",
+    ))
+    await db_session.commit()
+    return opt_id
+
+
+async def _audit_rows(db_session) -> list:
+    return list((await db_session.execute(
+        select(AuditLog).where(AuditLog.action == "optimizations_deleted")
+    )).scalars().all())
+
+
+async def test_delete_blocked_by_live_suite_reference_raises(
+    db_session, caplog,
+):
+    """AC-5 (service layer): non-forced delete of a live-suite-referenced id
+    raises SuiteReferencedError; nothing deleted; no audit row; warning logged."""
+    opt_id = await _seed_plain_opt(db_session)
+    suite_id = await _seed_suite_row(
+        db_session, ref_ids=[opt_id], label="blocking-suite",
+    )
+
+    svc = OptimizationService(db_session)
+    with caplog.at_level("WARNING"):
+        with pytest.raises(SuiteReferencedError) as exc_info:
+            await svc.delete_optimizations(
+                [opt_id], reason="test", source="api_bulk",
+            )
+
+    blocked = exc_info.value.blocked
+    assert blocked == [{
+        "optimization_id": opt_id,
+        "suite_id": suite_id,
+        "suite_label": "blocking-suite",
+    }]
+    # Nothing deleted.
+    survivor = (await db_session.execute(
+        select(Optimization).where(Optimization.id == opt_id)
+    )).scalar_one_or_none()
+    assert survivor is not None
+    # No audit row for denials.
+    assert await _audit_rows(db_session) == []
+    # Ops-visibility warning fired. Use getMessage() — caplog records do
+    # not pre-format the lazy %-style message into ``.message``.
+    assert any(
+        "suite reference" in r.getMessage().lower() for r in caplog.records
+    )
+
+
+async def test_dead_references_do_not_block(db_session):
+    """AC-6: refs whose Optimization rows no longer exist protect nothing —
+    an unrelated existing row deletes normally, and requesting the dead id
+    itself returns deleted=0 without raising."""
+    ghost_id = str(uuid.uuid4())  # never inserted — a dead reference
+    await _seed_suite_row(db_session, ref_ids=[ghost_id], label="orphan-suite")
+    live_id = await _seed_plain_opt(db_session)
+
+    svc = OptimizationService(db_session)
+    result = await svc.delete_optimizations(
+        [live_id], reason="test", source="api_bulk",
+    )
+    assert result.deleted == 1
+
+    result2 = await svc.delete_optimizations(
+        [ghost_id], reason="test", source="api_bulk",
+    )
+    assert result2.deleted == 0  # silent no-op, no SuiteReferencedError
+
+
+async def test_force_delete_overrides_guard_and_audits_suite_refs(db_session):
+    """AC-7 (service layer): force=True deletes a referenced row and the
+    audit row carries forced=True + populated suite_refs + source."""
+    opt_id = await _seed_plain_opt(db_session)
+    suite_id = await _seed_suite_row(
+        db_session, ref_ids=[opt_id], label="forced-suite",
+    )
+
+    svc = OptimizationService(db_session)
+    result = await svc.delete_optimizations(
+        [opt_id], reason="test", source="mcp", force=True,
+    )
+    assert result.deleted == 1
+
+    rows = await _audit_rows(db_session)
+    assert len(rows) == 1
+    detail = rows[0].detail
+    assert detail["forced"] is True
+    assert detail["source"] == "mcp"
+    assert detail["suite_refs"] == [{
+        "optimization_id": opt_id,
+        "suite_id": suite_id,
+        "suite_label": "forced-suite",
+    }]
+
+
+async def test_unreferenced_delete_writes_audit_row(db_session):
+    """AC-8: the common path behaves as today PLUS one audit row with
+    forced=False, suite_refs=[], and the correct source."""
+    opt_id = await _seed_plain_opt(db_session)
+
+    svc = OptimizationService(db_session)
+    result = await svc.delete_optimizations(
+        [opt_id], reason="user_request", source="api_single",
+    )
+    assert result.deleted == 1
+
+    rows = await _audit_rows(db_session)
+    assert len(rows) == 1
+    detail = rows[0].detail
+    assert detail["forced"] is False
+    assert detail["suite_refs"] == []
+    assert detail["source"] == "api_single"
+    assert detail["ids_count"] == 1
+    assert detail["ids"] == [opt_id]
+    assert detail["reason"] == "user_request"
+
+
+async def test_audit_is_one_row_per_operation_not_per_id(db_session):
+    """AC-8 + spec §6 risk table: bulk delete of N ids writes ONE audit row."""
+    ids = [await _seed_plain_opt(db_session) for _ in range(3)]
+
+    svc = OptimizationService(db_session)
+    result = await svc.delete_optimizations(
+        ids, reason="test", source="api_bulk",
+    )
+    assert result.deleted == 3
+    assert len(await _audit_rows(db_session)) == 1
+
+
+async def test_retired_suite_references_do_not_block(db_session):
+    """AC-9: the guard scans live suites only — retired-suite refs pass."""
+    opt_id = await _seed_plain_opt(db_session)
+    await _seed_suite_row(
+        db_session, ref_ids=[opt_id], label="retired-suite", retired=True,
+    )
+
+    svc = OptimizationService(db_session)
+    result = await svc.delete_optimizations(
+        [opt_id], reason="test", source="api_bulk",
+    )
+    assert result.deleted == 1

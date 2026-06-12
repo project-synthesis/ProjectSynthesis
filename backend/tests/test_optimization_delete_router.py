@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import select
 
-from app.models import Optimization, PromptCluster
+from app.models import AuditLog, Optimization, PromptCluster, ValidationSuite
 from app.services.event_bus import event_bus
 
 
@@ -146,3 +146,83 @@ async def test_delete_publishes_optimization_deleted_event(
     data = delete_events[0]["data"]
     assert data["id"] == opt_id
     assert data["reason"] == "user_request"
+
+
+# ===========================================================================
+# v0.4.37 Cycle 1 — provenance guard on DELETE /api/optimizations/{id}
+# ===========================================================================
+
+
+async def _seed_referencing_suite(db_session, opt_id: str, label: str) -> str:
+    suite_id = str(uuid.uuid4())
+    db_session.add(ValidationSuite(
+        id=suite_id,
+        source_run_id=None,
+        label=label,
+        prompts_snapshot=[{
+            "raw_prompt": "p",
+            "intent_label": None,
+            "original_optimization_id": opt_id,
+        }],
+        baseline_scores={"mean_overall": 7.0, "per_prompt": []},
+        tolerance_abs=0.5,
+        created_at=_utcnow_naive(),
+    ))
+    await db_session.commit()
+    return suite_id
+
+
+@pytest.mark.asyncio
+async def test_delete_referenced_returns_409_envelope(app_client, db_session):
+    """AC-5: 409 with the exact structured body at the response root;
+    nothing deleted."""
+    opt_id = await _seed_opt(db_session)
+    suite_id = await _seed_referencing_suite(db_session, opt_id, "rest-guard")
+
+    resp = await app_client.delete(f"/api/optimizations/{opt_id}")
+    assert resp.status_code == 409, resp.text
+    assert resp.json() == {
+        "error": "suite_referenced",
+        "blocked": [{
+            "optimization_id": opt_id,
+            "suite_id": suite_id,
+            "suite_label": "rest-guard",
+        }],
+        "hint": "retry with force=true or retire the suite",
+    }
+    survivor = (await db_session.execute(
+        select(Optimization).where(Optimization.id == opt_id)
+    )).scalar_one_or_none()
+    assert survivor is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_referenced_with_force_query_param_succeeds(
+    app_client, db_session,
+):
+    """AC-7: ?force=true overrides the guard on the single-delete surface.
+
+    RED-gate teeth: pre-GREEN the 200/deleted=1 half passes trivially —
+    FastAPI ignores unknown query params, so ``?force=true`` is a no-op
+    against the guard-less endpoint. The audit-row assertion is what makes
+    this test genuinely fail in RED (no ``optimizations_deleted`` audit
+    write exists anywhere pre-GREEN).
+    """
+    opt_id = await _seed_opt(db_session)
+    suite_id = await _seed_referencing_suite(db_session, opt_id, "rest-forced")
+
+    resp = await app_client.delete(f"/api/optimizations/{opt_id}?force=true")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted"] == 1
+    audit_rows = list((await db_session.execute(
+        select(AuditLog).where(AuditLog.action == "optimizations_deleted")
+    )).scalars().all())
+    assert len(audit_rows) == 1
+    detail = audit_rows[0].detail
+    assert detail["forced"] is True
+    assert detail["source"] == "api_single"
+    assert detail["suite_refs"] == [{
+        "optimization_id": opt_id,
+        "suite_id": suite_id,
+        "suite_label": "rest-forced",
+    }]

@@ -66,7 +66,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.models import Base, RunRow, ValidationSuite
+from app.models import Base, Optimization, RunRow, ValidationSuite
 
 # The two not-yet-existing modules — every import below raises
 # ``ModuleNotFoundError`` until Cycle 2 GREEN lands. Captured here at module
@@ -2105,3 +2105,90 @@ async def test_regression_alarm_transition_event_fires_on_state_change_only(
         f"tolerance replay overrides the prior firing one; got "
         f"{payload_d.get('new_state')!r}"
     )
+
+
+# ===========================================================================
+# v0.4.37 Cycle 1 — self-contained suite snapshots (spec §3.2, AC-3 + AC-4)
+# ===========================================================================
+
+
+async def _seed_optimization(
+    db: AsyncSession, *, opt_id: str, optimized_prompt: str | None,
+) -> None:
+    """Insert a minimal Optimization row the snapshot builder can fetch."""
+    db.add(Optimization(
+        id=opt_id,
+        raw_prompt="source raw prompt",
+        optimized_prompt=optimized_prompt,
+        status="completed",
+    ))
+    await db.commit()
+
+
+async def test_create_from_run_snapshot_carries_full_length_baseline_output(
+    db: AsyncSession, write_queue,
+) -> None:
+    """AC-3 + AC-4: a source Optimization whose optimized_prompt exceeds
+    1,000 chars snapshots in FULL — proving the builder fetched the
+    Optimization row, NOT the RunRow's 1,000-char result_text."""
+    full_output = "B" * 5_000  # > 1,000-char probe truncation, < 20,000 cap
+    opt_id = uuid.uuid4().hex
+    await _seed_optimization(db, opt_id=opt_id, optimized_prompt=full_output)
+
+    results = _prompt_results(3)
+    results[0]["optimization_id"] = opt_id
+    run = await _seed_run(
+        db, aggregate=_canonical_aggregate(), prompt_results=results,
+    )
+
+    svc = ValidationSuiteService()
+    out = await svc.create_from_run(
+        run.id, label="ac3-fidelity", write_queue=write_queue,
+    )
+
+    assert out.prompts_snapshot[0].baseline_optimized_prompt == full_output
+    assert len(out.prompts_snapshot[0].baseline_optimized_prompt) == 5_000
+
+
+async def test_create_from_run_snapshot_truncates_baseline_output_at_cap(
+    db: AsyncSession, write_queue,
+) -> None:
+    """AC-3: baseline_optimized_prompt is capped at 20,000 chars."""
+    opt_id = uuid.uuid4().hex
+    await _seed_optimization(db, opt_id=opt_id, optimized_prompt="C" * 25_000)
+
+    results = _prompt_results(3)
+    results[0]["optimization_id"] = opt_id
+    run = await _seed_run(
+        db, aggregate=_canonical_aggregate(), prompt_results=results,
+    )
+
+    svc = ValidationSuiteService()
+    out = await svc.create_from_run(
+        run.id, label="ac3-cap", write_queue=write_queue,
+    )
+    assert len(out.prompts_snapshot[0].baseline_optimized_prompt) == 20_000
+
+
+async def test_create_from_run_snapshot_none_when_source_lacks_output(
+    db: AsyncSession, write_queue,
+) -> None:
+    """AC-3: None when the source row has no output AND when the
+    referenced id does not exist at all."""
+    opt_id = uuid.uuid4().hex
+    await _seed_optimization(db, opt_id=opt_id, optimized_prompt=None)
+
+    results = _prompt_results(3)
+    results[0]["optimization_id"] = opt_id            # exists, no output
+    results[1]["optimization_id"] = uuid.uuid4().hex  # does not exist
+    run = await _seed_run(
+        db, aggregate=_canonical_aggregate(), prompt_results=results,
+    )
+
+    svc = ValidationSuiteService()
+    out = await svc.create_from_run(
+        run.id, label="ac3-none", write_queue=write_queue,
+    )
+    assert out.prompts_snapshot[0].baseline_optimized_prompt is None
+    assert out.prompts_snapshot[1].baseline_optimized_prompt is None
+    assert out.prompts_snapshot[2].baseline_optimized_prompt is None
