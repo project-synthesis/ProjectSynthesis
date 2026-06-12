@@ -47,8 +47,19 @@ export interface RunResult extends RunSummary {
     // `prompt_index` survives as a legacy alias in older payloads/tests.
     raw_prompt_idx?: number;
     prompt_index?: number;
-    overall_score: number;
+    // Null on score-less (rate-limited / failed) replay rows.
+    overall_score?: number | null;
     raw_prompt?: string;
+    intent_label?: string | null;
+    status?: string;
+    error?: string | null;
+    dimensions?: Record<string, number | null> | null;
+    // v0.4.37 output capture — key PRESENCE discriminates post-v0.4.37
+    // rows (always both keys, null for score-less) from pre-v0.4.37 rows
+    // (keys absent entirely). See spec §3.1 / §4.1 states 4-5.
+    optimized_prompt?: string | null;
+    changes_summary?: string | null;
+    output_truncated?: boolean;
     [key: string]: unknown;
   }>;
   // The aggregate block is a dict on the backend (8-key block from

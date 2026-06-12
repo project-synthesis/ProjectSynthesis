@@ -23,6 +23,9 @@ export interface PromptSnapshotItem {
   raw_prompt: string;
   intent_label: string | null;
   original_optimization_id: string | null;
+  /** v0.4.37 — full-length baseline optimized output (≤20,000 chars);
+   *  null/absent for pre-v0.4.37 suites and sources without output. */
+  baseline_optimized_prompt?: string | null;
 }
 
 /** Per-prompt scoring snapshot stored on the suite at save time. */

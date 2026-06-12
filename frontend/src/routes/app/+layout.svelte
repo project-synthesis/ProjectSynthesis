@@ -21,7 +21,7 @@
   // v0.4.22 T2: 'suites' added between 'clusters' and 'github' — see
   // ActivityBar.svelte for the rationale (validation surface is taxonomy-
   // adjacent, not auth-adjacent).
-  type Activity = 'editor' | 'history' | 'clusters' | 'suites' | 'github' | 'settings';
+  type Activity = 'editor' | 'history' | 'runs' | 'clusters' | 'suites' | 'github' | 'settings';
   let activeActivity = $state<Activity>('editor');
 
   $effect(() => {
@@ -53,6 +53,7 @@
       if (
         detail === 'editor' ||
         detail === 'history' ||
+        detail === 'runs' ||
         detail === 'clusters' ||
         detail === 'suites' ||
         detail === 'github' ||

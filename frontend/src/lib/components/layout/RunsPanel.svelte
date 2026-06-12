@@ -3,6 +3,7 @@
   import { onMount, untrack } from 'svelte';
   import { listRuns, bulkDeleteRuns, bulkExportRuns, type RunSummary } from '$lib/api/runs';
   import { projectStore } from '$lib/stores/project.svelte';
+  import { runsPanelStore } from '$lib/stores/runs-panel.svelte';
   import RunRowItem from './RunRowItem.svelte';
   import BulkActionBar from './BulkActionBar.svelte';
 
@@ -157,6 +158,20 @@
     void projectStore.currentProjectId;
     expandedId = null;  // collapse open row on filter/project change
     untrack(() => fetchRuns(0, false));
+  });
+
+  // v0.4.37 D-link: consume a pending run-selection request dispatched by
+  // SuiteDetailView's RUN link. Declared AFTER the fetch effect above so
+  // this effect's `expandedId` write lands after that effect's
+  // `expandedId = null` reset within the same flush (Svelte 5 runs
+  // effects in declaration order). Clearing the pending id re-triggers
+  // this effect once; the early return makes the second pass a no-op.
+  $effect(() => {
+    if (!active) return;
+    const pending = runsPanelStore.pendingSelectRunId;
+    if (!pending) return;
+    expandedId = pending;
+    untrack(() => runsPanelStore.clearPending());
   });
 
   // Scroll-load sentinel observer.

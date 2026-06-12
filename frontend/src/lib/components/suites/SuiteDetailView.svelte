@@ -40,6 +40,10 @@
   import { formatSignedDelta } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
   import DestructiveConfirmModal from '$lib/components/shared/DestructiveConfirmModal.svelte';
+  import { editorStore } from '$lib/stores/editor.svelte';
+  import { forgeStore } from '$lib/stores/forge.svelte';
+  import { getOptimization } from '$lib/api/client';
+  import { runsPanelStore } from '$lib/stores/runs-panel.svelte';
 
   // Test-mock-compat shim: tests stub `toastStore` with severity helpers
   // (`success`, `error`) that aren't on the real `ToastStore` class. We
@@ -64,8 +68,9 @@
       // must be present for the per-prompt join to pair the row.
       raw_prompt_idx?: number;
       prompt_index?: number;
-      overall_score: number;
+      overall_score?: number | null;
       raw_prompt?: string;
+      [key: string]: unknown;
     }>;
     aggregate?: RunResult['aggregate'];
   }
@@ -103,22 +108,99 @@
   const perPromptRows = $derived.by(() => {
     const baseline = suite.baseline_scores.per_prompt ?? [];
     const latest = latestReplay?.prompt_results ?? [];
+    const snapshot = suite.prompts_snapshot ?? [];
     return baseline.map((b) => {
       const l =
         latest.find(
           (x) => (x.raw_prompt_idx ?? x.prompt_index) === b.raw_prompt_idx,
         ) ?? null;
+      const lr = l as Record<string, unknown> | null;
+      const snap = snapshot[b.raw_prompt_idx] ?? null;
       const baselineScore = b.overall;
-      const latestScore = l?.overall_score ?? null;
+      const latestScore = (l?.overall_score ?? null) as number | null;
       const delta = latestScore != null ? latestScore - baselineScore : null;
       return {
         idx: b.raw_prompt_idx,
         baseline: baselineScore,
         latest: latestScore,
         delta,
+        snap,
+        latestRow: lr,
+        dims: (lr?.dimensions ?? null) as Record<string, number | null> | null,
+        status: (lr?.status ?? null) as string | null,
+        error: (lr?.error ?? null) as string | null,
       };
     });
   });
+
+  // ── v0.4.37 §4.1 — per-prompt expansion + five-state DIFF machine ──
+  let expandedIdx = $state<number | null>(null);
+
+  type DiffState =
+    | { kind: 'hidden' }
+    | { kind: 'output-vs-output'; before: string; after: string }
+    | { kind: 'raw-vs-output'; before: string; after: string }
+    | { kind: 'disabled'; tooltip: string };
+
+  type PerPromptRow = (typeof perPromptRows)[number];
+
+  // Evaluated per prompt row, in spec §4.1 order.
+  function diffStateFor(row: PerPromptRow): DiffState {
+    // State 1 — no replay selected/available for the suite: hidden
+    // (the diff table already renders its "No replays yet" empty state).
+    if (!latestReplay || !row.latestRow) return { kind: 'hidden' };
+    // State 5 — pre-v0.4.37 replay row: the key is absent entirely.
+    if (!('optimized_prompt' in row.latestRow)) {
+      return { kind: 'disabled', tooltip: 'output not captured (pre-v0.4.37 replay)' };
+    }
+    const optimized = row.latestRow['optimized_prompt'] as string | null;
+    // State 4 — post-v0.4.37 score-less row: key present, value null.
+    if (optimized == null) {
+      return { kind: 'disabled', tooltip: 'no output for this prompt (rate-limited or failed)' };
+    }
+    const baselineOutput = row.snap?.baseline_optimized_prompt ?? null;
+    // State 2 — output-vs-output (the regression view).
+    if (baselineOutput != null) {
+      return { kind: 'output-vs-output', before: baselineOutput, after: optimized };
+    }
+    // State 3 — raw → latest output (what the optimizer did this run).
+    return { kind: 'raw-vs-output', before: row.snap?.raw_prompt ?? '', after: optimized };
+  }
+
+  function openRowDiff(row: PerPromptRow, ds: DiffState): void {
+    if (ds.kind !== 'output-vs-output' && ds.kind !== 'raw-vs-output') return;
+    editorStore.openInlineDiff({
+      key: `${suite.id}:${row.idx}`,
+      title: `${suite.label} #${row.idx}`,
+      before: ds.before,
+      after: ds.after,
+      beforeLabel: ds.kind === 'output-vs-output' ? 'BASELINE' : 'RAW',
+      afterLabel: 'LATEST',
+    });
+  }
+
+  // ── v0.4.37 §4.1 — provenance liveness (tombstone + history link) ──
+  const aliveIds = $derived(suitesStore.aliveOriginalIds);
+
+  function isDead(id: string | null | undefined): boolean {
+    return !!id && aliveIds != null && !aliveIds.has(id);
+  }
+  function isAlive(id: string | null | undefined): boolean {
+    return !!id && aliveIds != null && aliveIds.has(id);
+  }
+
+  async function openInHistory(optId: string): Promise<void> {
+    const traceId = suitesStore.originalTraceIds[optId];
+    if (!traceId) return;
+    try {
+      const opt = await getOptimization(traceId);
+      forgeStore.loadFromRecord(opt);
+      editorStore.openResult(opt.id);
+    } catch {
+      toast.error?.('Failed to load optimization')
+        ?? toast.info('Failed to load optimization');
+    }
+  }
 
   const replayItems = $derived(replays?.items ?? []);
 
@@ -291,10 +373,16 @@
        + neon-red treatment is load-bearing. -->
   <div class="detail-meta-row" data-test="suite-meta">
     {#if suite.source_run_id}
-      <span class="meta-pair" data-field="source_run_id"
-        use:tooltip={`run ${suite.source_run_id}`}>
+      <button
+        type="button"
+        class="meta-pair meta-pair--link"
+        data-field="source_run_id"
+        data-test="suite-run-link"
+        use:tooltip={`open run ${suite.source_run_id} in the Runs panel`}
+        onclick={() => runsPanelStore.requestSelect(suite.source_run_id!)}
+      >
         <span class="meta-key">run</span><span class="meta-val">{suite.source_run_id.slice(0, 8)}…</span>
-      </span>
+      </button>
     {/if}
     {#if suite.repo_full_name}
       <span class="meta-pair" data-field="repo_full_name"
@@ -378,26 +466,93 @@
     {/if}
   </div>
 
-  <!-- ── Per-prompt baseline vs latest diff ─────────────────────── -->
+  <!-- ── Per-prompt baseline vs latest diff (v0.4.37: expandable rows
+       + five-state DIFF affordance + tombstone + history link) ─────── -->
   <div class="per-prompt" data-test="per-prompt" role="table" aria-label="Per-prompt baseline vs latest">
     <div class="prompt-row prompt-row--head" role="row">
+      <span role="columnheader" class="col-chevron" aria-label="Expand"></span>
       <span role="columnheader" class="col-idx">#</span>
       <span role="columnheader" class="col-baseline">baseline</span>
       <span role="columnheader" class="col-latest">latest</span>
       <span role="columnheader" class="col-delta">Δ</span>
+      <span role="columnheader" class="col-diff">diff</span>
     </div>
     {#each perPromptRows as row (row.idx)}
+      {@const ds = diffStateFor(row)}
       <div
         class="prompt-row"
         data-test="per-prompt-row"
         data-prompt-idx={row.idx}
         role="row"
       >
+        <button
+          type="button"
+          class="row-chevron col-chevron"
+          aria-expanded={expandedIdx === row.idx}
+          aria-label="Toggle prompt {row.idx} detail"
+          data-test="prompt-expand-btn"
+          onclick={() => { expandedIdx = expandedIdx === row.idx ? null : row.idx; }}
+        >{expandedIdx === row.idx ? '▾' : '▸'}</button>
         <span role="cell" class="col-idx">{row.idx}</span>
         <span role="cell" class="col-baseline">{row.baseline.toFixed(1)}</span>
         <span role="cell" class="col-latest">{row.latest != null ? row.latest.toFixed(1) : '—'}</span>
         <span role="cell" class="col-delta">{formatSignedDelta(row.delta)}</span>
+        <span role="cell" class="col-diff">
+          {#if ds.kind === 'output-vs-output' || ds.kind === 'raw-vs-output'}
+            <button
+              type="button"
+              class="diff-btn"
+              data-test="prompt-diff-btn"
+              data-diff-state={ds.kind}
+              use:tooltip={ds.kind === 'output-vs-output'
+                ? 'diff baseline output vs latest output'
+                : 'diff raw prompt vs latest output'}
+              onclick={() => openRowDiff(row, ds)}
+            >DIFF</button>
+          {:else if ds.kind === 'disabled'}
+            <button
+              type="button"
+              class="diff-btn"
+              data-test="prompt-diff-btn"
+              data-diff-state="disabled"
+              data-diff-tooltip={ds.tooltip}
+              use:tooltip={ds.tooltip}
+              disabled
+            >DIFF</button>
+          {/if}
+        </span>
       </div>
+      {#if expandedIdx === row.idx}
+        <div class="prompt-expanded" data-test="prompt-expanded" data-prompt-idx={row.idx}>
+          {#if row.snap?.intent_label}
+            <div class="expanded-meta">{row.snap.intent_label}</div>
+          {/if}
+          <pre class="expanded-prompt">{row.snap?.raw_prompt ?? ''}</pre>
+          {#if row.dims}
+            <div class="expanded-dims" data-test="prompt-dims">
+              {#each Object.entries(row.dims) as [dim, val] (dim)}
+                <span class="dim-chip">{dim} {val != null ? val.toFixed(1) : '—'}</span>
+              {/each}
+            </div>
+          {/if}
+          {#if row.status}
+            <div class="expanded-meta">status: {row.status}</div>
+          {/if}
+          {#if row.error}
+            <div class="expanded-error">{row.error}</div>
+          {/if}
+          {#if isDead(row.snap?.original_optimization_id)}
+            <div class="tombstone" data-test="prompt-tombstone">original optimization deleted — content preserved in this snapshot</div>
+          {:else if isAlive(row.snap?.original_optimization_id) && row.snap?.original_optimization_id}
+            <button
+              type="button"
+              class="open-history-btn"
+              data-test="open-in-history"
+              onclick={() => openInHistory(row.snap!.original_optimization_id!)}
+            >OPEN IN HISTORY</button>
+          {/if}
+        </div>
+      {/if}
     {/each}
   </div>
 </section>
@@ -603,7 +758,7 @@
   }
 
   .prompt-row {
-    grid-template-columns: 28px 1fr 1fr 1fr;
+    grid-template-columns: 14px 24px 1fr 1fr 1fr 36px;
     gap: 4px;
   }
 
@@ -759,5 +914,135 @@
   .retire-reason-input:focus {
     outline: none;
     border-color: color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
+  }
+
+  /* ── v0.4.37 — expandable per-prompt rows + DIFF affordance ────────
+     All zero-effects: 1px contours, no glow/shadow, 20px collapsed rows
+     preserved; the expanded body is a bordered block below the row. */
+  .row-chevron {
+    height: 20px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--color-text-dim);
+    font-size: 9px;
+    cursor: pointer;
+  }
+  .row-chevron:hover { color: var(--color-text-primary); }
+
+  .diff-btn {
+    height: 16px;
+    padding: 0 4px;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: 8px;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: border-color 200ms ease, color 200ms ease;
+  }
+  .diff-btn:hover:not(:disabled) {
+    border-color: var(--color-neon-cyan, #00e5ff);
+    color: var(--color-neon-cyan, #00e5ff);
+  }
+  .diff-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .prompt-expanded {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 6px 6px 18px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    background: color-mix(in srgb, var(--color-bg-hover) 25%, transparent);
+  }
+
+  .expanded-prompt {
+    margin: 0;
+    max-height: 160px;
+    overflow: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--color-text-primary);
+    border: 1px solid var(--color-border-subtle);
+    padding: 4px;
+  }
+
+  .expanded-meta {
+    font-size: 9px;
+    color: var(--color-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .expanded-dims {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .dim-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    padding: 0 4px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border-subtle);
+  }
+
+  .expanded-error {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-neon-red, #ff3366);
+  }
+
+  .tombstone {
+    font-size: 9px;
+    font-style: italic;
+    color: var(--color-text-dim);
+  }
+
+  .open-history-btn {
+    align-self: flex-start;
+    height: 18px;
+    padding: 0 6px;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: border-color 200ms ease, color 200ms ease;
+  }
+  .open-history-btn:hover {
+    border-color: var(--color-neon-cyan, #00e5ff);
+    color: var(--color-neon-cyan, #00e5ff);
+  }
+
+  /* RUN meta-link — text-link treatment, no chrome (the meta row is
+     deliberately quiet); neon-cyan signals interactivity. */
+  .meta-pair--link {
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: inherit;
+  }
+  .meta-pair--link .meta-val {
+    color: var(--color-neon-cyan, #00e5ff);
+  }
+  .meta-pair--link:hover .meta-val {
+    text-decoration: underline;
   }
 </style>
