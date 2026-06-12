@@ -17,6 +17,7 @@ Cycle 2 ships ``create_from_run`` only. Cycle 3 adds ``retire`` / ``get`` /
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
+
 from __future__ import annotations
 
 import logging
@@ -178,24 +179,21 @@ def _build_prompts_snapshot(
     for r in prompt_results:
         opt_id = r.get("optimization_id")
         baseline_output: str | None = outputs.get(opt_id) if opt_id else None
-        if (
-            baseline_output is not None
-            and len(baseline_output) > REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS
-        ):
+        if baseline_output is not None and len(baseline_output) > REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS:
             baseline_output = baseline_output[:REPLAY_OUTPUT_SNAPSHOT_MAX_CHARS]
-        snapshot.append({
-            # Finding 20: ``ReplayRunGenerator`` writes ``raw_prompt``;
-            # ``TopicProbeGenerator`` writes ``prompt_text`` (canonical post
-            # Finding 16+17 fix). Read both keys with ``raw_prompt`` taking
-            # precedence so suites forked from EITHER generator carry real
-            # prompt content in their snapshot.
-            "raw_prompt": (
-                r.get("raw_prompt") or r.get("prompt_text") or ""
-            ),
-            "intent_label": r.get("intent_label"),
-            "original_optimization_id": opt_id,
-            "baseline_optimized_prompt": baseline_output,
-        })
+        snapshot.append(
+            {
+                # Finding 20: ``ReplayRunGenerator`` writes ``raw_prompt``;
+                # ``TopicProbeGenerator`` writes ``prompt_text`` (canonical post
+                # Finding 16+17 fix). Read both keys with ``raw_prompt`` taking
+                # precedence so suites forked from EITHER generator carry real
+                # prompt content in their snapshot.
+                "raw_prompt": (r.get("raw_prompt") or r.get("prompt_text") or ""),
+                "intent_label": r.get("intent_label"),
+                "original_optimization_id": opt_id,
+                "baseline_optimized_prompt": baseline_output,
+            }
+        )
     return snapshot
 
 
@@ -213,10 +211,7 @@ def _derive_per_prompt_from_results(
         {
             "raw_prompt_idx": i,
             "overall": float(r.get("overall_score") or 0.0),
-            "dimensions": {
-                k: float(v) for k, v in (r.get("dimensions") or {}).items()
-                if isinstance(v, int | float)
-            },
+            "dimensions": {k: float(v) for k, v in (r.get("dimensions") or {}).items() if isinstance(v, int | float)},
         }
         for i, r in enumerate(prompt_results)
     ]
@@ -276,7 +271,8 @@ def _build_snapshot_inputs(
     prompt_results: list[dict[str, Any]] = list(run.prompt_results or [])
     prompts_snapshot = _build_prompts_snapshot(prompt_results, baseline_outputs)
     baseline_scores = _build_baseline_scores(
-        dict(run.aggregate or {}), prompt_results,
+        dict(run.aggregate or {}),
+        prompt_results,
     )
 
     return SuiteSnapshotInputs(
@@ -401,7 +397,9 @@ def _build_alarm_query() -> Select[Any]:
 
 
 async def _persist_suite_create(
-    db: AsyncSession, *, snapshot: SuiteSnapshotInputs,
+    db: AsyncSession,
+    *,
+    snapshot: SuiteSnapshotInputs,
 ) -> None:
     """Writer-engine callback — inserts the ValidationSuite row and commits.
 
@@ -427,7 +425,9 @@ async def _persist_suite_create(
 
 
 async def _persist_suite_retire(
-    db: AsyncSession, *, inputs: SuiteRetireInputs,
+    db: AsyncSession,
+    *,
+    inputs: SuiteRetireInputs,
 ) -> None:
     """Writer-engine callback — updates ``retired_at`` + ``retired_reason``.
 
@@ -448,7 +448,9 @@ async def _persist_suite_retire(
 
 
 def _log_validation_suite_phase(
-    trace_id: str, duration_ms: int, result: dict[str, Any],
+    trace_id: str,
+    duration_ms: int,
+    result: dict[str, Any],
 ) -> None:
     """Shared scaffold for both create + retire JSONL trace emissions.
 
@@ -637,9 +639,7 @@ class ValidationSuiteService:
         session_ctx = _database_mod.async_session_factory()
         read_db = await session_ctx.__aenter__()
         try:
-            result = await read_db.execute(
-                select(RunRow).where(RunRow.id == run_id)
-            )
+            result = await read_db.execute(select(RunRow).where(RunRow.id == run_id))
             run = result.scalar_one_or_none()
 
             if run is None:
@@ -658,28 +658,24 @@ class ValidationSuiteService:
             # is truncated to 1,000 chars by the probe generator — fetching
             # the source rows is the only correct sourcing (AC-4 pins this
             # with a >1,000-char fidelity test).
-            ref_ids = [
-                r.get("optimization_id")
-                for r in (run.prompt_results or [])
-                if r.get("optimization_id")
-            ]
+            ref_ids = [r.get("optimization_id") for r in (run.prompt_results or []) if r.get("optimization_id")]
             baseline_outputs: dict[str, str] = {}
             if ref_ids:
                 opt_rows = await read_db.execute(
-                    select(Optimization.id, Optimization.optimized_prompt)
-                    .where(Optimization.id.in_(ref_ids))
+                    select(Optimization.id, Optimization.optimized_prompt).where(Optimization.id.in_(ref_ids))
                 )
                 baseline_outputs = {
-                    row.id: row.optimized_prompt
-                    for row in opt_rows
-                    if row.optimized_prompt is not None
+                    row.id: row.optimized_prompt for row in opt_rows if row.optimized_prompt is not None
                 }
 
             # Build the frozen snapshot while the session is still open —
             # detaching the ORM instance and reading attributes outside the
             # session would trigger MissingGreenlet on lazy-loaded columns.
             snapshot = _build_snapshot_inputs(
-                run, label, tolerance_abs, baseline_outputs=baseline_outputs,
+                run,
+                label,
+                tolerance_abs,
+                baseline_outputs=baseline_outputs,
             )
         finally:
             await session_ctx.__aexit__(None, None, None)
@@ -700,15 +696,18 @@ class ValidationSuiteService:
         # Event emission: spec §9 — fires AFTER write_queue.submit completes
         # successfully. Failed submits raise before reaching this line so no
         # event is published on write failure.
-        event_bus.publish("validation_suite_created", {
-            "suite_id": snapshot.suite_id,
-            "source_run_id": snapshot.source_run_id,
-            "label": snapshot.label,
-            "tolerance_abs": snapshot.tolerance_abs,
-            "prompts_count": len(snapshot.prompts_snapshot),
-            "baseline_mean": snapshot.baseline_scores.get("mean_overall"),
-            "project_id": snapshot.project_id,
-        })
+        event_bus.publish(
+            "validation_suite_created",
+            {
+                "suite_id": snapshot.suite_id,
+                "source_run_id": snapshot.source_run_id,
+                "label": snapshot.label,
+                "tolerance_abs": snapshot.tolerance_abs,
+                "prompts_count": len(snapshot.prompts_snapshot),
+                "baseline_mean": snapshot.baseline_scores.get("mean_overall"),
+                "project_id": snapshot.project_id,
+            },
+        )
 
         duration_ms = int((time.monotonic() - start) * 1000)
         _emit_suite_create_trace(snapshot, duration_ms)
@@ -778,9 +777,7 @@ class ValidationSuiteService:
         session_ctx = _database_mod.async_session_factory()
         read_db = await session_ctx.__aenter__()
         try:
-            result = await read_db.execute(
-                select(ValidationSuite).where(ValidationSuite.id == suite_id)
-            )
+            result = await read_db.execute(select(ValidationSuite).where(ValidationSuite.id == suite_id))
             suite = result.scalar_one_or_none()
             if suite is None:
                 raise ValueError("suite_not_found")
@@ -812,10 +809,13 @@ class ValidationSuiteService:
         # Spec §9 — emitted ONLY when state actually transitions (first
         # retire). The idempotency short-circuit above bypasses this block
         # entirely on no-op re-retires.
-        event_bus.publish("validation_suite_retired", {
-            "suite_id": inputs.suite_id,
-            "reason": inputs.retired_reason,
-        })
+        event_bus.publish(
+            "validation_suite_retired",
+            {
+                "suite_id": inputs.suite_id,
+                "reason": inputs.retired_reason,
+            },
+        )
 
         duration_ms = int((time.monotonic() - start) * 1000)
         _emit_suite_retire_trace(inputs, duration_ms)
@@ -860,9 +860,7 @@ class ValidationSuiteService:
         session_ctx = _database_mod.async_session_factory()
         read_db = await session_ctx.__aenter__()
         try:
-            result = await read_db.execute(
-                select(ValidationSuite).where(ValidationSuite.id == suite_id)
-            )
+            result = await read_db.execute(select(ValidationSuite).where(ValidationSuite.id == suite_id))
             suite = result.scalar_one_or_none()
             if suite is None:
                 raise ValueError("suite_not_found")
@@ -927,11 +925,7 @@ class ValidationSuiteService:
             total_q = select(func.count()).select_from(base.subquery())
             total = int((await read_db.execute(total_q)).scalar_one())
 
-            page_q = (
-                base.order_by(ValidationSuite.created_at.desc())
-                .limit(limit)
-                .offset(offset)
-            )
+            page_q = base.order_by(ValidationSuite.created_at.desc()).limit(limit).offset(offset)
             rows = (await read_db.execute(page_q)).scalars().all()
             items = [_suite_list_item_from_orm(row) for row in rows]
         finally:
@@ -996,17 +990,11 @@ class ValidationSuiteService:
         session_ctx = _database_mod.async_session_factory()
         read_db = await session_ctx.__aenter__()
         try:
-            base = (
-                select(RunRow)
-                .where(RunRow.mode == "replay_run")
-                .where(RunRow.suite_id == suite_id)
-            )
+            base = select(RunRow).where(RunRow.mode == "replay_run").where(RunRow.suite_id == suite_id)
             total_q = select(func.count()).select_from(base.subquery())
             total = int((await read_db.execute(total_q)).scalar_one())
 
-            page_q = (
-                base.order_by(RunRow.started_at.desc()).limit(limit).offset(offset)
-            )
+            page_q = base.order_by(RunRow.started_at.desc()).limit(limit).offset(offset)
             rows = (await read_db.execute(page_q)).scalars().all()
             items = [_run_summary_from_row(row) for row in rows]
         finally:
@@ -1115,10 +1103,7 @@ class ValidationSuiteService:
         # cache tuple stores ``time.monotonic()`` so wall-clock jumps don't
         # invalidate live cache entries.
         now = time.monotonic()
-        if (
-            self._alarm_cache is not None
-            and (now - self._alarm_cache[0]) < _ALARM_CACHE_TTL_SECONDS
-        ):
+        if self._alarm_cache is not None and (now - self._alarm_cache[0]) < _ALARM_CACHE_TTL_SECONDS:
             return self._alarm_cache[1]
 
         # ============ STEP 2: read session — alarm SQL + counts ============
@@ -1133,9 +1118,13 @@ class ValidationSuiteService:
         read_db = await session_ctx.__aenter__()
         try:
             # ---- 2a: suites_total — active (non-retired) suite count ----
-            suites_total_q = select(func.count()).select_from(
-                ValidationSuite.__table__,
-            ).where(ValidationSuite.retired_at.is_(None))
+            suites_total_q = (
+                select(func.count())
+                .select_from(
+                    ValidationSuite.__table__,
+                )
+                .where(ValidationSuite.retired_at.is_(None))
+            )
             suites_total = int(
                 (await read_db.execute(suites_total_q)).scalar_one(),
             )
@@ -1219,9 +1208,7 @@ class ValidationSuiteService:
         # transitioned"). Build a per-entry index of the firing rows so we
         # can populate the event payload's ``baseline_mean`` / ``latest_mean``
         # / ``delta_abs`` fields directly (spec §9 payload columns).
-        firing_index: dict[str, RegressionAlarmEntry] = {
-            entry.suite_id: entry for entry in latest_alarms
-        }
+        firing_index: dict[str, RegressionAlarmEntry] = {entry.suite_id: entry for entry in latest_alarms}
         for suite_id, new_state in new_states.items():
             prior_state = self._prior_alarm_states.get(suite_id, "none")
             if new_state == prior_state:
@@ -1425,16 +1412,18 @@ def _suite_out_from_snapshot(snapshot: SuiteSnapshotInputs) -> ValidationSuiteOu
     in a single call — no per-field re-extraction, and the canonical key
     set lives in one place (the Pydantic schema declaration).
     """
-    return ValidationSuiteOut.model_validate({
-        "id": snapshot.suite_id,
-        "source_run_id": snapshot.source_run_id,
-        "label": snapshot.label,
-        "tolerance_abs": snapshot.tolerance_abs,
-        "project_id": snapshot.project_id,
-        "repo_full_name": snapshot.repo_full_name,
-        "created_at": snapshot.created_at,
-        "retired_at": None,
-        "retired_reason": None,
-        "prompts_snapshot": snapshot.prompts_snapshot,
-        "baseline_scores": snapshot.baseline_scores,
-    })
+    return ValidationSuiteOut.model_validate(
+        {
+            "id": snapshot.suite_id,
+            "source_run_id": snapshot.source_run_id,
+            "label": snapshot.label,
+            "tolerance_abs": snapshot.tolerance_abs,
+            "project_id": snapshot.project_id,
+            "repo_full_name": snapshot.repo_full_name,
+            "created_at": snapshot.created_at,
+            "retired_at": None,
+            "retired_reason": None,
+            "prompts_snapshot": snapshot.prompts_snapshot,
+            "baseline_scores": snapshot.baseline_scores,
+        }
+    )

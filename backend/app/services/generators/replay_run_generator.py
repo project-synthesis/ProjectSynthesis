@@ -474,23 +474,13 @@ class ReplayRunGenerator:
                             idx,
                             exc,
                         )
-                        result_row = {
-                            "raw_prompt_idx": idx,
-                            "raw_prompt": raw_prompt[:1000],
-                            "trace_id": None,
-                            "overall_score": None,
-                            "dimensions": None,
-                            "task_type": None,
-                            "intent_label": intent_fallback,
-                            "divergence_flags": None,
-                            "optimized_prompt": None,
-                            "changes_summary": None,
-                            "output_truncated": False,
-                            "baseline_overall": baseline_overall,
-                            "delta": None,
-                            "status": "failed",
-                            "error": str(exc)[:500],
-                        }
+                        result_row = _scoreless_row(
+                            idx=idx,
+                            raw_prompt=raw_prompt,
+                            baseline_overall=baseline_overall,
+                            intent_label=intent_fallback,
+                            error=str(exc)[:500],
+                        )
                 prompt_results[idx] = result_row
                 _publish_completed(idx, result_row)
 
@@ -597,21 +587,22 @@ def _truncate_output_field(value: Any, cap: int) -> tuple[str | None, bool]:
     return text, False
 
 
-def _rate_limited_row(
+def _scoreless_row(
     *,
     idx: int,
     raw_prompt: str,
     baseline_overall: float | None,
     intent_label: str | None,
+    error: str,
 ) -> dict[str, Any]:
-    """Score-less rate-limited row (spec §3.4 projection guard).
+    """Full score-less per-prompt envelope (rate-limited + failed rows).
 
-    Used for BOTH kinds of rate-limited outcome — pre-start short-circuit
-    and in-flight bail-gate projection. Replay is a measurement workload:
-    a heuristic-scored fallback row would silently poison the baseline
-    comparison, so the row carries NO ``overall_score`` and lands as
-    ``status='failed'`` (the existing terminal classification then yields
-    ``partial``/``failed`` with zero new status logic).
+    The two non-scoring outcomes differ only in their ``error`` value —
+    consolidating them here keeps the row shape (including the v0.4.37
+    §3.1 ``optimized_prompt`` / ``changes_summary`` / ``output_truncated``
+    key-presence contract) defined in ONE place. Both output keys are
+    present with literal ``None`` so consumers can distinguish "no output"
+    from "not captured (pre-v0.4.37 replay)" by key presence.
     """
     return {
         "raw_prompt_idx": idx,
@@ -628,8 +619,33 @@ def _rate_limited_row(
         "baseline_overall": baseline_overall,
         "delta": None,
         "status": "failed",
-        "error": "rate_limited",
+        "error": error,
     }
+
+
+def _rate_limited_row(
+    *,
+    idx: int,
+    raw_prompt: str,
+    baseline_overall: float | None,
+    intent_label: str | None,
+) -> dict[str, Any]:
+    """Score-less rate-limited row (spec §3.4 projection guard).
+
+    Used for BOTH kinds of rate-limited outcome — pre-start short-circuit
+    and in-flight bail-gate projection. Replay is a measurement workload:
+    a heuristic-scored fallback row would silently poison the baseline
+    comparison, so the row carries NO ``overall_score`` and lands as
+    ``status='failed'`` (the existing terminal classification then yields
+    ``partial``/``failed`` with zero new status logic).
+    """
+    return _scoreless_row(
+        idx=idx,
+        raw_prompt=raw_prompt,
+        baseline_overall=baseline_overall,
+        intent_label=intent_label,
+        error="rate_limited",
+    )
 
 
 def _project_pending_to_result(

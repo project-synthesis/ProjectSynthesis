@@ -9,6 +9,7 @@ output verbatim (`compute_run_aggregate`). Downstream consumers that read
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
+
 from __future__ import annotations
 
 from datetime import datetime

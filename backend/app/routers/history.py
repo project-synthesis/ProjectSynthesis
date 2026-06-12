@@ -47,13 +47,16 @@ class HistorySummaryEnrichment(BaseModel):
         description="Selected enrichment profile: code_aware | knowledge_work | cold_start.",
     )
     codebase_context: bool | None = Field(
-        default=None, description="Whether codebase context layer activated.",
+        default=None,
+        description="Whether codebase context layer activated.",
     )
     strategy_intelligence: bool | None = Field(
-        default=None, description="Whether strategy intelligence layer activated.",
+        default=None,
+        description="Whether strategy intelligence layer activated.",
     )
     applied_patterns: bool | None = Field(
-        default=None, description="Whether patterns were injected pre-pipeline.",
+        default=None,
+        description="Whether patterns were injected pre-pipeline.",
     )
     patterns_injected: int | None = Field(
         default=None,
@@ -64,7 +67,8 @@ class HistorySummaryEnrichment(BaseModel):
         description="Number of files included via curated retrieval (0 when codebase skipped).",
     )
     repo_relevance_score: float | None = Field(
-        default=None, description="B0 repo-relevance gate score (cosine vs project anchor).",
+        default=None,
+        description="B0 repo-relevance gate score (cosine vs project anchor).",
     )
 
 
@@ -79,7 +83,8 @@ class HistoryItem(BaseModel):
     duration_ms: int | None = Field(default=None, description="Pipeline duration in milliseconds.")
     provider: str | None = Field(default=None, description="LLM provider used.")
     routing_tier: str | None = Field(
-        default=None, description="Execution tier: internal, sampling, or passthrough.",
+        default=None,
+        description="Execution tier: internal, sampling, or passthrough.",
     )
     models_by_phase: dict[str, str] | None = Field(default=None, description="Per-phase model IDs used.")
     raw_prompt: str | None = Field(default=None, description="Truncated original prompt (first 100 chars).")
@@ -131,8 +136,13 @@ async def get_history(
     """
     svc = OptimizationService(db)
     result = await svc.list_optimizations(
-        offset=offset, limit=limit, sort_by=sort_by, sort_order=sort_order,
-        task_type=task_type, status=status, project_id=project_id,
+        offset=offset,
+        limit=limit,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        task_type=task_type,
+        status=status,
+        project_id=project_id,
     )
 
     # Batch-fetch family IDs for all returned items in a single query (not N+1).
@@ -145,8 +155,7 @@ async def get_history(
                 select(
                     OptimizationPattern.optimization_id,
                     OptimizationPattern.cluster_id,
-                )
-                .where(
+                ).where(
                     OptimizationPattern.optimization_id.in_(opt_ids),
                     OptimizationPattern.relationship == "source",
                 )
@@ -287,9 +296,7 @@ class DeleteOptimizationResponse(BaseModel):
     response_model=DeleteOptimizationResponse,
 )
 async def delete_optimization(
-    optimization_id: str = Path(
-        ..., description="Optimization id to delete (uuid)."
-    ),
+    optimization_id: str = Path(..., description="Optimization id to delete (uuid)."),
     force: bool = Query(
         False,
         description="Override the live-suite provenance guard (v0.4.37 §3.3).",
@@ -312,9 +319,7 @@ async def delete_optimization(
     # Probe before delete so we can 404 unknown ids. The service itself
     # returns deleted=0 silently — fine for bulk_reset/gc_sweep callers,
     # but bad for a REST client typing a wrong id.
-    exists = await db.execute(
-        select(Optimization.id).where(Optimization.id == optimization_id)
-    )
+    exists = await db.execute(select(Optimization.id).where(Optimization.id == optimization_id))
     if exists.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Optimization not found")
 
@@ -409,7 +414,10 @@ async def bulk_delete_optimizations(
     svc = OptimizationService(db, write_queue=write_queue)
     try:
         result = await svc.delete_optimizations(
-            body.ids, reason=body.reason, source="api_bulk", force=body.force,
+            body.ids,
+            reason=body.reason,
+            source="api_bulk",
+            force=body.force,
         )
     except SuiteReferencedError as exc:
         return _suite_referenced_response(exc)
@@ -442,7 +450,8 @@ class ExistsResponse(BaseModel):
     """
 
     alive: list[str] = Field(
-        default_factory=list, description="Ids whose rows still exist.",
+        default_factory=list,
+        description="Ids whose rows still exist.",
     )
     trace_ids: dict[str, str] = Field(
         default_factory=dict,
@@ -461,12 +470,7 @@ async def optimizations_exist(
     limits as a GET. Read-only; called once per suite selection by the
     SuiteDetailView tombstone + OPEN IN HISTORY affordances.
     """
-    rows = (
-        await db.execute(
-            select(Optimization.id, Optimization.trace_id)
-            .where(Optimization.id.in_(body.ids))
-        )
-    ).all()
+    rows = (await db.execute(select(Optimization.id, Optimization.trace_id).where(Optimization.id.in_(body.ids)))).all()
     return ExistsResponse(
         alive=[row.id for row in rows],
         trace_ids={row.id: row.trace_id for row in rows if row.trace_id},

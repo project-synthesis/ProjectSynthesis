@@ -4,6 +4,7 @@ POST-with-body deliberately (100 ids ≈ 3.6 KB would risk proxy URL limits
 as a GET). Read-only; backs the SuiteDetailView tombstone + OPEN IN
 HISTORY affordances, called once per suite selection.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -15,9 +16,14 @@ from app.models import Optimization
 
 async def _seed(db_session, *, trace_id: str | None = None) -> str:
     opt_id = str(uuid.uuid4())
-    db_session.add(Optimization(
-        id=opt_id, raw_prompt="raw", status="completed", trace_id=trace_id,
-    ))
+    db_session.add(
+        Optimization(
+            id=opt_id,
+            raw_prompt="raw",
+            status="completed",
+            trace_id=trace_id,
+        )
+    )
     await db_session.commit()
     return opt_id
 
@@ -31,7 +37,8 @@ async def test_exists_returns_alive_subset_and_trace_ids(app_client, db_session)
     ghost = str(uuid.uuid4())
 
     resp = await app_client.post(
-        "/api/optimizations/exists", json={"ids": [alive_a, alive_b, ghost]},
+        "/api/optimizations/exists",
+        json={"ids": [alive_a, alive_b, ghost]},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
