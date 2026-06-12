@@ -20,19 +20,19 @@ This document is the **actionable tracker** for soak gates. Operators consult it
 
 | Gate ID | Status | Opens | Earliest Close | Owner | Downstream change |
 |---|---|---|---|---|---|
-| [SG-2026-05-11](#sg-2026-05-11--audit-hook-warnrise-flip) | 🟡 ACTIVE | 2026-05-11 | 2026-05-18 | release-operator | v0.4.22 — `WRITE_QUEUE_AUDIT_HOOK_RAISE` flip `False → True` |
+| — | — | — | — | — | (none — no soak gate currently open) |
 
 ## Historical gates
 
 | Gate ID | Status | Window | Outcome |
 |---|---|---|---|
-| — | — | — | (none — SG-2026-05-11 is the first formal soak gate) |
+| [SG-2026-05-11](#sg-2026-05-11--audit-hook-warnrise-flip) | 🟢 CLOSED 2026-05-16 | 2026-05-11 → 2026-05-16 | PASS (evidence-based, decision-matrix row 2) — v0.4.22 `WRITE_QUEUE_AUDIT_HOOK_RAISE` flip shipped Day 5; 21 findings caught pre-ship; see [Gate closure](#gate-closure-2026-05-16t0625z) |
 
 ---
 
 ## SG-2026-05-11 — Audit-hook WARN→RAISE flip
 
-**Status**: 🟡 ACTIVE (opened 2026-05-11, earliest close 2026-05-18)
+**Status**: 🟢 CLOSED 2026-05-16 (opened 2026-05-11; evidence-based PASS per decision-matrix row 2 — see [Gate closure](#gate-closure-2026-05-16t0625z))
 **Owner**: release-operator
 **Downstream change**: v0.4.22 release — `WRITE_QUEUE_AUDIT_HOOK_RAISE` default flips `False → True` (per Topic Probe Tier 2 Cycle 15)
 

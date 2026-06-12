@@ -155,9 +155,10 @@ With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate 
 - **v0.4.28** — **Finding 19b restoration + T3.1 release.sh CI hook** (Probe Tier 3 decomposed into 4 versions; original "T3 bundled in v0.4.28" scope split for risk reduction, 2026-05-19). Sub-feature 1 (Finding 19b): wires `bulk_persist` + `batch_taxonomy_assign` ONCE at end of `TopicProbeGenerator.run()` matching canonical `seed_agent_generator.py:241-282`. Restores v0.4.12 T1 design intent — probes now produce `Optimization` rows in `/api/history`. **MERGED to main 2026-05-19 (PR #89)**; held for T3.1 bundle. Sub-feature 2 (T3.1 release.sh CI hook): adds `is_release_gate: bool` column on `ValidationSuite`; new endpoints `GET /api/suites/release-gates` + `POST /api/suites/{id}/release-gate`; `release.sh` new preflight step queries flagged suites + their `compute_regression_alarm` state, exits non-zero if any in alarm; `--skip-release-gates` flag for hotfix override. Currently **IN BRAINSTORMING** (2026-05-19). v0.4.28 ships once T3.1 lands.
 - **v0.4.29** — **Probe T3.2 probe→seed-agent promotion + T3.5 cross-tier composition** (Probe Tier 3 decomposition, 2026-05-19). T3.2: saved high-score probe → `prompts/seed-agents/<topic-slug>.md`; `RunRow.mode` flip + metadata write. T3.5: probe-discovered prompts feed seed-agent few-shot context. Bundled because both require shared service-layer plumbing on the unified `RunRow` substrate. — **PLANNED**.
 - **v0.4.30** — **Probe T3.3 drill-into-cluster** (Probe Tier 3 decomposition, 2026-05-19). Action on seed runs auto-launches a probe scoped to the cluster's `intent_label`. UI feature + service plumbing. — **PLANNED**.
-- **v0.4.32** — **RunsPanel polish sweep** (per-row rename + delete + multi-select + bulk-delete + bulk-export JSON). Closes 4 ROADMAP TBDs from v0.4.31 (lines 162-167 cluster). — **SHIPPED 2026-05-21** (PR #TBD).
-- **v0.4.31** — **Probe Tier 4** (final UI consolidation — substrate already done in P3; was v0.4.29 pre-T3 decomposition shift). — **SHIPPED 2026-05-20** (PR #TBD).
+- **v0.4.32** — **RunsPanel polish sweep** (per-row rename + delete + multi-select + bulk-delete + bulk-export JSON). Closes 4 ROADMAP TBDs from v0.4.31 (lines 162-167 cluster). — **SHIPPED 2026-05-21** (PR #94).
+- **v0.4.31** — **Probe Tier 4** (final UI consolidation — substrate already done in P3; was v0.4.29 pre-T3 decomposition shift). — **SHIPPED 2026-05-20** (PR #93).
 - **v0.4.35** — **Periodic GC sweep**: `_gc_orphan_runs` + `_gc_stuck_pending_optimizations` now also fire hourly via `_recurring_gc_task`. Each sweep tags log with `phase` (startup/recurring) for ops forensics. — **SHIPPED 2026-05-21**.
+- **v0.4.36** — **Concurrent replay executor** (`PROBE_PROMPT_CONCURRENCY` tier-mapped fan-out + rate-limit projection guard) **+ time-gated debt retirement** (`WriterLockedAsyncSession`, gc shim, 18 unused-ignores, MCP audit hook). — **SHIPPED 2026-06-12** (PR #97 — confirm at release).
 - **TBD** — Foundation P2 Path B (Phase 3 body extraction — deferred indefinitely; needs fresh design cycle; not blocking T3-T4 because they build on the unified substrate from P3, not on Phase 3 isolation).
 - **TBD** — UI affordance for ValidationSuite release-gate toggle (admin-only API in v0.4.28 T3.1; UI suite-card toggle deferred). Could fold into v0.4.29 or later.
 - **TBD** — Universal "Drill into cluster" UI surface (anywhere a cluster appears — `ClusterNavigator`, `ClusterRow`, `ClusterTemplatesSection`, 3D Pattern Graph cluster context menu). v0.4.30 T3.3 shipped the seed-result-view-only version per the ROADMAP "action on seed runs" scoping; this entry tracks the future expansion to all cluster surfaces.
@@ -181,6 +182,11 @@ With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate 
 - **TBD** — Configurable GC sweep interval via env var (e.g., `GC_RECURRING_INTERVAL_MINUTES`). v0.4.35 inherits the existing hourly cadence from `_recurring_gc_task`. If operators want shorter intervals for stuck-row sweeps without affecting token/repo sweeps, this would split the cadence.
 - **TBD** — Prometheus-style counter metrics (`gc_orphan_runs_cleaned_total{phase="startup|recurring"}`, etc.). v0.4.35 ships log-only observability. Counter metrics would feed Grafana dashboards.
 - **TBD** — New event-bus events `gc_orphan_swept` / `gc_pending_swept` for SSE consumers. v0.4.35 emits via `logger.info` only. Event-bus would let frontend banners react in real-time to "we just cleaned N stuck rows" notifications.
+- **TBD** — Cross-run global provider throttling / admission control. Per-run semaphores do not compose: two concurrent replays + a seed batch can stack 20-30 simultaneous provider calls. v0.4.36 ships per-run caps only; the replay endpoint stays rate-limited 5/minute.
+- **TBD** — Preference-configurable replay concurrency. v0.4.36 maps `PROBE_PROMPT_CONCURRENCY` from the fixed seed-batch tier table; an operator-tunable knob is YAGNI until requested.
+- **TBD** — Legacy warm-path fallback removal: `engine.run_warm_path(async_session_factory)` branches in `main.py` only fire when the WriteQueue failed to start, and under RAISE-mode those un-allow-listed writes would raise `WriteOnReadEngineError` anyway — effectively dead code, but removal touches `warm_path.py`'s dual-typed `session_factory` dispatch.
+- **TBD** — Content-review + merge of `feature/agentic-rag-audit-docs` (13 files, 2,522 lines, docs-only, conflict-free as of 2026-06-12). The 11 audit docs make analysis claims about the pipeline that warrant a dedicated review pass before landing on main (decision 2026-06-12: not merged blind in the v0.4.36 hygiene sweep).
+- **TBD** — Replay regression-alarm treatment of partial runs: `compute_regression_alarm` currently treats partial-status runs per its pre-v0.4.36 logic; with rate-limit degradation now always classifying runs partial/failed, consider an explicit min-completed-fraction gate before a partial run participates in alarm evaluation.
 
 **Per-phase specs:** each phase gets its own spec → plan → strict 7-dispatch TDD cycle (RED → GREEN → REFACTOR → INTEGRATE → OPERATE → spec-compliance reviewer → code-quality reviewer) per `feedback_tdd_protocol.md`. P1 brainstorm starts immediately after this ROADMAP update lands.
 
@@ -385,7 +391,7 @@ After Foundation P3 + P4 + Probe T2 + Pattern Graph hardening A–F + Probe T3-T
 | **Hierarchical topology navigation** | 4-level drill-down topology (project → domain → cluster → prompt) | Planned (was target v0.4.0 — re-targeting to v0.5.x given foundation phase pre-empted; see "Hierarchical topology navigation" entry) |
 | **Unified scoring service** | Eliminate scoring-orchestration duplication across 4 call sites | Planned (no version — see "Unified scoring service" entry) |
 | **Pipeline progress visualization** | Streaming token previews + per-phase timing for optimize/refine | Planned (no version — see "Pipeline progress visualization" entry) |
-| **Time-gated cleanup follow-ups** | Audit-hook RAISE-in-prod flip + `WriterLockedAsyncSession` removal | Audit flip → v0.4.22 (rides with Probe T2 after 7-day post-P4 soak) — `WriterLockedAsyncSession` removal still time-gated |
+| **Time-gated cleanup follow-ups** | Audit-hook RAISE-in-prod flip + `WriterLockedAsyncSession` removal | Audit flip SHIPPED v0.4.22 (2026-05-16); class removed v0.4.36 |
 
 The v0.5.0 major would either (a) ship one or two of these as the headline feature, or (b) be a clean architecture milestone marker if the foundation + probe lifecycle leaves the codebase in a release-worthy state worth bumping the minor for.
 
@@ -824,7 +830,7 @@ The takeaway is a working principle now captured in `.claude/skills/brand-guidel
 ---
 
 ### `Accept`-header content negotiation for SSE on `POST /api/seed` — deferred from Foundation P3 (2026-05-06)
-**Status:** **SHIPPED 2026-05-21 (v0.4.34)** — PR # TBD (back-fill on merge). Closes the last open Foundation P3 "out of scope" deferred item.
+**Status:** **SHIPPED 2026-05-21 (v0.4.34)** — PR #95. Closes the last open Foundation P3 "out of scope" deferred item.
 **Context:** P3 (v0.4.18) keeps `POST /api/seed` synchronous to preserve byte-for-byte backward compat with all existing callers (REST, MCP `synthesis_seed`, frontend `SeedModal`, CLI). Live UI updates flow through the existing `/api/events` global SSE bus filtered by the additive `run_id` field, which suffices for the T4 history surface. Future clients that prefer SSE on the POST itself (parity with `POST /api/probes`) can be served via HTTP content negotiation: `Accept: application/json` → sync as today; `Accept: text/event-stream` → SSE stream of `seed_*` events terminating on `seed_completed`/`seed_failed`. Strictly additive — old callers unchanged.
 
 **Trigger:** any of the following.
@@ -839,7 +845,7 @@ The takeaway is a working principle now captured in `.claude/skills/brand-guidel
 ---
 
 ### `current_probe_id` → `current_run_id` ContextVar rename completion — deferred from Foundation P3 (2026-05-06)
-**Status:** **SHIPPED 2026-05-21 (v0.4.34)** — PR # TBD (back-fill on merge). 16 release cycles post-v0.4.18 — migration window closed.
+**Status:** **SHIPPED 2026-05-21 (v0.4.34)** — PR #95 (shipped together with the Accept-header SSE item). 16 release cycles post-v0.4.18 — migration window closed.
 **Context:** Foundation P3 (v0.4.18) renames the `current_probe_id` ContextVar (declared in `services/probe_service.py`, re-exported by `services/probe_event_correlation.py`) to `current_run_id` as part of the substrate unification — every taxonomy event fired during a run now correlates via the unified ContextVar regardless of mode. To preserve byte-for-byte backward compat for any out-of-tree consumer or test patching `current_probe_id` directly, P3 keeps the old name as a re-export alias of the new one. The alias is dead weight after a few release cycles confirm no in-tree callers use the old name.
 
 **Trigger:** 2+ release cycles post-v0.4.18 with zero in-tree references to `current_probe_id` (verified via grep) and no external bug reports about ContextVar correlation. Then drop the re-export shim and let any remaining stragglers update to the canonical name.
@@ -887,7 +893,7 @@ The takeaway is a working principle now captured in `.claude/skills/brand-guidel
 ---
 
 ### Switch read-engine audit hook to RAISE in production (v0.4.14.x time-gated)
-**Status:** Planned for v0.4.14.x patch
+**Status:** **SHIPPED v0.4.22 (2026-05-16)** — back-dated closure; the flip shipped with the T2 bundle but this entry was never marked.
 **Context:** v0.4.13 shipped the audit hook in WARN mode for dev/prod and RAISE-only for CI (`WRITE_QUEUE_AUDIT_HOOK_RAISE` env flag); v0.4.14 finalized the short-lived foreground writer migration with 0 audit warns under the OPERATE regression bar. Once 7+ days of zero locks/warns confirmed in real usage post-v0.4.14, switch the production default to RAISE. Drift writes that escape the migration become hard failures at source instead of WARN-and-continue.
 
 **Trigger:** 7 consecutive days post-v0.4.14 ship with zero `database is locked` errors and zero audit-hook WARN events on the active branch.
@@ -895,7 +901,7 @@ The takeaway is a working principle now captured in `.claude/skills/brand-guidel
 ---
 
 ### Remove `WriterLockedAsyncSession` defense-in-depth class (v0.4.14.x time-gated)
-**Status:** Planned for v0.4.14.x patch
+**Status:** **SHIPPED v0.4.36 (2026-06-12)** — gate satisfied by proxy (27 days RAISE-default, zero audit events, zero locked errors in backend+mcp logs; the lock emitted no acquisition telemetry so "zero flush events" was only measurable by proxy). MCP process gained the audit hook in the same release.
 **Context:** v0.4.13 retains the legacy `WriterLockedAsyncSession` (process-wide flush serializer) as defense-in-depth during the post-release watch window. Once the audit hook is RAISE in production AND no flush events fire for 7+ days, the class is dead code and gets deleted along with its tests.
 
 **Trigger:** post-RAISE-switch + zero flush events for 7+ days.
