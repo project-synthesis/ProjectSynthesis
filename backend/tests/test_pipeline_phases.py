@@ -556,8 +556,8 @@ class TestPersistAndPropagateViaQueue:
 # * Test #2 — N=5 concurrent LEGACY callers: documents the v0.4.13 cycle 4
 #   transitional risk surfaced by integrate concern #2 — the legacy
 #   ``(db, inputs)`` path is still in use by ``pipeline.py`` until cycle 5
-#   migrates it. Verifies whether ``database is locked`` is recoverable via
-#   ``AsyncSession`` or surfaces to the caller. Findings inform
+#   migrates it. Verifies whether ``database is locked`` is recoverable by
+#   the legacy direct-session path or surfaces to the caller. Findings inform
 #   cycle 5 migration scope.
 # * Test #3 — provenance writes after commit: pins the v0.4.5 invariant
 #   surfaced by integrate concern #3 (full ``auto_injected_*`` propagation)

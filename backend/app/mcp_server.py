@@ -228,6 +228,7 @@ except Exception:
 # scheduling (no preemption between the check and assignment).  If the
 # server were ever embedded in a threaded ASGI host, a threading.Lock
 # would be needed instead.
+_process_initialized = False
 
 
 def _install_audit_hook_once() -> None:
@@ -251,9 +252,6 @@ def _install_audit_hook_once() -> None:
             "MCP audit hook install skipped (already installed): %s",
             _hook_exc,
         )
-
-
-_process_initialized = False
 
 
 @asynccontextmanager

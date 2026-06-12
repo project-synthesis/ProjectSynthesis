@@ -827,9 +827,18 @@ async def mcp_test_client():
     """
     from fastmcp import Client
 
+    from app.database import uninstall_read_engine_audit_hook
     from app.mcp_server import mcp
     async with Client(mcp) as client:
         yield client
+    # The MCP lifespan installs the read-engine audit hook process-once and
+    # never uninstalls (singleton contract). Tear it down here so audit-hook
+    # install/uninstall-semantics tests later in the collection order start
+    # from a clean slate regardless of ordering (-k subsets, randomization).
+    try:
+        uninstall_read_engine_audit_hook()
+    except Exception:
+        pass
 
 
 @pytest_asyncio.fixture
