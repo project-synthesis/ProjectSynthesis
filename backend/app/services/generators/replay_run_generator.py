@@ -39,6 +39,8 @@ Surface contract (spec §5):
 
 Spec: ``docs/superpowers/specs/2026-05-11-topic-probe-tier-2-design.md``
        §2 components + §5 ReplayRunGenerator body + §9 trace tagging.
+v0.4.36: docs/superpowers/specs/2026-06-12-v0.4.36-replay-parallelism-and-debt-retirement-design.md
+       (concurrent executor).
 Plan: ``docs/superpowers/plans/2026-05-11-topic-probe-tier-2.md`` Cycle 6.
 
 Copyright 2025-2026 Project Synthesis contributors.
@@ -351,7 +353,7 @@ class ReplayRunGenerator:
                     # NOTE: parens are load-bearing — runtime is Python 3.12
                     # (PEP 758 bare form needs 3.14; ruff's py314
                     # target-version would strip them, see pyproject.toml).
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError):  # fmt: skip
                         return None
             return None
 
@@ -395,15 +397,14 @@ class ReplayRunGenerator:
                     )
                 else:
                     try:
-                        # Fairness yield (one event-loop pass): guarantees
-                        # every semaphore-admitted sibling reaches its
-                        # provider call before any sibling's result
-                        # processing (e.g. the rate-limit trip below) runs.
-                        # Without it a synchronously-completing first call
-                        # would pre-start-short-circuit siblings the spec
-                        # counts as in-flight (spec §3.4 containment model:
-                        # in-flight prompts bail at the ``batch_pipeline``
-                        # phase gates, not at the executor).
+                        # Fairness yield: ensures every semaphore-admitted
+                        # sibling has passed the pre-start short-circuit
+                        # gate (is committed to its provider call) before
+                        # any sibling's result processing runs — the spec
+                        # §3.4 containment property. With real providers
+                        # the call itself suspends, making this a no-op;
+                        # it matters only when a call completes
+                        # synchronously (test fakes).
                         await asyncio.sleep(0)
                         pending = await batch_mod.run_single_prompt(
                             raw_prompt,
@@ -491,17 +492,23 @@ class ReplayRunGenerator:
         outcomes = await asyncio.gather(*tasks, return_exceptions=True)
         # BaseException sweep BEFORE the dense-list assertion — a
         # cancellation must surface as CancelledError, never as a spurious
-        # RuntimeError from a half-filled results list.
+        # RuntimeError from a half-filled results list. ``_run_one`` catches
+        # ``Exception`` internally, so a plain-Exception outcome here means
+        # the task body itself broke (executor bug); capture the first one
+        # to chain as the cause of the dense-list violation below.
+        first_unexpected: Exception | None = None
         for outcome in outcomes:
             if isinstance(outcome, BaseException) and not isinstance(
                 outcome,
                 Exception,
             ):
                 raise outcome
+            if first_unexpected is None and isinstance(outcome, Exception):
+                first_unexpected = outcome
         if any(r is None for r in prompt_results):
             raise RuntimeError(
                 f"replay executor slot invariant violated — sparse results list for run {run_id}",
-            )
+            ) from first_unexpected
         dense_results: list[dict[str, Any]] = [r for r in prompt_results if r is not None]
 
         # ---- Step 4: aggregate ----
@@ -650,7 +657,7 @@ def _project_pending_to_result(
         try:
             overall_score = float(overall_raw)
         # NOTE: parens are load-bearing on Python 3.12 (see _baseline_for).
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # fmt: skip
             overall_score = None
 
     delta: float | None = None

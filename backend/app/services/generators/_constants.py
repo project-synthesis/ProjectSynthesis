@@ -2,8 +2,8 @@
 
 Named in the T2 spec and deliberately deferred ("Scaffolding != TDD" canon)
 to land together with its first consumer — the v0.4.36 concurrent replay
-executor (spec: docs/superpowers/specs/
-2026-06-12-v0.4.36-replay-parallelism-and-debt-retirement-design.md §3.1).
+executor (spec:
+docs/superpowers/specs/2026-06-12-v0.4.36-replay-parallelism-and-debt-retirement-design.md §3.1).
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
