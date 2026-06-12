@@ -136,6 +136,22 @@
   // ── v0.4.37 §4.1 — per-prompt expansion + five-state DIFF machine ──
   let expandedIdx = $state<number | null>(null);
 
+  // Collapse the open row when the SELECTED SUITE changes — suite B must
+  // never render suite A's expansion state (row indexes are per-suite).
+  // Keyed on `suite.id`, not the object, so in-place detail refreshes
+  // (replay/retire → loadDetail re-flows a new object with the same id)
+  // do NOT collapse the operator's open row. Per the project's Svelte-5
+  // invariant, `suite.id` is read BEFORE the gate so the effect always
+  // subscribes to prop swaps.
+  let lastSuiteId: string | undefined;
+  $effect(() => {
+    const id = suite.id;
+    if (lastSuiteId !== undefined && id !== lastSuiteId) {
+      expandedIdx = null;
+    }
+    lastSuiteId = id;
+  });
+
   type DiffState =
     | { kind: 'hidden' }
     | { kind: 'output-vs-output'; before: string; after: string }
@@ -927,6 +943,7 @@
     color: var(--color-text-dim);
     font-size: 9px;
     cursor: pointer;
+    transition: color 200ms ease;
   }
   .row-chevron:hover { color: var(--color-text-primary); }
 
@@ -994,6 +1011,9 @@
     gap: 4px;
   }
 
+  /* Dimension-chip recipe — keep visually in lockstep with `.rp-dim-chip`
+     in layout/RunDetailInline.svelte (the replay-detail surface renders
+     the same per-prompt dimension data with the same chip treatment). */
   .dim-chip {
     display: inline-flex;
     align-items: center;

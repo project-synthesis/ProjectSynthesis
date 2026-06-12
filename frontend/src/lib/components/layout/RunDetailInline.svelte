@@ -137,6 +137,7 @@
     font-size: 10px;
     text-align: left;
     cursor: pointer;
+    transition: background-color 200ms ease;
   }
   .replay-prompt-head:hover { background: color-mix(in srgb, var(--color-bg-hover) 40%, transparent); }
   .replay-prompt-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -164,6 +165,9 @@
   }
   .rp-changes { color: var(--color-text-secondary); }
   .rp-dims { display: flex; flex-wrap: wrap; gap: 4px; }
+  /* Dimension-chip recipe — keep visually in lockstep with `.dim-chip`
+     in suites/SuiteDetailView.svelte (the suite-detail surface renders
+     the same per-prompt dimension data with the same chip treatment). */
   .rp-dim-chip {
     display: inline-flex;
     align-items: center;

@@ -217,6 +217,25 @@ describe('SuiteDetailView provenance (v0.4.37)', () => {
     expect(editorMock.editorStore.openResult).toHaveBeenCalledWith('opt-1');
   });
 
+  it('switching the suite prop resets the per-prompt expansion', async () => {
+    const user = userEvent.setup();
+    const { container, rerender } = render(SuiteDetailView, {
+      props: { suite: makeSuite(), replays: null, latestReplay: null },
+    });
+    await user.click(container.querySelector('[data-test="prompt-expand-btn"]') as HTMLElement);
+    expect(container.querySelector('[data-test="prompt-expanded"]')).not.toBeNull();
+
+    // Same snapshot shape, different suite id — the suite.id-keyed $effect
+    // collapses the open row so suite B never renders suite A's expansion
+    // state (row indexes are per-suite).
+    await rerender({
+      suite: makeSuite({ id: 'suite-2', label: 'other-suite' }),
+      replays: null,
+      latestReplay: null,
+    });
+    expect(container.querySelector('[data-test="prompt-expanded"]')).toBeNull();
+  });
+
   it('RUN link requests run selection in the Runs panel', async () => {
     const user = userEvent.setup();
     const { container } = render(SuiteDetailView, {

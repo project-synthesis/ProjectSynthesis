@@ -256,7 +256,7 @@ describe('suitesStore', () => {
     total: 0, count: 0, offset: 0, items: [], has_more: false, next_offset: null,
   };
 
-  it('loadDetail fires one deduped liveness check and stores alive ids + trace map', async () => {
+  it('select fires one deduped liveness check and stores alive ids + trace map', async () => {
     const fetchSpy = mockFetch([
       // Order matters: includes()-matching means the replays handler must
       // precede the bare suite-detail handler.
@@ -266,7 +266,11 @@ describe('suitesStore', () => {
     ]);
 
     const { suitesStore } = await loadStore();
-    await suitesStore.loadDetail('suite-1');
+    // Route through select() (not loadDetail directly) — loadDetail's
+    // stale-selection bail discards responses whose suiteId no longer
+    // matches `selectedSuiteId`, and select() is the production caller
+    // that sets the selection synchronously first.
+    await suitesStore.select('suite-1');
 
     const existsCalls = fetchSpy.mock.calls.filter(([u]) =>
       String(u).includes('/optimizations/exists'),
@@ -287,11 +291,132 @@ describe('suitesStore', () => {
     ]);
 
     const { suitesStore } = await loadStore();
-    await suitesStore.loadDetail('suite-1');
+    await suitesStore.select('suite-1');
 
     expect(suitesStore.aliveOriginalIds).toBeNull();
     expect(suitesStore.originalTraceIds).toEqual({});
     // The detail itself still loaded — liveness is best-effort.
+    expect(suitesStore.detail?.id).toBe('suite-1');
+  });
+
+  // ── v0.4.37 C2 gate fixes — stale-switch + >100-id regressions ───────
+
+  it('stale suite switch: A\'s late liveness response never leaks into B', async () => {
+    const detailA = {
+      ...detailWithRefs,
+      id: 'suite-a',
+      prompts_snapshot: [
+        { raw_prompt: 'a', intent_label: null, original_optimization_id: 'opt-a1' },
+      ],
+    };
+    const detailB = {
+      ...detailWithRefs,
+      id: 'suite-b',
+      prompts_snapshot: [
+        { raw_prompt: 'b', intent_label: null, original_optimization_id: 'opt-b1' },
+      ],
+    };
+
+    // Controllable gate parking suite A's /optimizations/exists response
+    // until released — models a slow liveness round-trip that resolves
+    // AFTER the operator has already switched to suite B.
+    let releaseA!: () => void;
+    const aGate = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+
+    // Static routes go through the canonical mockFetch helper; the wrapper
+    // intercepts only the exists POST so A's response can be parked.
+    const inner = mockFetch([
+      { match: '/api/suites/suite-a/replays', response: emptyReplays },
+      { match: '/api/suites/suite-a', response: detailA },
+      { match: '/api/suites/suite-b/replays', response: emptyReplays },
+      { match: '/api/suites/suite-b', response: detailB },
+    ]);
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/optimizations/exists')) {
+        const ids: string[] = JSON.parse(String(init?.body ?? '{}')).ids ?? [];
+        if (ids.includes('opt-a1')) {
+          await aGate; // park A's liveness round-trip until released
+          return json({ alive: ['opt-a1'], trace_ids: { 'opt-a1': 'tr-a1' } });
+        }
+        return json({ alive: ['opt-b1'], trace_ids: { 'opt-b1': 'tr-b1' } });
+      }
+      return inner(input, init);
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const { suitesStore } = await loadStore();
+
+    const selectA = suitesStore.select('suite-a');
+    // Wait until A's exists call is in flight (parked on the gate).
+    await vi.waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([u]) => String(u).includes('/optimizations/exists')),
+      ).toBe(true);
+    });
+
+    // Pre-seed a sentinel so the reset-at-entry is observable (not just
+    // the store's initial null).
+    suitesStore.aliveOriginalIds = new Set(['sentinel']);
+    suitesStore.originalTraceIds = { sentinel: 'tr-x' };
+
+    // Switch to B while A's liveness response is still pending. The
+    // unknown-state contract must hold immediately: loadDetail resets the
+    // liveness slices synchronously at entry, before its first await.
+    const selectB = suitesStore.select('suite-b');
+    expect(suitesStore.aliveOriginalIds).toBeNull();
+    expect(suitesStore.originalTraceIds).toEqual({});
+
+    await selectB;
+    expect(suitesStore.detail?.id).toBe('suite-b');
+    expect(suitesStore.aliveOriginalIds).toEqual(new Set(['opt-b1']));
+
+    // Release A's parked response — the stale-selection bail must discard
+    // it rather than let it clobber B's liveness state.
+    releaseA();
+    await selectA;
+    expect(suitesStore.selectedSuiteId).toBe('suite-b');
+    expect(suitesStore.aliveOriginalIds).toEqual(new Set(['opt-b1']));
+    expect(suitesStore.originalTraceIds).toEqual({ 'opt-b1': 'tr-b1' });
+  });
+
+  it('over-100 distinct ids degrades liveness to unknown without an exists call', async () => {
+    const manyIds = Array.from({ length: 101 }, (_, i) => `opt-${i}`);
+    const bigDetail = {
+      ...detailWithRefs,
+      prompts_snapshot: manyIds.map((id) => ({
+        raw_prompt: 'p',
+        intent_label: null,
+        original_optimization_id: id,
+      })),
+    };
+    const fetchSpy = mockFetch([
+      // Would answer an exists call if one were (wrongly) made — the
+      // assertion below pins that it never fires above the boundary.
+      { match: '/api/optimizations/exists', response: { alive: manyIds, trace_ids: {} } },
+      { match: '/api/suites/suite-1/replays', response: emptyReplays },
+      { match: '/api/suites/suite-1', response: bigDetail },
+    ]);
+
+    const { suitesStore } = await loadStore();
+    await suitesStore.select('suite-1');
+
+    const existsCalls = fetchSpy.mock.calls.filter(([u]) =>
+      String(u).includes('/optimizations/exists'),
+    );
+    expect(existsCalls).toHaveLength(0);
+    // Whole-suite degrade to unknown: no tombstones, no history links —
+    // never a sliced subset that lies about the rest.
+    expect(suitesStore.aliveOriginalIds).toBeNull();
+    expect(suitesStore.originalTraceIds).toEqual({});
+    // The detail itself still loaded.
     expect(suitesStore.detail?.id).toBe('suite-1');
   });
 });
