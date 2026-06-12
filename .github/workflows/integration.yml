@@ -23,6 +23,11 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      # Evict any cached native-built hnswlib wheel: the pip cache restores
+      # via prefix restore-keys, so a requirements.txt hash bust alone does
+      # not stop pip from reusing the poisoned wheel without re-running
+      # setup.py (where HNSWLIB_NO_NATIVE takes effect).
+      - run: pip cache remove hnswlib || true
       # HNSWLIB_NO_NATIVE: hnswlib ships sdist-only; without this flag its
       # setup.py compiles with -march=native, and the pip cache then serves
       # a CPU-specific wheel to runners lacking those instructions (SIGILL,
