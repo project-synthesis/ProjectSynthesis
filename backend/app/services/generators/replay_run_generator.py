@@ -22,9 +22,12 @@ Surface contract (spec §5):
 * Repo drift (saved suite repo ≠ request repo) emits a single
   ``probe_warning`` event with ``code='repo_drift'``. Informational only —
   replay proceeds with the saved snapshot.
-* Sequential per-prompt loop wraps every
-  ``batch_pipeline.run_single_prompt`` call in ``try / except Exception``
-  so one prompt's failure does NOT abort siblings.
+* Concurrent per-prompt fan-out (v0.4.36): ``asyncio.Semaphore`` capped by
+  ``PROBE_PROMPT_CONCURRENCY[tier]`` + ``gather(return_exceptions=True)``.
+  Preallocated index-addressed results preserve position correspondence;
+  per-prompt ``try / except Exception`` preserves sibling isolation; the
+  rate-limit projection guard keeps heuristic fallback scores out of the
+  regression baseline.
 * Per-prompt dict carries ``trace_id=pending.trace_id`` (NOT
   ``pending.id`` — replay does NOT bulk_persist so ``pending.id`` would
   be an orphan uuid) and uses ``overall_score`` as the canonical score
@@ -42,6 +45,7 @@ Copyright 2025-2026 Project Synthesis contributors.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -53,6 +57,10 @@ from app.models import ValidationSuite
 from app.schemas.runs import RunRequest
 from app.services.event_bus import event_bus
 from app.services.generators._aggregate import compute_run_aggregate
+from app.services.generators._constants import (
+    DEFAULT_PROMPT_CONCURRENCY,
+    PROBE_PROMPT_CONCURRENCY,
+)
 from app.services.generators.base import GeneratorResult
 
 logger = logging.getLogger(__name__)
@@ -109,7 +117,8 @@ class ReplayRunGenerator:
         2. Close the read session. Compare ``suite.repo_full_name`` with
            ``request.payload['repo_full_name']`` — emit a single
            ``probe_warning(code='repo_drift', ...)`` on mismatch.
-        3. For each prompt in ``suite.prompts_snapshot`` SEQUENTIALLY:
+        3. For each prompt in ``suite.prompts_snapshot`` CONCURRENTLY
+           (semaphore-capped per ``PROBE_PROMPT_CONCURRENCY``):
            call ``batch_pipeline.run_single_prompt`` under try/except,
            project the :class:`PendingOptimization` into a per-prompt
            dict (``trace_id=pending.trace_id``, ``overall_score``,
@@ -285,133 +294,73 @@ class ReplayRunGenerator:
                 "current_repo": repo_full_name,
             })
 
-        # ---- Step 3: sequential per-prompt loop ----
+        # ---- Step 3: concurrent per-prompt fan-out (v0.4.36, spec §3.3) ----
         #
-        # Why sequential (not ``asyncio.TaskGroup`` / ``asyncio.gather``):
+        # Invariants the executor preserves:
         #
-        # 1. Deterministic regression detection. Replay is the
-        #    baseline-vs-latest comparison that backs the regression-alarm
-        #    block in ``/api/health``. Parallel execution would expose race
-        #    conditions on the shared taxonomy engine + embedding index and
-        #    leak rate-limit-induced score variance into the latest_mean —
-        #    a flaky alarm is worse than a slow one.
-        # 2. ``TaskGroup`` semantics are wrong for this workload. A single
-        #    child's non-rate-limit exception propagates a
-        #    ``BaseExceptionGroup`` that aborts every sibling, leaving
-        #    inconsistent state with partial assignments. Terminal-status
-        #    classification cannot distinguish "partial=N completed=M"
-        #    from "TaskGroup-aborted at M". Sequential preserves the
-        #    per-prompt outcome envelope.
-        # 3. Failure isolation: the per-iteration ``try/except Exception``
-        #    below catches Exception (NOT bare ``except:``) deliberately
-        #    — provider failures, taxonomy lookups, scoring divergences
-        #    are all in scope; ``KeyboardInterrupt`` / ``SystemExit`` /
-        #    ``asyncio.CancelledError`` derive from ``BaseException`` and
-        #    propagate up to the orchestrator's ``shield()``ed cleanup.
-        #
-        # Trade-off accepted (spec §10 Cycle 6 O7): a 25-prompt suite at
-        # the worst-case provider latency runs ~30 min. That worst case
-        # is bounded by ``SESSION_TIMEOUT_BY_TYPE`` on the orchestrator
-        # side and is the documented upper limit for the replay surface.
-        # Per-prompt parallelism is deferred to T3, gated by the
-        # ``PROBE_PROMPT_CONCURRENCY`` constant introduced alongside its
-        # first consumer (per ``feedback_tdd_protocol.md`` "Scaffolding
-        # ≠ TDD" canon).
+        # 1. Position correspondence: ``prompt_results`` is preallocated and
+        #    index-addressed (``prompt_results[idx] = row``) — never appended
+        #    in completion order. Slot i pairs with ``prompts_snapshot[i]``
+        #    and ``per_prompt_baselines[i]`` by construction.
+        # 2. Failure isolation: ``_run_one`` catches ``Exception`` per prompt
+        #    (provider 5xx, taxonomy lookups, scoring divergences). Only
+        #    ``BaseException`` (cancellation / SystemExit) surfaces through
+        #    ``gather(return_exceptions=True)`` — re-raised AFTER all
+        #    siblings settle, BEFORE the dense-list assertion, so the
+        #    orchestrator's ``shield()``-ed cleanup sees the true cause.
+        # 3. Rate-limit containment (spec §3.4): the first pending carrying
+        #    ``rate_limit_meta.rate_limited`` trips a shared event — in-flight
+        #    prompts bail at the ``batch_pipeline`` phase gates; unstarted
+        #    prompts short-circuit pre-call. The projection guard converts
+        #    EVERY rate-limited pending into a score-less failed row so
+        #    heuristic fallback scores never enter the regression baseline's
+        #    ``latest_mean``.
+        # 4. ContextVar: tasks are created inside the orchestrator's
+        #    ``current_run_id.set(run_id)`` window, so children inherit the
+        #    run id (contextvars copy at ``create_task`` time).
         #
         # Function-level import: keeps the cyclic-import boundary easy to
-        # monkeypatch in tests — ``_patch_run_single_prompt`` substitutes
-        # a fake at this exact attribute path.
+        # monkeypatch in tests — fakes substitute at this exact attribute path.
         from app.services import batch_pipeline as batch_mod
 
-        prompt_results: list[dict[str, Any]] = []
-        for idx, prompt_row in enumerate(prompts_snapshot):
-            raw_prompt = str(prompt_row.get("raw_prompt", ""))
-            # Position-correspondence baseline lookup (spec §3 invariant 2
-            # + §5 lines 749-751): ``baseline_scores.per_prompt[idx]`` is
-            # paired with ``prompts_snapshot[idx]``. Missing entries fall
-            # back to ``None`` so the ``delta`` computation degrades to
-            # ``None`` rather than crashing on legacy or partial baselines.
-            baseline_overall: float | None = None
+        tier = "internal"
+        concurrency = PROBE_PROMPT_CONCURRENCY.get(
+            tier, DEFAULT_PROMPT_CONCURRENCY,
+        )
+        total_prompts = len(prompts_snapshot)
+        prompt_results: list[dict[str, Any] | None] = [None] * total_prompts
+        semaphore = asyncio.Semaphore(concurrency)
+        rate_limit_event = asyncio.Event()
+        rate_limited_flag: dict[str, Any] = {"hit": False}
+        progress = {"completed": 0}
+
+        def _baseline_for(idx: int) -> float | None:
+            # Position-correspondence baseline lookup (spec §3 invariant 2):
+            # ``baseline_scores.per_prompt[idx]`` pairs with
+            # ``prompts_snapshot[idx]``. Missing entries degrade to ``None``.
             if idx < len(per_prompt_baselines):
                 _bo_raw = per_prompt_baselines[idx].get("overall")
                 if _bo_raw is not None:
                     try:
-                        baseline_overall = float(_bo_raw)
+                        return float(_bo_raw)
                     except (TypeError, ValueError):
-                        baseline_overall = None
-            try:
-                pending = await batch_mod.run_single_prompt(
-                    raw_prompt,
-                    self._provider,
-                    self._prompt_loader,
-                    self._embedding_service,
-                    repo_full_name=repo_full_name,
-                    batch_id=run_id,
-                    prompt_index=idx,
-                    total_prompts=len(prompts_snapshot),
-                    session_factory=self._session_factory,
-                    taxonomy_engine=self._taxonomy_engine,
-                    domain_resolver=self._domain_resolver,
-                    tier="internal",
-                    context_service=self._context_service,
-                    historical_stats=historical_stats,
-                    project_id=project_id,
-                )
-                result_row = _project_pending_to_result(
-                    idx=idx,
-                    raw_prompt=raw_prompt,
-                    pending=pending,
-                    baseline_overall=baseline_overall,
-                    intent_label_fallback=prompt_row.get("intent_label"),
-                )
-            except Exception as exc:  # noqa: BLE001 - deliberately broad; see below
-                # Sibling-isolation: one prompt's failure does NOT abort
-                # the rest of the loop. Catches ``Exception`` (NOT bare
-                # ``except:`` and NOT a narrower union) deliberately —
-                # ``batch_pipeline.run_single_prompt`` can fail in many
-                # ways (provider 5xx, taxonomy lookup, scoring blender,
-                # embedding service, etc.) and every one of those should
-                # land as ``status='failed'`` on this row, not abort the
-                # whole replay. ``KeyboardInterrupt`` / ``SystemExit`` /
-                # ``asyncio.CancelledError`` derive from ``BaseException``
-                # and propagate up to the orchestrator's shielded cleanup.
-                logger.warning(
-                    "replay_run %s prompt %d raised (%s) — marking failed",
-                    run_id, idx, exc,
-                )
-                result_row = {
-                    "raw_prompt_idx": idx,
-                    "raw_prompt": raw_prompt[:1000],
-                    "trace_id": None,
-                    "overall_score": None,
-                    "dimensions": None,
-                    "task_type": None,
-                    "intent_label": prompt_row.get("intent_label"),
-                    "divergence_flags": None,
-                    "baseline_overall": baseline_overall,
-                    "delta": None,
-                    "status": "failed",
-                    "error": str(exc)[:500],
-                }
-            prompt_results.append(result_row)
+                        return None
+            return None
 
-            # Reuse the existing ``probe_prompt_completed`` event so SSE
-            # subscribers (HistoryPanel, SuiteDetailView, RunDetailView)
-            # don't need a new event type — the run_id correlates the row
-            # back to the replay invocation. Spec §5 lines 783-787 emit
-            # ``{run_id, idx, total, overall_score, delta}``; topic-probe
-            # ships ``{run_id, probe_id, current, total, optimization_id,
-            # intent_label, overall_score, status}``. We emit the UNION
-            # so existing topic-probe consumers (frontend HistoryPanel
-            # which keys off ``current``/``total``/``optimization_id``)
-            # stay compatible AND the spec's additive ``idx`` + ``delta``
-            # land for the SuiteDetailView regression-diff renderer.
+        def _publish_completed(idx: int, result_row: dict[str, Any]) -> None:
+            # ``current`` is a monotonic completed-counter (NOT idx+1):
+            # incremented synchronously before publish — single event loop,
+            # no await in between, hence race-free. The MCP bus→ctx bridge
+            # (tools/probe.py) forwards it to ctx.report_progress, which
+            # requires monotonicity under out-of-order completion. ``idx``
+            # keeps row identity for the SuiteDetailView diff renderer.
+            progress["completed"] += 1
             event_bus.publish("probe_prompt_completed", {
                 "run_id": run_id,
                 "probe_id": run_id,
                 "idx": idx,
-                "current": idx + 1,
-                "total": len(prompts_snapshot),
+                "current": progress["completed"],
+                "total": total_prompts,
                 "optimization_id": "",  # replay does not persist
                 "intent_label": result_row.get("intent_label"),
                 "overall_score": result_row.get("overall_score"),
@@ -419,8 +368,137 @@ class ReplayRunGenerator:
                 "status": result_row.get("status"),
             })
 
+        async def _run_one(idx: int, prompt_row: dict[str, Any]) -> None:
+            raw_prompt = str(prompt_row.get("raw_prompt", ""))
+            baseline_overall = _baseline_for(idx)
+            intent_fallback = prompt_row.get("intent_label")
+            async with semaphore:
+                if rate_limit_event.is_set():
+                    # Pre-start short-circuit: a sibling already hit the
+                    # provider rate limit — don't burn a guaranteed-429 call.
+                    result_row = _rate_limited_row(
+                        idx=idx,
+                        raw_prompt=raw_prompt,
+                        baseline_overall=baseline_overall,
+                        intent_label=intent_fallback,
+                    )
+                else:
+                    try:
+                        # Fairness yield (one event-loop pass): guarantees
+                        # every semaphore-admitted sibling reaches its
+                        # provider call before any sibling's result
+                        # processing (e.g. the rate-limit trip below) runs.
+                        # Without it a synchronously-completing first call
+                        # would pre-start-short-circuit siblings the spec
+                        # counts as in-flight (spec §3.4 containment model:
+                        # in-flight prompts bail at the ``batch_pipeline``
+                        # phase gates, not at the executor).
+                        await asyncio.sleep(0)
+                        pending = await batch_mod.run_single_prompt(
+                            raw_prompt,
+                            self._provider,
+                            self._prompt_loader,
+                            self._embedding_service,
+                            repo_full_name=repo_full_name,
+                            batch_id=run_id,
+                            prompt_index=idx,
+                            total_prompts=total_prompts,
+                            session_factory=self._session_factory,
+                            taxonomy_engine=self._taxonomy_engine,
+                            domain_resolver=self._domain_resolver,
+                            tier=tier,
+                            context_service=self._context_service,
+                            historical_stats=historical_stats,
+                            project_id=project_id,
+                            rate_limit_event=rate_limit_event,
+                        )
+                        meta = getattr(pending, "rate_limit_meta", None) or {}
+                        if meta.get("rate_limited"):
+                            # Detection per batch_orchestrator.py:212-224 —
+                            # run_single_prompt never raises on 429; the flag
+                            # rides on the returned pending. First hit trips
+                            # the shared event for siblings.
+                            if not rate_limited_flag["hit"]:
+                                rate_limited_flag["hit"] = True
+                                rate_limit_event.set()
+                                logger.warning(
+                                    "replay_run %s prompt %d rate-limited "
+                                    "(provider=%s, reset_at=%s) — "
+                                    "short-circuiting unstarted prompts",
+                                    run_id, idx, meta.get("provider"),
+                                    meta.get("reset_at_iso"),
+                                )
+                            # Projection guard (spec §3.4): bail-gate rows
+                            # carry status='completed' + heuristic
+                            # overall_score — poison for the regression
+                            # baseline. Project score-less instead.
+                            result_row = _rate_limited_row(
+                                idx=idx,
+                                raw_prompt=raw_prompt,
+                                baseline_overall=baseline_overall,
+                                intent_label=(
+                                    getattr(pending, "intent_label", None)
+                                    or intent_fallback
+                                ),
+                            )
+                        else:
+                            result_row = _project_pending_to_result(
+                                idx=idx,
+                                raw_prompt=raw_prompt,
+                                pending=pending,
+                                baseline_overall=baseline_overall,
+                                intent_label_fallback=intent_fallback,
+                            )
+                    except Exception as exc:  # noqa: BLE001 — sibling isolation
+                        # One prompt's failure does NOT abort the rest.
+                        # KeyboardInterrupt / SystemExit / CancelledError
+                        # derive from BaseException and propagate to the
+                        # gather sweep below.
+                        logger.warning(
+                            "replay_run %s prompt %d raised (%s) — marking "
+                            "failed", run_id, idx, exc,
+                        )
+                        result_row = {
+                            "raw_prompt_idx": idx,
+                            "raw_prompt": raw_prompt[:1000],
+                            "trace_id": None,
+                            "overall_score": None,
+                            "dimensions": None,
+                            "task_type": None,
+                            "intent_label": intent_fallback,
+                            "divergence_flags": None,
+                            "baseline_overall": baseline_overall,
+                            "delta": None,
+                            "status": "failed",
+                            "error": str(exc)[:500],
+                        }
+                prompt_results[idx] = result_row
+                _publish_completed(idx, result_row)
+
+        tasks = [
+            asyncio.create_task(_run_one(i, row))
+            for i, row in enumerate(prompts_snapshot)
+        ]
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        # BaseException sweep BEFORE the dense-list assertion — a
+        # cancellation must surface as CancelledError, never as a spurious
+        # RuntimeError from a half-filled results list.
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException) and not isinstance(
+                outcome, Exception,
+            ):
+                raise outcome
+        if any(r is None for r in prompt_results):
+            raise RuntimeError(
+                "replay executor slot invariant violated — sparse results "
+                f"list for run {run_id}",
+            )
+        dense_results: list[dict[str, Any]] = [
+            r for r in prompt_results if r is not None
+        ]
+
         # ---- Step 4: aggregate ----
-        aggregate = compute_run_aggregate(prompt_results)
+        aggregate = compute_run_aggregate(dense_results)
         # Replay-side metadata (additive — not in the canonical 8-key
         # block so seed/topic_probe consumers are unaffected). Useful for
         # the SuiteDetailView baseline diff which is keyed off suite_id.
@@ -435,11 +513,15 @@ class ReplayRunGenerator:
         # accumulate as future warning types land, e.g., ``baseline_stale``).
         completed_count = aggregate.get("completed_count", 0)
         failed_count = aggregate.get("failed_count", 0)
+        rate_limited_count = sum(
+            1 for r in dense_results if r.get("error") == "rate_limited"
+        )
         aggregate.update({
             "replay_warnings": warnings,
             "replay_suite_id": suite_id,
             "replay_n_completed": completed_count,
             "replay_n_failed": failed_count,
+            "replay_rate_limited_count": rate_limited_count,
         })
 
         # ---- Step 5: JSONL trace (spec §9 trace tagging) ----
@@ -476,11 +558,43 @@ class ReplayRunGenerator:
         return GeneratorResult(
             terminal_status=terminal,  # type: ignore[arg-type]
             prompts_generated=len(prompts_snapshot),
-            prompt_results=prompt_results,
+            prompt_results=dense_results,
             aggregate=aggregate,
             taxonomy_delta={},
             final_report=final_report,
         )
+
+
+def _rate_limited_row(
+    *,
+    idx: int,
+    raw_prompt: str,
+    baseline_overall: float | None,
+    intent_label: str | None,
+) -> dict[str, Any]:
+    """Score-less rate-limited row (spec §3.4 projection guard).
+
+    Used for BOTH kinds of rate-limited outcome — pre-start short-circuit
+    and in-flight bail-gate projection. Replay is a measurement workload:
+    a heuristic-scored fallback row would silently poison the baseline
+    comparison, so the row carries NO ``overall_score`` and lands as
+    ``status='failed'`` (the existing terminal classification then yields
+    ``partial``/``failed`` with zero new status logic).
+    """
+    return {
+        "raw_prompt_idx": idx,
+        "raw_prompt": raw_prompt[:1000],
+        "trace_id": None,
+        "overall_score": None,
+        "dimensions": None,
+        "task_type": None,
+        "intent_label": intent_label,
+        "divergence_flags": None,
+        "baseline_overall": baseline_overall,
+        "delta": None,
+        "status": "failed",
+        "error": "rate_limited",
+    }
 
 
 def _project_pending_to_result(
