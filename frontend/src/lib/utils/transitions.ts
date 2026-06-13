@@ -125,6 +125,16 @@ export const dialogIn = { duration: 200, easing: easeSpring };
  *  entrance per the brand "decisive lateral snap" cadence on dismissal. */
 export const dialogOut = { duration: 150, easing: easeExit };
 
+/** Scrim entrance — alias of dialogIn for surfaces that want to express
+ *  "the scrim is fading in" explicitly. The scrim and dialog must use
+ *  matched durations so they appear/dismiss in lockstep; deviating
+ *  visually announces an out-of-order render. Brand: chrome moves
+ *  together. */
+export const scrimIn = dialogIn;
+
+/** Scrim dismissal — alias of dialogOut. See ``scrimIn``. */
+export const scrimOut = dialogOut;
+
 /** List row insertion (history rows, cluster nodes, refinement turns).
  *  Matches ``navSlide`` so insert/expand transitions in the same panel
  *  feel cohesive. */

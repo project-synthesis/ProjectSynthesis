@@ -28,6 +28,7 @@
   import { tooltip } from '$lib/actions/tooltip';
   import { slide } from 'svelte/transition';
   import { navSlide } from '$lib/utils/transitions';
+  import { formatRelativeTime } from '$lib/utils/formatting';
 
   interface Props {
     active: boolean;
@@ -85,18 +86,9 @@
     return `${h}h ${m % 60}m`;
   }
 
-  // Compact relative-time formatter for the "Detected" row in the
-  // rate-limit detail card. Mirrors the formatTimeAgo helper used in
-  // taxonomy-health utilities so the panel reads consistently.
-  function formatDetectedAgo(detected_at_ms: number): string {
-    const diff = Date.now() - detected_at_ms;
-    const secs = Math.max(0, Math.floor(diff / 1000));
-    if (secs < 60) return `${secs}s ago`;
-    const m = Math.floor(secs / 60);
-    if (m < 60) return `${m}m ago`;
-    const h = Math.floor(m / 60);
-    return `${h}h ago`;
-  }
+  // v0.4.39 R-16: rate-limit "Detected" row goes through the shared
+  // `formatRelativeTime(epoch_ms, { suffix: 'ago' })` SSOT in
+  // utils/formatting — the local `formatDetectedAgo` was deleted.
 
   // One-line tooltip for the rate-limit accordion header — replaces the
   // full-paragraph "Behavior" data-row that dominated the clear-state
@@ -700,7 +692,7 @@
               <div class="data-row">
                 <span class="data-label">Detected</span>
                 <span class="data-value font-mono">
-                  {formatDetectedAgo(entry.detected_at_ms)}
+                  {formatRelativeTime(entry.detected_at_ms, { suffix: 'ago' })}
                 </span>
               </div>
               {#if entry.source}

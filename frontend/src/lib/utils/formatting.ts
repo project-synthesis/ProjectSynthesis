@@ -44,21 +44,43 @@ export function truncateText(text: string | null | undefined, maxLen = 80): stri
   return text.slice(0, maxLen).trimEnd() + '...';
 }
 
-/** Compact relative time string for sidebar display (e.g. "2h", "3d", "1mo"). */
-export function formatRelativeTime(isoString: string): string {
-  const diff = Date.now() - new Date(isoString).getTime();
-  if (diff < 0) return 'now';
+/**
+ * Relative-time formatter — single source of truth across the workbench.
+ *
+ * Default (`opts.suffix === 'compact'` or omitted) returns the IDE-density
+ * form `2h`, `3d`, `1mo` for sidebar rows + tables. `opts.suffix === 'ago'`
+ * adds the natural-language tail `2h ago`, `3d ago`, `just now` for
+ * conversational rows in cards + tooltips.
+ *
+ * Accepts either an ISO string OR a numeric epoch-ms timestamp — the rate-
+ * limit accordion in SettingsPanel previously hand-rolled its own
+ * `formatDetectedAgo(detected_at_ms: number)` because the original signature
+ * was string-only. The narrowed overload absorbs that consumer without
+ * losing the ISO path used by HistoryPanel / GitHubPanel / Inspector.
+ *
+ * Pre-v0.4.39 a sibling `formatTimeAgo` lived in `utils/taxonomy-health.ts`
+ * with subtly different break points; both have been collapsed here.
+ */
+export function formatRelativeTime(
+  input: string | number,
+  opts: { suffix?: 'ago' | 'compact' } = {},
+): string {
+  const ms = typeof input === 'number' ? input : new Date(input).getTime();
+  const diff = Date.now() - ms;
+  const suffix = opts.suffix ?? 'compact';
+  if (diff < 0) return suffix === 'ago' ? 'just now' : 'now';
   const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return 'now';
+  if (seconds < 60) return suffix === 'ago' ? 'just now' : 'now';
+  const tail = suffix === 'ago' ? ' ago' : '';
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) return `${minutes}m${tail}`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
+  if (hours < 24) return `${hours}h${tail}`;
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
-  if (days < 30) return `${Math.floor(days / 7)}w`;
-  if (days < 365) return `${Math.floor(days / 30)}mo`;
-  return `${Math.floor(days / 365)}y`;
+  if (days < 7) return `${days}d${tail}`;
+  if (days < 30) return `${Math.floor(days / 7)}w${tail}`;
+  if (days < 365) return `${Math.floor(days / 30)}mo${tail}`;
+  return `${Math.floor(days / 365)}y${tail}`;
 }
 
 /** Trend threshold (absolute) below which the trend is considered stable. */

@@ -83,6 +83,21 @@
     };
   });
 
+  // Body-scroll lock while open. Snapshots the prior `overflow` value at
+  // open time and restores it on close so we don't trample whatever the
+  // host page had set (e.g. landing routes that lock scroll independently
+  // of any modal). Per v0.4.39 risk callout: never restore unconditionally
+  // to `'auto'` — that would silently override pre-existing page state.
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    if (!open) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  });
+
   onDestroy(() => {
     if (typeof document !== 'undefined') {
       document.removeEventListener('keydown', handleKeyDown);
@@ -115,8 +130,8 @@
   .ad-scrim {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 60;
+    background: var(--color-scrim);
+    z-index: var(--z-modal-scrim);
   }
 
   .ad-dialog {
@@ -126,7 +141,7 @@
     transform: translate(-50%, -50%);
     background: var(--color-bg-card);
     border: 1px solid var(--color-border-subtle);
-    z-index: 61;
+    z-index: var(--z-modal);
     /* Consumers control max-width / padding / inner layout via the default
        slot. The primitive only owns the chrome wrapper + transitions. */
   }

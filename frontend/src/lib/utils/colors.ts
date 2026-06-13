@@ -45,16 +45,26 @@ export function qHealthColor(q: number | null): string {
   return 'var(--color-neon-red)';
 }
 
-/** Cluster lifecycle state color for state filter tabs and badges. */
+/**
+ * Cluster lifecycle state color for state filter tabs and badges.
+ *
+ * Resolved through `--color-state-*` tokens defined in `app.css:root` —
+ * pre-v0.4.39 the hex values lived inline here and drifted from the
+ * design tokens. Unknown states safely degrade to the candidate slot.
+ *
+ * Brand note: `domain` resolves to warm platinum (not neon-yellow) so
+ * structural-foundation nodes stay visually distinct from the
+ * passthrough-tier neon-yellow accent.
+ */
 export function stateColor(state: string): string {
   const map: Record<string, string> = {
-    candidate: '#7a7a9e',
-    active: '#4d8eff',
-    mature: '#a855f7',
-    archived: '#3a3a52',
-    domain: '#c0a060',  // warm platinum — structural foundation (distinct from neon-yellow/passthrough #fbbf24)
+    candidate: 'var(--color-state-candidate)',
+    active: 'var(--color-state-active)',
+    mature: 'var(--color-state-mature)',
+    archived: 'var(--color-state-archived)',
+    domain: 'var(--color-state-domain)',
   };
-  return map[state] ?? '#7a7a9e';
+  return map[state] ?? 'var(--color-state-candidate)';
 }
 
 /**

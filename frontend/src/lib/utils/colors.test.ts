@@ -128,19 +128,21 @@ describe('qHealthColor', () => {
 });
 
 describe('stateColor', () => {
-  it('returns correct color for each lifecycle state', () => {
-    expect(stateColor('candidate')).toBe('#7a7a9e');
-    expect(stateColor('active')).toBe('#4d8eff');
-    expect(stateColor('mature')).toBe('#a855f7');
-    expect(stateColor('archived')).toBe('#3a3a52');
+  it('returns the correct CSS var for each lifecycle state', () => {
+    // v0.4.39 R-11 prerequisite: stateColor now returns CSS var() strings
+    // that resolve through the `--color-state-*` tokens in app.css.
+    expect(stateColor('candidate')).toBe('var(--color-state-candidate)');
+    expect(stateColor('active')).toBe('var(--color-state-active)');
+    expect(stateColor('mature')).toBe('var(--color-state-mature)');
+    expect(stateColor('archived')).toBe('var(--color-state-archived)');
   });
 
-  it('returns fallback gray for unknown state', () => {
-    expect(stateColor('nonexistent')).toBe('#7a7a9e');
+  it('returns the candidate-slot var for unknown state', () => {
+    expect(stateColor('nonexistent')).toBe('var(--color-state-candidate)');
   });
 
-  it('returns fallback gray for empty string', () => {
-    expect(stateColor('')).toBe('#7a7a9e');
+  it('returns the candidate-slot var for empty string', () => {
+    expect(stateColor('')).toBe('var(--color-state-candidate)');
   });
 });
 
@@ -155,9 +157,11 @@ describe('highlight color constants', () => {
 });
 
 describe('stateColor — template state removed', () => {
-  it('no longer recognizes template state (falls back to default gray)', () => {
-    // After the refactor, 'template' is unknown and gets the fallback.
-    expect(stateColor('template')).toBe('#7a7a9e');
+  it('no longer recognizes template state (falls back to candidate slot)', () => {
+    // After the refactor, 'template' is unknown and gets the fallback,
+    // which the v0.4.39 R-11 prerequisite resolves through the
+    // --color-state-candidate token.
+    expect(stateColor('template')).toBe('var(--color-state-candidate)');
   });
 });
 

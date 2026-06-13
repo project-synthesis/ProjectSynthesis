@@ -358,20 +358,16 @@
     height: 7px;
     background: var(--color-neon-green);
     border: 1px solid var(--color-bg-primary);
-    animation: pulse-dot 2s ease-in-out infinite;
-  }
-  @keyframes pulse-dot {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    /* v0.4.39 R-05: reuse the shared status-pulse keyframe so the badge
+       dot pulses on the same cadence as every other status indicator. */
+    animation: status-pulse 2s ease-in-out infinite;
   }
   .update-badge.updating {
     color: var(--color-neon-yellow);
     cursor: default;
-    animation: pulse 1.5s ease-in-out infinite;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+    /* v0.4.39 R-05: shared status-pulse, faster cadence for the active
+       update state. */
+    animation: status-pulse 1.5s ease-in-out infinite;
   }
   .update-dialog {
     width: 360px;
