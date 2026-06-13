@@ -6,7 +6,9 @@ Spec: docs/superpowers/specs/2026-06-12-v0.4.38-sub-domain-telemetry-design.md Â
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -148,10 +150,14 @@ def test_ac10_handles_missing_generated_qualifiers_key(migrated_db):
 def test_ac10_alembic_upgrade_head_clean(migrated_db):
     eng, cfg = migrated_db
     # After upgrade-head, alembic check returns 0 on a clean DB.
+    # Invoke via `sys.executable -m alembic` so the test runs both locally
+    # (where .venv/bin/alembic exists) and in CI (where alembic is on PATH
+    # but not at that exact relative path â€” the system site-packages
+    # installation).
     result = subprocess.run(
-        [".venv/bin/alembic", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=str(BACKEND_DIR),
-        env={"DATABASE_URL": cfg.get_main_option("sqlalchemy.url")},
+        env={"DATABASE_URL": cfg.get_main_option("sqlalchemy.url"), "PATH": os.environ.get("PATH", "")},
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr

@@ -10,27 +10,41 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_process_started_flag():
-    """Reset the module-level singleton guard between tests in this file.
+    """Reset the module-level singleton guard AND restore the global event
+    logger between tests in this file.
 
-    ``app.mcp_server._process_started_emitted`` is a MODULE-LEVEL bool that
-    persists across tests within the same pytest process. Without this
-    fixture, the second test that calls ``_emit_process_started_decision_mcp()``
-    finds the flag already True (set by the first test that called it) and
-    returns 0 events — breaking the singleton-guarded test.
+    Two pieces of cross-test state to manage:
 
-    Backend rationale (no equivalent fixture needed for ``app.main``):
-    ``_emit_process_started_decision`` in ``app/main.py`` is the helper used
-    by the backend lifespan and is intentionally NOT singleton-guarded — the
-    backend lifespan executes exactly once per process so the guard would be
-    redundant. Verified by the ``grep -n "_process_started_emitted" app/main.py``
-    check in C2-INTEGRATE.1 (expected: no hits). If a future revision adds a
-    backend-side flag, extend this fixture to reset both.
+    1. ``app.mcp_server._process_started_emitted`` is a MODULE-LEVEL bool that
+       persists across tests within the same pytest process. Without resetting
+       it, the second test that calls ``_emit_process_started_decision_mcp()``
+       finds the flag already True and returns 0 events — breaking the
+       singleton-guarded test.
+    2. Each test calls ``set_event_logger(tel)`` with a tmp_path-backed
+       logger; without restoration, the GLOBAL event-logger singleton is
+       left pointing at a torn-down tmp_path for every subsequent test in
+       the same pytest process. Downstream tests that assert on
+       ``caplog`` messages emitted via Python logging from app code paths
+       that ALSO touch ``get_event_logger()`` would see silent failures
+       (a JSONL write to a dead path raises inside the swallowing
+       try/except, which routes through Python logging and races with
+       the test's caplog capture). Saving + restoring the prior logger
+       contains the blast radius.
+
+    Backend rationale (no equivalent flag in ``app/main.py``): the backend
+    lifespan executes once per process so the guard would be redundant.
     """
     import app.mcp_server as _mcp
+    from app.services.taxonomy import event_logger as _el
 
+    prior_logger = _el._instance
+    prior_flag = _mcp._process_started_emitted
     _mcp._process_started_emitted = False
-    yield
-    _mcp._process_started_emitted = False
+    try:
+        yield
+    finally:
+        _mcp._process_started_emitted = prior_flag
+        _el._instance = prior_logger
 
 
 def test_ac14_backend_lifespan_emits_process_started(tmp_path, monkeypatch):
