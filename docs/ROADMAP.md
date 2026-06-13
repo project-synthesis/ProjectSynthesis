@@ -160,6 +160,7 @@ With P3 in place, Probe Tier 2 / Tier 3 / Tier 4 build on the unified substrate 
 - **v0.4.35** — **Periodic GC sweep**: `_gc_orphan_runs` + `_gc_stuck_pending_optimizations` now also fire hourly via `_recurring_gc_task`. Each sweep tags log with `phase` (startup/recurring) for ops forensics. — **SHIPPED 2026-05-21**.
 - **v0.4.36** — **Concurrent replay executor** (`PROBE_PROMPT_CONCURRENCY` tier-mapped fan-out + rate-limit projection guard) **+ time-gated debt retirement** (`WriterLockedAsyncSession`, gc shim, 18 unused-ignores, MCP audit hook). — **SHIPPED 2026-06-12** (PR #97).
 - **v0.4.37** — **Suite/run content visibility + provenance integrity** (replay output capture + self-contained snapshots + 409 delete guard w/ force + `optimizations_deleted` audit trail + exists endpoint; SuiteDetailView expandable rows + five-state DIFF machine + tombstones + run/history links; RunDetailInline replay detail). — **SHIPPED 2026-06-12** (PR #98).
+- **v0.4.38** — **Sub-domain telemetry hardening**: unified qualifier view (F2) + truncation heal (F5a) + `sub_domain_health_check` four-reason decision (F1) + regen-on-created (F3) + retry-queue periodic drain timer (F4) + `process_started` decisions on both lifespans (F5b). Closes ROADMAP audit findings 1-5. — **SHIPPED 2026-06-13**.
 - **TBD** — Foundation P2 Path B (Phase 3 body extraction — deferred indefinitely; needs fresh design cycle; not blocking T3-T4 because they build on the unified substrate from P3, not on Phase 3 isolation).
 - **TBD** — UI affordance for ValidationSuite release-gate toggle (admin-only API in v0.4.28 T3.1; UI suite-card toggle deferred). Could fold into v0.4.29 or later.
 - **TBD** — Universal "Drill into cluster" UI surface (anywhere a cluster appears — `ClusterNavigator`, `ClusterRow`, `ClusterTemplatesSection`, 3D Pattern Graph cluster context menu). v0.4.30 T3.3 shipped the seed-result-view-only version per the ROADMAP "action on seed runs" scoping; this entry tracks the future expansion to all cluster surfaces.
@@ -534,26 +535,15 @@ synthesis_probe                      → MCP tool (extends existing 14 → 15 to
 
 ---
 
-### v0.4.10+ audit-driven hardening (sourced from cycles 19–22 meta-prompts, 2026-04-27)
+### v0.4.10+ audit-driven hardening (sourced from cycles 19–22 meta-prompts, 2026-04-27) — **CLOSED v0.4.38**
 
-Top 5 architectural audit findings surfaced by self-prompting the running v0.4.8 system about its own inconsistencies. Each is a candidate v0.4.10+ follow-up; scores are the system's own optimization-quality grade for the audit prompt that surfaced the gap. (Originally targeted at v0.4.9; that release was reallocated to ship F1-F5 audit-prompt scoring hardening from `docs/specs/audit-prompt-hardening-2026-04-28.md`.)
+All five findings shipped in v0.4.38 (2026-06-13). See CHANGELOG.md.
 
-**1. R3/R5 telemetry asymmetry — `sub_domain_health_check` periodic event (score 8.10)**
-Today an operator investigating a quiet sub-domain (no events in JSONL) cannot tell whether R3 silently skipped it, R2's grace-gate blocked it, or re-eval simply hasn't fired. Propose: a per-cycle `sub_domain_health_check` event for every existing sub-domain with `reason ∈ {grace_period, empty_snapshot, evaluated}`. Bounded volume (one per sub-domain per cycle), fully observable, closes the silent-skip blind spot. Trace: `d74283a8`.
-
-**2. Cascade-vs-parse_domain unified primitive (score 8.04)**
-The R6 spec already documents this divergence (see `docs/specs/sub-domain-dissolution-hardening-r4-r6.md` §R6 implementation note) but it remains a structural risk. The cascade normalizes literal qualifiers (`embedding`, `embedding-correctness`) → vocab groups (`embeddings`); rebuild bypasses that and operates on raw `parse_domain`. Today's cycle-15→17 emergence push exposed this concretely — R6 dry-runs at 0.30/0.35/0.38 thresholds returned `proposed=[]` even when the cascade view showed the qualifier consolidating well past the threshold. Propose: shared `compute_unified_qualifier_view()` primitive that runs the cascade normalization with a vocab-empty fallback to literal `parse_domain`, used by both readiness and rebuild. Trace: `eca121be`.
-
-**3. Phase 4.95 vocab regen cadence — auto-trigger on `sub_domain_created` (score 7.74)**
-Phase 4.95 (vocab regeneration) runs on `MAINTENANCE_CYCLE_INTERVAL=6` cadence — but today's `embeddings` sub-domain emergence at 20:15 didn't trigger an immediate vocab regen on `backend`; the next regen waited for the cadence tick (6 minutes later at 20:21). For ~6 min the parent domain's vocab was stale, still listing `embeddings` as one of its own groups. Propose: decouple Phase 4.95 from the cadence specifically when `sub_domain_created` fires — the parent's vocab needs to drop the graduated qualifier immediately. Trace: `c4da176c`.
-
-**4. Cross-process telemetry sync — MCP ↔ backend bridge flush (score 7.68)**
-Both processes write to `data/taxonomy_events/decisions-YYYY-MM-DD.jsonl` but events from the MCP process route through an HTTP POST bridge to `/api/events/_publish` with up to 30s of buffering. Today's `sub_domain_rebuild_invoked` events show this asymmetry: events from REST calls land instantly; events from MCP-tool-triggered actions delay. Propose: `flush_on_decision_emit` policy — every `log_decision()` call from a process that's NOT the JSONL owner immediately POSTs to the bridge with a 1s timeout, falls back to the existing buffer on timeout. Trace: `de801d3b`.
-
-**5. R7 label-truncation discrepancy + per-process event_logger lifespan tied (score 7.68)**
-Two related findings tied at score 7.68 — both around event-logger correctness:
-- **5a** `previous_groups` in the WARNING-firing R7 event today contains `pipeline-observabili` (truncated to 20 chars) while `new_groups` has the full `pipeline-observability` (22 chars). Stored vocab labels were truncated somewhere in storage; new regens produce full labels. Propose: audit `normalize_sub_domain_label(raw, max_len=30)` callers to find the silent 20-char truncation path. Confirmed live in: `2026-04-27T20:53:00 general` regen.
-- **5b** Per-process event_logger lifespan singleton — when MCP or backend restarts mid-session, the new process's events flow to a fresh JSONL file but old-process pending writes go to the old file. Propose: emit a `process_started` decision so operators can correlate event gaps with restarts. Trace: `c93a188f`.
+- **1. R3/R5 telemetry asymmetry — `sub_domain_health_check`** — **SHIPPED v0.4.38**
+- **2. Cascade-vs-parse_domain unified primitive** — **SHIPPED v0.4.38**
+- **3. Phase 4.95 vocab regen cadence — auto-trigger on `sub_domain_created`** — **SHIPPED v0.4.38**
+- **4. Cross-process telemetry sync — MCP ↔ backend bridge flush (corrected diagnosis: periodic drain timer)** — **SHIPPED v0.4.38**
+- **5. R7 label-truncation discrepancy + per-process event_logger lifespan tied** — **SHIPPED v0.4.38**
 
 **Audit-cycle methodology:** 4 cycles × 4–7 prompts each = 20 prompts asking the running system to introspect specific surfaces. Average score 7.36 (slightly below v0.4.8 baseline 7.96 — consistent with the audit-prompt score-drift hypothesis itself surfaced by cycle-21). The 20 prompts also organically emerged a `frontend` top-level domain (3rd new node today, after `embeddings` sub and `data` domain).
 
