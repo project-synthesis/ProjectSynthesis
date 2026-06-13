@@ -58,7 +58,8 @@ def _apply_cross_process_dirty_marks(engine, event_data) -> None:
         except Exception:
             logger.debug(
                 "mark_dirty(%s) raised from cross-process bridge — skipping",
-                cid, exc_info=True,
+                cid,
+                exc_info=True,
             )
 
 
@@ -75,28 +76,33 @@ async def _backfill_project_ids(db) -> None:
     from app.models import LinkedRepo, Optimization, PromptCluster
 
     # Resolve Legacy project (fallback for repo-less optimizations).
-    legacy = (await db.execute(
-        _sel(PromptCluster).where(
-            PromptCluster.state == "project",
-            PromptCluster.label == "Legacy",
-        ).limit(1)
-    )).scalar_one_or_none()
+    legacy = (
+        await db.execute(
+            _sel(PromptCluster)
+            .where(
+                PromptCluster.state == "project",
+                PromptCluster.label == "Legacy",
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
     legacy_id = legacy.id if legacy else None
 
     # Bulk-load repo → project_node_id map (typically small).
     repo_map: dict[str, str] = {}
-    lr_rows = (await db.execute(
-        _sel(LinkedRepo.full_name, LinkedRepo.project_node_id)
-        .where(LinkedRepo.project_node_id.isnot(None))
-    )).all()
+    lr_rows = (
+        await db.execute(
+            _sel(LinkedRepo.full_name, LinkedRepo.project_node_id).where(LinkedRepo.project_node_id.isnot(None))
+        )
+    ).all()
     for row in lr_rows:
         repo_map[row[0]] = row[1]
 
     total_filled = 0
     while True:
-        missing = (await db.execute(
-            _sel(Optimization).where(Optimization.project_id.is_(None)).limit(500)
-        )).scalars().all()
+        missing = (
+            (await db.execute(_sel(Optimization).where(Optimization.project_id.is_(None)).limit(500))).scalars().all()
+        )
         if not missing:
             break
 
@@ -146,10 +152,12 @@ async def _run_adr005_migration(db) -> None:
 
     # Step 1: Find or create the canonical Legacy project node.
     legacy_q = await db.execute(
-        _sel(PromptCluster).where(
+        _sel(PromptCluster)
+        .where(
             PromptCluster.state == "project",
             PromptCluster.label == "Legacy",
-        ).limit(1)
+        )
+        .limit(1)
     )
     legacy = legacy_q.scalar_one_or_none()
 
@@ -164,24 +172,29 @@ async def _run_adr005_migration(db) -> None:
         db.add(legacy)
         await db.flush()
         logger.info(
-            "Hybrid migration: created Legacy project node %s", legacy.id,
+            "Hybrid migration: created Legacy project node %s",
+            legacy.id,
         )
 
     # Step 2: Detach top-level domains from any project parent.
     # Domains must live at the taxonomy root so projects and domains are
     # sibling roots. Sub-domains (parent.state == "domain") are preserved.
-    project_ids_q = await db.execute(
-        _sel(PromptCluster.id).where(PromptCluster.state == "project")
-    )
+    project_ids_q = await db.execute(_sel(PromptCluster.id).where(PromptCluster.state == "project"))
     project_ids = {row[0] for row in project_ids_q.all()}
     detached_count = 0
     if project_ids:
-        parented = (await db.execute(
-            _sel(PromptCluster).where(
-                PromptCluster.state == "domain",
-                PromptCluster.parent_id.in_(project_ids),
+        parented = (
+            (
+                await db.execute(
+                    _sel(PromptCluster).where(
+                        PromptCluster.state == "domain",
+                        PromptCluster.parent_id.in_(project_ids),
+                    )
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
         for d in parented:
             d.parent_id = None
             detached_count += 1
@@ -198,9 +211,9 @@ async def _run_adr005_migration(db) -> None:
     # the legacy bulk-assign-to-Legacy behavior that collapsed every
     # linked repo into a single shared project.
     try:
-        unlinked_repos = (await db.execute(
-            _sel(LinkedRepo).where(LinkedRepo.project_node_id.is_(None))
-        )).scalars().all()
+        unlinked_repos = (
+            (await db.execute(_sel(LinkedRepo).where(LinkedRepo.project_node_id.is_(None)))).scalars().all()
+        )
     except Exception:
         # Column always present from migration ``bdd8e96cf489`` (v0.4.18);
         # this guard is retained as belt-and-braces for fresh DBs whose
@@ -303,6 +316,7 @@ async def lifespan(app: FastAPI):
     # Wire here so MCP tool handlers called from REST in the backend process
     # find the routing singleton.
     from app.tools._shared import set_routing as _set_shared_routing
+
     _set_shared_routing(routing)
 
     logger.info(
@@ -316,6 +330,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize rate-limit store and startup probe
     from app.services.rate_limit_state import get_rate_limit_store, probe_rate_limit
+
     rate_limit_store = get_rate_limit_store()
 
     # Synchronize initial routing state
@@ -372,6 +387,7 @@ async def lifespan(app: FastAPI):
     # Validate prompt templates at startup
     from app.services.prompt_loader import PromptLoader
     from app.services.strategy_loader import StrategyLoader
+
     try:
         loader = PromptLoader(PROMPTS_DIR)
         loader.validate_all()
@@ -385,6 +401,7 @@ async def lifespan(app: FastAPI):
     try:
         from app.database import async_session_factory
         from app.services.adaptation_tracker import AdaptationTracker
+
         async with async_session_factory() as db:
             tracker = AdaptationTracker(db)
             await tracker.cleanup_orphaned_affinities()
@@ -395,6 +412,7 @@ async def lifespan(app: FastAPI):
     try:
         from app.database import async_session_factory
         from app.services.gc import run_startup_gc
+
         async with async_session_factory() as db:
             await run_startup_gc(db)
     except Exception as exc:
@@ -458,20 +476,18 @@ async def lifespan(app: FastAPI):
     app.state.recurring_gc_task = asyncio.create_task(_recurring_gc_task())
 
     # Start strategy file watcher
-    watcher_task = asyncio.create_task(
-        watch_strategy_files(PROMPTS_DIR / "strategies")
-    )
+    watcher_task = asyncio.create_task(watch_strategy_files(PROMPTS_DIR / "strategies"))
     app.state.watcher_task = watcher_task
 
     # Start seed agent file watcher
     from app.services.file_watcher import watch_seed_agent_files
-    agent_watcher_task = asyncio.create_task(
-        watch_seed_agent_files(PROMPTS_DIR / "seed-agents")
-    )
+
+    agent_watcher_task = asyncio.create_task(watch_seed_agent_files(PROMPTS_DIR / "seed-agents"))
     app.state.agent_watcher_task = agent_watcher_task
 
     # Start update checker (background — non-blocking)
     from app.services.update_service import UpdateService
+
     _update_svc = UpdateService(project_root=PROJECT_ROOT)
     app.state.update_service = _update_svc
 
@@ -499,6 +515,7 @@ async def lifespan(app: FastAPI):
 
     # Shared EmbeddingService singleton — reused by taxonomy engine and context service
     from app.services.embedding_service import EmbeddingService
+
     _shared_embedding_service = EmbeddingService()
 
     # Start taxonomy engine subscriber (replaces PatternExtractorService)
@@ -519,6 +536,7 @@ async def lifespan(app: FastAPI):
             # called from REST in the backend process find it. MCP server
             # process wires this via ``mcp_server.py:307``.
             from app.tools._shared import set_taxonomy_engine as _set_shared_taxonomy
+
             _set_shared_taxonomy(engine)
 
             # v0.4.16 P1a Cycle 1: defensive recovery for engine bootstrap.
@@ -536,6 +554,7 @@ async def lifespan(app: FastAPI):
 
             # Initialize taxonomy event logger
             from app.services.taxonomy.event_logger import TaxonomyEventLogger, set_event_logger
+
             taxonomy_event_logger = TaxonomyEventLogger(
                 events_dir=DATA_DIR / "taxonomy_events",
                 publish_to_bus=True,
@@ -577,11 +596,13 @@ async def lifespan(app: FastAPI):
                 set_domain_resolver as _set_shared_dr,
                 set_signal_loader as _set_shared_sl,
             )
+
             _set_shared_dr(domain_resolver)
             _set_shared_sl(signal_loader)
 
             # Wire signal loader into heuristic analyzer for dynamic domain signals
             from app.services.heuristic_analyzer import set_signal_loader as set_analyzer_signal_loader
+
             set_analyzer_signal_loader(signal_loader)
 
             logger.info("Domain services initialized")
@@ -590,6 +611,7 @@ async def lifespan(app: FastAPI):
             try:
                 from app.services.heuristic_analyzer import set_task_type_signals
                 from app.services.task_type_signal_extractor import extract_task_type_signals
+
                 async with async_session_factory() as _tt_db:
                     tt_signals = await extract_task_type_signals(_tt_db)
                     if tt_signals:
@@ -604,12 +626,15 @@ async def lifespan(app: FastAPI):
                         )
                         # Persist for MCP cold-start
                         import json as _tt_json
+
                         _tt_cache = DATA_DIR / "task_type_signals.json"
                         try:
-                            _tt_cache.write_text(_tt_json.dumps(
-                                {k: [[kw, w] for kw, w in v] for k, v in tt_signals.items()},
-                                indent=2,
-                            ))
+                            _tt_cache.write_text(
+                                _tt_json.dumps(
+                                    {k: [[kw, w] for kw, w in v] for k, v in tt_signals.items()},
+                                    indent=2,
+                                )
+                            )
                         except Exception:
                             logger.debug("Failed to persist task_type_signals.json")
                     else:
@@ -632,16 +657,19 @@ async def lifespan(app: FastAPI):
                     from app.models import PromptCluster as _PC_check
 
                     async with async_session_factory() as _check_db:
-                        _active_count = (await _check_db.execute(
-                            _sel_check(_func_check.count()).where(
-                                _PC_check.state.notin_(EXCLUDED_STRUCTURAL_STATES),
-                                _PC_check.centroid_embedding.isnot(None),
+                        _active_count = (
+                            await _check_db.execute(
+                                _sel_check(_func_check.count()).where(
+                                    _PC_check.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+                                    _PC_check.centroid_embedding.isnot(None),
+                                )
                             )
-                        )).scalar() or 0
+                        ).scalar() or 0
                     if engine.embedding_index.size < _active_count * 0.5:
                         logger.info(
                             "Embedding index cache stale (%d entries, %d active clusters) — rebuilding",
-                            engine.embedding_index.size, _active_count,
+                            engine.embedding_index.size,
+                            _active_count,
                         )
                         _cache_loaded = False  # Force rebuild below
 
@@ -653,19 +681,19 @@ async def lifespan(app: FastAPI):
 
                     async with async_session_factory() as _db:
                         _clusters = (
-                            await _db.execute(
-                                _select(PromptCluster).where(
-                                    PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
+                            (
+                                await _db.execute(
+                                    _select(PromptCluster).where(PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES))
                                 )
                             )
-                        ).scalars().all()
+                            .scalars()
+                            .all()
+                        )
                         _centroids: dict[str, _np.ndarray] = {}
                         for _c in _clusters:
                             if _c.centroid_embedding:
                                 try:
-                                    _emb = _np.frombuffer(
-                                        _c.centroid_embedding, dtype=_np.float32
-                                    )
+                                    _emb = _np.frombuffer(_c.centroid_embedding, dtype=_np.float32)
                                     if _emb.shape[0] == 384:
                                         _centroids[_c.id] = _emb
                                 except (ValueError, TypeError):
@@ -677,9 +705,7 @@ async def lifespan(app: FastAPI):
                             len(_centroids),
                         )
             except Exception as idx_exc:
-                logger.warning(
-                    "EmbeddingIndex warm-load failed (non-fatal): %s", idx_exc
-                )
+                logger.warning("EmbeddingIndex warm-load failed (non-fatal): %s", idx_exc)
 
             # Warm-load TransformationIndex + OptimizedEmbeddingIndex from disk cache
             await engine.load_index_caches(DATA_DIR)
@@ -693,6 +719,7 @@ async def lifespan(app: FastAPI):
             # Cleared immediately before the event-consumption ``async for``
             # loop and signaled via ``_migrations_done``.
             from app.database import read_engine_meta
+
             read_engine_meta.migration_mode = True
 
             # ADR-005: Legacy project node + domain detach + per-repo project
@@ -718,6 +745,7 @@ async def lifespan(app: FastAPI):
                     get_legacy_project_id,
                     prime_legacy_project_id_cache,
                 )
+
                 async with async_session_factory() as _lpid_db:
                     app.state.legacy_project_id = await get_legacy_project_id(_lpid_db)
                 prime_legacy_project_id_cache(app.state.legacy_project_id)
@@ -736,6 +764,7 @@ async def lifespan(app: FastAPI):
                 from app.services.taxonomy.global_patterns import (
                     repair_legacy_only_promotions,
                 )
+
                 async with async_session_factory() as _b8_db:
                     _b8_stats = await repair_legacy_only_promotions(_b8_db)
                 if _b8_stats.get("demoted") or _b8_stats.get("retired"):
@@ -758,23 +787,32 @@ async def lifespan(app: FastAPI):
                 try:
                     async with async_session_factory() as _bf_db:
                         from sqlalchemy import func as _bf_func
-                        count = (await _bf_db.execute(
-                            _bf_select(_bf_func.count()).where(
-                                _bf_Opt.embedding.isnot(None),
-                                _bf_Opt.optimized_embedding.is_(None),
-                                _bf_Opt.optimized_prompt.isnot(None),
-                            )
-                        )).scalar() or 0
 
-                        if count > 0:
-                            logger.info("Backfilling %d optimized embeddings...", count)
-                            rows = (await _bf_db.execute(
-                                _bf_select(_bf_Opt).where(
+                        count = (
+                            await _bf_db.execute(
+                                _bf_select(_bf_func.count()).where(
                                     _bf_Opt.embedding.isnot(None),
                                     _bf_Opt.optimized_embedding.is_(None),
                                     _bf_Opt.optimized_prompt.isnot(None),
                                 )
-                            )).scalars().all()
+                            )
+                        ).scalar() or 0
+
+                        if count > 0:
+                            logger.info("Backfilling %d optimized embeddings...", count)
+                            rows = (
+                                (
+                                    await _bf_db.execute(
+                                        _bf_select(_bf_Opt).where(
+                                            _bf_Opt.embedding.isnot(None),
+                                            _bf_Opt.optimized_embedding.is_(None),
+                                            _bf_Opt.optimized_prompt.isnot(None),
+                                        )
+                                    )
+                                )
+                                .scalars()
+                                .all()
+                            )
 
                             # Batch embed for efficiency (errata E1-4)
                             texts = [opt.optimized_prompt for opt in rows]
@@ -802,15 +840,18 @@ async def lifespan(app: FastAPI):
             try:
                 async with async_session_factory() as _ti_db:
                     from sqlalchemy import func as _ti_func
+
                     # Find clusters with transformation data
                     ti_q = await _ti_db.execute(
                         _bf_select(
                             _bf_Opt.cluster_id,
                             _ti_func.count().label("ct"),
-                        ).where(
+                        )
+                        .where(
                             _bf_Opt.cluster_id.isnot(None),
                             _bf_Opt.transformation_embedding.isnot(None),
-                        ).group_by(_bf_Opt.cluster_id)
+                        )
+                        .group_by(_bf_Opt.cluster_id)
                     )
                     cluster_ids_with_transforms = [row[0] for row in ti_q.all() if row[1] >= 1]
 
@@ -847,14 +888,17 @@ async def lifespan(app: FastAPI):
             try:
                 async with async_session_factory() as _oi_db:
                     from sqlalchemy import func as _oi_func
+
                     oi_q = await _oi_db.execute(
                         _bf_select(
                             _bf_Opt.cluster_id,
                             _oi_func.count().label("ct"),
-                        ).where(
+                        )
+                        .where(
                             _bf_Opt.cluster_id.isnot(None),
                             _bf_Opt.optimized_embedding.isnot(None),
-                        ).group_by(_bf_Opt.cluster_id)
+                        )
+                        .group_by(_bf_Opt.cluster_id)
                     )
                     cluster_ids_with_opt_embs = [row[0] for row in oi_q.all() if row[1] >= 1]
 
@@ -890,19 +934,14 @@ async def lifespan(app: FastAPI):
             # Startup: backfill orphan optimizations with null cluster_id
             try:
                 from app.services.prompt_lifecycle import PromptLifecycleService
+
                 async with async_session_factory() as _db:
                     lifecycle = PromptLifecycleService()
-                    orphans_linked = await lifecycle.backfill_orphans(
-                        _db, engine.embedding_index
-                    )
+                    orphans_linked = await lifecycle.backfill_orphans(_db, engine.embedding_index)
                     await _db.commit()
-                    logger.info(
-                        "Backfill: %d orphan optimizations linked", orphans_linked
-                    )
+                    logger.info("Backfill: %d orphan optimizations linked", orphans_linked)
             except Exception as backfill_exc:
-                logger.warning(
-                    "Orphan backfill failed (non-fatal): %s", backfill_exc
-                )
+                logger.warning("Orphan backfill failed (non-fatal): %s", backfill_exc)
 
             # Cold-start bootstrap: if orphans remain AND no active clusters
             # exist (fresh install, post-reset, or migrated DB), drive each
@@ -916,14 +955,15 @@ async def lifespan(app: FastAPI):
 
                 from app.models import Optimization as _CS_Opt
                 from app.models import PromptCluster as _CS_Cluster
+
                 async with async_session_factory() as _cs_db:
-                    active_count = (await _cs_db.execute(
-                        _cs_select(_cs_func.count(_CS_Cluster.id)).where(
-                            _CS_Cluster.state.in_(
-                                ["active", "candidate", "mature"]
+                    active_count = (
+                        await _cs_db.execute(
+                            _cs_select(_cs_func.count(_CS_Cluster.id)).where(
+                                _CS_Cluster.state.in_(["active", "candidate", "mature"])
                             )
                         )
-                    )).scalar() or 0
+                    ).scalar() or 0
                     orphan_ids: list[str] = []
                     if active_count == 0:
                         orphan_q = await _cs_db.execute(
@@ -951,16 +991,16 @@ async def lifespan(app: FastAPI):
                         except Exception as _seed_exc:
                             logger.warning(
                                 "Cold-start seed failed for %s: %s",
-                                _opt_id, _seed_exc,
+                                _opt_id,
+                                _seed_exc,
                             )
                     logger.info(
                         "Cold-start bootstrap complete: seeded %d/%d optimizations",
-                        seeded, len(orphan_ids),
+                        seeded,
+                        len(orphan_ids),
                     )
             except Exception as cs_exc:
-                logger.warning(
-                    "Cold-start bootstrap failed (non-fatal): %s", cs_exc
-                )
+                logger.warning("Cold-start bootstrap failed (non-fatal): %s", cs_exc)
 
             # v0.4.13 cycle 9: migrations done, exit migration_mode +
             # signal lifespan. Audit hook + WriteQueue come online next.
@@ -1017,10 +1057,7 @@ async def lifespan(app: FastAPI):
                                 # the queue's worker task isn't running
                                 # (test mocks asyncio.create_task with a
                                 # DummyTask that never executes the loop).
-                                _worker_alive = (
-                                    _wq is not None
-                                    and getattr(_wq, "worker_alive", False)
-                                )
+                                _worker_alive = _wq is not None and getattr(_wq, "worker_alive", False)
                                 if _wq is None or not _worker_alive:
                                     async with async_session_factory() as db:
                                         await engine.process_optimization(oid, db)
@@ -1028,7 +1065,8 @@ async def lifespan(app: FastAPI):
                                 # Route the cluster-extraction body through
                                 # the queue.
                                 await engine.process_optimization(
-                                    oid, write_queue=_wq,
+                                    oid,
+                                    write_queue=_wq,
                                 )
                                 # Promotion + strategy affinity: read the
                                 # source row from the read engine (no
@@ -1040,29 +1078,33 @@ async def lifespan(app: FastAPI):
                                 from app.services.prompt_lifecycle import (
                                     PromptLifecycleService,
                                 )
+
                                 async with async_session_factory() as _read_db:
-                                    _row = (await _read_db.execute(
-                                        _sel(_OptPat).where(
-                                            _OptPat.optimization_id == oid,
-                                            _OptPat.relationship == "source",
+                                    _row = (
+                                        await _read_db.execute(
+                                            _sel(_OptPat).where(
+                                                _OptPat.optimization_id == oid,
+                                                _OptPat.relationship == "source",
+                                            )
                                         )
-                                    )).scalar_one_or_none()
-                                    _row_cluster_id = (
-                                        _row.cluster_id if _row else None
-                                    )
+                                    ).scalar_one_or_none()
+                                    _row_cluster_id = _row.cluster_id if _row else None
                                 if _row_cluster_id:
                                     from sqlalchemy.ext.asyncio import (
                                         AsyncSession as _ExtAsyncSession,
                                     )
+
                                     async def _do_followup(
                                         write_db: _ExtAsyncSession,
                                     ) -> None:
                                         lifecycle = PromptLifecycleService()
                                         await lifecycle.check_promotion(
-                                            write_db, _row_cluster_id,
+                                            write_db,
+                                            _row_cluster_id,
                                         )
                                         await lifecycle.update_strategy_affinity(
-                                            write_db, _row_cluster_id,
+                                            write_db,
+                                            _row_cluster_id,
                                         )
                                         await write_db.commit()
 
@@ -1073,7 +1115,9 @@ async def lifespan(app: FastAPI):
                             except Exception as task_exc:
                                 logger.error(
                                     "Background taxonomy extraction failed for %s: %s",
-                                    oid, task_exc, exc_info=True,
+                                    oid,
+                                    task_exc,
+                                    exc_info=True,
                                 )
 
                         task = asyncio.create_task(
@@ -1121,11 +1165,13 @@ async def lifespan(app: FastAPI):
             # v0.4.13 cycle 9: ensure lifespan can proceed even if the
             # listener is cancelled mid-migration.
             from app.database import read_engine_meta
+
             read_engine_meta.migration_mode = False
             _migrations_done.set()
             logger.info("Taxonomy extraction listener shutting down")
         except Exception as exc:
             from app.database import read_engine_meta
+
             read_engine_meta.migration_mode = False
             _migrations_done.set()
             logger.error("Taxonomy extraction listener crashed: %s", exc, exc_info=True)
@@ -1159,8 +1205,7 @@ async def lifespan(app: FastAPI):
             )
     else:
         logger.debug(
-            "Lifespan: extraction_task is not a real asyncio.Task "
-            "(mocked) — skipping _migrations_done wait",
+            "Lifespan: extraction_task is not a real asyncio.Task (mocked) — skipping _migrations_done wait",
         )
     app.state.lifespan_order.append("migrations_complete")
 
@@ -1209,6 +1254,7 @@ async def lifespan(app: FastAPI):
         # both singletons (process-dependency + tools-shared) keeps the
         # backend and MCP processes symmetric.
         from app.tools._shared import set_write_queue as _set_shared_write_queue
+
         _set_shared_write_queue(write_queue)
         app.state.lifespan_order.append("write_queue_started")
         logger.info(
@@ -1221,6 +1267,7 @@ async def lifespan(app: FastAPI):
         app.state.write_queue = None
         try:
             from app.dependencies.write_queue import register_process_write_queue
+
             register_process_write_queue(None)
         except Exception:
             pass
@@ -1258,9 +1305,7 @@ async def lifespan(app: FastAPI):
 
         _wq = getattr(app.state, "write_queue", None)
         _routing = getattr(app.state, "routing", None)
-        _provider = (
-            _routing.state.provider if _routing is not None else None
-        )
+        _provider = _routing.state.provider if _routing is not None else None
         _taxonomy_engine = getattr(app.state, "taxonomy_engine", None)
         # Hoisted collaborator resolutions: both TopicProbeGenerator
         # (Finding 16 fix) and ReplayRunGenerator (T2 Cycle 6) need
@@ -1338,6 +1383,7 @@ async def lifespan(app: FastAPI):
             # process find it. MCP server process wires this via
             # ``mcp_server.py:503``.
             from app.tools._shared import set_run_orchestrator as _set_shared_ro
+
             _set_shared_ro(app.state.run_orchestrator)
             app.state.lifespan_order.append("run_orchestrator_registered")
             logger.info(
@@ -1405,12 +1451,13 @@ async def lifespan(app: FastAPI):
         # ``tools/optimize.py:81``) called from REST in the backend process
         # find it. MCP server process wires this via ``mcp_server.py:380``.
         from app.tools._shared import set_context_service as _set_shared_ctx_svc
+
         _set_shared_ctx_svc(app.state.context_service)
         logger.info("ContextEnrichmentService initialized")
     except Exception as exc:
         logger.error(
-            "ContextEnrichmentService init failed — passthrough and pattern "
-            "resolution will be unavailable: %s", exc,
+            "ContextEnrichmentService init failed — passthrough and pattern resolution will be unavailable: %s",
+            exc,
         )
         app.state.context_service = None
 
@@ -1438,7 +1485,8 @@ async def lifespan(app: FastAPI):
 
         logger.info(
             "index_refresh_loop: started (interval=%ds, concurrency=%d)",
-            interval, settings.REPO_INDEX_REFRESH_CONCURRENCY,
+            interval,
+            settings.REPO_INDEX_REFRESH_CONCURRENCY,
         )
 
         from sqlalchemy import select as _sel_refresh
@@ -1461,9 +1509,7 @@ async def lifespan(app: FastAPI):
                 try:
                     async with async_session_factory() as db:
                         # Find all linked repos
-                        repos = (await db.execute(
-                            _sel_refresh(LinkedRepo)
-                        )).scalars().all()
+                        repos = (await db.execute(_sel_refresh(LinkedRepo))).scalars().all()
 
                         if not repos:
                             logger.debug("index_refresh_cycle: cycle=%d no linked repos", cycle_number)
@@ -1472,13 +1518,9 @@ async def lifespan(app: FastAPI):
                         # Collect session_ids and decrypt tokens
                         session_ids = {r.session_id for r in repos}
                         tokens_q = await db.execute(
-                            _sel_refresh(GitHubToken).where(
-                                GitHubToken.session_id.in_(session_ids)
-                            )
+                            _sel_refresh(GitHubToken).where(GitHubToken.session_id.in_(session_ids))
                         )
-                        token_rows = {
-                            t.session_id: t for t in tokens_q.scalars().all()
-                        }
+                        token_rows = {t.session_id: t for t in tokens_q.scalars().all()}
 
                         github_svc = GitHubService(secret_key=settings.resolve_secret_key())
                         gc = GitHubClient()
@@ -1506,7 +1548,8 @@ async def lifespan(app: FastAPI):
                                 repos_skipped += 1
                                 logger.warning(
                                     "index_refresh: %s token decrypt failed: %s",
-                                    repo.full_name, decrypt_exc,
+                                    repo.full_name,
+                                    decrypt_exc,
                                 )
                                 continue
 
@@ -1518,7 +1561,9 @@ async def lifespan(app: FastAPI):
                                     github_client=gc,
                                     embedding_service=_shared_embedding_service,
                                     write_queue=getattr(
-                                        app.state, "write_queue", None,
+                                        app.state,
+                                        "write_queue",
+                                        None,
                                     ),
                                 )
                                 result = await index_svc.incremental_update(
@@ -1527,11 +1572,7 @@ async def lifespan(app: FastAPI):
                                     token=token,
                                     concurrency=settings.REPO_INDEX_REFRESH_CONCURRENCY,
                                 )
-                                file_changes = (
-                                    result["changed"]
-                                    + result["added"]
-                                    + result["removed"]
-                                )
+                                file_changes = result["changed"] + result["added"] + result["removed"]
                                 if file_changes > 0:
                                     repos_updated += 1
                                     total_changed += result["changed"]
@@ -1546,7 +1587,9 @@ async def lifespan(app: FastAPI):
                                 repos_failed += 1
                                 logger.warning(
                                     "index_refresh: %s@%s unhandled error: %s",
-                                    repo.full_name, branch, repo_exc,
+                                    repo.full_name,
+                                    branch,
+                                    repo_exc,
                                 )
                                 continue
 
@@ -1559,15 +1602,17 @@ async def lifespan(app: FastAPI):
                             )
                             # Notify frontend via event bus
                             try:
-                                event_bus.publish({
-                                    "event": "index_refreshed",
-                                    "data": {
-                                        "repos": updated_repos,
-                                        "changed": total_changed,
-                                        "added": total_added,
-                                        "removed": total_removed,
-                                    },
-                                })
+                                event_bus.publish(
+                                    {
+                                        "event": "index_refreshed",
+                                        "data": {
+                                            "repos": updated_repos,
+                                            "changed": total_changed,
+                                            "added": total_added,
+                                            "removed": total_removed,
+                                        },
+                                    }
+                                )
                             except Exception:
                                 pass  # Event bus publish is best-effort
 
@@ -1577,16 +1622,24 @@ async def lifespan(app: FastAPI):
                         "unchanged=%d skipped=%d failed=%d "
                         "files_changed=%d files_added=%d files_removed=%d "
                         "elapsed=%.0fms",
-                        cycle_number, repos_checked, repos_updated,
-                        repos_unchanged, repos_skipped, repos_failed,
-                        total_changed, total_added, total_removed,
+                        cycle_number,
+                        repos_checked,
+                        repos_updated,
+                        repos_unchanged,
+                        repos_skipped,
+                        repos_failed,
+                        total_changed,
+                        total_added,
+                        total_removed,
                         cycle_ms,
                     )
                 except Exception as cycle_exc:
                     cycle_ms = (time.monotonic() - t_cycle) * 1000
                     logger.error(
                         "index_refresh_cycle: cycle=%d failed after %.0fms: %s",
-                        cycle_number, cycle_ms, cycle_exc,
+                        cycle_number,
+                        cycle_ms,
+                        cycle_exc,
                         exc_info=True,
                     )
         except asyncio.CancelledError:
@@ -1631,6 +1684,7 @@ async def lifespan(app: FastAPI):
             if engine:
                 try:
                     from app.database import async_session_factory
+
                     _wq = getattr(app.state, "write_queue", None)
                     if _wq is not None:
                         await engine.run_warm_path(write_queue=_wq)
@@ -1667,6 +1721,7 @@ async def lifespan(app: FastAPI):
                         from app.services.prompt_lifecycle import (
                             PromptLifecycleService,
                         )
+
                         # v0.4.13 cycle 9.5: thread the write queue so every
                         # warm-path phase commit (Phase 0/4/5 cluster
                         # updates, meta_pattern inserts, etc.) routes
@@ -1760,11 +1815,14 @@ async def lifespan(app: FastAPI):
                         # writer engine via the queue.
                         try:
                             from app.services.orphan_recovery import recovery_service
+
                             recovery_stats = await recovery_service.scan_and_recover(
                                 async_session_factory,
                                 engine,
                                 write_queue=getattr(
-                                    app.state, "write_queue", None,
+                                    app.state,
+                                    "write_queue",
+                                    None,
                                 ),
                             )
                             if recovery_stats.get("recovered"):
@@ -1792,12 +1850,14 @@ async def lifespan(app: FastAPI):
                                 from app.models import PromptCluster
 
                                 async with async_session_factory() as umap_db:
-                                    no_umap = (await umap_db.execute(
-                                        select(func.count()).where(
-                                            PromptCluster.state == "active",
-                                            PromptCluster.umap_x.is_(None),
+                                    no_umap = (
+                                        await umap_db.execute(
+                                            select(func.count()).where(
+                                                PromptCluster.state == "active",
+                                                PromptCluster.umap_x.is_(None),
+                                            )
                                         )
-                                    )).scalar() or 0
+                                    ).scalar() or 0
 
                                 if no_umap >= 3:
                                     logger.info(
@@ -1837,7 +1897,8 @@ async def lifespan(app: FastAPI):
     # Phase 2: Cancel all background tasks concurrently via gather().
     # Previous code awaited each sequentially (4 × cancel+await blocks).
     bg_tasks = [
-        t for t in [
+        t
+        for t in [
             getattr(app.state, "extraction_task", None),
             getattr(app.state, "warm_path_task", None),
             getattr(app.state, "refresh_task", None),
@@ -1882,11 +1943,7 @@ async def lifespan(app: FastAPI):
         from app.models import Optimization
 
         async def _mark_interrupted(db):
-            await db.execute(
-                update(Optimization)
-                .where(Optimization.status == "running")
-                .values(status="interrupted")
-            )
+            await db.execute(update(Optimization).where(Optimization.status == "running").values(status="interrupted"))
             await db.commit()
 
         wq = getattr(app.state, "write_queue", None)
@@ -1919,6 +1976,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.trace_logger import TraceLogger
+
         tl = TraceLogger(DATA_DIR / "traces")
         deleted = tl.rotate(retention_days=settings.TRACE_RETENTION_DAYS)
         if deleted:
@@ -1928,6 +1986,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.taxonomy.event_logger import get_event_logger
+
         tel = get_event_logger()
         tel_deleted = tel.rotate(retention_days=settings.TRACE_RETENTION_DAYS)
         if tel_deleted:
@@ -1948,6 +2007,7 @@ async def lifespan(app: FastAPI):
     # Phase 5: Clear taxonomy singleton + dispose database engine.
     try:
         from app.services.taxonomy import reset_engine
+
         reset_engine()
     except Exception:
         pass
@@ -1986,6 +2046,7 @@ async def lifespan(app: FastAPI):
                 from app.dependencies.write_queue import (
                     register_process_write_queue,
                 )
+
                 register_process_write_queue(None)
             except Exception:
                 pass
@@ -1995,12 +2056,14 @@ async def lifespan(app: FastAPI):
     # against a registered listener.
     try:
         from app.database import uninstall_read_engine_audit_hook
+
         uninstall_read_engine_audit_hook()
     except Exception as exc:
         logger.error("Audit hook uninstall failed: %s", exc)
 
     try:
         from app.database import dispose
+
         await dispose()
     except Exception as exc:
         logger.error("Database disposal failed: %s", exc)
@@ -2008,6 +2071,7 @@ async def lifespan(app: FastAPI):
     # v0.4.13 cycle 9 — Phase 5c: dispose the writer engine pool.
     try:
         from app.database import dispose_writer
+
         await dispose_writer()
     except Exception as exc:
         logger.error("Writer engine disposal failed: %s", exc)
@@ -2041,6 +2105,7 @@ from app.services.request_tracker import (  # noqa: E402, I001
 _request_tracker = RequestTracker()
 app.state.request_tracker = _request_tracker
 app.add_middleware(RequestTrackerMiddleware, tracker=_request_tracker)
+
 
 # Global exception handler — captures unhandled 500s to structured error JSONL
 @app.exception_handler(Exception)
@@ -2093,144 +2158,168 @@ async def _global_exception_handler(request, exc):
 # Routers (imported lazily — may not exist yet during phased development)
 try:
     from app.routers.health import router as health_router
+
     app.include_router(health_router)
 except ImportError:
     pass
 
 try:
     from app.routers.optimize import router as optimize_router
+
     app.include_router(optimize_router)
 except ImportError:
     pass
 
 try:
     from app.routers.history import router as history_router
+
     app.include_router(history_router)
 except ImportError:
     pass
 
 try:
     from app.routers.feedback import router as feedback_router
+
     app.include_router(feedback_router)
 except ImportError:
     pass
 
 try:
     from app.routers.providers import router as providers_router
+
     app.include_router(providers_router)
 except ImportError:
     pass
 
 try:
     from app.routers.settings import router as settings_router
+
     app.include_router(settings_router)
 except ImportError:
     pass
 
 try:
     from app.routers.github_auth import router as github_auth_router
+
     app.include_router(github_auth_router)
 except ImportError:
     pass
 
 try:
     from app.routers.github_repos import router as github_repos_router
+
     app.include_router(github_repos_router)
 except ImportError:
     pass
 
 try:
     from app.routers.refinement import router as refinement_router
+
     app.include_router(refinement_router)
 except ImportError:
     pass
 
 try:
     from app.routers.events import router as events_router
+
     app.include_router(events_router)
 except ImportError:
     pass
 
 try:
     from app.routers.preferences import router as preferences_router
+
     app.include_router(preferences_router)
 except ImportError:
     pass
 
 try:
     from app.routers.strategies import router as strategies_router
+
     app.include_router(strategies_router)
 except ImportError:
     pass
 
 try:
     from app.routers.clusters import router as clusters_router
+
     app.include_router(clusters_router)
 except ImportError:
     pass
 
 try:
     from app.routers.domains import router as domains_router
+
     app.include_router(domains_router)
 except ImportError:
     pass
 
 try:
     from app.routers.patterns import router as patterns_router
+
     app.include_router(patterns_router)
 except ImportError:
     pass
 
 try:
     from app.routers.seed import router as seed_router
+
     app.include_router(seed_router)
 except ImportError:
     pass
 
 try:
     from app.routers.monitoring import router as monitoring_router
+
     app.include_router(monitoring_router)
 except ImportError:
     pass
 
 try:
     from app.routers.templates import router as templates_router
+
     app.include_router(templates_router)
 except ImportError:
     pass
 
 try:
     from app.routers.taxonomy_insights import router as taxonomy_insights_router
+
     app.include_router(taxonomy_insights_router)
 except ImportError:
     pass
 
 try:
     from app.routers.update import router as update_router
+
     app.include_router(update_router)
 except ImportError:
     pass
 
 try:
     from app.routers.projects import router as projects_router
+
     app.include_router(projects_router)
 except ImportError:
     pass
 
 try:
     from app.routers.probes import router as probes_router
+
     app.include_router(probes_router)
 except ImportError:
     pass
 
 try:
     from app.routers.runs import router as runs_router
+
     app.include_router(runs_router)
 except ImportError:
     pass
 
 try:
     from app.routers.suites import router as suites_router
+
     app.include_router(suites_router)
 except ImportError:
     pass
