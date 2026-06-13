@@ -120,6 +120,7 @@ async def _load_active_nodes(
     if project_id:
         # Load only clusters under this project's domain subtree
         from app.services.taxonomy.family_ops import _get_project_domain_ids
+
         domain_ids = await _get_project_domain_ids(db, project_id)
 
         if not domain_ids:
@@ -131,10 +132,15 @@ async def _load_active_nodes(
 
         from app.models import Optimization
 
-        cross_project_cluster_ids = select(Optimization.cluster_id).where(
-            Optimization.project_id == project_id,
-            Optimization.cluster_id.isnot(None),
-        ).distinct().scalar_subquery()
+        cross_project_cluster_ids = (
+            select(Optimization.cluster_id)
+            .where(
+                Optimization.project_id == project_id,
+                Optimization.cluster_id.isnot(None),
+            )
+            .distinct()
+            .scalar_subquery()
+        )
 
         result = await db.execute(
             select(PromptCluster).where(
@@ -146,16 +152,13 @@ async def _load_active_nodes(
             )
         )
     else:
-        result = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state.notin_(excluded)
-            )
-        )
+        result = await db.execute(select(PromptCluster).where(PromptCluster.state.notin_(excluded)))
     return list(result.scalars().all())
 
 
 def _resolve_project_scope(
-    engine: TaxonomyEngine, dirty_ids: set[str] | None,
+    engine: TaxonomyEngine,
+    dirty_ids: set[str] | None,
 ) -> str | None:
     """Resolve per-project Q scope when all dirty clusters share a project.
 
@@ -231,8 +234,10 @@ async def _persist_split_failure_metadata(
                 content_hash = phase_result.split_content_hashes.get(cid, "")
                 if content_hash:
                     await _record_domain_split_block(
-                        db, cluster.domain or "general",
-                        content_hash, cluster.label or "?",
+                        db,
+                        cluster.domain or "general",
+                        content_hash,
+                        cluster.label or "?",
                         source="q_gate_rejection",
                     )
     except Exception as dh_exc:
@@ -260,7 +265,9 @@ def _log_metadata_persist_failure(
     )
     try:
         get_event_logger().log_decision(
-            path="warm", op="split", decision="metadata_persist_failed",
+            path="warm",
+            op="split",
+            decision="metadata_persist_failed",
             context={
                 "cluster_ids": list(
                     phase_result.split_attempted_ids,
@@ -304,7 +311,9 @@ async def _execute_phase_in_session(
     # Load nodes and compute Q_before — exclude candidates to prevent
     # low-coherence candidate clusters from dragging Q down.
     nodes_before = await _load_active_nodes(
-        db, exclude_candidates=True, project_id=_project_scope,
+        db,
+        exclude_candidates=True,
+        project_id=_project_scope,
     )
     q_before = engine._compute_q_from_nodes(nodes_before)
 
@@ -315,12 +324,17 @@ async def _execute_phase_in_session(
     else:
         # phase_split_emerge and phase_merge take split_protected_ids
         phase_result = await phase_fn(
-            engine, db, split_protected_ids or set(), dirty_ids=dirty_ids,
+            engine,
+            db,
+            split_protected_ids or set(),
+            dirty_ids=dirty_ids,
         )
 
     # Re-query nodes and compute Q_after — same exclusion as Q_before.
     nodes_after = await _load_active_nodes(
-        db, exclude_candidates=True, project_id=_project_scope,
+        db,
+        exclude_candidates=True,
+        project_id=_project_scope,
     )
     q_after = engine._compute_q_from_nodes(nodes_after)
 
@@ -336,16 +350,15 @@ async def _execute_phase_in_session(
     phase_result.q_before = q_before  # type: ignore[assignment]
     phase_result.q_after = q_after  # type: ignore[assignment]
 
-    _q_delta = (
-        None if (q_before is None or q_after is None)
-        else round(q_after - q_before, 4)
-    )
+    _q_delta = None if (q_before is None or q_after is None) else round(q_after - q_before, 4)
 
     if is_non_regressive(q_before, q_after, engine._warm_path_age):
         phase_result.accepted = True
         logger.info(
             "Phase %s accepted: Q %s -> %s (ops=%d)",
-            phase_name, _q_fmt(q_before), _q_fmt(q_after),
+            phase_name,
+            _q_fmt(q_before),
+            _q_fmt(q_after),
             phase_result.ops_accepted,
         )
         # Only log accepted phases that actually did work — idle
@@ -354,7 +367,9 @@ async def _execute_phase_in_session(
         if phase_result.ops_attempted > 0:
             try:
                 get_event_logger().log_decision(
-                    path="warm", op="phase", decision="accepted",
+                    path="warm",
+                    op="phase",
+                    decision="accepted",
                     context={
                         "phase_name": phase_name,
                         "phase_idx": phase_idx,
@@ -379,11 +394,15 @@ async def _execute_phase_in_session(
     phase_result.accepted = False
     logger.warning(
         "Phase %s rejected (Q regression): Q %s -> %s",
-        phase_name, _q_fmt(q_before), _q_fmt(q_after),
+        phase_name,
+        _q_fmt(q_before),
+        _q_fmt(q_after),
     )
     try:
         get_event_logger().log_decision(
-            path="warm", op="phase", decision="rejected",
+            path="warm",
+            op="phase",
+            decision="rejected",
             context={
                 "phase_name": phase_name,
                 "phase_idx": phase_idx,
@@ -463,6 +482,7 @@ async def _run_speculative_phase(
     # Canonical cycle 6+ path: single submit per phase + savepoint pattern.
     # ----------------------------------------------------------------------
     if write_queue is not None:
+
         async def _do_speculative(db: AsyncSession) -> PhaseResult:
             """All v0.4.12 commit sites collapse into one callback.
 
@@ -500,11 +520,7 @@ async def _run_speculative_phase(
             #   split_failures counter so the Groundhog Day cooldown
             #   accumulates across cycles.
             # * Accept -> nothing extra to do; just commit.
-            if (
-                not phase_result.accepted
-                and phase_name == "split_emerge"
-                and phase_result.split_attempted_ids
-            ):
+            if not phase_result.accepted and phase_name == "split_emerge" and phase_result.split_attempted_ids:
                 try:
                     await _persist_split_failure_metadata(db, phase_result)
                 except Exception as meta_exc:
@@ -544,11 +560,7 @@ async def _run_speculative_phase(
     # Without this, the split_failures cooldown counter resets to 0 on every
     # Q-gate rejection, causing the same cluster to be split and rolled back
     # indefinitely (the "Groundhog Day" loop).
-    if (
-        not phase_result.accepted
-        and phase_name == "split_emerge"
-        and phase_result.split_attempted_ids
-    ):
+    if not phase_result.accepted and phase_name == "split_emerge" and phase_result.split_attempted_ids:
         try:
             async with session_factory() as meta_db:
                 await _persist_split_failure_metadata(meta_db, phase_result)
@@ -656,7 +668,8 @@ async def run_phase_4_5(
         root_cause = getattr(exc, "orig", None) or getattr(exc, "__cause__", None)
         logger.warning(
             "Phase 4.5 step 1 (promote) failed: %s | root_cause=%r",
-            exc, root_cause,
+            exc,
+            root_cause,
         )
 
     # ------------------------------------------------------------------
@@ -680,7 +693,8 @@ async def run_phase_4_5(
         root_cause = getattr(exc, "orig", None) or getattr(exc, "__cause__", None)
         logger.warning(
             "Phase 4.5 step 2 (validate) failed: %s | root_cause=%r",
-            exc, root_cause,
+            exc,
+            root_cause,
         )
 
     # ------------------------------------------------------------------
@@ -702,7 +716,8 @@ async def run_phase_4_5(
         root_cause = getattr(exc, "orig", None) or getattr(exc, "__cause__", None)
         logger.warning(
             "Phase 4.5 step 3 (cap) failed: %s | root_cause=%r",
-            exc, root_cause,
+            exc,
+            root_cause,
         )
 
     return stats
@@ -749,9 +764,7 @@ def _update_phase_rejection_counters(
 
     for phase_name, result in speculative_results:
         if not result.accepted:
-            engine._phase_rejection_counters[phase_name] = (
-                engine._phase_rejection_counters.get(phase_name, 0) + 1
-            )
+            engine._phase_rejection_counters[phase_name] = engine._phase_rejection_counters.get(phase_name, 0) + 1
         else:
             engine._phase_rejection_counters[phase_name] = 0
 
@@ -760,8 +773,7 @@ def _update_phase_rejection_counters(
             deadlock_phase = phase_name
             engine._cold_path_needed = True
             logger.warning(
-                "Per-phase deadlock breaker triggered for '%s' "
-                "(rejected %d consecutive times) -- scheduling cold path",
+                "Per-phase deadlock breaker triggered for '%s' (rejected %d consecutive times) -- scheduling cold path",
                 phase_name,
                 engine._phase_rejection_counters[phase_name],
             )
@@ -806,12 +818,13 @@ async def _run_in_writer_session(
     """
     if write_queue is not None:
         return await write_queue.submit(
-            work, timeout=timeout, operation_label=operation_label,
+            work,
+            timeout=timeout,
+            operation_label=operation_label,
         )
     if session_factory is None:
         raise TypeError(
-            "_run_in_writer_session requires either write_queue= or "
-            "session_factory=; both are None.",
+            "_run_in_writer_session requires either write_queue= or session_factory=; both are None.",
         )
     async with session_factory() as db:
         return await work(db)
@@ -871,16 +884,20 @@ async def execute_maintenance_phases(
 
     try:
         await _run_in_writer_session(
-            write_queue, session_factory, _do_vocab_refresh,
+            write_queue,
+            session_factory,
+            _do_vocab_refresh,
             operation_label="warm_phase_4_95_vocab_refresh",
         )
     except Exception as vocab_exc:
         logger.warning(
-            "Phase 4.95 (vocab refresh) failed (non-fatal): %s", vocab_exc,
+            "Phase 4.95 (vocab refresh) failed (non-fatal): %s",
+            vocab_exc,
         )
         try:
             get_event_logger().log_decision(
-                path="warm", op="discover",
+                path="warm",
+                op="discover",
                 decision="vocab_refresh_failed",
                 context={"error": str(vocab_exc)[:300]},
             )
@@ -910,7 +927,8 @@ async def execute_maintenance_phases(
             # checkout needed, and reads are on the freshly committed
             # state.
             reports = await _r.compute_all_domain_readiness(
-                db, fresh=True,
+                db,
+                fresh=True,
             )
             # Concurrent fire-and-forget: record_snapshot internally
             # offloads to a thread pool, so gather lets per-report
@@ -925,7 +943,8 @@ async def execute_maintenance_phases(
                     if isinstance(outcome, Exception):
                         logger.warning(
                             "readiness snapshot failed for domain %s: %s",
-                            r.domain_id, outcome,
+                            r.domain_id,
+                            outcome,
                         )
         except Exception as snap_exc:
             logger.warning(
@@ -936,7 +955,9 @@ async def execute_maintenance_phases(
 
     try:
         discover_result = await _run_in_writer_session(
-            write_queue, session_factory, _do_discover,
+            write_queue,
+            session_factory,
+            _do_discover,
             operation_label="warm_phase_5_discover",
         )
         logger.info(
@@ -956,6 +977,7 @@ async def execute_maintenance_phases(
             from app.services.taxonomy.readiness_history import (
                 prune_old_snapshots,
             )
+
             today = datetime.now(timezone.utc).date()
             last_prune = getattr(engine, "_readiness_pruned_on", None)
             if last_prune != today:
@@ -963,11 +985,13 @@ async def execute_maintenance_phases(
                 engine._readiness_pruned_on = today
                 if removed:
                     logger.info(
-                        "readiness history pruned: %d files", removed,
+                        "readiness history pruned: %d files",
+                        removed,
                     )
         except Exception as prune_exc:
             logger.warning(
-                "readiness prune failed: %s", prune_exc,
+                "readiness prune failed: %s",
+                prune_exc,
             )
     except Exception as discover_exc:
         logger.warning(
@@ -977,7 +1001,8 @@ async def execute_maintenance_phases(
         engine._maintenance_pending = True
         try:
             get_event_logger().log_decision(
-                path="warm", op="discover",
+                path="warm",
+                op="discover",
                 decision="discover_failed_will_retry",
                 context={"error": str(discover_exc)},
             )
@@ -994,7 +1019,9 @@ async def execute_maintenance_phases(
 
     try:
         sub_domains_archived = await _run_in_writer_session(
-            write_queue, session_factory, _do_archive,
+            write_queue,
+            session_factory,
+            _do_archive,
             operation_label="warm_phase_5_5_archive",
         )
         if sub_domains_archived:
@@ -1011,13 +1038,18 @@ async def execute_maintenance_phases(
     # ------------------------------------------------------------------
     async def _do_audit(db: AsyncSession) -> Any:
         result = await phase_audit(
-            engine, db, phase_results, q_baseline,
+            engine,
+            db,
+            phase_results,
+            q_baseline,
         )
         await db.commit()
         return result
 
     audit_result = await _run_in_writer_session(
-        write_queue, session_factory, _do_audit,
+        write_queue,
+        session_factory,
+        _do_audit,
         operation_label="warm_phase_6_audit",
     )
     logger.info(
@@ -1032,12 +1064,15 @@ async def execute_maintenance_phases(
     # ------------------------------------------------------------------
     async def _do_prune(db: AsyncSession) -> int:
         from app.services.taxonomy.snapshot import prune_snapshots
+
         return await prune_snapshots(db)
 
     try:
         # v0.4.13 cycle 9 (I3): renamed to fit ``warm_phase_*`` namespace.
         pruned = await _run_in_writer_session(
-            write_queue, session_factory, _do_prune,
+            write_queue,
+            session_factory,
+            _do_prune,
             operation_label="warm_phase_snapshot_prune",
         )
         if pruned:
@@ -1094,11 +1129,11 @@ async def execute_warm_path(
     """
     if write_queue is None and session_factory is None:
         raise TypeError(
-            "execute_warm_path requires either write_queue= (canonical) "
-            "or session_factory= (legacy); both are None.",
+            "execute_warm_path requires either write_queue= (canonical) or session_factory= (legacy); both are None.",
         )
 
     import time as _time
+
     _cycle_start = _time.monotonic()
 
     all_phase_results: list[PhaseResult] = []
@@ -1116,22 +1151,20 @@ async def execute_warm_path(
             # their own cadence or when retrying after a transient failure.
             from app.services.taxonomy._constants import MAINTENANCE_CYCLE_INTERVAL
 
-            cadence_gate = (engine._warm_path_age % MAINTENANCE_CYCLE_INTERVAL == 0)
-            should_maintain = (
-                cadence_gate
-                or engine._maintenance_pending
-                or bool(engine._vocab_regen_pending)
-            )
+            cadence_gate = engine._warm_path_age % MAINTENANCE_CYCLE_INTERVAL == 0
+            should_maintain = cadence_gate or engine._maintenance_pending or bool(engine._vocab_regen_pending)
 
             if should_maintain:
                 logger.info(
-                    "Warm path: no dirty clusters but running maintenance "
-                    "(cadence=%s pending=%s age=%d)",
-                    cadence_gate, engine._maintenance_pending, engine._warm_path_age,
+                    "Warm path: no dirty clusters but running maintenance (cadence=%s pending=%s age=%d)",
+                    cadence_gate,
+                    engine._maintenance_pending,
+                    engine._warm_path_age,
                 )
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="maintenance",
+                        path="warm",
+                        op="maintenance",
                         decision="maintenance_on_idle",
                         context={
                             "warm_path_age": engine._warm_path_age,
@@ -1145,14 +1178,18 @@ async def execute_warm_path(
                 # NOTE: do NOT increment _warm_path_age here — phase_audit()
                 # inside execute_maintenance_phases() does it unconditionally.
                 return await execute_maintenance_phases(
-                    engine, session_factory, write_queue=write_queue,
+                    engine,
+                    session_factory,
+                    write_queue=write_queue,
                 )
 
             # Neither cadence nor retry — skip entirely
             logger.debug("Warm path skipped — no dirty clusters (age=%d)", engine._warm_path_age)
             try:
                 get_event_logger().log_decision(
-                    path="warm", op="skip", decision="no_dirty_clusters",
+                    path="warm",
+                    op="skip",
+                    decision="no_dirty_clusters",
                     context={"warm_path_age": engine._warm_path_age},
                 )
             except RuntimeError:
@@ -1175,7 +1212,8 @@ async def execute_warm_path(
     if mode.is_round_robin:
         dirty_ids = mode.scoped_dirty_ids
         budget_summary = ", ".join(
-            f"{pid}={b}" for pid, b in sorted(
+            f"{pid}={b}"
+            for pid, b in sorted(
                 (mode.project_budgets or {}).items(),
             )
         )
@@ -1207,12 +1245,13 @@ async def execute_warm_path(
         return result, q_base
 
     reconcile_result, q_baseline = await _run_in_writer_session(
-        write_queue, session_factory, _do_reconcile,
+        write_queue,
+        session_factory,
+        _do_reconcile,
         operation_label="warm_phase_0_reconcile",
     )
     logger.info(
-        "Phase 0 (reconcile): fixed=%d coherence=%d scores=%d "
-        "zombies=%d outliers_ejected=%d",
+        "Phase 0 (reconcile): fixed=%d coherence=%d scores=%d zombies=%d outliers_ejected=%d",
         reconcile_result.member_counts_fixed,
         reconcile_result.coherence_updated,
         reconcile_result.scores_reconciled,
@@ -1230,7 +1269,9 @@ async def execute_warm_path(
         return result
 
     candidate_result = await _run_in_writer_session(
-        write_queue, session_factory, _do_evaluate_candidates,
+        write_queue,
+        session_factory,
+        _do_evaluate_candidates,
         operation_label="warm_phase_0_5_evaluate_candidates",
     )
     if candidate_result["promoted"] > 0 or candidate_result["rejected"] > 0:
@@ -1243,11 +1284,15 @@ async def execute_warm_path(
         # Publish taxonomy_changed so the frontend re-renders the topology
         try:
             from app.services.event_bus import event_bus
-            event_bus.publish("taxonomy_changed", {
-                "trigger": "candidate_evaluation",
-                "promoted": candidate_result["promoted"],
-                "rejected": candidate_result["rejected"],
-            })
+
+            event_bus.publish(
+                "taxonomy_changed",
+                {
+                    "trigger": "candidate_evaluation",
+                    "promoted": candidate_result["promoted"],
+                    "rejected": candidate_result["rejected"],
+                },
+            )
         except Exception as _evt_exc:
             logger.warning(
                 "Failed to publish taxonomy_changed after candidate evaluation: %s",
@@ -1258,7 +1303,10 @@ async def execute_warm_path(
     # Phase 1: Split/Emerge — speculative
     # ------------------------------------------------------------------
     split_result = await _run_speculative_phase(
-        "split_emerge", phase_split_emerge, engine, session_factory,
+        "split_emerge",
+        phase_split_emerge,
+        engine,
+        session_factory,
         split_protected_ids=set(),
         phase_idx=0,
         dirty_ids=dirty_ids,  # ADR-005: only split dirty clusters
@@ -1273,7 +1321,10 @@ async def execute_warm_path(
     # Phase 2: Merge — speculative (receives split_protected_ids)
     # ------------------------------------------------------------------
     merge_result = await _run_speculative_phase(
-        "merge", phase_merge, engine, session_factory,
+        "merge",
+        phase_merge,
+        engine,
+        session_factory,
         split_protected_ids=split_protected_ids,
         phase_idx=1,
         dirty_ids=dirty_ids,  # ADR-005: only merge when ≥1 partner is dirty
@@ -1286,7 +1337,10 @@ async def execute_warm_path(
     # ADR-005: Full scan — retirement needs complete cluster state
     # ------------------------------------------------------------------
     retire_result = await _run_speculative_phase(
-        "retire", phase_retire, engine, session_factory,
+        "retire",
+        phase_retire,
+        engine,
+        session_factory,
         phase_idx=2,
         write_queue=write_queue,
     )
@@ -1301,7 +1355,8 @@ async def execute_warm_path(
         ("retire", retire_result),
     ]
     deadlock_used, deadlock_phase = _update_phase_rejection_counters(
-        engine, speculative_phases,
+        engine,
+        speculative_phases,
     )
 
     # ------------------------------------------------------------------
@@ -1314,7 +1369,9 @@ async def execute_warm_path(
         return result
 
     refresh_result = await _run_in_writer_session(
-        write_queue, session_factory, _do_refresh,
+        write_queue,
+        session_factory,
+        _do_refresh,
         operation_label="warm_phase_4_refresh",
     )
     logger.info(
@@ -1330,6 +1387,7 @@ async def execute_warm_path(
     # adds new clusters/patterns. Saved every warm cycle (~5 min).
     try:
         from app.config import DATA_DIR
+
         _idx_path = DATA_DIR / "embedding_index.pkl"
         await engine.embedding_index.save_cache(_idx_path)
         logger.debug("Embedding index saved (%d entries)", engine.embedding_index.size)
@@ -1342,11 +1400,14 @@ async def execute_warm_path(
     # ------------------------------------------------------------------
     async def _do_aggregate_sub_domain_patterns(db: AsyncSession) -> None:
         from app.services.taxonomy.warm_phases import aggregate_sub_domain_patterns
+
         await aggregate_sub_domain_patterns(db)
         await db.commit()
 
     await _run_in_writer_session(
-        write_queue, session_factory, _do_aggregate_sub_domain_patterns,
+        write_queue,
+        session_factory,
+        _do_aggregate_sub_domain_patterns,
         operation_label="warm_phase_4_25_aggregate_sub_domain_patterns",
     )
 
@@ -1361,10 +1422,9 @@ async def execute_warm_path(
         GLOBAL_PATTERN_MIN_WALL_CLOCK_MINUTES,
     )
 
-    _gp_age_gate = (engine._warm_path_age % GLOBAL_PATTERN_CYCLE_INTERVAL == 0)
+    _gp_age_gate = engine._warm_path_age % GLOBAL_PATTERN_CYCLE_INTERVAL == 0
     _gp_wall_gate = (
-        _gp_time.monotonic() - engine._last_global_pattern_check
-        >= GLOBAL_PATTERN_MIN_WALL_CLOCK_MINUTES * 60
+        _gp_time.monotonic() - engine._last_global_pattern_check >= GLOBAL_PATTERN_MIN_WALL_CLOCK_MINUTES * 60
     )
 
     if _gp_age_gate and _gp_wall_gate:
@@ -1372,7 +1432,8 @@ async def execute_warm_path(
             # Cycle 6 H-v4-3 path: each sub-step is its own submit.
             try:
                 gp_stats = await run_phase_4_5(
-                    write_queue, warm_path_age=engine._warm_path_age,
+                    write_queue,
+                    warm_path_age=engine._warm_path_age,
                 )
                 engine._last_global_pattern_check = _gp_time.monotonic()
                 if gp_stats.get("promoted", 0) or gp_stats.get("demoted", 0) or gp_stats.get("retired", 0):
@@ -1388,7 +1449,8 @@ async def execute_warm_path(
                 root_cause = getattr(gp_exc, "orig", None) or getattr(gp_exc, "__cause__", None)
                 logger.warning(
                     "Phase 4.5 (global patterns) failed (non-fatal): %s | root_cause=%r",
-                    gp_exc, root_cause,
+                    gp_exc,
+                    root_cause,
                 )
         else:
             # Legacy single-session path: kept for parity until cycle 7.
@@ -1396,6 +1458,7 @@ async def execute_warm_path(
             try:
                 async with session_factory() as db:
                     from app.services.taxonomy.global_patterns import run_global_pattern_phase
+
                     gp_stats = await run_global_pattern_phase(db, engine._warm_path_age)
                     await db.commit()
                     engine._last_global_pattern_check = _gp_time.monotonic()
@@ -1412,7 +1475,8 @@ async def execute_warm_path(
                 root_cause = getattr(gp_exc, "orig", None) or getattr(gp_exc, "__cause__", None)
                 logger.warning(
                     "Phase 4.5 (global patterns) failed (non-fatal): %s | root_cause=%r",
-                    gp_exc, root_cause,
+                    gp_exc,
+                    root_cause,
                 )
 
     # ------------------------------------------------------------------
@@ -1422,6 +1486,7 @@ async def execute_warm_path(
     async def _do_task_type_signals(db: AsyncSession) -> None:
         from app.services.heuristic_analyzer import set_task_type_signals
         from app.services.task_type_signal_extractor import extract_task_type_signals
+
         tt_signals = await extract_task_type_signals(db)
         if tt_signals:
             # A4: signals dict keys are exactly the task_types that crossed
@@ -1434,19 +1499,24 @@ async def execute_warm_path(
             import json as _tt_json
 
             from app.config import DATA_DIR
+
             _tt_cache = DATA_DIR / "task_type_signals.json"
             try:
-                _tt_cache.write_text(_tt_json.dumps(
-                    {k: [[kw, w] for kw, w in v] for k, v in tt_signals.items()},
-                    indent=2,
-                ))
+                _tt_cache.write_text(
+                    _tt_json.dumps(
+                        {k: [[kw, w] for kw, w in v] for k, v in tt_signals.items()},
+                        indent=2,
+                    )
+                )
                 logger.info("Phase 4.75 (task-type signals): persisted to %s", _tt_cache)
             except Exception as _persist_exc:
                 logger.warning("Phase 4.75: persistence failed (%s) — in-memory only", _persist_exc)
 
     try:
         await _run_in_writer_session(
-            write_queue, session_factory, _do_task_type_signals,
+            write_queue,
+            session_factory,
+            _do_task_type_signals,
             operation_label="warm_phase_4_75_task_type_signals",
         )
     except Exception as _tt_exc:
@@ -1462,17 +1532,19 @@ async def execute_warm_path(
     # ------------------------------------------------------------------
     async def _do_signal_adjuster(db: AsyncSession) -> Any:
         from app.services.signal_adjuster import adjust_signals_from_telemetry
+
         return await adjust_signals_from_telemetry(db)
 
     try:
         adjust_result = await _run_in_writer_session(
-            write_queue, session_factory, _do_signal_adjuster,
+            write_queue,
+            session_factory,
+            _do_signal_adjuster,
             operation_label="warm_phase_4_76_signal_adjuster",
         )
         if adjust_result.signals_added:
             logger.info(
-                "Phase 4.76 (signal adjuster): %d signals added from %d "
-                "telemetry rows (task_types: %s)",
+                "Phase 4.76 (signal adjuster): %d signals added from %d telemetry rows (task_types: %s)",
                 adjust_result.signals_added,
                 adjust_result.rows_processed,
                 sorted(adjust_result.task_types_touched),
@@ -1486,7 +1558,8 @@ async def execute_warm_path(
     # retry and error isolation independently.
     # ------------------------------------------------------------------
     maint_result = await execute_maintenance_phases(
-        engine, session_factory,
+        engine,
+        session_factory,
         phase_results=all_phase_results,
         q_baseline=q_baseline,
         write_queue=write_queue,

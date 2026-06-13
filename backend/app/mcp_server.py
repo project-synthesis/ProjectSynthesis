@@ -127,10 +127,7 @@ try:
             request_mcp_session_id = request.query_params.get("session_id")
 
         # Existing session — handle directly (no lock needed)
-        if (
-            request_mcp_session_id is not None
-            and request_mcp_session_id in self._server_instances
-        ):
+        if request_mcp_session_id is not None and request_mcp_session_id in self._server_instances:
             transport = self._server_instances[request_mcp_session_id]
             await transport.handle_request(scope, receive, send)
             return
@@ -152,7 +149,8 @@ try:
                 _instances = self._server_instances  # closure ref
 
                 async def run_server(
-                    *, task_status: anyio.abc.TaskStatus[None] = anyio.TASK_STATUS_IGNORED,
+                    *,
+                    task_status: anyio.abc.TaskStatus[None] = anyio.TASK_STATUS_IGNORED,
                 ) -> None:
                     async with http_transport.connect() as streams:
                         read_stream, write_stream = streams
@@ -173,11 +171,7 @@ try:
                             )
                         finally:
                             sid = http_transport.mcp_session_id
-                            if (
-                                sid
-                                and sid in _instances
-                                and not http_transport.is_terminated
-                            ):
+                            if sid and sid in _instances and not http_transport.is_terminated:
                                 logger.info("Cleaning up crashed session %s", sid)
                                 del _instances[sid]
 
@@ -310,6 +304,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         # get_event_logger() raises RuntimeError in the MCP process.
         # cross_process=True forwards events to the backend's SSE via HTTP POST.
         from app.services.taxonomy.event_logger import TaxonomyEventLogger, set_event_logger
+
         _tel = TaxonomyEventLogger(
             events_dir=DATA_DIR / "taxonomy_events",
             publish_to_bus=False,
@@ -330,6 +325,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
         # E1b: Enable cross-process forwarding for classification agreement
         from app.services.classification_agreement import get_classification_agreement
+
         get_classification_agreement()._cross_process = True
         logger.info("MCP lifespan: ClassificationAgreement cross-process forwarding enabled")
 
@@ -368,6 +364,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
         # Shared EmbeddingService singleton — reused by taxonomy engine and context service
         from app.services.embedding_service import EmbeddingService
+
         _mcp_embedding_service = EmbeddingService()
 
         # Hot-path-only taxonomy engine for domain mapping (Spec 6.7)
@@ -401,9 +398,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             # Uses mtime-based change detection instead of age-based freshness:
             # the cache file doesn't expire, it just gets out of sync with the DB.
             # Only reloads when the backend has actually saved a new version.
-            _last_loaded_mtime: float = (
-                _index_cache_path.stat().st_mtime if _index_cache_path.exists() else 0.0
-            )
+            _last_loaded_mtime: float = _index_cache_path.stat().st_mtime if _index_cache_path.exists() else 0.0
 
             async def _refresh_embedding_index() -> None:
                 nonlocal _last_loaded_mtime
@@ -418,7 +413,8 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                         # File has been updated by backend warm path — reload
                         # regardless of age (bypass max_age_seconds check).
                         loaded = await engine.embedding_index.load_cache(
-                            _index_cache_path, max_age_seconds=86400,
+                            _index_cache_path,
+                            max_age_seconds=86400,
                         )
                         if loaded:
                             _last_loaded_mtime = current_mtime
@@ -456,7 +452,8 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         except Exception as exc:
             logger.warning(
                 "MCP server: ContextEnrichmentService init failed — passthrough "
-                "and pattern resolution will be unavailable: %s", exc,
+                "and pattern resolution will be unavailable: %s",
+                exc,
             )
 
         # Initialize domain services
@@ -475,12 +472,14 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
             # Wire signal loader into heuristic analyzer
             from app.services.heuristic_analyzer import set_signal_loader as set_analyzer_signal_loader
+
             set_analyzer_signal_loader(_signal_loader)
 
             logger.info("MCP domain services initialized")
         except Exception as exc:
             logger.warning(
-                "MCP server: domain services init failed (non-fatal): %s", exc,
+                "MCP server: domain services init failed (non-fatal): %s",
+                exc,
             )
 
         # Load dynamic task-type signals from JSON cache (persisted by backend warm path)
@@ -488,6 +487,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             import json as _tt_json
 
             from app.services.heuristic_analyzer import set_task_type_signals
+
             _tt_cache = DATA_DIR / "task_type_signals.json"
             if _tt_cache.exists():
                 _tt_raw = _tt_json.loads(_tt_cache.read_text())
@@ -508,6 +508,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                 get_legacy_project_id,
                 prime_legacy_project_id_cache,
             )
+
             async with _shared.async_session_factory() as _lpid_db:
                 _mcp_legacy_id = await get_legacy_project_id(_lpid_db)
             prime_legacy_project_id_cache(_mcp_legacy_id)
@@ -578,9 +579,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             from app.tools._shared import set_run_orchestrator as _set_ro
 
             _mcp_wq = _shared._write_queue
-            _mcp_provider = (
-                routing.state.provider if routing is not None else None
-            )
+            _mcp_provider = routing.state.provider if routing is not None else None
             _mcp_taxonomy = _shared.get_taxonomy_engine()
 
             # Collaborator resolutions hoisted ABOVE TopicProbeGenerator
@@ -652,8 +651,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                 )
             else:
                 logger.warning(
-                    "MCP lifespan: RunOrchestrator not registered "
-                    "(WriteQueue unavailable)",
+                    "MCP lifespan: RunOrchestrator not registered (WriteQueue unavailable)",
                 )
         except Exception as _ro_exc:
             logger.warning(
@@ -665,6 +663,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         async def _reload_domain_caches() -> None:
             try:
                 from app.tools._shared import get_domain_resolver, get_signal_loader
+
                 async with _shared.async_session_factory() as _reload_db:
                     resolver = get_domain_resolver()
                     await resolver.load(_reload_db)
@@ -709,6 +708,7 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     # cleanup, so taxonomy_activity events aren't silently cancelled.
     try:
         from app.services.taxonomy.event_logger import get_event_logger
+
         await get_event_logger().drain_pending(timeout=10.0)
     except RuntimeError:
         pass  # Event logger never initialized — nothing to drain
@@ -769,6 +769,7 @@ class _MCPAuthMiddleware:
         # Check query param fallback for SSE (constant-time comparison)
         if self.allow_query_token:
             from urllib.parse import parse_qs
+
             qs = parse_qs(scope.get("query_string", b"").decode())
             candidate = qs.get("token", [""])[0]
             if candidate and hmac.compare_digest(candidate, self.auth_token):
@@ -776,9 +777,15 @@ class _MCPAuthMiddleware:
 
         # Reject — send 401
         logger.warning("MCP auth failure from %s", scope.get("client", ("unknown",))[0])
-        await send({"type": "http.response.start", "status": 401, "headers": [
-            (b"content-type", b"application/json"),
-        ]})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                ],
+            }
+        )
         await send({"type": "http.response.body", "body": b'{"error":"Unauthorized"}'})
 
 
@@ -846,13 +853,13 @@ class _CapabilityDetectionMiddleware:
 
         # Extract request session ID for per-client activity tracking
         req_headers = dict(
-            (k.decode() if isinstance(k, bytes) else k,
-             v.decode() if isinstance(v, bytes) else v)
+            (k.decode() if isinstance(k, bytes) else k, v.decode() if isinstance(v, bytes) else v)
             for k, v in scope.get("headers", [])
         )
         req_session_id = req_headers.get("mcp-session-id", "")
         if not req_session_id:
             from urllib.parse import parse_qs
+
             qs = parse_qs(scope.get("query_string", b"").decode())
             req_session_id = qs.get("sessionId", [""])[0] or qs.get("session_id", [""])[0]
 
@@ -905,8 +912,7 @@ class _CapabilityDetectionMiddleware:
 
     async def _handle_get(self, scope, receive, send):
         headers = dict(
-            (k.decode() if isinstance(k, bytes) else k,
-             v.decode() if isinstance(v, bytes) else v)
+            (k.decode() if isinstance(k, bytes) else k, v.decode() if isinstance(v, bytes) else v)
             for k, v in scope.get("headers", [])
         )
         session_id = headers.get("mcp-session-id", "")
@@ -932,8 +938,7 @@ class _CapabilityDetectionMiddleware:
 
                     if not session_id:
                         resp_headers = dict(
-                            (k.decode() if isinstance(k, bytes) else k,
-                             v.decode() if isinstance(v, bytes) else v)
+                            (k.decode() if isinstance(k, bytes) else k, v.decode() if isinstance(v, bytes) else v)
                             for k, v in message.get("headers", [])
                         )
                         session_id = resp_headers.get("mcp-session-id", "")
@@ -941,9 +946,12 @@ class _CapabilityDetectionMiddleware:
                     is_sampling_stream = session_id and session_id in cls._sampling_session_ids
                     if is_sampling_stream:
                         cls._sampling_sse_sessions.add(session_id)
-                        logger.info("Sampling SSE opened: %s (total=%d, sampling=%d)",
-                                    session_id[:12], cls._active_sse_streams,
-                                    len(cls._sampling_sse_sessions))
+                        logger.info(
+                            "Sampling SSE opened: %s (total=%d, sampling=%d)",
+                            session_id[:12],
+                            cls._active_sse_streams,
+                            len(cls._sampling_sse_sessions),
+                        )
                     if not has_session_id:
                         cls._write_optimistic_session()
                     elif is_sampling_stream:
@@ -956,7 +964,8 @@ class _CapabilityDetectionMiddleware:
                     body_bytes = message.get("body", b"")
                     if b"endpoint" in body_bytes or b"session_id" in body_bytes or b"sessionId" in body_bytes:
                         import re
-                        m = re.search(br'(?:sessionId|session_id|mcp-session-id)=([a-zA-Z0-9_-]+)', body_bytes)
+
+                        m = re.search(rb"(?:sessionId|session_id|mcp-session-id)=([a-zA-Z0-9_-]+)", body_bytes)
                         if m:
                             session_id = m.group(1).decode()
                             logger.debug("Extracted session ID from SSE body: %s", session_id[:12])
@@ -965,9 +974,12 @@ class _CapabilityDetectionMiddleware:
                 if is_sampling_stream:
                     if session_id not in cls._sampling_sse_sessions:
                         cls._sampling_sse_sessions.add(session_id)
-                        logger.info("Sampling SSE mapped dynamically: %s (total=%d, sampling=%d)",
-                                    session_id[:12], cls._active_sse_streams,
-                                    len(cls._sampling_sse_sessions))
+                        logger.info(
+                            "Sampling SSE mapped dynamically: %s (total=%d, sampling=%d)",
+                            session_id[:12],
+                            cls._active_sse_streams,
+                            len(cls._sampling_sse_sessions),
+                        )
                     self._touch_routing_activity()
                 self._touch_session_file()
             await send(message)
@@ -995,8 +1007,7 @@ class _CapabilityDetectionMiddleware:
                         routing.on_mcp_disconnect()
                     else:
                         logger.info(
-                            "Last sampling SSE closed (non-sampling remain: %d) "
-                            "— firing on_sampling_disconnect()",
+                            "Last sampling SSE closed (non-sampling remain: %d) — firing on_sampling_disconnect()",
                             cls._active_sse_streams,
                         )
                         routing.on_sampling_disconnect()
@@ -1069,8 +1080,7 @@ class _CapabilityDetectionMiddleware:
             if routing:
                 routing.on_session_invalidated()
             logger.info(
-                "Stale session cleanup: removed mcp_session.json after failed "
-                "client reconnection (400/404)",
+                "Stale session cleanup: removed mcp_session.json after failed client reconnection (400/404)",
             )
 
     @staticmethod
@@ -1085,8 +1095,7 @@ class _CapabilityDetectionMiddleware:
             sampling = caps.get("sampling") is not None
 
             logger.info(
-                "Capability detection middleware: initialize from %s/%s — "
-                "caps=%s, sampling=%s, protocolVersion=%s",
+                "Capability detection middleware: initialize from %s/%s — caps=%s, sampling=%s, protocolVersion=%s",
                 client_info.get("name", "unknown"),
                 client_info.get("version", "?"),
                 list(caps.keys()),
@@ -1149,6 +1158,7 @@ def _patched_streamable_http_app(**kwargs):
     app.add_middleware(_CapabilityDetectionMiddleware)
     # Auth middleware wraps outermost — checked before capability detection
     from app.config import settings
+
     app.add_middleware(
         _MCPAuthMiddleware,
         auth_token=settings.MCP_AUTH_TOKEN,
@@ -1184,21 +1194,36 @@ from app.tools.strategies import handle_strategies  # noqa: E402
 @mcp.tool(structured_output=True)
 async def synthesis_optimize(
     prompt: Annotated[str, Field(description="The raw prompt text to optimize (20–200k chars).")],
-    strategy: Annotated[str | None, Field(
-        default=None,
-        description="Optimization strategy name (e.g. 'auto', 'chain-of-thought', 'few-shot', "
-        "'meta-prompting', 'role-playing', 'structured-output'). Defaults to user preference or 'auto'.",
-    )] = None,
-    repo_full_name: Annotated[str | None, Field(
-        default=None, description="GitHub repo in 'owner/repo' format for codebase-aware optimization.",
-    )] = None,
-    workspace_path: Annotated[str | None, Field(
-        default=None, description="Absolute path to the workspace root for context injection.",
-    )] = None,
-    applied_pattern_ids: Annotated[list[str] | None, Field(
-        default=None, description="List of MetaPattern IDs to inject into the optimizer context. "
-        "Get these from synthesis_match results.",
-    )] = None,
+    strategy: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Optimization strategy name (e.g. 'auto', 'chain-of-thought', 'few-shot', "
+            "'meta-prompting', 'role-playing', 'structured-output'). Defaults to user preference or 'auto'.",
+        ),
+    ] = None,
+    repo_full_name: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="GitHub repo in 'owner/repo' format for codebase-aware optimization.",
+        ),
+    ] = None,
+    workspace_path: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Absolute path to the workspace root for context injection.",
+        ),
+    ] = None,
+    applied_pattern_ids: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description="List of MetaPattern IDs to inject into the optimizer context. "
+            "Get these from synthesis_match results.",
+        ),
+    ] = None,
     ctx: Context | None = None,
 ) -> OptimizeOutput:
     """Run the full optimization pipeline on a prompt.
@@ -1242,22 +1267,40 @@ async def synthesis_analyze(
 
 @mcp.tool(structured_output=True)
 async def synthesis_prepare_optimization(
-    prompt: Annotated[str, Field(
-        description="The raw prompt text to prepare for external optimization (min 20 chars).",
-    )],
-    strategy: Annotated[str | None, Field(
-        default=None,
-        description="Optimization strategy name. Defaults to user preference or 'auto'.",
-    )] = None,
-    max_context_tokens: Annotated[int, Field(
-        default=128000, description="Maximum context window budget in tokens.",
-    )] = 128000,
-    workspace_path: Annotated[str | None, Field(
-        default=None, description="Absolute path to the workspace root for context injection.",
-    )] = None,
-    repo_full_name: Annotated[str | None, Field(
-        default=None, description="GitHub repo in 'owner/repo' format for codebase-aware optimization.",
-    )] = None,
+    prompt: Annotated[
+        str,
+        Field(
+            description="The raw prompt text to prepare for external optimization (min 20 chars).",
+        ),
+    ],
+    strategy: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Optimization strategy name. Defaults to user preference or 'auto'.",
+        ),
+    ] = None,
+    max_context_tokens: Annotated[
+        int,
+        Field(
+            default=128000,
+            description="Maximum context window budget in tokens.",
+        ),
+    ] = 128000,
+    workspace_path: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Absolute path to the workspace root for context injection.",
+        ),
+    ] = None,
+    repo_full_name: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="GitHub repo in 'owner/repo' format for codebase-aware optimization.",
+        ),
+    ] = None,
     ctx: Context | None = None,
 ) -> PrepareOutput:
     """Assemble the full optimization prompt for processing by YOUR LLM.
@@ -1277,35 +1320,66 @@ async def synthesis_prepare_optimization(
 async def synthesis_save_result(
     trace_id: Annotated[str, Field(description="Trace ID from synthesis_prepare_optimization.")],
     optimized_prompt: Annotated[str, Field(description="The optimized prompt text produced by your LLM.")],
-    changes_summary: Annotated[str | None, Field(
-        default=None, description="Brief summary of changes made during optimization.",
-    )] = None,
-    task_type: Annotated[str | None, Field(
-        default=None,
-        description="Task classification: 'coding', 'writing', 'analysis', 'creative', 'data', 'system', or 'general'.",
-    )] = None,
-    strategy_used: Annotated[str | None, Field(
-        default=None, description="Strategy name used. Normalized to known strategies if verbose.",
-    )] = None,
-    scores: Annotated[dict | None, Field(
-        default=None,
-        description="Self-rated scores dict with keys: clarity, specificity, structure, "
-        "faithfulness, conciseness (1.0-10.0 float, clamped to this range).",
-    )] = None,
-    model: Annotated[str | None, Field(
-        default=None, description="Model ID that produced the optimization.",
-    )] = None,
-    codebase_context: Annotated[str | None, Field(
-        default=None, description="IDE-provided codebase context snapshot to store alongside the result.",
-    )] = None,
-    domain: Annotated[str | None, Field(
-        default=None,
-        description="Domain from known domain nodes (e.g., 'backend', 'frontend', "
-        "'database', 'devops', 'security'). Defaults to 'general' if not provided.",
-    )] = None,
-    intent_label: Annotated[str | None, Field(
-        default=None, description="Short 3-6 word intent classification label. Defaults to 'general'.",
-    )] = None,
+    changes_summary: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Brief summary of changes made during optimization.",
+        ),
+    ] = None,
+    task_type: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Task classification: 'coding', 'writing', 'analysis', 'creative', 'data', 'system', or 'general'."
+            ),
+        ),
+    ] = None,
+    strategy_used: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Strategy name used. Normalized to known strategies if verbose.",
+        ),
+    ] = None,
+    scores: Annotated[
+        dict | None,
+        Field(
+            default=None,
+            description="Self-rated scores dict with keys: clarity, specificity, structure, "
+            "faithfulness, conciseness (1.0-10.0 float, clamped to this range).",
+        ),
+    ] = None,
+    model: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Model ID that produced the optimization.",
+        ),
+    ] = None,
+    codebase_context: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="IDE-provided codebase context snapshot to store alongside the result.",
+        ),
+    ] = None,
+    domain: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Domain from known domain nodes (e.g., 'backend', 'frontend', "
+            "'database', 'devops', 'security'). Defaults to 'general' if not provided.",
+        ),
+    ] = None,
+    intent_label: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Short 3-6 word intent classification label. Defaults to 'general'.",
+        ),
+    ] = None,
     ctx: Context | None = None,
 ) -> SaveResultOutput:
     """Persist an optimization result from an external LLM with hybrid scoring.
@@ -1318,9 +1392,17 @@ async def synthesis_save_result(
     Chain: Call synthesis_feedback AFTER using the optimized prompt to report quality.
     """
     return await handle_save_result(
-        trace_id, optimized_prompt, changes_summary, task_type,
-        strategy_used, scores, model, codebase_context, ctx,
-        domain=domain, intent_label=intent_label,
+        trace_id,
+        optimized_prompt,
+        changes_summary,
+        task_type,
+        strategy_used,
+        scores,
+        model,
+        codebase_context,
+        ctx,
+        domain=domain,
+        intent_label=intent_label,
     )
 
 
@@ -1356,26 +1438,50 @@ async def synthesis_strategies(
 
 @mcp.tool(structured_output=True)
 async def synthesis_history(
-    limit: Annotated[int, Field(
-        default=10, description="Number of results to return (1-50).",
-    )] = 10,
-    offset: Annotated[int, Field(
-        default=0, description="Pagination offset.",
-    )] = 0,
-    sort_by: Annotated[str, Field(
-        default="created_at",
-        description="Sort column: 'created_at', 'overall_score', 'task_type', 'strategy_used', 'duration_ms'.",
-    )] = "created_at",
-    sort_order: Annotated[str, Field(
-        default="desc", description="Sort direction: 'asc' or 'desc'.",
-    )] = "desc",
-    task_type: Annotated[str | None, Field(
-        default=None,
-        description="Filter by task type: 'coding', 'writing', 'analysis', 'creative', 'data', 'system', 'general'.",
-    )] = None,
-    status: Annotated[str | None, Field(
-        default=None, description="Filter by status: 'completed', 'failed', 'analyzed', 'pending'.",
-    )] = None,
+    limit: Annotated[
+        int,
+        Field(
+            default=10,
+            description="Number of results to return (1-50).",
+        ),
+    ] = 10,
+    offset: Annotated[
+        int,
+        Field(
+            default=0,
+            description="Pagination offset.",
+        ),
+    ] = 0,
+    sort_by: Annotated[
+        str,
+        Field(
+            default="created_at",
+            description="Sort column: 'created_at', 'overall_score', 'task_type', 'strategy_used', 'duration_ms'.",
+        ),
+    ] = "created_at",
+    sort_order: Annotated[
+        str,
+        Field(
+            default="desc",
+            description="Sort direction: 'asc' or 'desc'.",
+        ),
+    ] = "desc",
+    task_type: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Filter by task type: 'coding', 'writing', 'analysis', 'creative', 'data', 'system', 'general'."
+            ),
+        ),
+    ] = None,
+    status: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Filter by status: 'completed', 'failed', 'analyzed', 'pending'.",
+        ),
+    ] = None,
     ctx: Context | None = None,
 ) -> HistoryOutput:
     """Query optimization history with filtering and sorting.
@@ -1406,16 +1512,20 @@ async def synthesis_get_optimization(
 @mcp.tool(structured_output=True)
 async def synthesis_delete(
     optimization_id: Annotated[
-        str, Field(description="ID of the optimization to delete (uuid)."),
+        str,
+        Field(description="ID of the optimization to delete (uuid)."),
     ],
-    force: Annotated[bool, Field(
-        default=False,
-        description=(
-            "Override the live-suite provenance guard (v0.4.37). Without "
-            "it, deleting an optimization referenced by a live validation "
-            "suite fails with a structured suite_referenced error."
+    force: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Override the live-suite provenance guard (v0.4.37). Without "
+                "it, deleting an optimization referenced by a live validation "
+                "suite fails with a structured suite_referenced error."
+            ),
         ),
-    )] = False,
+    ] = False,
     ctx: Context | None = None,
 ) -> DeleteOptimizationOutput:
     """Delete one optimization and cascade dependents.
@@ -1438,9 +1548,12 @@ async def synthesis_delete(
 
 @mcp.tool(structured_output=True)
 async def synthesis_match(
-    prompt_text: Annotated[str, Field(
-        description="Prompt text to match against the knowledge graph (min 10 chars).",
-    )],
+    prompt_text: Annotated[
+        str,
+        Field(
+            description="Prompt text to match against the knowledge graph (min 10 chars).",
+        ),
+    ],
     ctx: Context | None = None,
 ) -> MatchOutput:
     """Search the knowledge graph for clusters and reusable patterns similar to a prompt.
@@ -1458,13 +1571,20 @@ async def synthesis_match(
 @mcp.tool(structured_output=True)
 async def synthesis_feedback(
     optimization_id: Annotated[str, Field(description="ID of the optimization to rate.")],
-    rating: Annotated[str, Field(
-        description="Quality rating: 'thumbs_up' if the optimized prompt worked well, "
-        "'thumbs_down' if it underperformed.",
-    )],
-    comment: Annotated[str | None, Field(
-        default=None, description="Optional explanation of what worked or didn't.",
-    )] = None,
+    rating: Annotated[
+        str,
+        Field(
+            description="Quality rating: 'thumbs_up' if the optimized prompt worked well, "
+            "'thumbs_down' if it underperformed.",
+        ),
+    ],
+    comment: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Optional explanation of what worked or didn't.",
+        ),
+    ] = None,
     ctx: Context | None = None,
 ) -> FeedbackOutput:
     """Submit quality feedback on a completed optimization to drive strategy adaptation.
@@ -1480,16 +1600,27 @@ async def synthesis_feedback(
 @mcp.tool(structured_output=True)
 async def synthesis_refine(
     optimization_id: Annotated[str, Field(description="ID of the optimization to refine.")],
-    refinement_request: Annotated[str, Field(
-        description="Specific refinement instruction (e.g., 'add more concrete examples', "
-        "'strengthen the error handling section', 'make it more concise').",
-    )],
-    branch_id: Annotated[str | None, Field(
-        default=None, description="Branch ID to refine on. Omit to use the latest branch.",
-    )] = None,
-    workspace_path: Annotated[str | None, Field(
-        default=None, description="Absolute path to workspace root for codebase context.",
-    )] = None,
+    refinement_request: Annotated[
+        str,
+        Field(
+            description="Specific refinement instruction (e.g., 'add more concrete examples', "
+            "'strengthen the error handling section', 'make it more concise').",
+        ),
+    ],
+    branch_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Branch ID to refine on. Omit to use the latest branch.",
+        ),
+    ] = None,
+    workspace_path: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Absolute path to workspace root for codebase context.",
+        ),
+    ] = None,
     ctx: Context | None = None,
 ) -> RefineOutput:
     """Iteratively improve an optimized prompt with specific instructions.
@@ -1505,29 +1636,47 @@ async def synthesis_refine(
 
 @mcp.tool(structured_output=True)
 async def synthesis_seed(
-    project_description: Annotated[str, Field(
-        description="Project description for prompt generation (20+ chars).",
-    )],
-    workspace_path: Annotated[str | None, Field(
-        default=None,
-        description="Absolute path to workspace root for context extraction.",
-    )] = None,
-    repo_full_name: Annotated[str | None, Field(
-        default=None,
-        description="GitHub repo in 'owner/repo' format for explore phase.",
-    )] = None,
-    prompt_count: Annotated[int, Field(
-        default=30,
-        description="Target total prompts (5-100).",
-    )] = 30,
-    agents: Annotated[list[str] | None, Field(
-        default=None,
-        description="Specific agent names. None = all enabled.",
-    )] = None,
-    prompts: Annotated[list[str] | None, Field(
-        default=None,
-        description="User-provided prompts (bypasses generation).",
-    )] = None,
+    project_description: Annotated[
+        str,
+        Field(
+            description="Project description for prompt generation (20+ chars).",
+        ),
+    ],
+    workspace_path: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Absolute path to workspace root for context extraction.",
+        ),
+    ] = None,
+    repo_full_name: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="GitHub repo in 'owner/repo' format for explore phase.",
+        ),
+    ] = None,
+    prompt_count: Annotated[
+        int,
+        Field(
+            default=30,
+            description="Target total prompts (5-100).",
+        ),
+    ] = 30,
+    agents: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description="Specific agent names. None = all enabled.",
+        ),
+    ] = None,
+    prompts: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description="User-provided prompts (bypasses generation).",
+        ),
+    ] = None,
     ctx: Context | None = None,
 ) -> SeedOutput:
     """Seed the taxonomy by generating and optimizing diverse prompts.
@@ -1542,6 +1691,7 @@ async def synthesis_seed(
     and taxonomy engine handle everything.
     """
     from app.tools.seed import handle_seed
+
     # MCP context: routing resolved via get_routing() inside handle_seed fallback.
     # Resolve context_service via the MCP-process singleton so batch seeding goes
     # through unified enrichment (B0 gate, B1/B2 divergence, pattern injection,
@@ -1549,6 +1699,7 @@ async def synthesis_seed(
     _ctx_svc = None
     try:
         from app.tools._shared import get_context_service
+
         _ctx_svc = get_context_service()
     except Exception:
         _ctx_svc = None
@@ -1567,9 +1718,12 @@ async def synthesis_seed(
 
 @mcp.tool(structured_output=True)
 async def synthesis_explain(
-    optimization_id: Annotated[str, Field(
-        description="Optimization ID or trace_id to explain.",
-    )],
+    optimization_id: Annotated[
+        str,
+        Field(
+            description="Optimization ID or trace_id to explain.",
+        ),
+    ],
     ctx: Context | None = None,
 ) -> ExplainResult:
     """Get a plain-English explanation of what an optimization changed and why.
@@ -1586,13 +1740,19 @@ async def synthesis_explain(
 
 @mcp.tool(structured_output=True)
 async def synthesis_probe(
-    topic: Annotated[str, Field(
-        description="Free-text topic to probe (3-500 chars). Drives prompt generation.",
-    )],
-    scope: Annotated[str | None, Field(
-        default=None,
-        description="Optional file glob within the linked repo (default = whole repo).",
-    )] = None,
+    topic: Annotated[
+        str,
+        Field(
+            description="Free-text topic to probe (3-500 chars). Drives prompt generation.",
+        ),
+    ],
+    scope: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Optional file glob within the linked repo (default = whole repo).",
+        ),
+    ] = None,
     intent_hint: Annotated[
         Literal["audit", "refactor", "explore", "regression-test"] | None,
         Field(
@@ -1600,20 +1760,26 @@ async def synthesis_probe(
             description="Optional intent hint shaping prompt generation (default = explore).",
         ),
     ] = None,
-    n_prompts: Annotated[int | None, Field(
-        default=None,
-        description="Optional prompt count (5-25, default 12).",
-        ge=5,
-        le=25,
-    )] = None,
-    repo_full_name: Annotated[str | None, Field(
-        default=None,
-        description=(
-            "Optional explicit GitHub repo (owner/repo). Defaults to the "
-            "active linked repo; if neither is supplied the tool surfaces "
-            "ProbeError('link_repo_first')."
+    n_prompts: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Optional prompt count (5-25, default 12).",
+            ge=5,
+            le=25,
         ),
-    )] = None,
+    ] = None,
+    repo_full_name: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Optional explicit GitHub repo (owner/repo). Defaults to the "
+                "active linked repo; if neither is supplied the tool surfaces "
+                "ProbeError('link_repo_first')."
+            ),
+        ),
+    ] = None,
     ctx: Context | None = None,
 ) -> ProbeRunResult:
     """Topic Probe — agentic targeted exploration of a topic against the linked codebase.
@@ -1643,24 +1809,33 @@ async def synthesis_probe(
 
 @mcp.tool(structured_output=True)
 async def synthesis_save_suite(
-    run_id: Annotated[str, Field(
-        description="Source RunRow.id from a completed synthesis_probe run.",
-    )],
-    label: Annotated[str, Field(
-        description="Human-readable suite label (1-120 chars).",
-        min_length=1,
-        max_length=120,
-    )],
-    tolerance_abs: Annotated[float, Field(
-        default=0.5,
-        description=(
-            "Absolute score tolerance for regression detection (0.1-5.0). "
-            "Replays whose mean overall falls below the baseline by more "
-            "than this fire the regression alarm."
+    run_id: Annotated[
+        str,
+        Field(
+            description="Source RunRow.id from a completed synthesis_probe run.",
         ),
-        ge=0.1,
-        le=5.0,
-    )] = 0.5,
+    ],
+    label: Annotated[
+        str,
+        Field(
+            description="Human-readable suite label (1-120 chars).",
+            min_length=1,
+            max_length=120,
+        ),
+    ],
+    tolerance_abs: Annotated[
+        float,
+        Field(
+            default=0.5,
+            description=(
+                "Absolute score tolerance for regression detection (0.1-5.0). "
+                "Replays whose mean overall falls below the baseline by more "
+                "than this fire the regression alarm."
+            ),
+            ge=0.1,
+            le=5.0,
+        ),
+    ] = 0.5,
 ) -> SaveSuiteOutput:
     """Fork a completed topic_probe run into an immutable ValidationSuite.
 
@@ -1691,9 +1866,12 @@ async def synthesis_save_suite(
 
 @mcp.tool(structured_output=True)
 async def synthesis_replay_suite(
-    suite_id: Annotated[str, Field(
-        description="Target ValidationSuite.id to replay.",
-    )],
+    suite_id: Annotated[
+        str,
+        Field(
+            description="Target ValidationSuite.id to replay.",
+        ),
+    ],
 ) -> ReplayInitiatedOutput:
     """Kick off a replay run against an existing ValidationSuite.
 
@@ -1716,9 +1894,12 @@ async def synthesis_replay_suite(
 
 @mcp.tool(structured_output=True)
 async def synthesis_refresh_seed_agent(
-    agent_name: Annotated[str, Field(
-        description="Stem of the seed-agent file (e.g., 'react-testing' for prompts/seed-agents/react-testing.md).",
-    )],
+    agent_name: Annotated[
+        str,
+        Field(
+            description="Stem of the seed-agent file (e.g., 'react-testing' for prompts/seed-agents/react-testing.md).",
+        ),
+    ],
 ) -> RefreshResult:
     """Refresh the few-shot Examples section of a promoted seed-agent file.
 
@@ -1738,20 +1919,27 @@ async def synthesis_refresh_seed_agent(
     * ``skipped_reason``: file_not_found | no_source_run | source_run_deleted | write_failed | None.
     """
     from app.tools.refresh_seed_agent import handle_refresh_seed_agent
+
     return await handle_refresh_seed_agent(agent_name=agent_name)
 
 
 @mcp.tool(structured_output=True)
 async def synthesis_drill_into_cluster(
-    cluster_id: Annotated[str, Field(
-        description="Target PromptCluster.id to drill into.",
-    )],
-    topic: Annotated[str, Field(
-        description="Topic for the new topic_probe run (3-500 chars). "
-                    "Typically derived from cluster.label but operator-editable.",
-        min_length=3,
-        max_length=500,
-    )],
+    cluster_id: Annotated[
+        str,
+        Field(
+            description="Target PromptCluster.id to drill into.",
+        ),
+    ],
+    topic: Annotated[
+        str,
+        Field(
+            description="Topic for the new topic_probe run (3-500 chars). "
+            "Typically derived from cluster.label but operator-editable.",
+            min_length=3,
+            max_length=500,
+        ),
+    ],
 ) -> DrillInitiatedOutput:
     """Drill from an existing cluster into a new focused topic_probe run.
 
@@ -1765,6 +1953,7 @@ async def synthesis_drill_into_cluster(
     * ``invalid_topic`` — topic shorter than 3 chars or longer than 500.
     """
     from app.tools.drill_cluster import handle_drill_into_cluster
+
     return await handle_drill_into_cluster(
         cluster_id=cluster_id,
         topic=topic,

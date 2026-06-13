@@ -2440,13 +2440,10 @@ class TaxonomyEngine:
             # not cross the >30% churn bar — the creation itself is the
             # staleness signal. The flag is cleared after the regen runs,
             # so this only fires once per creation.
-            regen_forced_for_parent = (
-                domain_node.id in self._vocab_regen_pending
-            )
+            regen_forced_for_parent = domain_node.id in self._vocab_regen_pending
             stale = (
                 is_first_generation
-                or abs(current_cluster_count - cached_cluster_count)
-                > max(2, cached_cluster_count * 0.3)
+                or abs(current_cluster_count - cached_cluster_count) > max(2, cached_cluster_count * 0.3)
                 or regen_forced_for_parent
             )
             if stale and self._provider:
@@ -4121,10 +4118,7 @@ class TaxonomyEngine:
                 if created is not None and created.tzinfo is not None:
                     created = created.replace(tzinfo=None)
             # v0.4.38 F1: compute once — every health-check branch reads this.
-            age_hours = (
-                max(0.0, (now - created).total_seconds() / 3600.0)
-                if created else 0.0
-            )
+            age_hours = max(0.0, (now - created).total_seconds() / 3600.0) if created else 0.0
             if created and created > age_cutoff:
                 _emit_health_check(sub, "grace_period", age_hours)
                 continue  # too young — skip

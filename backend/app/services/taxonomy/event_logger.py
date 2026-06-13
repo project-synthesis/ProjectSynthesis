@@ -28,12 +28,22 @@ logger = logging.getLogger(__name__)
 # `dict`). Activity history renders verbatim — do NOT remap. See:
 #   docs/superpowers/specs/2026-04-18-template-architecture-design.md §Compat
 _LegacyClusterState = Literal[
-    "candidate", "active", "mature", "template", "archived", "domain", "project",
+    "candidate",
+    "active",
+    "mature",
+    "template",
+    "archived",
+    "domain",
+    "project",
 ]
 
 # Context-dict keys that may carry a legacy state value.
 _LEGACY_STATE_KEYS: tuple[str, ...] = (
-    "state", "old_state", "new_state", "previous_state", "winner_state",
+    "state",
+    "old_state",
+    "new_state",
+    "previous_state",
+    "winner_state",
 )
 
 # Maximum number of failed events to keep for retry on next successful delivery.
@@ -64,7 +74,8 @@ def get_event_logger() -> "TaxonomyEventLogger":
         if _uninitialized_warnings <= _UNINITIALIZED_WARN_LIMIT:
             logger.warning(
                 "TaxonomyEventLogger not initialized (call %d/%d before suppression)",
-                _uninitialized_warnings, _UNINITIALIZED_WARN_LIMIT,
+                _uninitialized_warnings,
+                _UNINITIALIZED_WARN_LIMIT,
             )
         raise RuntimeError("TaxonomyEventLogger not initialized — call set_event_logger() first")
     return _instance
@@ -166,6 +177,7 @@ class TaxonomyEventLogger:
         # Local import avoids circular import (probe_service imports from
         # event_logger transitively via the taxonomy package).
         from app.services.probe_event_correlation import inject_probe_id
+
         context = inject_probe_id(context or {})
 
         # Consecutive dedup: suppress truly back-to-back identical events.
@@ -174,11 +186,13 @@ class TaxonomyEventLogger:
         # This prevents over-suppression of semantically different events
         # that happen to share identical context (e.g., two Q-gate
         # evaluations with the same scores across different warm phases).
-        _sig = hashlib.md5(json.dumps(
-            {"path": path, "op": op, "decision": decision,
-             "cluster_id": cluster_id, "context": context or {}},
-            sort_keys=True, default=str,
-        ).encode()).hexdigest()
+        _sig = hashlib.md5(
+            json.dumps(
+                {"path": path, "op": op, "decision": decision, "cluster_id": cluster_id, "context": context or {}},
+                sort_keys=True,
+                default=str,
+            ).encode()
+        ).hexdigest()
         if _sig == self._last_dedup_signature:
             return  # Suppress consecutive duplicate
         self._last_dedup_signature = _sig
@@ -213,11 +227,14 @@ class TaxonomyEventLogger:
         if self._publish_to_bus:
             try:
                 from app.services.event_bus import event_bus
+
                 event_bus.publish("taxonomy_activity", event)
             except Exception as _bus_exc:
                 logger.warning(
                     "SSE bridge publish failed for %s/%s: %s",
-                    op, decision, _bus_exc,
+                    op,
+                    decision,
+                    _bus_exc,
                 )
         elif self._cross_process:
             # MCP server process: forward via HTTP to backend's event bus.
@@ -239,7 +256,9 @@ class TaxonomyEventLogger:
             except Exception as _cp_exc:
                 logger.warning(
                     "Cross-process notification failed for %s/%s: %s",
-                    op, decision, _cp_exc,
+                    op,
+                    decision,
+                    _cp_exc,
                 )
                 self._retry_queue.append(event)
 
@@ -254,9 +273,11 @@ class TaxonomyEventLogger:
         events logged from synchronous contexts (thread-pool tasks, sync
         helpers) are not silently dropped to JSONL-only.
         """
+
         def _post() -> None:
             try:
                 import httpx
+
                 httpx.post(
                     _PUBLISH_URL,
                     json={"event_type": "taxonomy_activity", "data": event},
@@ -266,7 +287,9 @@ class TaxonomyEventLogger:
             except Exception as exc:
                 logger.warning(
                     "Cross-process sync forward failed for %s/%s: %s — queued for retry",
-                    op, decision, exc,
+                    op,
+                    decision,
+                    exc,
                 )
                 self._retry_queue.append(event)
 
@@ -274,7 +297,10 @@ class TaxonomyEventLogger:
         t.start()
 
     async def _forward_with_retry(
-        self, event: dict[str, Any], op: str, decision: str,
+        self,
+        event: dict[str, Any],
+        op: str,
+        decision: str,
     ) -> None:
         """Forward an event and drain any pending retries on success."""
         from app.services.event_notification import notify_event_bus
@@ -292,7 +318,8 @@ class TaxonomyEventLogger:
                 await notify_event_bus("taxonomy_activity", stale_event)
                 logger.info(
                     "Retry-delivered stale cross-process event: %s/%s",
-                    stale_event.get("op", "?"), stale_event.get("decision", "?"),
+                    stale_event.get("op", "?"),
+                    stale_event.get("decision", "?"),
                 )
             except Exception as exc:
                 # Put it back and stop draining — backend is struggling again.
@@ -329,7 +356,8 @@ class TaxonomyEventLogger:
         if pending:
             logger.warning(
                 "%d cross-process event tasks did not complete within %.1fs — cancelling",
-                len(pending), timeout,
+                len(pending),
+                timeout,
             )
             for t in pending:
                 t.cancel()
@@ -350,7 +378,8 @@ class TaxonomyEventLogger:
         except RuntimeError:
             return  # No loop — log_decision lazy path will retry later.
         self._drain_task = loop.create_task(
-            self._periodic_drain(), name="taxonomy_drain",
+            self._periodic_drain(),
+            name="taxonomy_drain",
         )
 
     async def _periodic_drain(self) -> None:
@@ -387,7 +416,8 @@ class TaxonomyEventLogger:
                     await notify_event_bus("taxonomy_activity", event)
                     logger.info(
                         "Drain-delivered parked cross-process event: %s/%s",
-                        event.get("op", "?"), event.get("decision", "?"),
+                        event.get("op", "?"),
+                        event.get("decision", "?"),
                     )
                 except Exception as exc:
                     self._retry_queue.appendleft(event)
@@ -455,7 +485,8 @@ class TaxonomyEventLogger:
             except json.JSONDecodeError as jde:
                 logger.warning(
                     "Malformed JSONL line in %s (skipping): %s",
-                    filepath.name, jde,
+                    filepath.name,
+                    jde,
                 )
                 continue
         return events[offset : offset + limit]
