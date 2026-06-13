@@ -4,8 +4,11 @@
   import { listRuns, bulkDeleteRuns, bulkExportRuns, type RunSummary } from '$lib/api/runs';
   import { projectStore } from '$lib/stores/project.svelte';
   import { runsPanelStore } from '$lib/stores/runs-panel.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import RunRowItem from './RunRowItem.svelte';
   import BulkActionBar from './BulkActionBar.svelte';
+  import AnimatedDialog from '$lib/components/shared/AnimatedDialog.svelte';
+  import DestructiveConfirmModal from '$lib/components/shared/DestructiveConfirmModal.svelte';
 
   interface Props {
     active?: boolean;
@@ -16,6 +19,7 @@
   let statusFilter = $state<'all' | 'running' | 'completed' | 'partial' | 'failed'>('all');
 
   let runs = $state<RunSummary[]>([]);
+  let runsTotal = $state(0);
   let runsError = $state<string | null>(null);
   let runsLoaded = $state(false);
   let hasMore = $state(false);
@@ -29,6 +33,16 @@
   let selectedIds = $state(new Set<string>());
   let confirmDeleteIds = $state<string[] | null>(null);
   let bulkActionInFlight = $state(false);
+
+  // R-23 — Select-all tri-state indeterminate binding via $effect.
+  let selectAllEl: HTMLInputElement | undefined = $state();
+  const allSelected = $derived(runs.length > 0 && runs.every(r => selectedIds.has(r.id)));
+  const someSelected = $derived(selectedIds.size > 0 && !allSelected);
+  $effect(() => {
+    if (selectAllEl) {
+      selectAllEl.indeterminate = someSelected;
+    }
+  });
 
   function toggleSelectMode(): void {
     selectMode = !selectMode;
@@ -71,6 +85,7 @@
       confirmDeleteIds = null;
     } catch (err) {
       runsError = err instanceof Error ? err.message : 'Bulk delete failed';
+      throw err instanceof Error ? err : new Error(String(err));
     } finally {
       bulkActionInFlight = false;
     }
@@ -122,6 +137,7 @@
       });
       if (myRequest !== requestId) return;  // stale response — discard
       runs = append ? [...runs, ...resp.items] : resp.items;
+      runsTotal = resp.total;
       hasMore = resp.has_more;  // authoritative; runs.ts:80
       nextOffset = resp.next_offset;
       runsLoaded = true;
@@ -133,6 +149,11 @@
     } finally {
       if (myRequest === requestId && offset > 0) loadingMore = false;
     }
+  }
+
+  function loadMore(): void {
+    if (!hasMore || loadingMore || nextOffset === null) return;
+    void fetchRuns(nextOffset, true);
   }
 
   function resetFilters(): void {
@@ -189,43 +210,107 @@
 
 <div class="panel runs-panel">
   <header class="panel-header">
-    <span class="section-heading">Runs</span>
+    <!-- R-24 — section heading is an <h2> (not <span>) so document outline
+         and SR rotor expose it. R-25 — count badge surfaces when runs.length > 0. -->
+    <h2 class="section-heading">Runs</h2>
+    {#if runs.length > 0}
+      <span class="panel-count font-mono">{runs.length}</span>
+    {/if}
     <button
       type="button"
       class="select-toggle"
       aria-label="Toggle select mode"
       aria-pressed={selectMode}
       onclick={toggleSelectMode}
+      use:tooltip={selectMode
+        ? 'Exit select mode (Esc)'
+        : 'Select — toggle rows for bulk delete / export'}
     >
       {selectMode ? 'Cancel' : 'Select'}
     </button>
   </header>
 
   <div class="filter-region">
-    <div class="filter-row" role="toolbar" aria-label="Run filters">
+    <div class="filter-row" role="toolbar" aria-label="Run filters" aria-controls="runs-list-region">
       <div class="filter-group" role="group" aria-label="Mode filter">
-        <button class="chip chip-rect" class:active={modeFilter === 'all'} onclick={() => modeFilter = 'all'}>All</button>
-        <button class="chip chip-rect" class:active={modeFilter === 'topic_probe'} onclick={() => modeFilter = 'topic_probe'}>Probe</button>
-        <button class="chip chip-rect" class:active={modeFilter === 'seed_agent'} onclick={() => modeFilter = 'seed_agent'}>Seed</button>
-        <button class="chip chip-rect" class:active={modeFilter === 'replay_run'} onclick={() => modeFilter = 'replay_run'}>Replay</button>
+        <button
+          type="button"
+          class="chip chip-rect"
+          class:active={modeFilter === 'all'}
+          aria-pressed={modeFilter === 'all'}
+          onclick={() => modeFilter = 'all'}
+        >All</button>
+        <button
+          type="button"
+          class="chip chip-rect"
+          class:active={modeFilter === 'topic_probe'}
+          aria-pressed={modeFilter === 'topic_probe'}
+          onclick={() => modeFilter = 'topic_probe'}
+        >Probe</button>
+        <button
+          type="button"
+          class="chip chip-rect"
+          class:active={modeFilter === 'seed_agent'}
+          aria-pressed={modeFilter === 'seed_agent'}
+          onclick={() => modeFilter = 'seed_agent'}
+        >Seed</button>
+        <button
+          type="button"
+          class="chip chip-rect"
+          class:active={modeFilter === 'replay_run'}
+          aria-pressed={modeFilter === 'replay_run'}
+          onclick={() => modeFilter = 'replay_run'}
+        >Replay</button>
       </div>
       <div class="filter-group" role="group" aria-label="Status filter">
-        <button class="chip chip-rect" class:active={statusFilter === 'all'} onclick={() => statusFilter = 'all'}>All</button>
-        <button class="chip chip-rect" class:active={statusFilter === 'running'} onclick={() => statusFilter = 'running'}>Running</button>
-        <button class="chip chip-rect" class:active={statusFilter === 'completed'} onclick={() => statusFilter = 'completed'}>Completed</button>
-        <button class="chip chip-rect" class:active={statusFilter === 'partial'} onclick={() => statusFilter = 'partial'}>Partial</button>
-        <button class="chip chip-rect" class:active={statusFilter === 'failed'} onclick={() => statusFilter = 'failed'}>Failed</button>
+        <button
+          type="button"
+          class="chip chip-rect"
+          class:active={statusFilter === 'all'}
+          aria-pressed={statusFilter === 'all'}
+          onclick={() => statusFilter = 'all'}
+        >All</button>
+        <button
+          type="button"
+          class="chip chip-rect"
+          class:active={statusFilter === 'running'}
+          aria-pressed={statusFilter === 'running'}
+          onclick={() => statusFilter = 'running'}
+        >Running</button>
+        <button
+          type="button"
+          class="chip chip-rect"
+          class:active={statusFilter === 'completed'}
+          aria-pressed={statusFilter === 'completed'}
+          onclick={() => statusFilter = 'completed'}
+        >Completed</button>
+        <button
+          type="button"
+          class="chip chip-rect"
+          class:active={statusFilter === 'partial'}
+          aria-pressed={statusFilter === 'partial'}
+          onclick={() => statusFilter = 'partial'}
+        >Partial</button>
+        <button
+          type="button"
+          class="chip chip-rect"
+          class:active={statusFilter === 'failed'}
+          aria-pressed={statusFilter === 'failed'}
+          onclick={() => statusFilter = 'failed'}
+        >Failed</button>
       </div>
     </div>
     {#if selectMode}
       <label class="select-all-wrap">
         <input
+          bind:this={selectAllEl}
           type="checkbox"
+          class="select-all-checkbox"
           aria-label="Select all"
-          checked={runs.length > 0 && runs.every(r => selectedIds.has(r.id))}
+          checked={allSelected}
           onchange={selectAll}
         />
-        <span class="text-[10px]">Select all</span>
+        <span class="select-all-label">Select all</span>
       </label>
     {/if}
     <BulkActionBar
@@ -237,19 +322,20 @@
     />
   </div>
 
-  <div class="panel-body">
+  <div class="panel-body" id="runs-list-region">
     {#if runsError}
-      <div class="runs-error">
-        <p class="text-[10px] text-neon-red">Failed to load runs: {runsError}</p>
-        <button class="btn-outline-secondary" onclick={() => fetchRuns(0, false)}>Retry</button>
-      </div>
+      <p class="empty-note panel-error">Failed to load runs: {runsError}</p>
+      <button type="button" class="btn-outline-secondary" onclick={() => fetchRuns(0, false)}>Retry</button>
     {:else if !runsLoaded}
-      <p class="text-[10px] text-text-dim">Loading runs…</p>
+      <!-- R-12 — skeleton loading rows (4 placeholders). -->
+      {#each { length: 4 } as _}
+        <div class="skeleton-row">
+          <div class="skeleton-bar"></div>
+        </div>
+      {/each}
     {:else if runs.length === 0}
-      <div class="runs-empty">
-        <p class="text-[10px] text-text-dim">No runs match the current filters.</p>
-        <button class="btn-outline-secondary" onclick={resetFilters}>Reset filters</button>
-      </div>
+      <p class="empty-note">No runs match the current filters.</p>
+      <button type="button" class="btn-outline-secondary" onclick={resetFilters}>Reset filters</button>
     {:else}
       <div class="runs-list" role="list">
         {#each runs as run (run.id)}
@@ -264,8 +350,21 @@
           />
         {/each}
         {#if hasMore}
-          <div bind:this={sentinelEl} class="runs-sentinel" aria-hidden="true">
-            {#if loadingMore}<span class="text-[10px] text-text-dim">Loading more…</span>{/if}
+          <!-- RU-057 — sentinel exposes a keyboard-reachable "Load more"
+               affordance. Auto-load fires via IntersectionObserver for
+               pointer users; keyboard / SR users get the explicit button. -->
+          <div bind:this={sentinelEl} class="runs-sentinel">
+            <span class="sentinel-status font-mono">
+              Showing {runs.length} of {runsTotal}
+            </span>
+            <button
+              type="button"
+              class="btn-outline-secondary load-more-btn"
+              onclick={loadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'Loading…' : 'Load more'}
+            </button>
           </div>
         {/if}
       </div>
@@ -273,51 +372,37 @@
   </div>
 </div>
 
-{#if confirmDeleteIds !== null}
-  <div
-    class="confirm-modal-scrim"
-    role="presentation"
-    onclick={() => { confirmDeleteIds = null; }}
-    onkeydown={(e) => { if (e.key === 'Escape') confirmDeleteIds = null; }}
-  >
-    <div
-      class="confirm-modal"
-      role="dialog"
-      tabindex={-1}
-      aria-modal="true"
-      aria-labelledby="confirm-title"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); confirmDeleteIds = null; } }}
-    >
-      <h3 id="confirm-title" class="text-[11px]" style="text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--font-display);">
-        Confirm delete
-      </h3>
-      <p class="text-[11px]">
-        Delete {confirmDeleteIds.length} run{confirmDeleteIds.length === 1 ? '' : 's'}?
-        This cannot be undone.
-      </p>
-      <div class="confirm-actions">
-        <button class="btn-outline-secondary" onclick={() => { confirmDeleteIds = null; }}>
-          Cancel
-        </button>
-        <button
-          class="btn-outline-danger"
-          onclick={executeBulkDelete}
-          disabled={bulkActionInFlight}
-        >
-          Confirm
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
+<!-- R-14 — AnimatedDialog wraps DestructiveConfirmModal so the modal
+     inherits the canonical scrim+dialog transitions, token-driven z-indices,
+     ESC + click-outside dismiss, and body-scroll lock. Parity with
+     HistoryPanel's bulk-delete pattern — the typed DELETE literal gate
+     prevents accidental destructive actions. -->
+<AnimatedDialog
+  open={confirmDeleteIds !== null}
+  onClose={() => { if (!bulkActionInFlight) confirmDeleteIds = null; }}
+  dismissible={!bulkActionInFlight}
+  ariaLabel="Confirm delete"
+>
+  <DestructiveConfirmModal
+    open={confirmDeleteIds !== null}
+    title={`DELETE ${confirmDeleteIds?.length ?? 0} RUN${confirmDeleteIds?.length === 1 ? '' : 'S'}?`}
+    sideEffectHint="This cannot be undone."
+    confirmLabel={`Delete ${confirmDeleteIds?.length ?? 0}`}
+    onConfirm={executeBulkDelete}
+    onCancel={() => { confirmDeleteIds = null; }}
+  />
+</AnimatedDialog>
 
 <style>
   /* Canonical panel chrome inherited from app.css .panel/.panel-header/.panel-body. */
   .panel-body { padding: 4px 6px 6px; }
+
+  /* RU-007 — compress filter region to a single row of padding (was 6px
+     uniform). 4px vertical / 6px horizontal mirrors HistoryPanel toolbar
+     density. */
   .filter-region {
     flex-shrink: 0;
-    padding: 6px;
+    padding: 4px 6px;
     border-bottom: 1px solid var(--color-border-subtle);
     display: flex;
     flex-direction: column;
@@ -325,25 +410,99 @@
   }
   .filter-row { display: flex; flex-direction: column; gap: 6px; }
   .filter-group { display: flex; gap: 4px; flex-wrap: wrap; }
+
+  /* R-07 — chip-active recipe lives in app.css under `.chip[aria-pressed="true"]`.
+     The local `.active` modifier is preserved for back-compat with the
+     existing class-based styling pattern; the aria-pressed selector is
+     the canonical / a11y-aware path. */
   .chip.chip-rect.active {
     background: color-mix(in srgb, var(--color-neon-cyan) 12%, transparent);
     border-color: var(--color-neon-cyan);
     color: var(--color-neon-cyan);
   }
-  .runs-error, .runs-empty {
-    display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 6px 0;
-  }
+
   .runs-list { display: flex; flex-direction: column; gap: 2px; }
-  .runs-sentinel { padding: 6px 0; min-height: 24px; }
+  .runs-sentinel {
+    padding: 6px 0;
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sentinel-status {
+    font-size: 10px;
+    color: var(--color-text-dim);
+  }
+  .load-more-btn {
+    margin-left: auto;
+  }
+
   .select-all-wrap {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     cursor: pointer;
+    min-height: 22px;
+  }
+  /* R-23 — custom checkbox + indeterminate state. The `:indeterminate`
+     selector picks up `el.indeterminate = true` set in the $effect above. */
+  .select-all-checkbox {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    border: 1px solid var(--color-border-subtle);
+    background: transparent;
+    border-radius: 0;
+    cursor: pointer;
+    position: relative;
+    transition: border-color var(--duration-hover) var(--ease-spring),
+                background-color var(--duration-hover) var(--ease-spring);
+  }
+  .select-all-checkbox:hover {
+    border-color: var(--color-border-accent);
+  }
+  .select-all-checkbox:checked {
+    background: var(--color-neon-cyan);
+    border-color: var(--color-neon-cyan);
+  }
+  .select-all-checkbox:checked::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border: solid var(--color-bg-primary);
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+  }
+  .select-all-checkbox:indeterminate {
+    background: color-mix(in srgb, var(--color-neon-cyan) 50%, transparent);
+    border-color: var(--color-neon-cyan);
+  }
+  .select-all-checkbox:indeterminate::after {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 5px;
+    width: 8px;
+    height: 2px;
+    background: var(--color-bg-primary);
+  }
+  .select-all-checkbox:focus-visible {
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
+  }
+  .select-all-label {
+    font-size: 10px;
+    color: var(--color-text-secondary);
   }
 
   /* Ghost-style select toggle mirroring HistoryPanel's .select-toggle.
-     Lives in .panel-header alongside the section heading. */
+     Lives in .panel-header alongside the section heading. Tokenized
+     transitions (R-04) + :active state (R-06) added v0.4.39. */
   .select-toggle {
     height: 20px;
     padding: 0 8px;
@@ -356,38 +515,30 @@
     font-weight: 500;
     border-radius: 0;
     cursor: pointer;
-    transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
+    transition: background-color var(--duration-hover) var(--ease-spring),
+                border-color var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
   .select-toggle:hover {
     background: var(--color-bg-hover);
     border-color: var(--color-border-subtle);
     color: var(--color-text-primary);
   }
+  .select-toggle:active {
+    border-color: transparent;
+  }
   .select-toggle:focus-visible {
-    outline: 1px solid rgba(0, 229, 255, 0.3);
-    outline-offset: 2px;
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
   }
-  .confirm-modal-scrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 50;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    animation: scrim-in 200ms ease-out;
-  }
-  .confirm-modal {
-    background: var(--color-bg-card);
-    border: 1px solid var(--color-border-subtle);
-    padding: 16px;
-    min-width: 280px;
-    animation: dialog-in 300ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-  .confirm-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-    margin-top: 12px;
+
+  /* R-19 — reduced-motion scoped override. */
+  @media (prefers-reduced-motion: reduce) {
+    .select-toggle,
+    .chip.chip-rect,
+    .select-all-checkbox {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 </style>

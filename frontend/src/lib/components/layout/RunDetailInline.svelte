@@ -20,7 +20,7 @@
 </script>
 
 {#await fullPromise}
-  <p class="text-[10px] text-text-dim">Loading detail…</p>
+  <p class="empty-note">Loading detail…</p>
 {:then full}
   {#if run.mode === 'topic_probe'}
     <!-- Structural cast: `runs.ts::RunResult.prompt_results[].raw_prompt` is
@@ -43,7 +43,7 @@
         {/each}
       </div>
     {:else}
-      <p class="text-[10px] text-text-dim">No clusters available for this run.</p>
+      <p class="empty-note">No clusters available for this run.</p>
     {/if}
   {:else if run.mode === 'replay_run'}
     {@const agg = full.aggregate as { mean_overall?: number | null; baseline_mean?: number | null } | null}
@@ -98,11 +98,11 @@
         </div>
       {/if}
     {:else}
-      <p class="text-[10px] text-text-dim">Replay in progress.</p>
+      <p class="empty-note">Replay in progress.</p>
     {/if}
   {/if}
 {:catch err}
-  <p class="text-[10px] text-neon-red">Failed to load detail: {err.message}</p>
+  <p class="empty-note panel-error">Failed to load detail: {err.message}</p>
 {/await}
 
 <style>
@@ -119,9 +119,17 @@
   .seed-cluster-meta { font-family: var(--font-mono); font-size: 10px; }
   .replay-summary { display: flex; flex-direction: column; gap: 2px; }
 
-  /* ── v0.4.37 §4.3 — replay per-prompt list (20px rows, zero-effects) ── */
+  /* ── v0.4.37 §4.3 — replay per-prompt list (20px rows, zero-effects) ──
+     v0.4.39 — R-06 row recipe (h-5 / 1px contour / 5-state lifecycle) +
+     R-04 transition tokens on the head button + R-02 token-only status hex. */
   .replay-prompts { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
-  .replay-prompt-row { border: 1px solid var(--color-border-subtle); }
+  .replay-prompt-row {
+    border: 1px solid var(--color-border-subtle);
+    transition: border-color var(--duration-hover) var(--ease-spring);
+  }
+  .replay-prompt-row:hover {
+    border-color: var(--color-border-accent);
+  }
   .replay-prompt-head {
     display: grid;
     grid-template-columns: 24px 1fr 36px 64px;
@@ -137,14 +145,22 @@
     font-size: 10px;
     text-align: left;
     cursor: pointer;
-    transition: background-color 200ms ease;
+    transition: background-color var(--duration-hover) var(--ease-spring);
   }
   .replay-prompt-head:hover { background: color-mix(in srgb, var(--color-bg-hover) 40%, transparent); }
+  .replay-prompt-head:focus-visible {
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
+  }
+  .replay-prompt-head:active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+  }
   .replay-prompt-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rp-idx { color: var(--color-text-dim); }
+  /* R-02 — drop off-brand hex fallback; tokens are guaranteed defined in :root. */
   .rp-status { color: var(--color-text-dim); }
-  .rp-status[data-status='completed'] { color: var(--color-neon-green, #22ff88); }
-  .rp-status[data-status='failed'] { color: var(--color-neon-red, #ff3366); }
+  .rp-status[data-status='completed'] { color: var(--color-neon-green); }
+  .rp-status[data-status='failed'] { color: var(--color-neon-red); }
   .replay-prompt-body {
     display: flex;
     flex-direction: column;
@@ -177,5 +193,15 @@
     font-size: 9px;
     color: var(--color-text-secondary);
     border: 1px solid var(--color-border-subtle);
+  }
+
+  /* R-19 — reduced-motion scoped override covering every transition/
+     animation selector in this file. */
+  @media (prefers-reduced-motion: reduce) {
+    .replay-prompt-row,
+    .replay-prompt-head {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 </style>

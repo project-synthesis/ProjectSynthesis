@@ -1,8 +1,9 @@
 <!-- frontend/src/lib/components/layout/RunActionMenu.svelte -->
 <!--
   v0.4.32 — kebab-triggered popover with Rename + Delete items.
-  RED phase: structural skeleton only. ESC keydown + focus return wiring
-  lands in GREEN.
+  v0.4.39 (R-04 / R-03 / R-06 / R-19) — animation + transition tokens,
+  z-index token (--z-dropdown), :focus-visible + :active states on
+  menu-items, first-item auto-focus on mount, reduced-motion override.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -15,8 +16,13 @@
   let { onRename, onDelete, onClose }: Props = $props();
 
   let menuEl: HTMLDivElement | undefined = $state();
+  let firstItemEl: HTMLButtonElement | undefined = $state();
 
   onMount(() => {
+    // RU-024 / RU-025 — auto-focus the first menuitem on open so keyboard
+    // users land directly in the menu instead of having to Tab into it.
+    queueMicrotask(() => firstItemEl?.focus());
+
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -50,8 +56,19 @@
   role="menu"
   aria-label="Run actions"
 >
-  <button type="button" class="menu-item" role="menuitem" onclick={onRename}>Rename</button>
-  <button type="button" class="menu-item menu-item-danger" role="menuitem" onclick={onDelete}>Delete</button>
+  <button
+    bind:this={firstItemEl}
+    type="button"
+    class="menu-item"
+    role="menuitem"
+    onclick={onRename}
+  >Rename</button>
+  <button
+    type="button"
+    class="menu-item menu-item-danger"
+    role="menuitem"
+    onclick={onDelete}
+  >Delete</button>
 </div>
 
 <style>
@@ -62,7 +79,8 @@
     position: absolute;
     top: 100%;
     right: 0;
-    z-index: 100;
+    /* R-03 / R-14 — z-index token for the dropdown tier. */
+    z-index: var(--z-dropdown);
     min-width: 96px;
     background: var(--color-bg-card);
     border: 1px solid var(--color-border-subtle);
@@ -70,7 +88,8 @@
        elements ... is banned". No rounding. */
     border-radius: 0;
     padding: 2px 0;
-    animation: dropdown-enter 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    /* R-04 — animation runs on the spring/hover token tuple. */
+    animation: dropdown-enter var(--duration-hover) var(--ease-spring);
   }
   .menu-item {
     display: block;
@@ -89,13 +108,34 @@
     font-family: var(--font-sans);
     font-size: 11px;
     line-height: 20px;
-    transition: background-color 200ms ease, color 200ms ease;
+    /* R-04 — transition tokens drive background + color on hover. */
+    transition: background-color var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
   .menu-item:hover {
     background: color-mix(in srgb, var(--color-neon-cyan) 8%, transparent);
   }
+  .menu-item:focus-visible {
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
+  }
+  .menu-item:active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+  }
   .menu-item-danger { color: var(--color-neon-red); }
   .menu-item-danger:hover {
     background: color-mix(in srgb, var(--color-neon-red) 8%, transparent);
+  }
+  .menu-item-danger:active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-neon-red) 40%, transparent);
+  }
+
+  /* R-19 — reduced-motion scoped override. */
+  @media (prefers-reduced-motion: reduce) {
+    .run-action-menu,
+    .menu-item {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 </style>
