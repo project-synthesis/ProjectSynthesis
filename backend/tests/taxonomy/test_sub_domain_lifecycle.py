@@ -4353,3 +4353,205 @@ class TestVocabRegenOverlap:
             )
         finally:
             set_event_logger(TaxonomyEventLogger(events_dir=tmp_path, publish_to_bus=False))
+
+
+# ---------------------------------------------------------------------------
+# AC-7 (event/response additivity) + AC-8 (readiness unchanged-by-construction)
+# Spec: docs/superpowers/specs/2026-06-12-v0.4.38-sub-domain-telemetry-design.md §3.6
+# ---------------------------------------------------------------------------
+
+
+class TestRebuildEventAdditivity:
+    """AC-7: sub_domain_rebuild_invoked retains legacy keys; new keys present."""
+
+    @pytest.mark.asyncio
+    async def test_ac7_rebuild_event_keys_additive(self, db, mock_provider, tmp_path):
+        from app.services.taxonomy.engine import TaxonomyEngine
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            set_event_logger,
+        )
+
+        tel = TaxonomyEventLogger(events_dir=tmp_path / "events", publish_to_bus=False)
+        set_event_logger(tel)
+
+        domain = PromptCluster(
+            id="dom-additivity",
+            label="backend",
+            state="domain",
+            cluster_metadata={
+                "generated_qualifiers": {"observability": ["tracing", "metrics"]},
+            },
+        )
+        db.add(domain)
+        c1 = PromptCluster(
+            id="c-add-1", label="c1", state="active", parent_id=domain.id,
+        )
+        c2 = PromptCluster(
+            id="c-add-2", label="c2", state="active", parent_id=domain.id,
+        )
+        db.add_all([c1, c2])
+        await db.flush()
+
+        for cl in (c1, c2):
+            for _ in range(6):
+                db.add(Optimization(
+                    raw_prompt="x", optimized_prompt="x",
+                    cluster_id=cl.id, domain_raw="backend: observability",
+                ))
+        await db.flush()
+
+        engine = TaxonomyEngine()
+        result = await engine.rebuild_sub_domains(
+            db, domain.id, dry_run=True,
+        )
+
+        # Legacy result keys preserved (7 keys)
+        for legacy_key in (
+            "domain_id", "domain_label", "threshold_used",
+            "proposed", "created", "skipped_existing", "dry_run",
+        ):
+            assert legacy_key in result, f"Legacy result key missing: {legacy_key}"
+        # New additive key
+        assert result["qualifier_source"] in ("cascade", "literal_fallback")
+
+        # Inspect emitted rebuild event
+        recent = tel.get_recent(limit=50)
+        rebuild_events = [
+            e for e in recent
+            if e.get("decision") == "sub_domain_rebuild_invoked"
+        ]
+        assert rebuild_events, "expected sub_domain_rebuild_invoked emission"
+        ev = rebuild_events[0]
+        ctx = ev.get("context", {})
+        # Legacy 7 context keys
+        for legacy_ctx in (
+            "domain", "min_consistency_override", "threshold_used",
+            "dry_run", "proposed_count", "created_count", "skipped_existing_count",
+        ):
+            assert legacy_ctx in ctx, f"Legacy event context key missing: {legacy_ctx}"
+        # New additive keys
+        assert "qualifier_source" in ctx
+        assert "proposal_sources" in ctx
+        assert "literal_member_counts" in ctx
+
+    @pytest.mark.asyncio
+    async def test_ac7_residue_proposal_source_labelled_literal_residue(
+        self, db, mock_provider, tmp_path,
+    ):
+        """AC-7 companion: residue-merged proposal carries literal_residue label.
+
+        Mirrors the AC-6 fixture (vocab present + dominant out-of-vocab literal
+        split across two clusters for breadth) and checks the EVENT-CONTEXT
+        proposal_sources mapping, which AC-6 deliberately defers here.
+        """
+        from app.services.taxonomy.engine import TaxonomyEngine
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            set_event_logger,
+        )
+
+        tel = TaxonomyEventLogger(events_dir=tmp_path / "events", publish_to_bus=False)
+        set_event_logger(tel)
+
+        domain = PromptCluster(
+            id="dom-residue-source",
+            label="backend",
+            state="domain",
+            cluster_metadata={
+                "generated_qualifiers": {"observability": ["tracing", "metrics"]},
+            },
+        )
+        db.add(domain)
+        c1 = PromptCluster(
+            id="c-rs-1", label="c1", state="active", parent_id=domain.id,
+        )
+        c2 = PromptCluster(
+            id="c-rs-2", label="c2", state="active", parent_id=domain.id,
+        )
+        c3 = PromptCluster(
+            id="c-rs-3", label="c3", state="active", parent_id=domain.id,
+        )
+        db.add_all([c1, c2, c3])
+        await db.flush()
+
+        # c1 admits via Source 2 → view.source == "cascade".
+        db.add(Optimization(
+            raw_prompt="x", optimized_prompt="x",
+            cluster_id=c1.id, domain_raw="backend: tracing",
+            intent_label="tracing telemetry",
+        ))
+        # c2 + c3 carry the out-of-vocab dominant literal so its breadth = 2.
+        for _ in range(3):
+            db.add(Optimization(
+                raw_prompt="x", optimized_prompt="x",
+                cluster_id=c2.id, domain_raw="backend: rate-limiting",
+            ))
+        for _ in range(3):
+            db.add(Optimization(
+                raw_prompt="x", optimized_prompt="x",
+                cluster_id=c3.id, domain_raw="backend: rate-limiting",
+            ))
+        await db.flush()
+
+        engine = TaxonomyEngine()
+        result = await engine.rebuild_sub_domains(
+            db, domain.id, min_consistency_override=0.40, dry_run=True,
+        )
+        assert "rate-limiting" in result["proposed"]
+        assert result["qualifier_source"] == "cascade"
+
+        recent = tel.get_recent(limit=50)
+        rebuild_events = [
+            e for e in recent
+            if e.get("decision") == "sub_domain_rebuild_invoked"
+        ]
+        assert rebuild_events
+        ctx = rebuild_events[0].get("context", {})
+        # The event-context proposal_sources surfaces the residue origin.
+        assert ctx["proposal_sources"]["rate-limiting"] == "literal_residue"
+
+
+class TestReadinessUnchangedByConstruction:
+    """AC-8: vocab-present emergence values identical pre/post the view rewire."""
+
+    @pytest.mark.asyncio
+    async def test_ac8_emergence_counts_identical_to_cascade(self, db):
+        """Vocab-present: emergence.top_candidate.count equals cascade.qualifier_counts[top]."""
+        from app.services.taxonomy.sub_domain_readiness import (
+            compute_qualifier_cascade,
+            compute_sub_domain_emergence,
+        )
+
+        domain = PromptCluster(
+            id="dom-unchanged",
+            label="backend",
+            state="domain",
+            cluster_metadata={
+                "generated_qualifiers": {"observability": ["tracing", "metrics"]},
+            },
+        )
+        db.add(domain)
+        c1 = PromptCluster(
+            id="c-unc-1", label="c1", state="active", parent_id=domain.id,
+        )
+        c2 = PromptCluster(
+            id="c-unc-2", label="c2", state="active", parent_id=domain.id,
+        )
+        db.add_all([c1, c2])
+        await db.flush()
+        for cl in (c1, c2):
+            for _ in range(5):
+                db.add(Optimization(
+                    raw_prompt="x", optimized_prompt="x",
+                    cluster_id=cl.id, domain_raw="backend: observability",
+                ))
+        await db.flush()
+
+        cascade = await compute_qualifier_cascade(db, domain)
+        report = await compute_sub_domain_emergence(db, domain, cascade=cascade)
+        assert report.top_candidate is not None
+        top_q = report.top_candidate.qualifier
+        assert cascade.qualifier_counts[top_q] == report.top_candidate.count
+        # Additive field defaults to "cascade"
+        assert report.qualifier_source == "cascade"
