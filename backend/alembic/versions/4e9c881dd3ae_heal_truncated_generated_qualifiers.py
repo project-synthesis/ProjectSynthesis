@@ -7,12 +7,12 @@ next maintenance cycle re-runs vocab generation regardless of the
 cluster-count-stability gate.
 
 Why ``-1``?  The staleness predicate in ``engine._propose_sub_domains``
-(engine.py:2369-2374) is
+(engine.py:2428-2434) is
 ``abs(current_cluster_count - cached_cluster_count) > max(2, cached_cluster_count * 0.3)``.
 With ``cached=-1`` and any non-negative ``current=n``:
 ``abs(n - (-1)) = n + 1 > max(2, -0.3) = 2  ⟺  n >= 2``.
 Vocab generation already skips domains with fewer than 2 child clusters
-(engine.py:2361-2362), so ``n < 2`` is unreachable in practice. The
+(engine.py:2420-2421), so ``n < 2`` is unreachable in practice. The
 negative ``cached * 0.3`` operand is mechanically still ``-0.3`` (not
 raised to ``0`` by ``max``) — the predicate is by design unreachable
 through the n<2 path, so the negative arithmetic is safe and load-bearing.

@@ -285,7 +285,7 @@ async def test_ac6_residue_recovery_vocab_scoped_away(db):
          residue; the literal_fallback branch synthesises counts from residue
          directly and never proposes a separate ``literal_residue`` source).
       2. The dominant out-of-vocab literal has ``cluster_breadth >= 2`` (gate
-         at ``engine.py:3292`` with ``SUB_DOMAIN_MIN_CLUSTER_BREADTH=2``);
+         at ``engine.py:3337`` with ``SUB_DOMAIN_MIN_CLUSTER_BREADTH=2``);
          otherwise it survives consistency but is dropped on breadth and
          ``proposed`` stays empty.
 
