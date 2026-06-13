@@ -32,28 +32,20 @@ class QualifierCandidate(BaseModel):
 
     qualifier: str
     count: int = Field(ge=0, description="Members matching this qualifier")
-    consistency: float = Field(
-        ge=0.0, le=1.0, description="count / total_opts — share of domain members"
-    )
-    dominant_source: QualifierSource = Field(
-        description="Which cascade source contributed the most to this qualifier"
-    )
+    consistency: float = Field(ge=0.0, le=1.0, description="count / total_opts — share of domain members")
+    dominant_source: QualifierSource = Field(description="Which cascade source contributed the most to this qualifier")
     source_breakdown: dict[str, int] = Field(
         default_factory=dict,
         description="Per-source hit counts: keys are 'domain_raw'|'intent_label'|'tf_idf'",
     )
-    cluster_breadth: int = Field(
-        ge=0, description="Distinct clusters contributing — a sub-domain needs >= 2"
-    )
+    cluster_breadth: int = Field(ge=0, description="Distinct clusters contributing — a sub-domain needs >= 2")
 
 
 class SubDomainEmergenceReport(BaseModel):
     """Readiness-to-promote: how close a new sub-domain is to emerging."""
 
     threshold: float = Field(ge=0.0, le=1.0)
-    threshold_formula: str = Field(
-        description="Human-readable formula with substituted values"
-    )
+    threshold_formula: str = Field(description="Human-readable formula with substituted values")
     min_member_count: int = Field(ge=1, description="SUB_DOMAIN_QUALIFIER_MIN_MEMBERS")
     total_opts: int = Field(ge=0, description="Total optimizations scanned")
     top_candidate: QualifierCandidate | None = None
@@ -81,21 +73,13 @@ class SubDomainEmergenceReport(BaseModel):
 class DomainStabilityGuards(BaseModel):
     """Outcome of each dissolution guard for a domain."""
 
-    general_protected: bool = Field(
-        description="Domain label is 'general' — dissolution permanently blocked"
-    )
-    has_sub_domain_anchor: bool = Field(
-        description="Domain has at least one child sub-domain — bottom-up block"
-    )
-    age_eligible: bool = Field(
-        description="Domain is old enough to be dissolved (age >= threshold)"
-    )
+    general_protected: bool = Field(description="Domain label is 'general' — dissolution permanently blocked")
+    has_sub_domain_anchor: bool = Field(description="Domain has at least one child sub-domain — bottom-up block")
+    age_eligible: bool = Field(description="Domain is old enough to be dissolved (age >= threshold)")
     above_member_ceiling: bool = Field(
         description="Member count > ceiling — too large to dissolve on consistency alone"
     )
-    consistency_above_floor: bool = Field(
-        description="Source-1 consistency >= dissolution floor"
-    )
+    consistency_above_floor: bool = Field(description="Source-1 consistency >= dissolution floor")
 
 
 class DomainStabilityReport(BaseModel):
@@ -108,7 +92,8 @@ class DomainStabilityReport(BaseModel):
     )
     dissolution_floor: float = Field(ge=0.0, le=1.0)
     hysteresis_creation_threshold: float = Field(
-        ge=0.0, le=1.0,
+        ge=0.0,
+        le=1.0,
         description="Creation threshold — gap vs floor is the hysteresis band",
     )
     age_hours: float = Field(ge=0.0)
@@ -124,9 +109,7 @@ class DomainStabilityReport(BaseModel):
         le=1.0,
         description="Composite [0,1] — 1.0 means all guards failing + likely dissolution",
     )
-    would_dissolve: bool = Field(
-        description="All guards currently failing — next warm cycle would dissolve"
-    )
+    would_dissolve: bool = Field(description="All guards currently failing — next warm cycle would dissolve")
 
 
 class DomainReadinessReport(BaseModel):

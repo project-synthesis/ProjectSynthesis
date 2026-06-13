@@ -262,10 +262,7 @@ def match_opt_to_sub_domain_vocab(
                     matched_value=q_norm,
                     reason="",
                 )
-            q_tokens = {
-                t for t in re.split(r"[\s\-_]", q_lower)
-                if len(t) >= 4
-            }
+            q_tokens = {t for t in re.split(r"[\s\-_]", q_lower) if len(t) >= 4}
             overlap = q_tokens & sub_vocab_tokens
             if overlap:
                 return SubDomainMatchResult(
@@ -277,10 +274,7 @@ def match_opt_to_sub_domain_vocab(
 
     # Source 2: intent_label tokens hit the sub-domain's vocab.
     if intent_label and sub_vocab_tokens:
-        intent_tokens = {
-            t.lower() for t in re.split(r"[\s\-_,.]+", intent_label)
-            if len(t) >= 4
-        }
+        intent_tokens = {t.lower() for t in re.split(r"[\s\-_,.]+", intent_label) if len(t) >= 4}
         overlap = intent_tokens & sub_vocab_tokens
         if overlap:
             return SubDomainMatchResult(
@@ -316,23 +310,13 @@ def match_opt_to_sub_domain_vocab(
             kw_lower = kw.lower()
             if kw_lower in prompt_lower:
                 dyn_hits += 1
-                effective_weight = weight + (
-                    0.5 if kw_lower in intent_lower_s3 else 0.0
-                )
+                effective_weight = weight + (0.5 if kw_lower in intent_lower_s3 else 0.0)
                 if effective_weight > best_dyn_weight:
                     best_dyn_weight = effective_weight
                     best_dyn = kw
-        raw_weight = best_dyn_weight - (
-            0.5
-            if best_dyn and best_dyn.lower() in intent_lower_s3
-            else 0.0
-        )
+        raw_weight = best_dyn_weight - (0.5 if best_dyn and best_dyn.lower() in intent_lower_s3 else 0.0)
         min_hits = 1 if raw_weight >= 0.8 else 2
-        if (
-            best_dyn
-            and dyn_hits >= min_hits
-            and best_dyn.lower().replace(" ", "-") == sub_qualifier
-        ):
+        if best_dyn and dyn_hits >= min_hits and best_dyn.lower().replace(" ", "-") == sub_qualifier:
             return SubDomainMatchResult(
                 matched=True,
                 source="tf_idf",
@@ -407,7 +391,8 @@ async def compute_qualifier_cascade(
             re-evaluation (sub-domains don't nest).
     """
     child_ids = await _collect_child_cluster_ids(
-        db, domain_node,
+        db,
+        domain_node,
         include_sub_domain_descendants=include_sub_domain_descendants,
     )
     if not child_ids:
@@ -488,7 +473,8 @@ async def compute_qualifier_cascade(
         if not qualifier and intent_label and generated_qualifiers:
             intent_lower = intent_label.lower()
             best_q, best_hits = DomainSignalLoader.find_best_qualifier(
-                intent_lower, generated_qualifiers,
+                intent_lower,
+                generated_qualifiers,
             )
             if best_q and best_hits >= SUB_DOMAIN_QUALIFIER_MIN_KEYWORD_HITS:
                 qualifier = best_q
@@ -505,16 +491,12 @@ async def compute_qualifier_cascade(
                 kw_lower = kw.lower()
                 if kw_lower in prompt_lower:
                     dyn_hits += 1
-                    effective_weight = weight + (
-                        0.5 if kw_lower in intent_lower_s3 else 0.0
-                    )
+                    effective_weight = weight + (0.5 if kw_lower in intent_lower_s3 else 0.0)
                     if effective_weight > best_dyn_weight:
                         best_dyn_weight = effective_weight
                         best_dyn = kw
             if best_dyn:
-                raw_weight = best_dyn_weight - (
-                    0.5 if best_dyn.lower() in intent_lower_s3 else 0.0
-                )
+                raw_weight = best_dyn_weight - (0.5 if best_dyn.lower() in intent_lower_s3 else 0.0)
                 min_hits = 1 if raw_weight >= 0.8 else 2
                 if dyn_hits >= min_hits:
                     qualifier = best_dyn.lower().replace(" ", "-")
@@ -536,11 +518,10 @@ async def compute_qualifier_cascade(
             _, q_raw = parse_domain(domain_raw)
             if q_raw:
                 from app.utils.text_cleanup import normalize_sub_domain_label as _norm
+
                 normalized = _norm(q_raw)
                 if normalized:
-                    unmatched_literal_counts[normalized] = (
-                        unmatched_literal_counts.get(normalized, 0) + 1
-                    )
+                    unmatched_literal_counts[normalized] = unmatched_literal_counts.get(normalized, 0) + 1
                     unmatched_literal_cluster_ids.setdefault(normalized, set()).add(cluster_id)
 
     return CascadeResult(
@@ -608,7 +589,8 @@ async def compute_unified_qualifier_view(
     """
     if cascade is None:
         cascade = await compute_qualifier_cascade(
-            db, domain_node,
+            db,
+            domain_node,
             meta_node=meta_node,
             include_sub_domain_descendants=include_sub_domain_descendants,
         )
@@ -647,17 +629,13 @@ def _emergence_threshold(total_opts: int) -> float:
     """Return the adaptive consistency threshold for a domain of N opts."""
     return max(
         SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
-        SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH
-        - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts,
+        SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts,
     )
 
 
 def _threshold_formula(total_opts: int, threshold: float) -> str:
     """Render the adaptive threshold formula as a human-readable string."""
-    raw = (
-        SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH
-        - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts
-    )
+    raw = SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts
     return (
         f"max({SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW:.2f}, "
         f"{SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH:.2f} - "
@@ -745,7 +723,9 @@ async def compute_sub_domain_emergence(
     if view is None:
         cascade = cascade or await compute_qualifier_cascade(db, domain_node)
         view = await compute_unified_qualifier_view(
-            db, domain_node, cascade=cascade,
+            db,
+            domain_node,
+            cascade=cascade,
         )
     cascade = view.cascade
     total_opts = view.total_opts
@@ -753,7 +733,8 @@ async def compute_sub_domain_emergence(
     formula = _threshold_formula(total_opts, threshold)
 
     counts_sorted = sorted(
-        view.qualifier_counts.items(), key=lambda kv: (-kv[1], kv[0]),
+        view.qualifier_counts.items(),
+        key=lambda kv: (-kv[1], kv[0]),
     )
 
     if not counts_sorted:
@@ -773,10 +754,7 @@ async def compute_sub_domain_emergence(
 
     top_q, top_count = counts_sorted[0]
     top_candidate = _build_candidate_from_view(top_q, top_count, total_opts, view)
-    runner_ups = [
-        _build_candidate_from_view(q, c, total_opts, view)
-        for q, c in counts_sorted[1:6]
-    ]
+    runner_ups = [_build_candidate_from_view(q, c, total_opts, view) for q, c in counts_sorted[1:6]]
 
     gap = threshold - top_candidate.consistency  # negative = over threshold
 
@@ -803,11 +781,7 @@ async def compute_sub_domain_emergence(
     tier: Literal["ready", "warming", "inert"]
     if ready:
         tier = "ready"
-    elif (
-        not below_min
-        and not single_cluster
-        and gap <= _WARMING_GAP
-    ):
+    elif not below_min and not single_cluster and gap <= _WARMING_GAP:
         tier = "warming"
     else:
         tier = "inert"
@@ -1005,9 +979,7 @@ async def _count_domain_opts(db: AsyncSession, domain_node: PromptCluster) -> in
     child_ids = await _collect_child_cluster_ids(db, domain_node)
     if not child_ids:
         return 0
-    q = await db.execute(
-        select(func.count()).where(Optimization.cluster_id.in_(child_ids))
-    )
+    q = await db.execute(select(func.count()).where(Optimization.cluster_id.in_(child_ids)))
     return int(q.scalar() or 0)
 
 
@@ -1039,7 +1011,9 @@ async def compute_domain_readiness(
 
     cascade = await compute_qualifier_cascade(db, domain_node)
     view = await compute_unified_qualifier_view(
-        db, domain_node, cascade=cascade,
+        db,
+        domain_node,
+        cascade=cascade,
     )
     emergence = await compute_sub_domain_emergence(db, domain_node, view=view)
     stability = await compute_domain_stability(db, domain_node)
@@ -1080,9 +1054,7 @@ async def compute_all_domain_readiness(
     ascending) so the most action-relevant domains lead.
     """
     # Load candidate domain nodes in one pass, then filter by parent state.
-    q = await db.execute(
-        select(PromptCluster).where(PromptCluster.state == "domain")
-    )
+    q = await db.execute(select(PromptCluster).where(PromptCluster.state == "domain"))
     candidates = list(q.scalars().all())
 
     # Resolve parent states in a single query (skip nulls → legacy top-level).
@@ -1090,18 +1062,11 @@ async def compute_all_domain_readiness(
     parent_state_by_id: dict[str, str] = {}
     if parent_ids:
         parent_q = await db.execute(
-            select(PromptCluster.id, PromptCluster.state).where(
-                PromptCluster.id.in_(parent_ids)
-            )
+            select(PromptCluster.id, PromptCluster.state).where(PromptCluster.id.in_(parent_ids))
         )
         parent_state_by_id = {row[0]: row[1] for row in parent_q.all()}
 
-    domains = [
-        d
-        for d in candidates
-        if d.parent_id is None
-        or parent_state_by_id.get(d.parent_id) == "project"
-    ]
+    domains = [d for d in candidates if d.parent_id is None or parent_state_by_id.get(d.parent_id) == "project"]
     reports: list[DomainReadinessReport] = []
     for domain in domains:
         reports.append(await compute_domain_readiness(db, domain, fresh=fresh))
@@ -1296,13 +1261,17 @@ def _detect_crossings(
     crossings: list[TierCrossing] = []
     for crossing in (
         _process_axis_crossing(
-            entry=entry, axis="emergence",
-            new_tier=report.emergence.tier, now=now,
+            entry=entry,
+            axis="emergence",
+            new_tier=report.emergence.tier,
+            now=now,
             domain_id=report.domain_id,
         ),
         _process_axis_crossing(
-            entry=entry, axis="stability",
-            new_tier=report.stability.tier, now=now,
+            entry=entry,
+            axis="stability",
+            new_tier=report.stability.tier,
+            now=now,
             domain_id=report.domain_id,
         ),
     ):
@@ -1339,9 +1308,7 @@ def _publish_crossings(
             "to_tier": crossing["to_tier"],
             "consistency": round(report.stability.consistency, 3),
             "gap_to_threshold": (
-                round(report.emergence.gap_to_threshold, 3)
-                if report.emergence.gap_to_threshold is not None
-                else None
+                round(report.emergence.gap_to_threshold, 3) if report.emergence.gap_to_threshold is not None else None
             ),
             "would_dissolve": report.stability.would_dissolve,
             "ts": report.computed_at.isoformat(),
@@ -1350,9 +1317,9 @@ def _publish_crossings(
             event_bus.publish("domain_readiness_changed", payload)
         except Exception:
             logger.debug(
-                "event_bus.publish failed for domain_readiness_changed "
-                "(domain_id=%s axis=%s)",
-                report.domain_id, crossing["axis"],
+                "event_bus.publish failed for domain_readiness_changed (domain_id=%s axis=%s)",
+                report.domain_id,
+                crossing["axis"],
                 exc_info=True,
             )
         try:
@@ -1414,11 +1381,7 @@ def _maybe_emit_events(
                 "ready": report.emergence.ready,
                 "total_opts": report.emergence.total_opts,
                 "threshold": round(report.emergence.threshold, 3),
-                "top_qualifier": (
-                    report.emergence.top_candidate.qualifier
-                    if report.emergence.top_candidate
-                    else None
-                ),
+                "top_qualifier": (report.emergence.top_candidate.qualifier if report.emergence.top_candidate else None),
                 "gap_to_threshold": (
                     round(report.emergence.gap_to_threshold, 3)
                     if report.emergence.gap_to_threshold is not None
