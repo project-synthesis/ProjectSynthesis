@@ -90,6 +90,13 @@ def reset_event_logger() -> None:
 class TaxonomyEventLogger:
     """Structured decision event logger for taxonomy hot/warm/cold paths."""
 
+    # v0.4.38 F4: periodic drain interval for parked cross-process events.
+    # Spec §4.3 pins 30s. Tests monkey-patch via
+    # ``patch.object(TaxonomyEventLogger, "_DRAIN_INTERVAL_SECONDS", 0.05)``
+    # so suite runtime stays bounded — keep this as a class attribute,
+    # NOT a module-level constant.
+    _DRAIN_INTERVAL_SECONDS = 30.0
+
     def __init__(
         self,
         events_dir: str | Path = "data/taxonomy_events",
@@ -116,6 +123,11 @@ class TaxonomyEventLogger:
         # Bounded retry queue for events that failed cross-process
         # forwarding.  Drained on next successful delivery.
         self._retry_queue: deque[dict[str, Any]] = deque(maxlen=_MAX_RETRY_QUEUE)
+        # v0.4.38 F4: periodic drain task handle. None until
+        # ``start_drain_loop()`` is called — either by the lifespan at
+        # init OR lazily by the first cross-process emit when a loop is
+        # available.
+        self._drain_task: asyncio.Task | None = None
         # Diagnostic counter: number of pre-migration 'template' state values
         # observed in event context dicts during ring-buffer reads. Used to
         # track residual legacy event volume post-migration. Bounded to avoid
@@ -322,6 +334,65 @@ class TaxonomyEventLogger:
             for t in pending:
                 t.cancel()
         return len(tasks)
+
+    def start_drain_loop(self) -> None:
+        """Start the periodic retry-queue drain task (v0.4.38 F4).
+
+        Called by the lifespan on logger init when a loop is available, and
+        lazily by the first cross-process emit otherwise. Idempotent — if a
+        task is already live and not done, this is a no-op. Falls back to
+        silent skip when no event loop is running (sync test paths).
+        """
+        if self._drain_task is not None and not self._drain_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # No loop — log_decision lazy path will retry later.
+        self._drain_task = loop.create_task(
+            self._periodic_drain(), name="taxonomy_drain",
+        )
+
+    async def _periodic_drain(self) -> None:
+        """Periodically attempt to redeliver parked cross-process events.
+
+        Uses the existing _retry_queue popleft-before-POST pattern from
+        _forward_with_retry's success-path drain (event_logger.py:277-289):
+        an event lives EITHER in flight (immediate forward task pending)
+        OR in _retry_queue, never both — so duplicate delivery is impossible
+        by construction.
+
+        Per-event timeout semantics come from ``notify_event_bus``, which
+        consults the existing ``_TIMEOUT_BY_EVENT`` table in
+        ``event_notification.py`` (``taxonomy_activity`` → 15s). The drain
+        does NOT introduce a new 1s timeout — the 15s warm-path-aware
+        entry exists for a reason.
+
+        On failure: re-park (appendleft) and continue to the next interval.
+        """
+        from app.services.event_notification import notify_event_bus
+
+        while True:
+            try:
+                await asyncio.sleep(self._DRAIN_INTERVAL_SECONDS)
+            except asyncio.CancelledError:
+                return
+            if not self._retry_queue:
+                continue
+            # Attempt one full drain pass; re-park on failure and stop
+            # this pass (try again next interval).
+            while self._retry_queue:
+                event = self._retry_queue.popleft()
+                try:
+                    await notify_event_bus("taxonomy_activity", event)
+                    logger.info(
+                        "Drain-delivered parked cross-process event: %s/%s",
+                        event.get("op", "?"), event.get("decision", "?"),
+                    )
+                except Exception as exc:
+                    self._retry_queue.appendleft(event)
+                    logger.debug("Drain pass aborted: %s", exc)
+                    break
 
     # ------------------------------------------------------------------
     # Read

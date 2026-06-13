@@ -1117,7 +1117,11 @@ async def execute_warm_path(
             from app.services.taxonomy._constants import MAINTENANCE_CYCLE_INTERVAL
 
             cadence_gate = (engine._warm_path_age % MAINTENANCE_CYCLE_INTERVAL == 0)
-            should_maintain = cadence_gate or engine._maintenance_pending
+            should_maintain = (
+                cadence_gate
+                or engine._maintenance_pending
+                or bool(engine._vocab_regen_pending)
+            )
 
             if should_maintain:
                 logger.info(

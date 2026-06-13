@@ -230,6 +230,44 @@ except Exception:
 # would be needed instead.
 _process_initialized = False
 
+# v0.4.38 F5b: module-level singleton guard for the MCP process_started
+# decision. A session reconnect that re-enters ``_mcp_lifespan`` without
+# crossing the ``_process_initialized`` guard must NOT double-emit.
+_process_started_emitted = False
+
+
+def _emit_process_started_decision_mcp() -> None:
+    """v0.4.38 F5b — emit one ``process_started`` per MCP process.
+
+    Idempotent: subsequent calls within the same process are no-ops so
+    a session reconnect that re-enters ``_mcp_lifespan`` (without crossing
+    the ``_process_initialized`` guard) cannot double-emit.
+    """
+    global _process_started_emitted
+    if _process_started_emitted:
+        return
+    try:
+        import os
+
+        from app._version import __version__ as version
+        from app.services.taxonomy.event_logger import get_event_logger
+
+        get_event_logger().log_decision(
+            path="system",
+            op="lifespan",
+            decision="process_started",
+            context={
+                "process": "mcp",
+                "pid": os.getpid(),
+                "version": version,
+            },
+        )
+        _process_started_emitted = True
+    except RuntimeError:
+        pass
+    except Exception as _ps_exc:
+        logger.debug("process_started emit skipped: %s", _ps_exc)
+
 
 def _install_audit_hook_once() -> None:
     """Install the read-engine audit hook in the MCP process (v0.4.36).
@@ -279,6 +317,16 @@ async def _mcp_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         )
         set_event_logger(_tel)
         logger.info("MCP lifespan: TaxonomyEventLogger initialized")
+
+        # v0.4.38 F4: start periodic drain timer for parked cross-process
+        # retry events. Best-effort; no loop ⇒ skip.
+        try:
+            _tel.start_drain_loop()
+        except Exception as _drain_exc:
+            logger.debug("MCP start_drain_loop skipped: %s", _drain_exc)
+
+        # v0.4.38 F5b: emit one process_started decision per MCP process.
+        _emit_process_started_decision_mcp()
 
         # E1b: Enable cross-process forwarding for classification agreement
         from app.services.classification_agreement import get_classification_agreement
