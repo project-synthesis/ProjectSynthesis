@@ -536,4 +536,15 @@ cd backend && mypy app/services/taxonomy/sub_domain_readiness.py app/services/ta
 ## Implementation notes
 
 - **R4 (cascade-vs-parse_domain deviation):** R6's `rebuild_sub_domains` does NOT reuse `compute_qualifier_cascade` despite the spec's earlier suggestion. The cascade gates qualifiers via `known_qualifiers` (built from the parent domain's `cluster_metadata.generated_qualifiers` + `signal_keywords`) — in operator-recovery scenarios where vocabulary may be empty/disrupted, that gate would return zero proposals. R6 instead uses `parse_domain` directly per-opt, builds `qualifier_to_cluster_ids` locally, and applies the breadth + consistency gates inline. User-visible semantics unchanged. Note added to engine.py docstring + spec §R6.
+
+  > **v0.4.38 update:** The cascade-deviation note above is superseded.
+  > `_rebuild_sub_domains_impl` now consumes the shared
+  > `compute_unified_qualifier_view()` primitive from
+  > `sub_domain_readiness.py`, which falls back to literal `parse_domain`
+  > tallies when the cascade admitted nothing AND on the cascade branch
+  > merges `unmatched_literal_counts` (residue) as a strict superset.
+  > User-visible semantics are unchanged (threshold formula + breadth
+  > gate + idempotency + transactional rollback all preserved); new
+  > additive `qualifier_source` / `proposal_sources` /
+  > `literal_member_counts` keys surface the source breakdown.
 - **R6 transaction semantics:** sub-domain creation is wrapped in `db.begin_nested()` (SAVEPOINT). Mid-batch failure rolls back ALL partial creates without expiring the test's outer ORM session — verified by `test_rebuild_rolls_back_on_partial_failure`.
