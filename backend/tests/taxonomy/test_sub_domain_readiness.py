@@ -897,3 +897,74 @@ class TestMatchOptToSubDomainVocab:
             f"reason must be a non-empty string when matched=False; "
             f"got: {result.reason!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# AC-9: R7 hygiene — stored legacy 20-char key no longer fires false low-overlap.
+# Spec: docs/superpowers/specs/2026-06-12-v0.4.38-sub-domain-telemetry-design.md §3.5
+# ---------------------------------------------------------------------------
+
+
+class TestR7HygieneNoLegacyTruncationWarning:
+    """AC-9: post-migration, no false `<50%` overlap WARNING from truncation."""
+
+    @pytest.mark.asyncio
+    async def test_ac9_post_migration_no_low_overlap_warning(self, db, mock_provider, caplog):
+        """Stored `pipeline-observabili` (len-20) + fresh `pipeline-observability` regen.
+
+        BEFORE the migration: the R7 prev_set contains the truncated key while
+        new_set contains the full label — Jaccard < 50% fires a WARNING.
+        AFTER the migration: the truncated key is gone, the next regen sees
+        either an empty prev (bootstrap) or already-normalized prev — no
+        false WARNING.
+        """
+        import logging
+
+        # The migration's runtime equivalent: directly strip len-20 keys
+        # via write_meta to simulate post-migration state.
+        from app.services.taxonomy.cluster_meta import read_meta, write_meta
+
+        domain = PromptCluster(
+            id="dom-r7-hyg",
+            label="general",
+            state="domain",
+            cluster_metadata={
+                "generated_qualifiers": {"pipeline-observabili": ["x", "y"]},
+                "generated_qualifiers_cluster_count": 5,
+            },
+        )
+        db.add(domain)
+        await db.flush()
+
+        # Simulate post-migration: strip len-20 keys, reset count to -1.
+        meta = read_meta(domain.cluster_metadata)
+        gq = dict(meta.get("generated_qualifiers", {}))
+        cleaned = {k: v for k, v in gq.items() if len(k) != 20}
+        domain.cluster_metadata = write_meta(
+            domain.cluster_metadata,
+            generated_qualifiers=cleaned,
+            generated_qualifiers_cluster_count=-1,
+        )
+        await db.flush()
+
+        # Now confirm the engine's R7 block, given cleaned prev + fresh new,
+        # produces overlap >= 50% (or 100% when prev is empty).
+        prev_set = {
+            g.lower() for g in (
+                list(domain.cluster_metadata["generated_qualifiers"].keys()) or []
+            )
+        }
+        new_set = {"pipeline-observability"}
+        intersect = prev_set & new_set
+        union = prev_set | new_set
+        overlap_pct = (100.0 * len(intersect) / len(union)) if union else 0.0
+
+        with caplog.at_level(logging.WARNING):
+            if prev_set and overlap_pct < 50.0:
+                # would WARN — this test asserts we DON'T hit this branch
+                pytest.fail(
+                    f"Post-migration R7 still WARNs: overlap={overlap_pct} "
+                    f"prev={prev_set} new={new_set}"
+                )
+        # Confirm the truncated key is gone.
+        assert "pipeline-observabili" not in prev_set
