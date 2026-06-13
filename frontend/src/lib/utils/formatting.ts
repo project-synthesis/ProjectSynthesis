@@ -134,3 +134,34 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return ok;
   }
 }
+
+/**
+ * Map a `replay_warnings` code to a `{short, description}` pair.
+ *
+ * `short` is the chip label rendered in the warnings strip (3–8 chars,
+ * lower-case noun, mono-friendly). `description` is the long-form prose
+ * surfaced in the chip tooltip + announced via `aria-live` so screen
+ * readers report what an opaque code means.
+ *
+ * Unknown codes degrade safely — the raw code becomes the short label and
+ * the description is a generic "unknown warning" message. This keeps the
+ * helper forward-compatible with backend warning codes that ship before a
+ * UI mapping lands (R-26 v0.4.39 brand-compliance).
+ *
+ * Backend emit sites today (search: `warnings.append`):
+ *   - `repo_drift` — suite + current repo differ; replay still runs.
+ */
+export function warningCodeLabel(code: string): { short: string; description: string } {
+  switch (code) {
+    case 'repo_drift':
+      return {
+        short: 'repo drift',
+        description: 'Suite repo and current repo differ. Replay ran against the snapshot.',
+      };
+    default:
+      return {
+        short: code,
+        description: `Unknown warning: ${code}`,
+      };
+  }
+}

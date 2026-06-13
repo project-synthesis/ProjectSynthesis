@@ -31,18 +31,39 @@
   let { active = true }: Props = $props();
 
   let loaded = $state(false);
+  // Track the last project id we loaded for so the $effect can detect a
+  // project switch + clear the detail surface before the new list loads.
+  let lastProjectId: string | null | undefined = undefined;
 
   // Lazy-load on first activation. Project scope is captured at load time;
-  // re-fires when the user switches projects.
+  // re-fires when the user switches projects. Per Svelte-5 invariant
+  // (CLAUDE.md "Critical Svelte 5 invariant"), `projectStore
+  // .currentProjectId` is read BEFORE the early-return gate so the
+  // effect subscribes to project switches regardless of the active flag.
   $effect(() => {
-    if (!active) return;
     const projectId = projectStore.currentProjectId;
+    if (!active) return;
+    // SU-035 (v0.4.39) — clear the detail surface before the new project
+    // list loads. If the previously-rendered detail row belongs to
+    // project A and the operator switches to project B, the detail must
+    // not survive into the new context. `select(null)` cascades the
+    // clear into replays/latestReplay/aliveOriginalIds too.
+    if (lastProjectId !== undefined && lastProjectId !== projectId) {
+      void suitesStore.select(null);
+    }
+    lastProjectId = projectId;
     loaded = true;
     void suitesStore.load(projectId ?? undefined);
   });
 
   function onRowClick(suite: ValidationSuiteListItem): void {
-    void suitesStore.select(suite.id);
+    // R-06 5-state — re-click on the selected row toggles selection off
+    // so the operator can collapse the SuiteDetailView surface in-place.
+    if (suitesStore.selectedSuiteId === suite.id) {
+      void suitesStore.select(null);
+    } else {
+      void suitesStore.select(suite.id);
+    }
   }
 
   // Status + delta are derived from the alarm block. A suite present in
@@ -79,7 +100,15 @@
 
     <div class="panel-body">
       {#if !loaded || suitesStore.loading}
-        <p class="empty-note">Loading…</p>
+        <!-- R-12 — loading state renders 4 .skeleton-row using the shared
+             shimmer keyframe. Replaces the prior "Loading…" prose row. -->
+        <div class="skeleton-list" data-test="suites-skeleton" aria-busy="true">
+          {#each Array(4) as _, i (i)}
+            <div class="skeleton-row">
+              <span class="skeleton-bar"></span>
+            </div>
+          {/each}
+        </div>
       {:else if suitesStore.error}
         <p class="empty-note panel-error">{suitesStore.error}</p>
       {:else if suitesStore.suites.length === 0}
@@ -92,6 +121,7 @@
                 {suite}
                 delta={deltaFor(suite)}
                 status={statusFor(suite)}
+                selected={suitesStore.selectedSuiteId === suite.id}
                 onClick={onRowClick}
               />
             </div>
@@ -149,6 +179,14 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
+  }
+
+  /* R-12 — skeleton list density. `.skeleton-row` + `.skeleton-bar` are
+     promoted to app.css; only the list-level gap is local. */
+  .skeleton-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .detail-wrapper {

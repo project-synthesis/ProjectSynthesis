@@ -233,6 +233,12 @@ describe('SuiteDetailView provenance (v0.4.37)', () => {
       replays: null,
       latestReplay: null,
     });
+    // v0.4.39 R-10 — expansion uses `transition:slide={navSlide}`. The
+    // per-prompt list is wrapped in `{#key suite.id}` so a suite swap
+    // force-destroys the prior list (transitions only animate when
+    // expandedIdx toggles WITHIN the same suite; cross-suite changes
+    // are an instant unmount). The contract holds: suite B never
+    // renders suite A's expansion state.
     expect(container.querySelector('[data-test="prompt-expanded"]')).toBeNull();
   });
 
