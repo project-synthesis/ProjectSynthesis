@@ -4,6 +4,13 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- **Unified qualifier view shared by readiness + rebuild** — new `compute_unified_qualifier_view()` primitive in `services/taxonomy/sub_domain_readiness.py` consumes the cascade and composes it with a literal-fallback predicate (cascade admitted zero ⇒ literal_fallback; else cascade with residue carrying vocab-unknown literals). `_rebuild_sub_domains_impl` swapped its local `parse_domain` counting loop for the view + residue merge — operator dry-runs at 0.30/0.35/0.38 thresholds now return non-empty proposals exactly when readiness reports the qualifier above threshold. Response and `sub_domain_rebuild_invoked` event gain additive `qualifier_source` (`cascade` | `literal_fallback`), `proposal_sources` (per-label `cascade_group` | `literal_residue` | `literal_fallback`), and `literal_member_counts` (top-5 raw variants per proposal). Closes ROADMAP audit finding 2.
+- **`SubDomainEmergenceReport.qualifier_source`** — additive field on the readiness emergence schema (`schemas/sub_domain_readiness.py`), defaults to `"cascade"`; populated to `"literal_fallback"` when the cascade admitted zero. Purely additive — pre-v0.4.38 clients see the default.
+
+### Fixed
+- **Legacy 20-char-truncated `generated_qualifiers` keys healed at migration time** — new Alembic data migration `4e9c881dd3ae_heal_truncated_generated_qualifiers.py` strips every `cluster_metadata.generated_qualifiers` key of length exactly 20 (the pre-v0.4.5 hard-slice signature) on every `state='domain'` row and resets `generated_qualifiers_cluster_count = -1` on affected rows so the next maintenance cycle re-generates vocab. Idempotent + reversible downgrade is a no-op. R7 Jaccard hygiene (engine.py:2662-2663) additionally normalises both `prev_set` and `new_set` through `normalize_sub_domain_label` so a future writer cannot reintroduce the same drift. Closes ROADMAP audit finding 5a.
+
 ## v0.4.37 — 2026-06-12
 
 ### Added
