@@ -79,7 +79,7 @@
   {:else if readinessStore.lastError && !readinessStore.loaded}
     <p class="empty-note panel-error">Unable to load readiness.</p>
   {:else if sorted.length === 0}
-    <p class="empty-note">No domains.</p>
+    <p class="empty-note">No domains — warming.</p>
   {:else}
     <div class="card-grid">
       {#each sorted as report (report.domain_id)}

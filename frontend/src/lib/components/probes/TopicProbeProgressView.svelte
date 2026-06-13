@@ -186,7 +186,7 @@
     position: absolute;
     inset: 0;
     background: transparent;
-    transition: background-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background-color var(--duration-hover) var(--ease-spring);
   }
 
   .progress-cell--done {
