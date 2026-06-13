@@ -2659,8 +2659,14 @@ class TaxonomyEngine:
 
                     # R7 (audit 2026-04-27): vocab regeneration overlap telemetry.
                     # Jaccard intersection-over-union between previous and new group names.
-                    prev_set = {g.lower() for g in (_existing_groups or [])}
-                    new_set = {g.lower() for g in generated.keys()}
+                    # v0.4.38 F5a: normalize BOTH sets through the canonicalizer so
+                    # stored legacy 20-char truncations don't fire false low-overlap.
+                    from app.utils.text_cleanup import normalize_sub_domain_label as _norm
+                    prev_set = {_norm(g) for g in (_existing_groups or []) if g}
+                    new_set = {_norm(g) for g in generated.keys() if g}
+                    # Filter empties produced by normalize on bogus input.
+                    prev_set.discard("")
+                    new_set.discard("")
                     if prev_set or new_set:
                         intersect = prev_set & new_set
                         union = prev_set | new_set
@@ -3080,25 +3086,21 @@ class TaxonomyEngine:
         without poisoning the outer queue session. Detection is
         ``write_queue is not None``.
 
-        Implementation note — cascade deviation:
-            The R6 spec proposed reusing ``compute_qualifier_cascade`` for the
-            qualifier scan, but that primitive admits a qualifier only when it
-            already lives in the parent domain's vocabulary
-            (``generated_qualifiers`` keys ∪ ``signal_keywords`` lemmas — see
-            ``known_qualifiers`` gating in
-            ``sub_domain_readiness.compute_qualifier_cascade``). This is the
-            correct gate for *organic* discovery during the warm-path Phase 5
-            cycle, but it is exactly wrong for the operator-recovery scenario
-            this method exists to serve: post-mass-dissolution, the parent
-            domain's ``generated_qualifiers`` may have been emptied or scoped
-            away from the qualifiers the operator wants to re-promote, and the
-            cascade would therefore return ``qualifier_counts={}`` and silently
-            produce a zero-proposal recovery. We instead read each
-            optimization's ``domain_raw`` directly via
-            ``parse_domain``, count occurrences locally, and let the breadth +
-            consistency gates do their work without a vocabulary precondition.
-            User-visible semantics (threshold formula, breadth gate, idempotency,
-            transactional rollback, telemetry) are unchanged.
+        Implementation note — unified qualifier view (v0.4.38):
+            Previously the cascade primitive admitted a qualifier only when
+            it already lived in the parent domain's combined vocab gate
+            (``generated_qualifiers`` keys ∪ ``signal_keywords`` lemmas).
+            Post-mass-dissolution that gate could return zero proposals
+            even when the literals were dominant. The rebuild now consumes
+            ``compute_unified_qualifier_view`` (`sub_domain_readiness.py`),
+            which falls back to ``parse_domain`` literals when the cascade
+            admitted nothing, AND on the cascade branch merges
+            ``unmatched_literal_counts`` (residue) as a strict superset of
+            the cascade's organic discovery. User-visible semantics
+            (threshold formula, breadth gate, idempotency, transactional
+            rollback, telemetry) are unchanged; new additive keys
+            ``qualifier_source`` / ``proposal_sources`` /
+            ``literal_member_counts`` ship the source breakdown.
 
         Args:
             db: Async SQLAlchemy session.
@@ -3190,57 +3192,44 @@ class TaxonomyEngine:
                 f"{SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR}"
             )
 
-        # 3. Scan the optimization tree under the domain for raw qualifier
-        # signals.  The rebuild is operator-invoked recovery — it must not
-        # gate on whether the cascade's vocabulary already "knows" the
-        # qualifier (which the discovery cascade does, by design).  Instead
-        # parse every ``domain_raw`` directly so a fresh qualifier the
-        # operator has just observed in production can become a sub-domain.
-        sub_descendant_q = await db.execute(
-            select(PromptCluster.id).where(
-                PromptCluster.parent_id == domain.id,
-                PromptCluster.state == "domain",
-            )
+        # 3. Compute the unified qualifier view.
+        #
+        # v0.4.38 (spec §3.3): the cascade primitive admits qualifiers from a
+        # combined vocab gate (generated_qualifiers ∪ signal_keywords lemmas);
+        # the unified view adds a literal-fallback predicate for the post-
+        # mass-dissolution recovery path. Residue carries vocab-unknown
+        # literals when source=="cascade" so the rebuild is a strict superset
+        # of organic discovery (AC-6 pins the residue path).
+        from app.services.taxonomy.sub_domain_readiness import (
+            compute_unified_qualifier_view,
         )
-        parent_ids: list[str] = [domain.id]
-        parent_ids.extend(r[0] for r in sub_descendant_q.all())
 
-        cluster_id_q = await db.execute(
-            select(PromptCluster.id).where(
-                PromptCluster.parent_id.in_(parent_ids),
-                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+        view = await compute_unified_qualifier_view(db, domain)
+        qualifier_source = view.source
+        qualifier_counts: Counter[str] = Counter(view.qualifier_counts)
+        qualifier_to_cluster_ids: dict[str, set[str]] = {
+            k: set(v) for k, v in view.qualifier_to_cluster_ids.items()
+        }
+        # Track per-qualifier source label for telemetry.
+        proposal_source_by_label: dict[str, str] = {}
+        for q in qualifier_counts:
+            proposal_source_by_label[q] = (
+                "literal_fallback"
+                if view.source == "literal_fallback"
+                else "cascade_group"
             )
-        )
-        cluster_ids: list[str] = [r[0] for r in cluster_id_q.all()]
-
-        opt_rows: list[tuple[str | None, str | None]] = []
-        if cluster_ids:
-            opt_q = await db.execute(
-                select(
-                    Optimization.domain_raw,
-                    Optimization.cluster_id,
-                ).where(Optimization.cluster_id.in_(cluster_ids))
-            )
-            opt_rows = [(row[0], row[1]) for row in opt_q.all()]
-
-        from app.utils.text_cleanup import parse_domain as _parse_domain
-        qualifier_counts: Counter[str] = Counter()
-        qualifier_to_cluster_ids: dict[str, set[str]] = {}
-        for domain_raw, cluster_id in opt_rows:
-            if not domain_raw or cluster_id is None:
-                # ``cluster_id is None`` cannot occur given the
-                # ``cluster_id.in_(cluster_ids)`` filter, but guard explicitly
-                # so the downstream type narrows to ``str``.
-                continue
-            _, q = _parse_domain(domain_raw)
-            if not q:
-                continue
-            q_norm = q.strip().lower()
-            if not q_norm:
-                continue
-            qualifier_counts[q_norm] += 1
-            qualifier_to_cluster_ids.setdefault(q_norm, set()).add(cluster_id)
-        total_opts = len(opt_rows)
+        # Residue merge — only when cascade admitted something but operator
+        # wants the strict-superset recovery (AC-6).
+        if view.source == "cascade":
+            for res_q, res_count in view.residue_counts.items():
+                qualifier_counts[res_q] = (
+                    qualifier_counts.get(res_q, 0) + res_count
+                )
+                qualifier_to_cluster_ids.setdefault(res_q, set()).update(
+                    view.residue_cluster_ids.get(res_q, set()),
+                )
+                proposal_source_by_label[res_q] = "literal_residue"
+        total_opts = view.total_opts
 
         # 4. Compute threshold_used.
         if min_consistency_override is not None:
@@ -3273,6 +3262,8 @@ class TaxonomyEngine:
         proposed: list[str] = []
         skipped_existing: list[str] = []
         eligible: list[tuple[str, str, set[str]]] = []  # (qualifier, sub_label, cluster_ids)
+        # v0.4.38: track per-proposed-sub_label source label for telemetry.
+        proposal_source_by_sub_label: dict[str, str] = {}
         for qualifier, count in qualifier_counts.most_common():
             if total_opts <= 0:
                 continue
@@ -3292,9 +3283,33 @@ class TaxonomyEngine:
             if cluster_breadth < SUB_DOMAIN_MIN_CLUSTER_BREADTH:
                 continue
             proposed.append(sub_label)
+            proposal_source_by_sub_label[sub_label] = proposal_source_by_label.get(
+                qualifier, "cascade_group",
+            )
             eligible.append(
                 (qualifier, sub_label, qualifier_to_cluster_ids.get(qualifier, set())),
             )
+
+        # Build literal_member_counts (top-5 per proposal) for telemetry.
+        # Maps proposal sub_label → list of (literal_variant, count) tuples
+        # sorted by count desc then name asc for determinism.
+        literal_member_counts: dict[str, list[tuple[str, int]]] = {}
+        for sub_label in proposed:
+            # Recover the original qualifier (group key) used to admit this
+            # proposal. For cascade/literal_residue, this is the GROUP key
+            # whose literal_members map is keyed on. For literal_fallback,
+            # the qualifier IS the literal so literal_members is empty.
+            # Walk eligible to find the qualifier whose sub_label matches.
+            original_qualifier = next(
+                (q for q, sl, _ in eligible if sl == sub_label),
+                sub_label,
+            )
+            variants = view.literal_members.get(original_qualifier, {})
+            sorted_variants = sorted(
+                variants.items(), key=lambda kv: (-kv[1], kv[0]),
+            )[:5]
+            if sorted_variants:
+                literal_member_counts[sub_label] = sorted_variants
 
         # 7. Create sub-domains (or skip in dry-run mode).
         # Wrap the batch in a SAVEPOINT so a mid-batch failure rolls back
@@ -3363,6 +3378,13 @@ class TaxonomyEngine:
                     "proposed_count": len(proposed),
                     "created_count": len(created),
                     "skipped_existing_count": len(skipped_existing),
+                    # v0.4.38 additive (spec §3.3):
+                    "qualifier_source": qualifier_source,
+                    "proposal_sources": {
+                        label: proposal_source_by_sub_label.get(label, "cascade_group")
+                        for label in proposed
+                    },
+                    "literal_member_counts": literal_member_counts,
                 },
             )
         except RuntimeError:
@@ -3385,6 +3407,7 @@ class TaxonomyEngine:
             "created": list(created),
             "skipped_existing": list(skipped_existing),
             "dry_run": dry_run,
+            "qualifier_source": qualifier_source,
         }
 
     async def dissolve_empty_domain(

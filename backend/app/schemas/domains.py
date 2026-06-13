@@ -1,6 +1,6 @@
 """Pydantic models for the domains API."""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +58,13 @@ class RebuildSubDomainsResult(BaseModel):
     created: list[str]
     skipped_existing: list[str]
     dry_run: bool
+    qualifier_source: Optional[Literal["cascade", "literal_fallback"]] = Field(
+        default=None,
+        description=(
+            "v0.4.38 additive: source the rebuild used. Always present in "
+            "post-v0.4.38 responses; absent (None) on pre-v0.4.38 clients."
+        ),
+    )
 
 
 class DissolveEmptyResult(BaseModel):

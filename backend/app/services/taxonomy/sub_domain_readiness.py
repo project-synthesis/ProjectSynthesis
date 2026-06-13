@@ -66,10 +66,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "CascadeResult",
+    "UnifiedQualifierView",
     "SubDomainMatchResult",
     "TierCrossing",
     "DomainReadinessChangedEvent",
     "compute_qualifier_cascade",
+    "compute_unified_qualifier_view",
     "match_opt_to_sub_domain_vocab",
     "compute_sub_domain_emergence",
     "compute_domain_stability",
@@ -117,6 +119,33 @@ class CascadeResult:
         generated_qualifiers_present: whether the domain has organic Haiku
             qualifier vocabulary in its ``cluster_metadata``.  Feeds the
             ``has_organic_vocab`` field in the engine's signal-scan event.
+
+    Attributes (additive forensic fields, v0.4.38, spec §3.1):
+        qualifier_literal_members: recorded GROUP-KEY → literal-variant counts
+            (e.g. {"embeddings": {"embedding": 7, "embedding-correctness": 11}}).
+            Forensic-only — never feeds gating decisions.
+
+            Source dependency: a literal-variant appears under a group key
+            ONLY when at least one cascade source admitted that group key
+            for an opt whose ``domain_raw`` parses to that literal. Source 1
+            (parse_domain) admits ONLY when the literal itself matches a
+            vocab GROUP KEY (e.g. literal ``"embeddings"`` matches group
+            ``"embeddings"``); a literal ``"embedding"`` (singular) does NOT
+            hit Source 1 against the same vocab — only Source 2 (via
+            ``DomainSignalLoader.find_best_qualifier``) can map an
+            intent_label containing ``"embedding"`` to the ``"embeddings"``
+            group when ``"embedding"`` lives in that group's KEYWORD LIST.
+            Therefore, in tests that exercise the ``literal_members[group]``
+            record path with non-identical literal variants, the fixture
+            MUST provide ``intent_label`` so Source 2 admits — otherwise
+            Source 1 misses and the literal lands in
+            ``unmatched_literal_counts`` (residue), not
+            ``qualifier_literal_members``.
+        unmatched_literal_counts: normalized literal → count, for literals
+            that NO source admitted (vocab-unknown). Keyed by
+            ``normalize_sub_domain_label(literal)``.
+        unmatched_literal_cluster_ids: parallel cluster-id set per
+            unmatched literal.
     """
 
     total_opts: int
@@ -126,6 +155,9 @@ class CascadeResult:
     qualifier_to_cluster_ids: dict[str, set[str]] = field(default_factory=dict)
     dynamic_keywords: tuple[tuple[str, float], ...] = ()
     generated_qualifiers_present: bool = False
+    qualifier_literal_members: dict[str, dict[str, int]] = field(default_factory=dict)
+    unmatched_literal_counts: dict[str, int] = field(default_factory=dict)
+    unmatched_literal_cluster_ids: dict[str, set[str]] = field(default_factory=dict)
 
     def dominant_source_for(self, qualifier: str) -> Literal["domain_raw", "intent_label", "tf_idf"]:
         """Return the source that contributed the most hits for ``qualifier``.
@@ -425,6 +457,10 @@ async def compute_qualifier_cascade(
     per_qualifier_sources: dict[str, dict[str, int]] = {}
     qualifier_to_cluster_ids: dict[str, set[str]] = {}
     source_breakdown: Counter[str] = Counter()
+    # v0.4.38 additive forensic state (spec §3.1): never feeds gating.
+    qualifier_literal_members: dict[str, dict[str, int]] = {}
+    unmatched_literal_counts: dict[str, int] = {}
+    unmatched_literal_cluster_ids: dict[str, set[str]] = {}
 
     # Lazy import to avoid circular dependency
     from app.services.domain_signal_loader import DomainSignalLoader
@@ -484,6 +520,29 @@ async def compute_qualifier_cascade(
                     qualifier = best_dyn.lower().replace(" ", "-")
                     _record(qualifier, _SOURCE_TF_IDF, cluster_id)
 
+        # v0.4.38 additive forensic recording (spec §3.1):
+        # Record literal variants under the cascade group key when a
+        # qualifier was admitted AND domain_raw parses to a literal.
+        if qualifier and domain_raw:
+            _, q_raw = parse_domain(domain_raw)
+            if q_raw:
+                q_raw_lower = q_raw.lower()
+                qualifier_literal_members.setdefault(qualifier, {}).setdefault(q_raw_lower, 0)
+                qualifier_literal_members[qualifier][q_raw_lower] += 1
+
+        # When NO source admitted a qualifier BUT domain_raw parses, record
+        # the literal in residue (keyed by normalize_sub_domain_label).
+        if not qualifier and domain_raw:
+            _, q_raw = parse_domain(domain_raw)
+            if q_raw:
+                from app.utils.text_cleanup import normalize_sub_domain_label as _norm
+                normalized = _norm(q_raw)
+                if normalized:
+                    unmatched_literal_counts[normalized] = (
+                        unmatched_literal_counts.get(normalized, 0) + 1
+                    )
+                    unmatched_literal_cluster_ids.setdefault(normalized, set()).add(cluster_id)
+
     return CascadeResult(
         total_opts=total_opts,
         qualifier_counts=dict(qualifier_counts),
@@ -492,6 +551,90 @@ async def compute_qualifier_cascade(
         qualifier_to_cluster_ids=qualifier_to_cluster_ids,
         dynamic_keywords=tuple(dynamic_keywords),
         generated_qualifiers_present=bool(generated_qualifiers),
+        qualifier_literal_members=qualifier_literal_members,
+        unmatched_literal_counts=unmatched_literal_counts,
+        unmatched_literal_cluster_ids=unmatched_literal_cluster_ids,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unified qualifier view (v0.4.38 — F2 spec §3.2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UnifiedQualifierView:
+    """Single source of truth for qualifier counts shared by readiness + rebuild.
+
+    Source semantics:
+      * ``"cascade"`` — at least one cascade source admitted a qualifier;
+        ``qualifier_counts`` mirrors ``cascade.qualifier_counts``.
+      * ``"literal_fallback"`` — cascade admitted nothing for any opt;
+        ``qualifier_counts`` is the normalized literal tally
+        (``cascade.unmatched_literal_counts``).
+
+    ``residue_counts`` carries vocab-unknown literals when source=="cascade"
+    (rebuild merges these on top as strict-superset recovery). Empty when
+    source=="literal_fallback" (the literals already populate ``qualifier_counts``).
+
+    Spec: docs/superpowers/specs/2026-06-12-v0.4.38-sub-domain-telemetry-design.md §3.2.
+    """
+
+    total_opts: int
+    source: Literal["cascade", "literal_fallback"]
+    qualifier_counts: dict[str, int]
+    qualifier_to_cluster_ids: dict[str, set[str]]
+    literal_members: dict[str, dict[str, int]]
+    residue_counts: dict[str, int]
+    residue_cluster_ids: dict[str, set[str]]
+    cascade: CascadeResult
+
+
+async def compute_unified_qualifier_view(
+    db: AsyncSession,
+    domain_node: PromptCluster,
+    *,
+    meta_node: PromptCluster | None = None,
+    include_sub_domain_descendants: bool = True,
+    cascade: CascadeResult | None = None,
+) -> UnifiedQualifierView:
+    """Compose the cascade result with a literal-fallback predicate.
+
+    Fallback predicate: ``source == "cascade"`` iff
+    ``cascade.qualifier_counts`` is non-empty; else ``"literal_fallback"``
+    with counts == ``cascade.unmatched_literal_counts``. See spec §3.2 for
+    the rationale (vocab-empty is the wrong predicate; both-empty is wrong;
+    "cascade admitted zero" is the only structurally honest signal).
+    """
+    if cascade is None:
+        cascade = await compute_qualifier_cascade(
+            db, domain_node,
+            meta_node=meta_node,
+            include_sub_domain_descendants=include_sub_domain_descendants,
+        )
+
+    if cascade.qualifier_counts:
+        return UnifiedQualifierView(
+            total_opts=cascade.total_opts,
+            source="cascade",
+            qualifier_counts=dict(cascade.qualifier_counts),
+            qualifier_to_cluster_ids=dict(cascade.qualifier_to_cluster_ids),
+            literal_members=dict(cascade.qualifier_literal_members),
+            residue_counts=dict(cascade.unmatched_literal_counts),
+            residue_cluster_ids=dict(cascade.unmatched_literal_cluster_ids),
+            cascade=cascade,
+        )
+
+    # Cascade admitted zero — fall back to literal tally.
+    return UnifiedQualifierView(
+        total_opts=cascade.total_opts,
+        source="literal_fallback",
+        qualifier_counts=dict(cascade.unmatched_literal_counts),
+        qualifier_to_cluster_ids=dict(cascade.unmatched_literal_cluster_ids),
+        literal_members={},
+        residue_counts={},
+        residue_cluster_ids={},
+        cascade=cascade,
     )
 
 
@@ -542,11 +685,45 @@ def _build_candidate(
     )
 
 
+def _build_candidate_from_view(
+    qualifier: str,
+    count: int,
+    total_opts: int,
+    view: UnifiedQualifierView,
+) -> QualifierCandidate:
+    """View-aware candidate builder.
+
+    When source=="cascade", delegates to the existing breakdown.
+    When source=="literal_fallback", synthesises a domain_raw-only breakdown.
+    """
+    if view.source == "cascade":
+        sources = view.cascade.per_qualifier_sources.get(qualifier, {})
+        breakdown = {src: sources.get(src, 0) for src in _SOURCES}
+        return QualifierCandidate(
+            qualifier=qualifier,
+            count=count,
+            consistency=(count / total_opts) if total_opts else 0.0,
+            dominant_source=view.cascade.dominant_source_for(qualifier),
+            source_breakdown=breakdown,
+            cluster_breadth=len(view.qualifier_to_cluster_ids.get(qualifier, set())),
+        )
+    # literal_fallback — synthetic breakdown.
+    return QualifierCandidate(
+        qualifier=qualifier,
+        count=count,
+        consistency=(count / total_opts) if total_opts else 0.0,
+        dominant_source="domain_raw",
+        source_breakdown={"domain_raw": count, "intent_label": 0, "tf_idf": 0},
+        cluster_breadth=len(view.qualifier_to_cluster_ids.get(qualifier, set())),
+    )
+
+
 async def compute_sub_domain_emergence(
     db: AsyncSession,
     domain_node: PromptCluster,
     *,
     cascade: CascadeResult | None = None,
+    view: UnifiedQualifierView | None = None,
 ) -> SubDomainEmergenceReport:
     """Return the readiness-to-promote report for a domain.
 
@@ -559,14 +736,24 @@ async def compute_sub_domain_emergence(
     Ready ⇔ all three.  Blocker records the first check that failed.
     Shares gating constants with ``engine._propose_sub_domains`` so
     the primitive's ``ready`` flag and engine promotion agree by construction.
+
+    v0.4.38: ``view`` kwarg wins over ``cascade`` when both passed. When
+    ``view.source == "literal_fallback"``, candidates synthesise with
+    ``dominant_source="domain_raw"`` and ``source_breakdown={"domain_raw": n,
+    "intent_label": 0, "tf_idf": 0}``.
     """
-    cascade = cascade or await compute_qualifier_cascade(db, domain_node)
-    total_opts = cascade.total_opts
+    if view is None:
+        cascade = cascade or await compute_qualifier_cascade(db, domain_node)
+        view = await compute_unified_qualifier_view(
+            db, domain_node, cascade=cascade,
+        )
+    cascade = view.cascade
+    total_opts = view.total_opts
     threshold = _emergence_threshold(total_opts)
     formula = _threshold_formula(total_opts, threshold)
 
     counts_sorted = sorted(
-        cascade.qualifier_counts.items(), key=lambda kv: (-kv[1], kv[0]),
+        view.qualifier_counts.items(), key=lambda kv: (-kv[1], kv[0]),
     )
 
     if not counts_sorted:
@@ -581,12 +768,13 @@ async def compute_sub_domain_emergence(
             blocked_reason="no_candidates",
             runner_ups=[],
             tier="inert",
+            qualifier_source=view.source,
         )
 
     top_q, top_count = counts_sorted[0]
-    top_candidate = _build_candidate(top_q, top_count, total_opts, cascade)
+    top_candidate = _build_candidate_from_view(top_q, top_count, total_opts, view)
     runner_ups = [
-        _build_candidate(q, c, total_opts, cascade)
+        _build_candidate_from_view(q, c, total_opts, view)
         for q, c in counts_sorted[1:6]
     ]
 
@@ -635,6 +823,7 @@ async def compute_sub_domain_emergence(
         blocked_reason=blocked_reason if not ready else "none",
         runner_ups=runner_ups,
         tier=tier,
+        qualifier_source=view.source,
     )
 
 
@@ -849,7 +1038,10 @@ async def compute_domain_readiness(
             return entry.report
 
     cascade = await compute_qualifier_cascade(db, domain_node)
-    emergence = await compute_sub_domain_emergence(db, domain_node, cascade=cascade)
+    view = await compute_unified_qualifier_view(
+        db, domain_node, cascade=cascade,
+    )
+    emergence = await compute_sub_domain_emergence(db, domain_node, view=view)
     stability = await compute_domain_stability(db, domain_node)
 
     report = DomainReadinessReport(

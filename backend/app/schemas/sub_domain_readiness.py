@@ -68,6 +68,14 @@ class SubDomainEmergenceReport(BaseModel):
         description="Up to 5 runners-up ordered by consistency desc",
     )
     tier: EmergenceTier
+    qualifier_source: Literal["cascade", "literal_fallback"] = Field(
+        default="cascade",
+        description=(
+            "v0.4.38 additive: 'cascade' when at least one cascade source "
+            "admitted a qualifier; 'literal_fallback' when readiness "
+            "synthesised candidates from raw parse_domain literals."
+        ),
+    )
 
 
 class DomainStabilityGuards(BaseModel):

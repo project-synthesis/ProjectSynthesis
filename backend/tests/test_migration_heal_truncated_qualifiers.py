@@ -42,11 +42,21 @@ def migrated_db(tmp_path):
 
 def _insert_domain(eng, cluster_id: str, meta_dict: dict | None) -> None:
     # Table name confirmed against app/models.py:177 (__tablename__ = "prompt_cluster" — singular).
+    # NOT NULL columns (id, label, state, domain, task_type, member_count, usage_count,
+    # prune_flag_count, scored_count, template_count, weighted_member_sum) populated
+    # explicitly because raw SQL bypasses ORM Mapped defaults.
     with eng.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO prompt_cluster (id, label, state, cluster_metadata) "
-                "VALUES (:id, :label, 'domain', :meta)"
+                "INSERT INTO prompt_cluster ("
+                "id, label, state, domain, task_type, member_count, usage_count, "
+                "prune_flag_count, scored_count, template_count, weighted_member_sum, "
+                "cluster_metadata"
+                ") VALUES ("
+                ":id, :label, 'domain', 'general', 'general', 0, 0, "
+                "0, 0, 0, 0.0, "
+                ":meta"
+                ")"
             ),
             {
                 "id": cluster_id,
