@@ -4128,9 +4128,11 @@ class TaxonomyEngine:
             # failure mode (empty vocab → empty_snapshot) regardless of
             # whether the sub-domain also happens to lack child clusters.
             # The legacy ``sub_domain_reevaluation_skipped`` event still
-            # fires from this branch (with ``total_opts=0`` when child
-            # clusters are absent) for backwards-compatible operator
-            # tooling.
+            # fires from this branch with ``total_opts=0`` — note that
+            # before v0.4.38 the event was reached only after counting
+            # opts, so consumers may have seen non-zero values here. The
+            # informative count now lives on the new
+            # ``sub_domain_health_check`` event's per-sub forensics.
             sub_meta = read_meta(sub.cluster_metadata)
             sub_generated_qualifiers = sub_meta.get("generated_qualifiers") or {}
             if not sub_generated_qualifiers:

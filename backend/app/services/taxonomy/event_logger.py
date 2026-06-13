@@ -135,9 +135,10 @@ class TaxonomyEventLogger:
         # forwarding.  Drained on next successful delivery.
         self._retry_queue: deque[dict[str, Any]] = deque(maxlen=_MAX_RETRY_QUEUE)
         # v0.4.38 F4: periodic drain task handle. None until
-        # ``start_drain_loop()`` is called — either by the lifespan at
-        # init OR lazily by the first cross-process emit when a loop is
-        # available.
+        # ``start_drain_loop()`` is called by the lifespan at init when a
+        # loop is available. Never auto-started from the emit path —
+        # production reliability rides on the lifespan call (see
+        # ``app/main.py`` + ``app/mcp_server.py``).
         self._drain_task: asyncio.Task | None = None
         # Diagnostic counter: number of pre-migration 'template' state values
         # observed in event context dicts during ring-buffer reads. Used to
@@ -366,10 +367,10 @@ class TaxonomyEventLogger:
     def start_drain_loop(self) -> None:
         """Start the periodic retry-queue drain task (v0.4.38 F4).
 
-        Called by the lifespan on logger init when a loop is available, and
-        lazily by the first cross-process emit otherwise. Idempotent — if a
-        task is already live and not done, this is a no-op. Falls back to
-        silent skip when no event loop is running (sync test paths).
+        Called by the lifespan on logger init when a loop is available;
+        never auto-started from the emit path. Idempotent — if a task is
+        already live and not done, this is a no-op. Falls back to silent
+        skip when no event loop is running (sync test paths).
         """
         if self._drain_task is not None and not self._drain_task.done():
             return
