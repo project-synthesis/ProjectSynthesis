@@ -227,6 +227,36 @@ async def _run_adr005_migration(db) -> None:
     await _backfill_project_ids(db)
 
 
+def _emit_process_started_decision(process: str) -> None:
+    """v0.4.38 F5b — log a single ``process_started`` decision.
+
+    Best-effort wrapper; never raises. Caller provides ``"backend"`` or
+    ``"mcp"``. The backend caller is intentionally NOT singleton-guarded —
+    the FastAPI lifespan runs exactly once per process, so a flag would
+    be redundant. The MCP caller has its own guard (mcp_server.py).
+    """
+    try:
+        import os
+
+        from app._version import __version__ as version
+        from app.services.taxonomy.event_logger import get_event_logger
+    except Exception:
+        return
+    try:
+        get_event_logger().log_decision(
+            path="system",
+            op="lifespan",
+            decision="process_started",
+            context={
+                "process": process,
+                "pid": os.getpid(),
+                "version": version,
+            },
+        )
+    except RuntimeError:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
@@ -511,6 +541,15 @@ async def lifespan(app: FastAPI):
                 publish_to_bus=True,
             )
             set_event_logger(taxonomy_event_logger)
+            # v0.4.38 F4: start the periodic drain timer for parked
+            # cross-process retry events. Best-effort; no loop ⇒ skip.
+            try:
+                taxonomy_event_logger.start_drain_loop()
+            except Exception as _drain_exc:
+                logger.debug("start_drain_loop skipped: %s", _drain_exc)
+            # v0.4.38 F5b: emit one process_started decision per backend
+            # process for restart correlation.
+            _emit_process_started_decision("backend")
 
             # Initialize domain services
             from app.services.domain_resolver import (

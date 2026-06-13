@@ -395,6 +395,12 @@ class TaxonomyEngine:
         # with a transient error.  Causes the next idle warm cycle to run
         # maintenance phases regardless of the periodic cadence gate.
         self._maintenance_pending: bool = False
+        # v0.4.38 F3: sub-domain creations mark their parent domain id here
+        # so the next warm cycle bypasses both the cadence and staleness
+        # gates ONCE for the parent's vocab regeneration. Cleared by
+        # ``_propose_sub_domains`` on the regen pass that processes those
+        # parents.
+        self._vocab_regen_pending: set[str] = set()
         # Date of last readiness-history prune (UTC).  Guards the daily
         # idempotent prune inside warm-path Phase 5 so it runs at most
         # once per process per UTC day.  ``None`` = never pruned.
@@ -2426,8 +2432,22 @@ class TaxonomyEngine:
             current_cluster_count = len(child_ids)
 
             is_first_generation = not cached_vocab
-            stale = is_first_generation or abs(current_cluster_count - cached_cluster_count) > max(
-                2, cached_cluster_count * 0.3
+            # v0.4.38 F3: a sub-domain creation in the previous cycle marks
+            # the parent here so post-creation vocab regen does not depend
+            # on the natural staleness predicate. ``is_first_generation`` is
+            # False post-creation (the parent's vocab dict already exists),
+            # and reparenting one cluster under a brand-new sub-domain may
+            # not cross the >30% churn bar — the creation itself is the
+            # staleness signal. The flag is cleared after the regen runs,
+            # so this only fires once per creation.
+            regen_forced_for_parent = (
+                domain_node.id in self._vocab_regen_pending
+            )
+            stale = (
+                is_first_generation
+                or abs(current_cluster_count - cached_cluster_count)
+                > max(2, cached_cluster_count * 0.3)
+                or regen_forced_for_parent
             )
             if stale and self._provider:
                 import time as _vocab_time
@@ -2776,6 +2796,9 @@ class TaxonomyEngine:
                         generated_qualifiers=generated,
                         generated_qualifiers_cluster_count=current_cluster_count,
                     )
+                    # v0.4.38 F3: clear the per-parent pending flag now
+                    # that the regen pass has actually run.
+                    self._vocab_regen_pending.discard(domain_node.id)
                     try:
                         from app.services.domain_signal_loader import get_signal_loader
 
@@ -3120,6 +3143,10 @@ class TaxonomyEngine:
                     except RuntimeError:
                         pass
 
+                    # v0.4.38 F3: parent vocab is now stale — schedule
+                    # next-cycle bypass.
+                    self._vocab_regen_pending.add(domain_node.id)
+
                 except Exception as exc:
                     logger.warning(
                         "Sub-domain creation failed for '%s' under '%s': %s",
@@ -3415,6 +3442,9 @@ class TaxonomyEngine:
 
                     created.append(sub_label)
                     existing_labels.add(sub_label)
+                    # v0.4.38 F3: parent vocab is now stale — schedule
+                    # next-cycle bypass.
+                    self._vocab_regen_pending.add(domain_id_str)
                 await savepoint.commit()
             except Exception:
                 # Single-transaction semantics — discard any partial inserts.
@@ -4055,6 +4085,30 @@ class TaxonomyEngine:
         now = _utcnow()
         age_cutoff = now - __import__("datetime").timedelta(hours=SUB_DOMAIN_DISSOLUTION_MIN_AGE_HOURS)
 
+        # v0.4.38 F1: shared helper so every branch emits exactly one
+        # sub_domain_health_check per existing sub-domain per cycle.
+        def _emit_health_check(
+            sub: PromptCluster,
+            reason: str,
+            age_hours: float,
+        ) -> None:
+            try:
+                get_event_logger().log_decision(
+                    path="warm",
+                    op="reevaluate",
+                    decision="sub_domain_health_check",
+                    cluster_id=sub.id,
+                    context={
+                        "reason": reason,
+                        "sub_domain_id": sub.id,
+                        "sub_domain_label": sub.label,
+                        "parent_domain_label": domain_node.label,
+                        "age_hours": round(age_hours, 2),
+                    },
+                )
+            except RuntimeError:
+                pass
+
         for sub in sub_domains:
             # --- Age gate ---
             created = sub.created_at
@@ -4066,8 +4120,44 @@ class TaxonomyEngine:
                         created = None
                 if created is not None and created.tzinfo is not None:
                     created = created.replace(tzinfo=None)
+            # v0.4.38 F1: compute once — every health-check branch reads this.
+            age_hours = (
+                max(0.0, (now - created).total_seconds() / 3600.0)
+                if created else 0.0
+            )
             if created and created > age_cutoff:
+                _emit_health_check(sub, "grace_period", age_hours)
                 continue  # too young — skip
+
+            # v0.4.38 F1: empty-snapshot guard moved BEFORE the child-cluster
+            # query so the health-check classification reflects the actual
+            # failure mode (empty vocab → empty_snapshot) regardless of
+            # whether the sub-domain also happens to lack child clusters.
+            # The legacy ``sub_domain_reevaluation_skipped`` event still
+            # fires from this branch (with ``total_opts=0`` when child
+            # clusters are absent) for backwards-compatible operator
+            # tooling.
+            sub_meta = read_meta(sub.cluster_metadata)
+            sub_generated_qualifiers = sub_meta.get("generated_qualifiers") or {}
+            if not sub_generated_qualifiers:
+                try:
+                    get_event_logger().log_decision(
+                        path="warm",
+                        op="discover",
+                        decision="sub_domain_reevaluation_skipped",
+                        cluster_id=sub.id,
+                        context={
+                            "domain": domain_node.label,
+                            "domain_node_id": domain_node.id,
+                            "sub_domain": sub.label,
+                            "reason": "empty_vocab_snapshot",
+                            "total_opts": 0,
+                        },
+                    )
+                except RuntimeError:
+                    pass
+                _emit_health_check(sub, "empty_snapshot", age_hours)
+                continue
 
             # --- Gather all child clusters ---
             # Re-evaluation uses a narrow, sub-qualifier-targeted matcher (not
@@ -4093,6 +4183,7 @@ class TaxonomyEngine:
             )
             child_ids = [r[0] for r in child_q.all()]
             if not child_ids:
+                _emit_health_check(sub, "no_members", age_hours)
                 continue  # empty sub-domain — handled by phase_archive_empty_sub_domains
 
             opt_q = await db.execute(
@@ -4108,6 +4199,7 @@ class TaxonomyEngine:
             opt_rows = opt_q.all()
             total_opts = len(opt_rows)
             if total_opts == 0:
+                _emit_health_check(sub, "no_members", age_hours)
                 continue
 
             sub_qualifier = sub.label.lower()
@@ -4128,31 +4220,8 @@ class TaxonomyEngine:
             # creation time, stored in cluster_metadata.generated_qualifiers).
             # Shape: ``{group_name: [kebab-case-term, ...], ...}`` — e.g.
             # ``{"instrumentation": ["observability", "tracing", ...], ...}``
-            # for the ``embedding-health`` sub-domain.
-            sub_meta = read_meta(sub.cluster_metadata)
-            sub_generated_qualifiers = sub_meta.get("generated_qualifiers") or {}
-            # R3 (audit 2026-04-27): when generated_qualifiers is empty, the sub_vocab_*
-            # sets are empty and matching falls back to v0.4.6 exact-equality behavior
-            # — guaranteed 0% consistency on healthy sub-domains. Skip rather than
-            # fail-open. Emit skip event for operator visibility.
-            if not sub_generated_qualifiers:
-                try:
-                    get_event_logger().log_decision(
-                        path="warm",
-                        op="discover",
-                        decision="sub_domain_reevaluation_skipped",
-                        cluster_id=sub.id,
-                        context={
-                            "domain": domain_node.label,
-                            "domain_node_id": domain_node.id,
-                            "sub_domain": sub.label,
-                            "reason": "empty_vocab_snapshot",
-                            "total_opts": total_opts,
-                        },
-                    )
-                except RuntimeError:
-                    pass
-                continue
+            # for the ``embedding-health`` sub-domain. The empty-snapshot
+            # gate above guarantees the dict is non-empty here.
             sub_vocab_groups: set[str] = {str(k).lower() for k in sub_generated_qualifiers.keys() if isinstance(k, str)}
             sub_vocab_terms: set[str] = {
                 str(t).lower()
@@ -4263,6 +4332,8 @@ class TaxonomyEngine:
                 )
             except RuntimeError:
                 pass
+
+            _emit_health_check(sub, "evaluated", age_hours)
 
             if shrunk_consistency >= SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR:
                 continue  # healthy — keep
