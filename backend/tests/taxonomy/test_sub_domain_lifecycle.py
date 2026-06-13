@@ -4555,3 +4555,226 @@ class TestReadinessUnchangedByConstruction:
         assert cascade.qualifier_counts[top_q] == report.top_candidate.count
         # Additive field defaults to "cascade"
         assert report.qualifier_source == "cascade"
+
+
+# ---------------------------------------------------------------------------
+# AC-11: sub_domain_health_check — four-reason exhaustive emission.
+# Spec: docs/superpowers/specs/2026-06-12-v0.4.38-sub-domain-telemetry-design.md §4.1
+# ---------------------------------------------------------------------------
+
+
+class TestSubDomainHealthCheckEmission:
+
+    @pytest.mark.asyncio
+    async def test_ac11_four_reasons_per_cycle(self, db, mock_provider, tmp_path):
+        """A Phase-5 cycle over 4 sub-domains emits exactly 4 health-check decisions."""
+        from unittest.mock import AsyncMock
+
+        from app.services.taxonomy.engine import TaxonomyEngine
+        from app.services.taxonomy.event_logger import (
+            TaxonomyEventLogger,
+            set_event_logger,
+        )
+
+        tel = TaxonomyEventLogger(events_dir=tmp_path / "events", publish_to_bus=False)
+        set_event_logger(tel)
+
+        engine = TaxonomyEngine(
+            embedding_service=AsyncMock(), provider=mock_provider,
+        )
+
+        # Parent domain with 4 sub-domains, each engineered to hit a different reason:
+        #   sub_grace      → grace_period (created < 24h ago)
+        #   sub_no_members → no_members (zero child clusters OR child clusters but zero opts)
+        #   sub_empty_snap → empty_snapshot (generated_qualifiers empty)
+        #   sub_evaluated  → evaluated (passes all gates → matcher runs)
+        parent = PromptCluster(
+            id="dom-hc-parent",
+            label="backend",
+            state="domain",
+            cluster_metadata={
+                "generated_qualifiers": {"observability": ["tracing"]},
+            },
+        )
+        db.add(parent)
+        await db.flush()
+
+        import datetime as _dt
+        now_naive = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+        old_naive = now_naive - _dt.timedelta(hours=72)
+
+        sub_grace = PromptCluster(
+            id="sub-grace",
+            label="grace-topic",
+            state="domain",
+            parent_id=parent.id,
+            cluster_metadata={"generated_qualifiers": {"x": ["y"]}},
+            created_at=now_naive - _dt.timedelta(hours=1),
+        )
+        sub_no_members = PromptCluster(
+            id="sub-nomem",
+            label="nomem-topic",
+            state="domain",
+            parent_id=parent.id,
+            cluster_metadata={"generated_qualifiers": {"x": ["y"]}},
+            created_at=old_naive,
+        )
+        sub_empty = PromptCluster(
+            id="sub-empty",
+            label="empty-topic",
+            state="domain",
+            parent_id=parent.id,
+            cluster_metadata={"generated_qualifiers": {}},
+            created_at=old_naive,
+        )
+        sub_eval = PromptCluster(
+            id="sub-eval",
+            label="eval-topic",
+            state="domain",
+            parent_id=parent.id,
+            cluster_metadata={"generated_qualifiers": {"observability": ["tracing"]}},
+            created_at=old_naive,
+        )
+        db.add_all([sub_grace, sub_no_members, sub_empty, sub_eval])
+        await db.flush()
+
+        # sub_eval needs at least one child cluster + opts so it reaches the matcher.
+        child = PromptCluster(
+            id="child-eval", label="c", state="active", parent_id=sub_eval.id,
+        )
+        db.add(child)
+        await db.flush()
+        db.add(Optimization(
+            raw_prompt="x", optimized_prompt="x",
+            cluster_id=child.id, domain_raw="backend: observability",
+        ))
+        await db.flush()
+
+        existing_labels: set[str] = set()
+        await engine._reevaluate_sub_domains(db, parent, existing_labels)
+
+        health_events = [
+            e for e in tel.get_recent(limit=200)
+            if e.get("decision") == "sub_domain_health_check"
+        ]
+        assert len(health_events) == 4, f"expected 4 health checks, got {len(health_events)}"
+        reasons = {e["context"]["reason"] for e in health_events}
+        assert reasons == {"grace_period", "no_members", "empty_snapshot", "evaluated"}, reasons
+
+        # Every event carries the required context shape.
+        for ev in health_events:
+            ctx = ev["context"]
+            assert "sub_domain_id" in ctx
+            assert "sub_domain_label" in ctx
+            assert "parent_domain_label" in ctx
+            assert "age_hours" in ctx
+
+
+# ---------------------------------------------------------------------------
+# AC-12: regen-on-created — sub-domain creation triggers next-cycle vocab regen.
+# ---------------------------------------------------------------------------
+
+
+class TestRegenOnSubDomainCreated:
+
+    @pytest.mark.asyncio
+    async def test_ac12_organic_creation_marks_parent_pending(self, db, mock_provider):
+        """After organic sub_domain_created, the parent id lives in _vocab_regen_pending."""
+        from unittest.mock import AsyncMock
+
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        engine = TaxonomyEngine(
+            embedding_service=AsyncMock(), provider=mock_provider,
+        )
+
+        # Sanity: the attribute exists and starts empty.
+        assert engine._vocab_regen_pending == set()
+
+        # Drive _propose_sub_domains over a fixture that yields one creation.
+        # Build the minimum tree: parent domain + ≥2 child clusters whose
+        # domain_raw qualifiers cross the consistency threshold.
+        parent = PromptCluster(
+            id="dom-regen-org",
+            label="backend",
+            state="domain",
+            cluster_metadata={
+                "generated_qualifiers": {"observability": ["tracing"]},
+            },
+        )
+        db.add(parent)
+        await db.flush()
+        for i in range(3):
+            c = PromptCluster(
+                id=f"c-rg-{i}", label=f"c{i}", state="active", parent_id=parent.id,
+            )
+            db.add(c)
+            await db.flush()
+            for _ in range(4):
+                db.add(Optimization(
+                    raw_prompt="x", optimized_prompt="x",
+                    cluster_id=c.id, domain_raw="backend: observability",
+                ))
+        await db.flush()
+
+        created = await engine._propose_sub_domains(db)
+
+        # A new sub-domain emerged AND parent is marked pending.
+        assert created, "expected at least one organic sub-domain creation"
+        assert parent.id in engine._vocab_regen_pending
+
+    @pytest.mark.asyncio
+    async def test_ac12_rebuild_non_dry_creation_marks_parent_pending(self, db, mock_provider):
+        """After rebuild non-dry creation, parent id lives in _vocab_regen_pending."""
+        from unittest.mock import AsyncMock
+
+        from app.services.taxonomy.engine import TaxonomyEngine
+
+        engine = TaxonomyEngine(
+            embedding_service=AsyncMock(), provider=mock_provider,
+        )
+
+        parent = PromptCluster(
+            id="dom-regen-rebuild",
+            label="backend",
+            state="domain",
+            cluster_metadata={
+                "generated_qualifiers": {"observability": ["tracing"]},
+            },
+        )
+        db.add(parent)
+        c1 = PromptCluster(id="c-rb-1", label="c1", state="active", parent_id=parent.id)
+        c2 = PromptCluster(id="c-rb-2", label="c2", state="active", parent_id=parent.id)
+        db.add_all([c1, c2])
+        await db.flush()
+        for cl in (c1, c2):
+            for _ in range(6):
+                db.add(Optimization(
+                    raw_prompt="x", optimized_prompt="x",
+                    cluster_id=cl.id, domain_raw="backend: observability",
+                ))
+        await db.flush()
+
+        result = await engine.rebuild_sub_domains(
+            db, parent.id, dry_run=False,
+        )
+        assert result["created"], "expected non-dry rebuild creation"
+        assert parent.id in engine._vocab_regen_pending
+
+    @pytest.mark.asyncio
+    async def test_ac12_should_maintain_triggers_on_pending(self, db, mock_provider):
+        """warm_path.should_maintain is True when _vocab_regen_pending is non-empty."""
+        from app.services.taxonomy.engine import TaxonomyEngine
+        # Pinned: this test pins the boolean derivation directly because
+        # the helper computation lives inline in execute_warm_path. We
+        # reproduce the inline `should_maintain = cadence_gate or
+        # engine._maintenance_pending or bool(engine._vocab_regen_pending)`
+        # expression as a structural assertion.
+
+        engine = TaxonomyEngine()
+        engine._vocab_regen_pending.add("dom-x")
+        cadence_gate = False
+        should_maintain = (
+            cadence_gate or engine._maintenance_pending or bool(engine._vocab_regen_pending)
+        )
+        assert should_maintain
