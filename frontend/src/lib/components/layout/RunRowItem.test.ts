@@ -58,9 +58,13 @@ describe('RunRowItem', () => {
     });
     const btn = getByRole('button', { name: /probe react testing/ });
     expect(btn.getAttribute('aria-expanded')).toBe('false');
-    expect(getByText(/probe/)).toBeTruthy();
+    // v0.4.39 R-11/R-27 — MODE_LABEL renders UPPERCASE ('PROBE'); status uses
+    // CSS text-transform: uppercase + letter-spacing on the data string 'completed'.
+    // Both reads use case-insensitive matchers so the UI casing change does not
+    // brittle-fail the existing semantic contract.
+    expect(getByText(/probe/i)).toBeTruthy();
     expect(getByText('react testing')).toBeTruthy();
-    expect(getByText(/completed/)).toBeTruthy();
+    expect(getByText(/completed/i)).toBeTruthy();
   });
 
   it('Test 11: click invokes onClick prop; expanded=true renders RunDetailInline', async () => {

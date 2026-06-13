@@ -222,17 +222,28 @@ describe('RunsPanel', () => {
     const bulkSpy = vi.spyOn(runsApi, 'bulkDeleteRuns').mockResolvedValue({
       deleted: ['r1', 'r2'], not_found: [],
     });
-    const { findAllByRole, container, getByRole } = render(RunsPanel, { active: true });
+    const { findAllByRole, container, getAllByRole } = render(RunsPanel, { active: true });
     await findAllByRole('listitem');
     const toggle = container.querySelector('button[aria-label="Toggle select mode"]') as HTMLButtonElement;
     await fireEvent.click(toggle);
     const selectAllBox = container.querySelector('input[type="checkbox"][aria-label="Select all"]') as HTMLInputElement;
     await fireEvent.click(selectAllBox);
-    // Bulk action bar appears
-    const deleteBtn = await waitFor(() => getByRole('button', { name: /Delete 2/ }));
-    await fireEvent.click(deleteBtn);
-    // Confirm modal
-    const confirmBtn = await waitFor(() => getByRole('button', { name: /Confirm/i }));
+    // Bulk action bar appears — open the BulkActionBar's Delete trigger.
+    const deleteBtns = await waitFor(() => getAllByRole('button', { name: /Delete 2/ }));
+    await fireEvent.click(deleteBtns[0]);
+    // v0.4.39 R-14 — DestructiveConfirmModal gates the destructive action
+    // behind a typed literal. Type 'DELETE' into the confirm input, then
+    // click the (now-enabled) confirm button. Pick the in-modal "Delete 2"
+    // button (the second match — first is the still-visible BulkActionBar).
+    const confirmInput = await waitFor(() => {
+      const el = container.querySelector('input#confirm-literal-input') as HTMLInputElement | null;
+      if (!el) throw new Error('confirm input not found');
+      return el;
+    });
+    await fireEvent.input(confirmInput, { target: { value: 'DELETE' } });
+    const allDelete2 = getAllByRole('button', { name: /Delete 2/ });
+    // The modal's confirm button is the trailing match in DOM order.
+    const confirmBtn = allDelete2[allDelete2.length - 1];
     await fireEvent.click(confirmBtn);
     await waitFor(() => expect(bulkSpy).toHaveBeenCalledWith(['r1', 'r2']));
     // Rows gone
