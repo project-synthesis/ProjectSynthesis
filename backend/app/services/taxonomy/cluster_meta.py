@@ -57,6 +57,10 @@ class ClusterMeta(TypedDict, total=False):
     # --- Intent label coherence (Tier 5b) ---
     intent_label_coherence: float | None         # mean pairwise Jaccard of member intent labels
 
+    # --- Sub-domain vocabulary cache (written by Phase 4.95) ---
+    generated_qualifiers: dict[str, list[str]]   # group_name → keyword list
+    generated_qualifiers_cluster_count: int      # member_count at last regen; -1 = "heal pending" (v0.4.38)
+
 
 # -------------------------------------------------------------------------
 # Safe read / write helpers
