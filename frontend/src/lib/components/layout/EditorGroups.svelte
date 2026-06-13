@@ -82,6 +82,7 @@
     {#each editorStore.tabs as tab (tab.id)}
       <button
         class="tab"
+        id="tab-{tab.id}"
         class:active={editorStore.activeTabId === tab.id}
         role="tab"
         aria-selected={editorStore.activeTabId === tab.id}

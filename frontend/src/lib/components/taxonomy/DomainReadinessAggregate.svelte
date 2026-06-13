@@ -74,17 +74,20 @@
   bind:this={rootEl}
   aria-label="Domain readiness aggregate"
 >
-  {#if sorted.length === 0}
-    <p class="empty-copy">No domains yet — the taxonomy is warming up.</p>
+  {#if readinessStore.loading && !readinessStore.loaded}
+    <p class="empty-note">Loading…</p>
+  {:else if readinessStore.lastError && !readinessStore.loaded}
+    <p class="empty-note panel-error">Unable to load readiness.</p>
+  {:else if sorted.length === 0}
+    <p class="empty-note">No domains.</p>
   {:else}
     <div class="card-grid">
       {#each sorted as report (report.domain_id)}
-        <div
+        <button
+          type="button"
           class="readiness-card"
           data-tier={report.stability.tier}
           onclick={() => handleCardClick(report)}
-          role="button"
-          tabindex="0"
           aria-label="Open {report.domain_label} readiness"
           onkeydown={(e) => handleCardKey(e, report)}
         >
@@ -102,7 +105,7 @@
           </header>
           <DomainStabilityMeter report={report.stability} />
           <SubDomainEmergenceList report={report.emergence} />
-        </div>
+        </button>
       {/each}
     </div>
   {/if}
@@ -112,19 +115,17 @@
   .readiness-aggregate {
     padding: 6px;
   }
-  .empty-copy {
-    padding: 6px;
-    margin: 0;
-    font-family: var(--font-sans);
-    font-size: 11px;
-    color: var(--color-text-dim);
-  }
   .card-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 6px;
   }
   .readiness-card {
+    /* Reset the native <button> chrome so the card renders as a flat
+       data tile while keeping native a11y (Space/Enter activation,
+       keyboard focus, screen-reader role=button). */
+    all: unset;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -132,30 +133,47 @@
     background: var(--color-bg-card);
     border: 1px solid var(--color-border-subtle);
     cursor: pointer;
+    text-align: left;
     transition: border-color var(--duration-hover) var(--ease-spring);
   }
   .readiness-card:hover {
     border-color: var(--color-neon-cyan);
   }
   /*
-   * Brand spec: 1px focus contour, no glow. `color-mix` mirrors the focus
-   * styling on DomainReadinessPanel rows so keyboard navigation between the
-   * sidebar list and the observatory grid feels consistent.
+   * Brand spec: 1px focus contour, no shadow. Mirrors the focus styling on
+   * DomainReadinessPanel rows so keyboard navigation between the sidebar
+   * list and the observatory grid feels consistent.
    */
   .readiness-card:focus-visible {
-    outline: 1px solid color-mix(in srgb, var(--color-neon-cyan) 30%, transparent);
-    outline-offset: -1px;
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
   }
+  /*
+   * Data-tier border shift (OBS-038): critical and guarded cards adopt
+   * their tier color on the contour so the eye can scan the grid for
+   * lifecycle pressure at-a-glance without reading the stability meter.
+   * Healthy cards stay neutral — they don't need a chromatic call-out.
+   */
+  .readiness-card[data-tier='critical'] {
+    border-color: color-mix(in srgb, var(--color-neon-red) 40%, transparent);
+  }
+  .readiness-card[data-tier='guarded'] {
+    border-color: color-mix(in srgb, var(--color-neon-yellow) 35%, transparent);
+  }
+  /*
+   * Card header (OBS-037): label reads as a sans-serif row identifier
+   * rather than a Syne display caption — the domain label is data, not
+   * a section heading. Drops uppercase + 700 weight; keeps the dot +
+   * member count for chromatic + numeric reference.
+   */
   .card-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 4px;
-    font-family: var(--font-display);
+    font-family: var(--font-sans);
     font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
+    font-weight: 500;
     color: var(--color-text-primary);
     padding-bottom: 4px;
     border-bottom: 1px solid var(--color-border-subtle);
@@ -192,7 +210,8 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .readiness-card {
-      transition: none;
+      transition: none !important;
+      animation: none !important;
     }
   }
 </style>

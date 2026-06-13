@@ -18,11 +18,14 @@
    * Rows expand to reveal the raw context payload + a one-line `keyMetric`
    * summary (shared with ActivityPanel via `$lib/utils/activity-summary.ts`).
    */
+  import { slide } from 'svelte/transition';
   import { clustersStore } from '$lib/stores/clusters.svelte';
   import { observatoryStore } from '$lib/stores/observatory.svelte';
   import { pathColor, type ActivityPath } from '$lib/utils/activity-colors';
   import { isErrorEvent, opFamily, type OpFamily } from '$lib/utils/activity-filters';
   import { keyMetric } from '$lib/utils/activity-summary';
+  import { tooltip } from '$lib/actions/tooltip';
+  import { navSlide } from '$lib/utils/transitions';
   import type { TaxonomyActivityEvent } from '$lib/api/clusters';
   import type { ObservatoryPeriod } from '$lib/api/observatory';
 
@@ -126,14 +129,17 @@
 </script>
 
 <section class="timeline" data-test="lifecycle-timeline" aria-label="Domain lifecycle timeline">
-  <nav class="filter-bar" aria-label="Activity filters">
+  <nav class="filter-bar" aria-label="Activity filters" aria-controls="timeline-list">
     {#each ['hot','warm','cold'] as p (p)}
       <button
         type="button"
-        class="chip"
+        class="chip chip--path"
         class:chip--on={activePaths.has(p as ActivityPath)}
+        style="--chip-color: {pathColor(p as ActivityPath)};"
+        aria-pressed={activePaths.has(p as ActivityPath)}
+        aria-controls="timeline-list"
         onclick={() => togglePath(p as ActivityPath)}
-        title="{p} path events"
+        use:tooltip={`${p} path events`}
       >{p}</button>
     {/each}
     <span class="filter-sep" aria-hidden="true">·</span>
@@ -141,49 +147,61 @@
       type="button"
       class="chip"
       class:chip--on={activeFamilies.has('domain')}
+      aria-pressed={activeFamilies.has('domain')}
+      aria-controls="timeline-list"
       onclick={() => toggleFamily('domain')}
-      title="Domain lifecycle (discover, reevaluate, dissolve)"
+      use:tooltip={'Domain lifecycle (discover, reevaluate, dissolve)'}
       aria-label="Domain lifecycle"
     >domain</button>
     <button
       type="button"
       class="chip"
       class:chip--on={activeFamilies.has('cluster')}
+      aria-pressed={activeFamilies.has('cluster')}
+      aria-controls="timeline-list"
       onclick={() => toggleFamily('cluster')}
-      title="Cluster lifecycle (split, merge, retire)"
+      use:tooltip={'Cluster lifecycle (split, merge, retire)'}
       aria-label="Cluster lifecycle"
     >cluster</button>
     <button
       type="button"
       class="chip"
       class:chip--on={activeFamilies.has('pattern')}
+      aria-pressed={activeFamilies.has('pattern')}
+      aria-controls="timeline-list"
       onclick={() => toggleFamily('pattern')}
-      title="Pattern lifecycle (promote, demote, retire)"
+      use:tooltip={'Pattern lifecycle (promote, demote, retire)'}
       aria-label="Pattern lifecycle"
     >pattern</button>
     <button
       type="button"
       class="chip"
       class:chip--on={activeFamilies.has('readiness')}
+      aria-pressed={activeFamilies.has('readiness')}
+      aria-controls="timeline-list"
       onclick={() => toggleFamily('readiness')}
-      title="Readiness signals (stability, emergence)"
+      use:tooltip={'Readiness signals (stability, emergence)'}
       aria-label="Readiness"
     >readiness</button>
     <button
       type="button"
       class="chip"
       class:chip--on={activeFamilies.has('operator_action')}
+      aria-pressed={activeFamilies.has('operator_action')}
+      aria-controls="timeline-list"
       onclick={() => toggleFamily('operator_action')}
-      title="Operator actions (rebuild, reset, manual promote)"
+      use:tooltip={'Operator actions (rebuild, reset, manual promote)'}
       aria-label="Operator actions"
     >operator</button>
     <span class="filter-sep" aria-hidden="true">·</span>
     <button
       type="button"
-      class="chip"
+      class="chip chip--errors"
       class:chip--on={errorsOnly}
+      aria-pressed={errorsOnly}
+      aria-controls="timeline-list"
       onclick={() => errorsOnly = !errorsOnly}
-      title="Show only error/failed/rejected events"
+      use:tooltip={'Show only error/failed/rejected events'}
       aria-label="Errors only"
     >errors</button>
     <span class="filter-spacer" aria-hidden="true"></span>
@@ -196,36 +214,42 @@
         aria-pressed={observatoryStore.period === p}
         class:chip--on={observatoryStore.period === p}
         onclick={() => observatoryStore.setPeriod(p)}
-        title="Window: last {p}"
+        use:tooltip={`Window: last ${p}`}
       >{p}</button>
     {/each}
   </nav>
 
   {#if visibleEvents.length === 0}
-    <p class="empty-copy">No recent activity — the taxonomy is quiet.</p>
+    {#if errorsOnly || activePaths.size < 3 || activeFamilies.size < ALL_FAMILIES.length}
+      <p class="empty-note">No events match filters.</p>
+    {:else}
+      <p class="empty-note">No recent activity.</p>
+    {/if}
   {:else}
-    <ul class="timeline-list">
+    <ul class="timeline-list" id="timeline-list">
       {#each visibleEvents as evt (eventKey(evt))}
         {@const summary = keyMetric(evt)}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <li
-          class="timeline-row"
-          data-path={evt.path}
-          style="height: 20px;"
-          onclick={() => toggleExpand(eventKey(evt))}
-        >
-          <span class="ts" style="font-family: var(--font-mono, monospace); font-size: 10px; width: 60px;">{evt.ts.slice(11, 16)}</span>
-          <span class="path-badge" style="background-color: {pathColor(evt.path as ActivityPath)};">{evt.path}</span>
-          <span class="op">{evt.op}</span>
-          <span class="decision">{evt.decision}</span>
-          {#if summary}
-            <span class="metric" data-test="row-metric">{summary}</span>
+        {@const isExpanded = expandedId === eventKey(evt)}
+        <li class="timeline-item" data-path={evt.path}>
+          <button
+            type="button"
+            class="timeline-row"
+            data-path={evt.path}
+            aria-expanded={isExpanded}
+            onclick={() => toggleExpand(eventKey(evt))}
+          >
+            <span class="ts">{evt.ts.slice(11, 16)}</span>
+            <span class="path-badge" style="background-color: {pathColor(evt.path as ActivityPath)};">{evt.path}</span>
+            <span class="op">{evt.op}</span>
+            <span class="decision">{evt.decision}</span>
+            {#if summary}
+              <span class="metric" data-test="row-metric">{summary}</span>
+            {/if}
+          </button>
+          {#if isExpanded}
+            <div class="context-payload" transition:slide={navSlide}>{JSON.stringify(evt.context, null, 2)}</div>
           {/if}
         </li>
-        {#if expandedId === eventKey(evt)}
-          <li class="context-payload">{JSON.stringify(evt.context, null, 2)}</li>
-        {/if}
       {/each}
     </ul>
   {/if}
@@ -282,22 +306,54 @@
   }
   .chip:hover { color: var(--color-text-primary); }
   .chip:focus-visible {
-    outline: 1px solid rgba(0, 229, 255, 0.3);
-    outline-offset: 2px;
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-external);
   }
+  /*
+   * Default toggle-on grammar (R-07): activated chip picks up the canonical
+   * cyan contour + text. Chromatically encoded chips (hot/warm/cold path
+   * chips, errors chip) override via `--chip-color` so the activated state
+   * reads in the chip's semantic color rather than the generic cyan.
+   */
   .chip--on { border-color: var(--color-neon-cyan); color: var(--color-neon-cyan); }
-
-  .empty-copy { padding: 6px; color: var(--color-text-dim); font-size: 11px; margin: 0; }
+  /* Chromatic encoding (OBS-047, OBS-048): path chips activate in their
+     path color (hot=red, warm=yellow, cold=cyan) via the inline `--chip-color`
+     CSS variable. The `errors` chip activates in neon-red. */
+  .chip--path.chip--on,
+  .chip--errors.chip--on {
+    border-color: var(--chip-color, var(--color-neon-cyan));
+    color: var(--chip-color, var(--color-neon-cyan));
+  }
+  .chip--errors {
+    --chip-color: var(--color-neon-red);
+  }
 
   .timeline-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; }
+  .timeline-item { list-style: none; }
+  /*
+   * Row is a native <button> for screen-reader semantics. `all: unset`
+   * strips the button chrome (gradient bg, border) so the row reads as a
+   * flat list item; we keep cursor:pointer + focus-visible contour as the
+   * sole interactive cues. Native Space/Enter activation handled for free
+   * by the button element — no custom onkeydown handler required.
+   */
   .timeline-row {
+    all: unset;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     gap: 6px;
     padding: 0 6px;
+    width: 100%;
+    height: 20px;
     border-top: 1px solid var(--color-border-subtle);
     font-size: 11px;
     cursor: pointer;
+    text-align: left;
+  }
+  .timeline-row:focus-visible {
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
   }
   .ts {
     width: 60px;
@@ -306,13 +362,20 @@
     color: var(--color-text-dim);
     flex-shrink: 0;
   }
+  /*
+   * Path-badge contrast (OBS-009): saturated yellow/cyan/green backgrounds
+   * fail WCAG contrast against text-primary white. Shift the badge text to
+   * the dark background token so the path label reads on top of every chip
+   * color in the palette (red/yellow/cyan/green/fuchsia).
+   */
   .path-badge {
     padding: 0 4px;
     font-size: 9px;
     font-family: var(--font-mono);
-    color: var(--color-text-primary);
+    color: var(--color-bg-primary);
     flex-shrink: 0;
     text-transform: uppercase;
+    font-weight: 700;
   }
   .op {
     font-family: var(--font-mono);
@@ -354,6 +417,11 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .chip { transition-duration: 0.01ms !important; }
+    .chip,
+    .timeline-row,
+    .context-payload {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 </style>

@@ -36,10 +36,10 @@ describe('DomainLifecycleTimeline', () => {
     const { container } = render(DomainLifecycleTimeline);
     const rows = container.querySelectorAll('.timeline-row');
     expect(rows.length).toBe(3);
-    rows.forEach((r) => {
-      const inline = (r as HTMLElement).style.height;
-      expect(inline).toMatch(/20px/);
-    });
+    // v0.4.39 R-18 OBS-013: row height moved from inline `style="height: 20px"`
+    // to scoped `.timeline-row` CSS rule. Source-locked because Svelte's
+    // scoped CSS isn't injected at jsdom test time — same C8/C23 strategy.
+    expect(componentSource).toMatch(/\.timeline-row[\s\S]*?height:\s*20px/);
   });
 
   it('renders timestamp in mono 10 px, 60 px wide column (T3)', () => {
@@ -49,9 +49,13 @@ describe('DomainLifecycleTimeline', () => {
     const { container } = render(DomainLifecycleTimeline);
     const ts = container.querySelector('.ts') as HTMLElement;
     expect(ts).not.toBeNull();
-    const cs = getComputedStyle(ts);
-    // jsdom may not resolve var(--font-mono); accept any of: explicit mono name OR class on element
-    expect(cs.fontFamily.length).toBeGreaterThan(0);
+    // v0.4.39 R-18 OBS-014: width/font-size/font-family moved from inline
+    // `style="font-family: ...; font-size: 10px; width: 60px;"` to scoped
+    // `.ts` CSS rules. Source-locked because Svelte's scoped CSS isn't
+    // injected at jsdom test time — same C8/C23 strategy used by H10–H12.
+    expect(componentSource).toMatch(/\.ts[\s\S]*?width:\s*60px/);
+    expect(componentSource).toMatch(/\.ts[\s\S]*?font-size:\s*10px/);
+    expect(componentSource).toMatch(/\.ts[\s\S]*?font-family:\s*var\(--font-mono\)/);
     expect(ts.className).toContain('ts');
   });
 

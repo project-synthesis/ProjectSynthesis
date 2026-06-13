@@ -98,14 +98,16 @@
   }
 </script>
 
-<section class="heatmap" aria-label="Pattern density heatmap">
-  <header class="heatmap-header">
-    <span class="col col-domain">domain</span>
-    <span class="col col-n">clusters</span>
-    <span class="col col-n">meta</span>
-    <span class="col col-n">avg score</span>
-    <span class="col col-n">global</span>
-    <span class="col col-n">x-cluster inj. rate</span>
+<section class="heatmap" role="table" aria-label="Pattern density heatmap">
+  <header class="heatmap-header" role="rowgroup">
+    <div class="heatmap-header-row" role="row">
+      <span class="col col-domain" role="columnheader">DOMAIN</span>
+      <span class="col col-n" role="columnheader">CLUSTERS</span>
+      <span class="col col-n" role="columnheader">META</span>
+      <span class="col col-n" role="columnheader">AVG SCORE</span>
+      <span class="col col-n" role="columnheader">GLOBAL</span>
+      <span class="col col-n" role="columnheader" use:tooltip={'Cross-cluster injection rate — proportion of optimizations that pulled a pattern from a sibling cluster'}>x-cluster inj. rate</span>
+    </div>
   </header>
 
   {#if error}
@@ -114,22 +116,23 @@
       <button type="button" onclick={() => observatoryStore.refreshPatternDensity()}>Retry</button>
     </div>
   {:else if rows.length === 0 && !loading}
-    <p class="empty-copy">Pattern library is empty. Run <code>POST /api/seed</code> or start optimizing prompts.</p>
+    <p class="empty-note">Pattern library is empty. Run <code>POST /api/seed</code> or start optimizing prompts.</p>
   {:else}
-    <div class="heatmap-body" data-test="heatmap-body" style="opacity: {loading ? 0.5 : 1};">
+    <div class="heatmap-body" role="rowgroup" data-test="heatmap-body" style="opacity: {loading ? 0.5 : 1};">
       {#each rows as row (row.domain_id)}
         <div
           class="density-row"
+          role="row"
           data-test="density-row"
           style="background-color: color-mix(in srgb, {taxonomyColor(row.domain_label)} {heatPct(row.meta_pattern_count)}%, var(--color-bg-card));"
           use:tooltip={tooltipFor(row)}
         >
-          <span class="col col-domain">{row.domain_label}</span>
-          <span class="col col-n">{fmtCount(row.cluster_count)}</span>
-          <span class="col col-n">{fmtCount(row.meta_pattern_count)}</span>
-          <span class="col col-n">{fmt(row.meta_pattern_avg_score, 1)}</span>
-          <span class="col col-n">{fmtCount(row.global_pattern_count)}</span>
-          <span class="col col-n">{fmtRate(row.cross_cluster_injection_rate)}</span>
+          <span class="col col-domain" role="cell">{row.domain_label}</span>
+          <span class="col col-n" role="cell">{fmtCount(row.cluster_count)}</span>
+          <span class="col col-n" role="cell">{fmtCount(row.meta_pattern_count)}</span>
+          <span class="col col-n" role="cell">{fmt(row.meta_pattern_avg_score, 1)}</span>
+          <span class="col col-n" role="cell">{fmtCount(row.global_pattern_count)}</span>
+          <span class="col col-n" role="cell">{fmtRate(row.cross_cluster_injection_rate)}</span>
         </div>
       {/each}
     </div>
@@ -139,6 +142,9 @@
 <style>
   .heatmap { padding: 6px; }
   .heatmap-header {
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+  .heatmap-header-row {
     display: grid;
     grid-template-columns: 1.5fr repeat(5, 1fr);
     gap: 4px;
@@ -150,7 +156,6 @@
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--color-text-dim);
-    border-bottom: 1px solid var(--color-border-subtle);
     padding: 0 6px;
   }
   .density-row {
@@ -176,9 +181,14 @@
   .density-row:hover {
     box-shadow: inset 0 0 0 1px var(--color-neon-cyan);
   }
-  .col-domain { font-family: var(--font-sans); font-size: 11px; }
+  /*
+   * Row column reads in `var(--font-mono)` 10px (defined on `.density-row`).
+   * Header `.col-domain` matches the row mono font-size at 10px (OBS-026 —
+   * pre-v0.4.39 the `.col-domain` header was 11px sans which read
+   * inconsistently against the mono row).
+   */
+  .col-domain { font-family: var(--font-mono); font-size: 10px; }
   .col-n { text-align: right; font-variant-numeric: tabular-nums; }
-  .empty-copy { padding: 6px; font-size: 11px; color: var(--color-text-dim); margin: 0; }
 
   .heatmap-error {
     padding: 6px;
@@ -201,8 +211,8 @@
     background: color-mix(in srgb, var(--color-neon-red) 6%, transparent);
   }
   .heatmap-error button:focus-visible {
-    outline: 1px solid rgba(0, 229, 255, 0.3);
-    outline-offset: 2px;
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-external);
   }
 
   .heatmap-body {
@@ -212,6 +222,9 @@
   @media (prefers-reduced-motion: reduce) {
     .heatmap-body,
     .heatmap-error button,
-    .density-row { transition-duration: 0.01ms !important; }
+    .density-row {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 </style>

@@ -5,7 +5,8 @@
    * Calls `POST /api/domains/{id}/rebuild-sub-domains` with optional
    * `min_consistency` override (≥ 0.25 floor) and `dry_run` toggle.
    * Brand: 1px contour grammar, neon-cyan primary action, neon-yellow
-   * during request, neon-green on success, neon-red on error. Zero glow.
+   * during request, neon-green on success, neon-red on error.
+   * Zero shadow, contour-only.
    *
    * Audit: docs/audits/sub-domain-regression-2026-04-27.md §R6
    * Spec:  docs/specs/sub-domain-dissolution-hardening-r4-r6.md §R6
@@ -16,6 +17,7 @@
     type RebuildSubDomainsResult,
   } from '$lib/api/domains';
   import { readinessStore } from '$lib/stores/readiness.svelte';
+  import AnimatedDialog from '$lib/components/shared/AnimatedDialog.svelte';
 
   interface Props {
     /** When `null`, the modal is hidden. Set to a domain id to open. */
@@ -80,206 +82,196 @@
     }
   }
 
-  function handleOverlayClick(e: MouseEvent) {
-    if (e.target === e.currentTarget && !busy) onClose();
-  }
-
-  function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && !busy) onClose();
-  }
+  // Modal open contract: parent owns visibility via `domainId !== null`.
+  // AnimatedDialog wires ESC + click-outside via `onClose`. We block both
+  // while `busy === true` by setting `dismissible={!busy}` so an in-flight
+  // POST cannot be orphaned mid-mutation. Body-scroll-lock + keydown
+  // listener mount lifecycle live inside AnimatedDialog — no double-lock.
 
   const titleLabel = $derived(
     domainLabel ?? (domainId ? `${domainId.slice(0, 8)}…` : ''),
   );
 </script>
 
-<svelte:window onkeydown={handleKeyDown} />
+<AnimatedDialog
+  open={domainId !== null}
+  onClose={onClose}
+  dismissible={!busy}
+  ariaLabelledby="rsd-title"
+  class="rsd-modal"
+>
+  <div class="rsd-header">
+    <span class="rsd-title" id="rsd-title">REBUILD SUB-DOMAINS</span>
+    <button
+      type="button"
+      class="rsd-close"
+      onclick={onClose}
+      disabled={busy}
+      aria-label="Close"
+    >×</button>
+  </div>
 
-{#if domainId !== null}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div
-    class="rsd-overlay"
-    onclick={handleOverlayClick}
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="rsd-title"
-    tabindex="-1"
-  >
-    <div class="rsd-modal">
-      <div class="rsd-header">
-        <span class="rsd-title" id="rsd-title">REBUILD SUB-DOMAINS</span>
-        <button
-          type="button"
-          class="rsd-close"
-          onclick={onClose}
+  <div class="rsd-body">
+    <div class="rsd-field rsd-field--row">
+      <span class="rsd-label">DOMAIN</span>
+      <span class="rsd-value">{titleLabel}</span>
+    </div>
+
+    <!-- Threshold override toggle + slider -->
+    <div class="rsd-field">
+      <label class="rsd-toggle">
+        <input
+          type="checkbox"
+          class="rsd-checkbox"
+          bind:checked={useOverride}
           disabled={busy}
-          aria-label="Close"
-        >×</button>
-      </div>
-
-      <div class="rsd-body">
-        <div class="rsd-field rsd-field--row">
-          <span class="rsd-label">DOMAIN</span>
-          <span class="rsd-value">{titleLabel}</span>
+        />
+        <span class="rsd-toggle-text">
+          OVERRIDE THRESHOLD
+          <span class="rsd-toggle-hint">
+            (default: adaptive max(0.40, 0.60−0.004·N))
+          </span>
+        </span>
+      </label>
+      {#if useOverride}
+        <div class="rsd-slider-row">
+          <input
+            id="rsd-threshold"
+            type="range"
+            class="rsd-slider"
+            min={REBUILD_MIN_CONSISTENCY_FLOOR}
+            max="1.0"
+            step="0.05"
+            bind:value={overrideValue}
+            disabled={busy}
+            aria-label="Minimum consistency override"
+          />
+          <span class="rsd-slider-val">{overrideValue.toFixed(2)}</span>
         </div>
+        <span class="rsd-floor-hint">
+          Floor 0.25 = SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR — sub-domains created
+          at or below would dissolve on next Phase 5.
+        </span>
+      {/if}
+    </div>
 
-        <!-- Threshold override toggle + slider -->
-        <div class="rsd-field">
-          <label class="rsd-toggle">
-            <input
-              type="checkbox"
-              class="rsd-checkbox"
-              bind:checked={useOverride}
-              disabled={busy}
-            />
-            <span class="rsd-toggle-text">
-              OVERRIDE THRESHOLD
-              <span class="rsd-toggle-hint">
-                (default: adaptive max(0.40, 0.60−0.004·N))
-              </span>
-            </span>
-          </label>
-          {#if useOverride}
-            <div class="rsd-slider-row">
-              <input
-                id="rsd-threshold"
-                type="range"
-                class="rsd-slider"
-                min={REBUILD_MIN_CONSISTENCY_FLOOR}
-                max="1.0"
-                step="0.05"
-                bind:value={overrideValue}
-                disabled={busy}
-                aria-label="Minimum consistency override"
-              />
-              <span class="rsd-slider-val">{overrideValue.toFixed(2)}</span>
-            </div>
-            <span class="rsd-floor-hint">
-              Floor 0.25 = SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR — sub-domains created
-              at or below would dissolve on next Phase 5.
-            </span>
-          {/if}
-        </div>
+    <!-- Dry-run toggle -->
+    <div class="rsd-field">
+      <label class="rsd-toggle">
+        <input
+          type="checkbox"
+          class="rsd-checkbox"
+          bind:checked={dryRun}
+          disabled={busy}
+        />
+        <span class="rsd-toggle-text">
+          DRY RUN
+          <span class="rsd-toggle-hint">
+            (preview proposals without mutating state)
+          </span>
+        </span>
+      </label>
+    </div>
 
-        <!-- Dry-run toggle -->
-        <div class="rsd-field">
-          <label class="rsd-toggle">
-            <input
-              type="checkbox"
-              class="rsd-checkbox"
-              bind:checked={dryRun}
-              disabled={busy}
-            />
-            <span class="rsd-toggle-text">
+    {#if error}
+      <div class="rsd-error" role="alert">{error}</div>
+    {/if}
+
+    {#if result}
+      {@const empty = result.proposed.length === 0 && result.created.length === 0 && result.skipped_existing.length === 0}
+      <div
+        class="rsd-result"
+        class:rsd-result--dry={result.dry_run}
+        class:rsd-result--applied={!result.dry_run && result.created.length > 0}
+        class:rsd-result--noop={empty}
+      >
+        <div class="rsd-result-header">
+          <span class="rsd-result-status">
+            {#if result.dry_run}
               DRY RUN
-              <span class="rsd-toggle-hint">
-                (preview proposals without mutating state)
-              </span>
-            </span>
-          </label>
-        </div>
-
-        {#if error}
-          <div class="rsd-error" role="alert">{error}</div>
-        {/if}
-
-        {#if result}
-          {@const empty = result.proposed.length === 0 && result.created.length === 0 && result.skipped_existing.length === 0}
-          <div
-            class="rsd-result"
-            class:rsd-result--dry={result.dry_run}
-            class:rsd-result--applied={!result.dry_run && result.created.length > 0}
-            class:rsd-result--noop={empty}
-          >
-            <div class="rsd-result-header">
-              <span class="rsd-result-status">
-                {#if result.dry_run}
-                  DRY RUN
-                {:else if result.created.length > 0}
-                  APPLIED
-                {:else}
-                  NO-OP
-                {/if}
-              </span>
-              <span class="rsd-result-thr">
-                threshold = <span class="rsd-mono">{result.threshold_used.toFixed(2)}</span>
-              </span>
-            </div>
-            <div class="rsd-result-grid">
-              <div class="rsd-stat">
-                <span class="rsd-stat-val">{result.proposed.length}</span>
-                <span class="rsd-stat-label">proposed</span>
-              </div>
-              <div class="rsd-stat">
-                <span class="rsd-stat-val rsd-stat-val--accent">{result.created.length}</span>
-                <span class="rsd-stat-label">{result.dry_run ? 'would create' : 'created'}</span>
-              </div>
-              <div class="rsd-stat">
-                <span class="rsd-stat-val rsd-stat-val--dim">{result.skipped_existing.length}</span>
-                <span class="rsd-stat-label">skipped</span>
-              </div>
-            </div>
-            {#if result.proposed.length > 0}
-              <div class="rsd-tags">
-                {#each result.proposed as label}
-                  <span
-                    class="rsd-tag"
-                    class:rsd-tag--created={!result.dry_run && result.created.includes(label)}
-                    class:rsd-tag--skipped={result.skipped_existing.includes(label)}
-                  >{label}</span>
-                {/each}
-              </div>
+            {:else if result.created.length > 0}
+              APPLIED
+            {:else}
+              NO-OP
             {/if}
+          </span>
+          <span class="rsd-result-thr">
+            threshold = <span class="rsd-mono">{result.threshold_used.toFixed(2)}</span>
+          </span>
+        </div>
+        <div class="rsd-result-grid">
+          <div class="rsd-stat">
+            <span class="rsd-stat-val">{result.proposed.length}</span>
+            <span class="rsd-stat-label">proposed</span>
+          </div>
+          <div class="rsd-stat">
+            <span class="rsd-stat-val rsd-stat-val--accent">{result.created.length}</span>
+            <span class="rsd-stat-label">{result.dry_run ? 'would create' : 'created'}</span>
+          </div>
+          <div class="rsd-stat">
+            <span class="rsd-stat-val rsd-stat-val--dim">{result.skipped_existing.length}</span>
+            <span class="rsd-stat-label">skipped</span>
+          </div>
+        </div>
+        {#if result.proposed.length > 0}
+          <div class="rsd-tags">
+            {#each result.proposed as label}
+              <span
+                class="rsd-tag"
+                class:rsd-tag--created={!result.dry_run && result.created.includes(label)}
+                class:rsd-tag--skipped={result.skipped_existing.includes(label)}
+              >{label}</span>
+            {/each}
           </div>
         {/if}
       </div>
-
-      <div class="rsd-footer">
-        <button
-          type="button"
-          class="rsd-btn rsd-btn--secondary"
-          onclick={onClose}
-          disabled={busy}
-        >Close</button>
-        <button
-          type="button"
-          class="rsd-btn rsd-btn--primary"
-          class:rsd-btn--busy={busy}
-          onclick={handleRebuild}
-          disabled={busy}
-        >
-          {#if busy}
-            REBUILDING…
-          {:else if dryRun}
-            PREVIEW
-          {:else}
-            REBUILD
-          {/if}
-        </button>
-      </div>
-    </div>
+    {/if}
   </div>
-{/if}
+
+  <div class="rsd-footer">
+    <button
+      type="button"
+      class="rsd-btn rsd-btn--secondary"
+      onclick={onClose}
+      disabled={busy}
+    >Close</button>
+    <button
+      type="button"
+      class="rsd-btn rsd-btn--primary"
+      class:rsd-btn--busy={busy}
+      onclick={handleRebuild}
+      disabled={busy}
+    >
+      {#if busy}
+        REBUILDING…
+      {:else if dryRun}
+        PREVIEW
+      {:else}
+        REBUILD
+      {/if}
+    </button>
+  </div>
+</AnimatedDialog>
 
 <style>
   /*
-   * Brand grammar: 1px contours, no glow/shadow, ultra-compact density.
-   * Neon palette: cyan = primary action, yellow = busy, green = applied,
-   * red = error. Zero `box-shadow` with blur/spread anywhere.
+   * Brand grammar: 1px contours, no shadow, contour-only, ultra-compact
+   * density. Neon palette: cyan = primary action, yellow = busy,
+   * green = applied, red = error. Zero `box-shadow` with blur/spread
+   * anywhere.
+   *
+   * The scrim + dialog chrome (positioning, bg, border, z-stack tokens
+   * `--z-modal-scrim` / `--z-modal`, scrim color `--color-scrim`) live
+   * in AnimatedDialog. The `:global(.rsd-modal)` rules below augment the
+   * dialog with consumer-specific sizing + flex layout.
+   *
+   * `:global` is required because AnimatedDialog renders the `.rsd-modal`
+   * class onto its own scoped `.ad-dialog` element — Svelte's scoped CSS
+   * would otherwise hash our `.rsd-modal` selector to this file and the
+   * hash wouldn't match. The AnimatedDialog primitive already enforces
+   * brand defaults; we only widen the box and switch to flex column.
    */
-  .rsd-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--color-bg-primary) 70%, transparent);
-  }
-
-  .rsd-modal {
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border-subtle);
+  :global(.rsd-modal) {
     max-width: 440px;
     width: 90vw;
     max-height: 80vh;
@@ -288,12 +280,13 @@
     font-family: var(--font-mono);
   }
 
-  /* Header */
+  /* Header — OBS-015 padding tightened 12px → 8px to align with the
+     ultra-compact density across the operator surfaces. */
   .rsd-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
+    padding: 6px 8px;
     border-bottom: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
   }
@@ -307,20 +300,38 @@
     color: var(--color-neon-cyan);
   }
 
+  /*
+   * Close glyph (OBS-019, OBS-020): 1px contour grammar + 20px hit
+   * target. The legacy borderless variant gave operators no visual
+   * anchor; the 20px square aligns with action-btn sizing so the close
+   * sits flush with the other footer buttons even at the top-right.
+   */
   .rsd-close {
+    width: 20px;
+    height: 20px;
     background: transparent;
-    border: none;
+    border: 1px solid var(--color-border-subtle);
     color: var(--color-text-secondary);
     font-size: 14px;
     cursor: pointer;
-    padding: 0 4px;
+    padding: 0;
     line-height: 1;
     font-family: var(--font-mono);
-    transition: color var(--duration-micro) var(--ease-spring);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color var(--duration-micro) var(--ease-spring),
+      border-color var(--duration-micro) var(--ease-spring);
   }
 
   .rsd-close:hover:not(:disabled) {
     color: var(--color-text-primary);
+    border-color: var(--color-border-accent);
+  }
+
+  .rsd-close:focus-visible {
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-external);
   }
 
   .rsd-close:disabled {
@@ -328,14 +339,14 @@
     cursor: not-allowed;
   }
 
-  /* Body */
+  /* Body — OBS-015..018: padding tightened 12px → 8px, gap 10px → 6px. */
   .rsd-body {
     flex: 1;
     overflow-y: auto;
-    padding: 12px;
+    padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 6px;
   }
 
   .rsd-field {
@@ -524,8 +535,9 @@
     border: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
   }
 
+  /* OBS-021: 14px → 12px — operator-facing numerics ceiling. */
   .rsd-stat-val {
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--color-text-primary);
     line-height: 1;
@@ -539,8 +551,9 @@
     color: var(--color-text-dim);
   }
 
+  /* R-18 floor: 9px minimum on operator-facing controls (was 8px). */
   .rsd-stat-label {
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.05em;
     color: var(--color-text-dim);
     text-transform: uppercase;
@@ -575,12 +588,12 @@
     color: var(--color-text-dim);
   }
 
-  /* Footer */
+  /* Footer — OBS-016 padding tightened 12px → 8px. */
   .rsd-footer {
     display: flex;
     justify-content: flex-end;
     gap: 6px;
-    padding: 8px 12px;
+    padding: 6px 8px;
     border-top: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
   }
@@ -627,15 +640,16 @@
   }
 
   .rsd-btn:focus-visible {
-    outline: 1px solid color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
-    outline-offset: -1px;
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
   }
 
   @media (prefers-reduced-motion: reduce) {
     .rsd-close,
     .rsd-toggle,
     .rsd-btn {
-      transition: none;
+      transition: none !important;
+      animation: none !important;
     }
   }
 </style>
