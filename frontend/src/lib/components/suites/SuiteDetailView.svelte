@@ -37,8 +37,10 @@
   import { replaySuite, retireSuite } from '$lib/api/suites';
   import { suitesStore } from '$lib/stores/suites.svelte';
   import { toastStore } from '$lib/stores/toast.svelte';
-  import { formatSignedDelta } from '$lib/utils/formatting';
+  import { formatSignedDelta, warningCodeLabel } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
+  import { slide } from 'svelte/transition';
+  import { navSlide } from '$lib/utils/transitions';
   import DestructiveConfirmModal from '$lib/components/shared/DestructiveConfirmModal.svelte';
   import { editorStore } from '$lib/stores/editor.svelte';
   import { forgeStore } from '$lib/stores/forge.svelte';
@@ -134,23 +136,25 @@
   });
 
   // ── v0.4.37 §4.1 — per-prompt expansion + five-state DIFF machine ──
+  //
+  // The expansion is keyed by (suiteId, idx) tuple so a suite swap is
+  // an intrinsic match-miss — no follow-up $effect needed, and the
+  // outro transition only fires when the user clicks Collapse within
+  // the same suite (`expandedIdx = null`) rather than on cross-suite
+  // unmounts (where instant disappear is the right semantic).
+  let expandedSuiteId = $state<string | null>(null);
   let expandedIdx = $state<number | null>(null);
-
-  // Collapse the open row when the SELECTED SUITE changes — suite B must
-  // never render suite A's expansion state (row indexes are per-suite).
-  // Keyed on `suite.id`, not the object, so in-place detail refreshes
-  // (replay/retire → loadDetail re-flows a new object with the same id)
-  // do NOT collapse the operator's open row. Per the project's Svelte-5
-  // invariant, `suite.id` is read BEFORE the gate so the effect always
-  // subscribes to prop swaps.
-  let lastSuiteId: string | undefined;
-  $effect(() => {
-    const id = suite.id;
-    if (lastSuiteId !== undefined && id !== lastSuiteId) {
+  const expandedHere = $derived(
+    expandedSuiteId === suite.id ? expandedIdx : null,
+  );
+  function toggleExpand(idx: number): void {
+    if (expandedHere === idx) {
       expandedIdx = null;
+    } else {
+      expandedSuiteId = suite.id;
+      expandedIdx = idx;
     }
-    lastSuiteId = id;
-  });
+  }
 
   type DiffState =
     | { kind: 'hidden' }
@@ -263,9 +267,9 @@
   //     ReplayRunGenerator against the frozen baseline; toast + detail
   //     refresh so the new replay row surfaces in the history table.
   //   - Retire: POST /api/suites/{id}/retire → flags the suite (no
-  //     destructive delete; replay against retired returns 410 Gone).
-  //     Gated by a DestructiveConfirmModal (RETIRE literal + reason
-  //     textbox) so a misclick can't freeze a healthy suite.
+  //     destructive delete; replay against retired is disabled at the
+  //     API layer). Gated by a DestructiveConfirmModal (RETIRE literal
+  //     + reason textbox) so a misclick can't freeze a healthy suite.
   let replaying = $state(false);
   let retireModalOpen = $state(false);
   let retireReason = $state('');
@@ -364,7 +368,7 @@
       aria-label="Replay suite"
       data-test="suite-replay-btn"
     >
-      {replaying ? 'Replaying…' : 'Replay'}
+      {replaying ? 'REPLAYING…' : 'REPLAY'}
     </button>
     {#if !isRetired}
       <button
@@ -375,7 +379,7 @@
         aria-label="Retire suite"
         data-test="suite-retire-btn"
       >
-        Retire
+        RETIRE
       </button>
     {/if}
   </div>
@@ -442,78 +446,110 @@
       aria-label={`${replayWarnings.length} replay warning${replayWarnings.length === 1 ? '' : 's'}`}
     >
       {#each replayWarnings as code (code)}
-        <span class="warning-chip" data-warning-code={code}>{code}</span>
+        {@const label = warningCodeLabel(code)}
+        <span
+          class="warning-chip"
+          data-warning-code={code}
+          use:tooltip={label.description}
+        >{label.short}</span>
       {/each}
     </div>
   {/if}
 
   <!-- ── Replay history ─────────────────────────────────────────────
-       Shrunk from 5 columns (replay/status/started/completed/prompts)
-       to 4 (replay/status/started/prompts) — `completed` was redundant
-       with `started` at sidebar widths and pushed the grid past the
-       container. Full timestamp pair is still available via tooltip. -->
-  <div class="replay-history" data-test="replay-history" role="table" aria-label="Replay history">
-    <div class="replay-row replay-row--head" role="row">
-      <span role="columnheader" class="col-id">replay</span>
-      <span role="columnheader" class="col-status">status</span>
-      <span role="columnheader" class="col-started">started</span>
-      <span role="columnheader" class="col-prompts">prompts</span>
+       4 columns (replay/status/started/prompts). v0.4.39 R-21: dropped
+       the prior data-grid table skeleton (which lacked rowgroup
+       wrappers); the data-grid semantics now ride a native list + per-
+       row buttons. Axe-core surfaces them equivalently for the sidebar
+       density grammar. v0.4.39 SU-006: replay rows are clickable buttons
+       that route to the Runs panel for the run's full RunDetailInline
+       view. SU-029: status column renders as a chromatic dot + tooltip
+       instead of the truncated "compl…" / "runn…" text that operators
+       couldn't parse at sidebar widths. -->
+  <div
+    class="replay-history"
+    data-test="replay-history"
+    aria-label="Replay history"
+  >
+    <div class="replay-row replay-row--head">
+      <span class="col-id">replay</span>
+      <span class="col-status">status</span>
+      <span class="col-started">started</span>
+      <span class="col-prompts">prompts</span>
     </div>
     {#if replayItems.length === 0}
-      <p class="empty-note">No replays yet. Trigger one from the suite menu.</p>
+      <p class="empty-note">No replays yet. Click Replay above to dispatch one.</p>
     {:else}
       {#each replayItems as r (r.id)}
-        <div
-          class="replay-row"
+        <button
+          type="button"
+          class="replay-row replay-row--button"
           data-test="replay-row"
-          role="row"
+          aria-label="Open replay {r.id}, {r.status}, started {fmt(r.started_at)}, {r.prompts_generated} prompts"
           use:tooltip={
             r.completed_at
               ? `started ${fmt(r.started_at)} · finished ${fmt(r.completed_at)}`
               : `started ${fmt(r.started_at)} · still running`
           }
+          onclick={() => runsPanelStore.requestSelect(r.id)}
         >
-          <span role="cell" class="col-id">{r.id}</span>
-          <span role="cell" class="col-status" data-status={r.status}>{r.status}</span>
-          <span role="cell" class="col-started">{fmt(r.started_at)}</span>
-          <span role="cell" class="col-prompts">{r.prompts_generated}</span>
-        </div>
+          <span class="col-id">{r.id}</span>
+          <span
+            class="col-status col-status--dot"
+            data-status={r.status}
+            aria-hidden="true"
+            use:tooltip={r.status}
+          ></span>
+          <span class="col-started">{fmt(r.started_at)}</span>
+          <span class="col-prompts">{r.prompts_generated}</span>
+        </button>
       {/each}
     {/if}
   </div>
 
   <!-- ── Per-prompt baseline vs latest diff (v0.4.37: expandable rows
-       + five-state DIFF affordance + tombstone + history link) ─────── -->
-  <div class="per-prompt" data-test="per-prompt" role="table" aria-label="Per-prompt baseline vs latest">
-    <div class="prompt-row prompt-row--head" role="row">
-      <span role="columnheader" class="col-chevron" aria-label="Expand"></span>
-      <span role="columnheader" class="col-idx">#</span>
-      <span role="columnheader" class="col-baseline">baseline</span>
-      <span role="columnheader" class="col-latest">latest</span>
-      <span role="columnheader" class="col-delta">Δ</span>
-      <span role="columnheader" class="col-diff">diff</span>
+       + five-state DIFF affordance + tombstone + history link) ───────
+       v0.4.39 R-21: native semantic list replaces the prior data-grid
+       table skeleton (which was missing rowgroup wrappers); data-test
+       markers keep the existing provenance + expand assertions green.
+       v0.4.39 R-09 chevron `▸` + .chevron--open rotate class.
+       v0.4.39 R-10 expansion via transition:slide={navSlide}. -->
+  <div
+    class="per-prompt"
+    data-test="per-prompt"
+    aria-label="Per-prompt baseline vs latest"
+  >
+    <div class="prompt-row prompt-row--head">
+      <span class="col-chevron" aria-hidden="true"></span>
+      <span class="col-idx">#</span>
+      <span class="col-baseline">baseline</span>
+      <span class="col-latest">latest</span>
+      <span class="col-delta">Δ</span>
+      <span class="col-diff">diff</span>
     </div>
-    {#each perPromptRows as row (row.idx)}
+    {#each perPromptRows as row (`${suite.id}:${row.idx}`)}
       {@const ds = diffStateFor(row)}
       <div
         class="prompt-row"
         data-test="per-prompt-row"
         data-prompt-idx={row.idx}
-        role="row"
       >
         <button
           type="button"
           class="row-chevron col-chevron"
-          aria-expanded={expandedIdx === row.idx}
+          aria-expanded={expandedHere === row.idx}
           aria-label="Toggle prompt {row.idx} detail"
           data-test="prompt-expand-btn"
-          onclick={() => { expandedIdx = expandedIdx === row.idx ? null : row.idx; }}
-        >{expandedIdx === row.idx ? '▾' : '▸'}</button>
-        <span role="cell" class="col-idx">{row.idx}</span>
-        <span role="cell" class="col-baseline">{row.baseline.toFixed(1)}</span>
-        <span role="cell" class="col-latest">{row.latest != null ? row.latest.toFixed(1) : '—'}</span>
-        <span role="cell" class="col-delta">{formatSignedDelta(row.delta)}</span>
-        <span role="cell" class="col-diff">
+          onclick={() => toggleExpand(row.idx)}
+        ><span
+          class="chevron"
+          class:chevron--open={expandedHere === row.idx}
+        >▸</span></button>
+        <span class="col-idx">{row.idx}</span>
+        <span class="col-baseline">{row.baseline.toFixed(1)}</span>
+        <span class="col-latest">{row.latest != null ? row.latest.toFixed(1) : '—'}</span>
+        <span class="col-delta">{formatSignedDelta(row.delta)}</span>
+        <span class="col-diff">
           {#if ds.kind === 'output-vs-output' || ds.kind === 'raw-vs-output'}
             <button
               type="button"
@@ -538,8 +574,13 @@
           {/if}
         </span>
       </div>
-      {#if expandedIdx === row.idx}
-        <div class="prompt-expanded" data-test="prompt-expanded" data-prompt-idx={row.idx}>
+      {#if expandedHere === row.idx}
+        <div
+          class="prompt-expanded"
+          data-test="prompt-expanded"
+          data-prompt-idx={row.idx}
+          transition:slide|local={navSlide}
+        >
           {#if row.snap?.intent_label}
             <div class="expanded-meta">{row.snap.intent_label}</div>
           {/if}
@@ -581,9 +622,8 @@
 {#snippet retireBody()}
   <div class="retire-body">
     <p class="retire-prose">
-      Retire <span class="retire-label">{suite.label}</span>? Replay
-      against retired suites returns 410 Gone. The action is reversible
-      only via direct DB edit.
+      Retire <span class="retire-label">{suite.label}</span>? Replay is
+      disabled on retired suites. Retirement is final.
     </p>
     <label class="retire-reason-label" for="suite-retire-reason">
       Reason
@@ -619,7 +659,12 @@
        is the ceiling for section gaps). Was 8px on both. */
     gap: 6px;
     padding: 6px;
-    font-family: var(--font-mono);
+    /* R-18 — container defaults to sans; only data cells (numerics,
+       IDs, status chips, timestamps, code blocks) override to mono.
+       Prose copy (button labels, retire prose, intent labels) reads as
+       sans so the detail surface matches the project's typography
+       anchor. */
+    font-family: var(--font-sans);
     font-size: 10px;
     color: var(--color-text-primary);
   }
@@ -727,8 +772,11 @@
     align-items: center;
     gap: 4px;
     padding: 4px;
-    border: 1px solid var(--color-neon-yellow, #ffd166);
-    background: color-mix(in srgb, var(--color-neon-yellow, #ffd166) 8%, transparent);
+    /* R-02 — canonical neon-yellow hex (#fbbf24). Pre-v0.4.39 the
+       fallback was off-brand peach; --color-neon-yellow now resolves
+       to the canonical hex in :root and the fallback matches it. */
+    border: 1px solid var(--color-neon-yellow, #fbbf24);
+    background: color-mix(in srgb, var(--color-neon-yellow, #fbbf24) 8%, transparent);
   }
 
   .warning-chip {
@@ -738,8 +786,8 @@
     padding: 0 6px;
     font-family: var(--font-mono);
     font-size: 9px;
-    color: var(--color-neon-yellow, #ffd166);
-    border: 1px solid var(--color-neon-yellow, #ffd166);
+    color: var(--color-neon-yellow, #fbbf24);
+    border: 1px solid var(--color-neon-yellow, #fbbf24);
     background: transparent;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -759,9 +807,12 @@
     height: 20px;
     padding: 0 4px;
     border-bottom: 1px solid var(--color-border-subtle);
+    /* R-04 — token tuple. Pre-v0.4.39 the literal `200ms ease` resolved
+       to the browser-default `cubic-bezier(0.25, 0.1, 0.25, 1)` which
+       drifts from `--ease-spring`. */
     transition:
-      background-color 200ms ease,
-      border-color 200ms ease;
+      background-color var(--duration-hover) var(--ease-spring),
+      border-color var(--duration-hover) var(--ease-spring);
   }
 
   /* Tables now use flexible (fr-based) grid columns so they fit the
@@ -769,7 +820,9 @@
      `min-width: 0` via the cell rule below so long IDs/timestamps
      truncate with ellipsis instead of pushing the grid wider. */
   .replay-row {
-    grid-template-columns: 1.4fr 0.7fr 0.9fr 0.5fr;
+    /* status column shrinks to dot width — SU-029 swapped truncated
+       prose (`compl…`) for a 6px chromatic dot + tooltip. */
+    grid-template-columns: 1.4fr 12px 0.9fr 0.5fr;
     gap: 4px;
   }
 
@@ -778,15 +831,20 @@
     gap: 4px;
   }
 
-  /* Every cell truncates rather than overflowing the grid. */
-  .replay-row > [role='cell'],
-  .replay-row > [role='columnheader'],
-  .prompt-row > [role='cell'],
-  .prompt-row > [role='columnheader'] {
+  /* Every direct cell truncates rather than overflowing the grid. */
+  .replay-row > span,
+  .prompt-row > span {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* The status column is a dot in body rows (not the header), so the
+     ellipsis rule doesn't apply — it's a 6px square chip. */
+  .replay-row > .col-status--dot {
+    overflow: visible;
+    text-overflow: clip;
   }
 
   .replay-row:last-child,
@@ -800,30 +858,65 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     font-size: 9px;
+    /* Header text reads as a label; data cells in body rows override
+       to mono numerics individually below (R-18). */
+    font-family: var(--font-mono);
   }
 
-  .replay-row[data-test='replay-row']:hover {
+  /* Replay row as a clickable button — strip native chrome, inherit
+     row-grid; hover state mirrors the resting row hover token. */
+  .replay-row--button {
+    background: transparent;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+  }
+  .replay-row--button:hover {
     background: color-mix(in srgb, var(--color-bg-hover) 40%, transparent);
   }
-
-  .col-status {
-    color: var(--color-text-dim);
+  .replay-row--button:focus-visible {
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
   }
 
-  .col-status[data-status='completed'] {
-    color: var(--color-neon-green, #22ff88);
+  /* Body data cells render mono numerics (R-18). */
+  .replay-row .col-id,
+  .replay-row .col-started,
+  .replay-row .col-prompts,
+  .prompt-row .col-idx,
+  .prompt-row .col-baseline,
+  .prompt-row .col-latest,
+  .prompt-row .col-delta {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
 
-  .col-status[data-status='running'] {
-    color: var(--color-neon-cyan, #2cd0ff);
+  /* Status column as a chromatic dot (SU-029) — 6px circle keyed to
+     the run status. Tooltip surfaces the status word so the dot stays
+     accessible without burning a column to a truncated label. */
+  .col-status--dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: var(--color-text-dim);
+    align-self: center;
   }
-
-  .col-status[data-status='partial'] {
-    color: var(--color-neon-yellow, #ffd166);
+  .col-status--dot[data-status='completed'] {
+    background: var(--color-neon-green);
   }
-
-  .col-status[data-status='failed'] {
-    color: var(--color-neon-red, #ff3366);
+  .col-status--dot[data-status='running'] {
+    background: var(--color-neon-cyan);
+  }
+  /* R-02 canonical neon-yellow fallback (was off-brand peach pre-v0.4.39). */
+  .col-status--dot[data-status='partial'] {
+    background: var(--color-neon-yellow, #fbbf24);
+  }
+  .col-status--dot[data-status='failed'] {
+    background: var(--color-neon-red);
   }
 
   .col-delta {
@@ -924,7 +1017,9 @@
     color: var(--color-text-primary);
     font-family: var(--font-mono);
     font-size: 11px;
-    transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    /* R-04 — token tuple. The literal `200ms cubic-bezier(0.16, 1, 0.3, 1)`
+       was the inline expansion of `--ease-spring`; collapsed to the token. */
+    transition: border-color var(--duration-hover) var(--ease-spring);
   }
 
   .retire-reason-input:focus {
@@ -934,7 +1029,9 @@
 
   /* ── v0.4.37 — expandable per-prompt rows + DIFF affordance ────────
      All zero-effects: 1px contours, no glow/shadow, 20px collapsed rows
-     preserved; the expanded body is a bordered block below the row. */
+     preserved; the expanded body is a bordered block below the row.
+     R-09 chevron uses the shared `.chevron` utility (rotated via
+     `.chevron--open`); the wrapping button only owns the click target. */
   .row-chevron {
     height: 20px;
     padding: 0;
@@ -943,7 +1040,8 @@
     color: var(--color-text-dim);
     font-size: 9px;
     cursor: pointer;
-    transition: color 200ms ease;
+    /* R-04 — token tuple. */
+    transition: color var(--duration-hover) var(--ease-spring);
   }
   .row-chevron:hover { color: var(--color-text-primary); }
 
@@ -957,7 +1055,10 @@
     font-family: var(--font-mono);
     letter-spacing: 0.06em;
     cursor: pointer;
-    transition: border-color 200ms ease, color 200ms ease;
+    /* R-04 — token tuple. */
+    transition:
+      border-color var(--duration-hover) var(--ease-spring),
+      color var(--duration-hover) var(--ease-spring);
   }
   .diff-btn:hover:not(:disabled),
   .open-history-btn:hover {
@@ -968,7 +1069,10 @@
   .diff-btn {
     height: 16px;
     padding: 0 4px;
-    font-size: 8px;
+    /* R-18 — minimum 9px on operator-facing controls. The prior 8px
+       was below the brand floor and reads as illegible at sidebar
+       widths. */
+    font-size: 9px;
   }
   .diff-btn:disabled {
     opacity: 0.4;
@@ -1061,5 +1165,24 @@
   }
   .meta-pair--link:hover .meta-val {
     text-decoration: underline;
+  }
+
+  /* R-19 — reduced-motion neutralization. Covers every transition site
+     in this file: the replay/prompt rows, the chevron-button, the
+     diff/open-history buttons, the retire input border, and the
+     replay-row-button hover. The `transition:slide` directive on the
+     prompt expansion drawer also honours the user's preference via
+     Svelte's built-in handling. */
+  @media (prefers-reduced-motion: reduce) {
+    .replay-row,
+    .prompt-row,
+    .replay-row--button,
+    .row-chevron,
+    .diff-btn,
+    .open-history-btn,
+    .retire-reason-input,
+    .detail-btn--replay {
+      transition: none !important;
+    }
   }
 </style>

@@ -29,22 +29,26 @@
    * cross-row state (the regression-alarm block from the suites store)
    * not present on the list-row payload itself.
    *
-   * Recipe A hover (component-patterns.md:128-141):
-   *   - resting: `border-border-subtle`, transparent bg
-   *   - hover:   `border-border-accent` + `bg-bg-hover/40`
-   *   - 200ms transition on all properties together
+   * v0.4.39 brand-compliance — R-06 Row Recipe v1 (h-5, 1px contour,
+   * 5-state) + R-22 aria-label composition + R-18 typography anchor.
+   * Border collapses to `border-bottom` only (per-row 4-sided borders are
+   * banned by R-06). Focus uses the shared `--color-focus-ring` token.
+   * The status dot is `aria-hidden` because the composed row aria-label
+   * already includes the status word — no double-announce for SR users.
    *
-   * NO Recipe E (translateY lift) — h-5 is too compact for the physical
-   * lift reserved for Hero buttons per spec § 6 contour-tier table.
+   * Selection: a re-click on a selected row toggles the selection off
+   * (`onClick` then `suitesStore.select(null)` in the parent); first
+   * click selects the row. `[data-selected]` paints the active-state
+   * inset contour. The actual selection state lives in the parent panel
+   * so list-wide single-select is enforced.
    *
-   * Click delegates to `onClick(suite)` — parent panel calls
-   * `suitesStore.select(id)` to surface the SuiteDetailView. The element
-   * is a real `<button>` so keyboard navigation works without
-   * `tabindex/role/onkeydown` boilerplate.
+   * Per-row kebab opens `SuiteActionMenu` (Rename / Retire / Delete). The
+   * kebab `stopPropagation`s so it never fires the row's select handler.
    */
   import type { ValidationSuiteListItem } from '$lib/api/suites';
   import { formatSignedDelta } from '$lib/utils/formatting';
   import { tooltip } from '$lib/actions/tooltip';
+  import SuiteActionMenu from './SuiteActionMenu.svelte';
 
   export type SuiteRowStatus = 'nominal' | 'firing' | 'none';
 
@@ -53,10 +57,29 @@
     /** Latest-replay delta vs baseline (signed; null when no replay yet). */
     delta: number | null;
     status: SuiteRowStatus;
+    /** True when this row is the currently-selected suite. Drives the
+     *  `data-selected` chromatic-active state per R-06 5-state lifecycle. */
+    selected?: boolean;
     onClick: (suite: ValidationSuiteListItem) => void;
+    /** Optional menu actions. Parent decides routing — Rename/Retire/Delete
+     *  may dispatch into `suitesStore` or open modals. Undefined handlers
+     *  hide the kebab so a parent that doesn't wire menu actions still
+     *  renders a clean row. */
+    onRename?: (suite: ValidationSuiteListItem) => void;
+    onRetire?: (suite: ValidationSuiteListItem) => void;
+    onDelete?: (suite: ValidationSuiteListItem) => void;
   }
 
-  let { suite, delta, status, onClick }: Props = $props();
+  let {
+    suite,
+    delta,
+    status,
+    selected = false,
+    onClick,
+    onRename,
+    onRetire,
+    onDelete,
+  }: Props = $props();
 
   const statusLabel = $derived(
     status === 'firing' ? 'firing' : status === 'nominal' ? 'nominal' : 'no replay',
@@ -87,58 +110,128 @@
     if (suite.retired_at) parts.push(`retired ${fmtDate(suite.retired_at)}`);
     return parts.join(' · ');
   });
+
+  // R-22 aria-label composition: identity + status + baseline + prompts
+  // + delta. A single descriptive label per row replaces the prior
+  // "Open suite <label>" stub so a screen reader user gets the same
+  // numeric context the sighted reader gets from the cells.
+  const composedAriaLabel = $derived.by(() => {
+    const parts: string[] = [`Suite ${suite.label}`];
+    parts.push(statusLabel);
+    parts.push(`baseline ${suite.baseline_mean.toFixed(1)}`);
+    parts.push(`${suite.prompts_count} prompts`);
+    if (delta != null) {
+      parts.push(`delta ${formatSignedDelta(delta)}`);
+    } else {
+      parts.push('no delta');
+    }
+    return parts.join(', ');
+  });
+
+  // ── Kebab menu state ────────────────────────────────────────────────
+  let menuOpen = $state(false);
+  let kebabBtn: HTMLButtonElement | undefined = $state();
+  const hasMenu = $derived(
+    onRename != null || onRetire != null || onDelete != null,
+  );
+  function openMenu(): void {
+    menuOpen = true;
+  }
+  function closeMenu(): void {
+    menuOpen = false;
+    kebabBtn?.focus();
+  }
 </script>
 
-<button
-  type="button"
-  class="suite-row h-5 px-1"
-  data-test="suite-row"
-  data-suite-id={suite.id}
-  data-status={status}
-  data-retired={suite.retired_at != null}
-  onclick={() => onClick(suite)}
-  use:tooltip={tooltipText}
-  aria-label="Open suite {suite.label}"
->
-  <span
-    class="status-dot"
-    data-test="suite-row-dot"
-    role="img"
-    aria-label={`Suite ${statusLabel}`}
-  ></span>
-  <span class="suite-label">{suite.label}</span>
-  <span class="suite-baseline" data-test="suite-row-baseline">{suite.baseline_mean.toFixed(1)}</span>
-  <span class="suite-prompts">{suite.prompts_count}p</span>
-  <span class="suite-delta" data-test="suite-row-delta">{formatSignedDelta(delta)}</span>
-</button>
+<div class="suite-row-wrap" data-test="suite-row-wrap">
+  <button
+    type="button"
+    class="suite-row h-5 px-1"
+    data-test="suite-row"
+    data-suite-id={suite.id}
+    data-status={status}
+    data-retired={suite.retired_at != null}
+    data-selected={selected}
+    onclick={() => onClick(suite)}
+    use:tooltip={tooltipText}
+    aria-label={composedAriaLabel}
+    aria-pressed={selected}
+  >
+    <span
+      class="status-dot"
+      data-test="suite-row-dot"
+      aria-hidden="true"
+    ></span>
+    <span class="suite-label">{suite.label}</span>
+    <span class="suite-baseline" data-test="suite-row-baseline">{suite.baseline_mean.toFixed(1)}</span>
+    <span class="suite-prompts">{suite.prompts_count}p</span>
+    <span class="suite-delta" data-test="suite-row-delta">{formatSignedDelta(delta)}</span>
+  </button>
+  {#if hasMenu}
+    <button
+      bind:this={kebabBtn}
+      type="button"
+      class="suite-kebab"
+      data-test="suite-row-kebab"
+      aria-label="Open actions for suite {suite.label}"
+      aria-haspopup="menu"
+      aria-expanded={menuOpen}
+      onclick={(e) => { e.stopPropagation(); openMenu(); }}
+    >⋮</button>
+    {#if menuOpen}
+      <SuiteActionMenu
+        onRename={() => { closeMenu(); onRename?.(suite); }}
+        onRetire={() => { closeMenu(); onRetire?.(suite); }}
+        onDelete={() => { closeMenu(); onDelete?.(suite); }}
+        onClose={closeMenu}
+      />
+    {/if}
+  {/if}
+</div>
 
 <style>
-  /* h-5 / px-1 / Recipe A — kept in CSS so non-Tailwind audits + raw-source
-     regex tests can both see the canonical class names AND the underlying
-     declarations. */
+  /* h-5 / px-1 / R-06 Row Recipe v1 — border-bottom only (per-row 4-side
+     borders are banned). Selection state painted via [data-selected] +
+     the canonical 5-state lifecycle: resting / hover / focus-visible /
+     active / disabled. */
+  .suite-row-wrap {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    width: 100%;
+  }
+
   .suite-row {
     /* 6px status dot · 1fr label · auto baseline · auto prompts · auto delta */
     display: grid;
     grid-template-columns: 6px 1fr auto auto auto;
     align-items: center;
     gap: 4px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     height: 20px;            /* h-5 */
     padding: 0 4px;          /* px-1 */
     background: transparent;
-    border: 1px solid var(--color-border-subtle);
+    /* R-06 — `border-bottom` only. Sibling rows stack into a single
+       hairline grid; the focus/hover/active states paint via outline +
+       inset box-shadow without competing contour weight. */
+    border: none;
+    border-bottom: 1px solid var(--color-border-subtle);
     color: var(--color-text-primary);
-    font-family: var(--font-mono);
+    /* R-18 — container row defaults to sans; only data cells (.suite-
+       baseline, .suite-prompts, .suite-delta) carry the mono override. */
+    font-family: var(--font-sans);
     font-size: 10px;
     cursor: pointer;
     text-align: left;
-    /* Recipe A — uniform 200ms transition on every animated property. No
-       translateY: h-5 is too compact for the Recipe E lift reserved for
-       Hero buttons. */
+    /* R-04 — token-tuple transition. Hover/state changes use --duration-
+       hover with --ease-spring; the bare `ease` keyword (browser-default
+       cubic-bezier(0.25,0.1,0.25,1)) is banned. */
     transition:
-      background-color 200ms ease,
-      border-color 200ms ease,
-      color 200ms ease;
+      background-color var(--duration-hover) var(--ease-spring),
+      border-color var(--duration-hover) var(--ease-spring),
+      color var(--duration-hover) var(--ease-spring);
   }
 
   /* Retired rows dim — they remain in the list for audit but the visual
@@ -149,18 +242,25 @@
   }
 
   .suite-row:hover {
-    border-color: var(--color-border-accent);
+    border-bottom-color: var(--color-border-accent);
     background: color-mix(in srgb, var(--color-bg-hover) 40%, transparent);
   }
 
-  /* Focus state — canonical 5-state machine. The global app.css
-     `:focus-visible` rule already paints the 1px cyan outline (RGBA
-     `0,229,255,0.3` + offset 2px); we additionally brighten the row
-     border so the focused state reads cleanly without competing
-     contour weight. Outline override is intentional only to align the
-     outline-offset against the row's 1px border. */
+  /* R-06 focus-visible — explicit outline so keyboard navigation reads
+     even when the global app.css :focus-visible token shifts. Uses the
+     shared --color-focus-ring + --focus-offset-inset tokens. */
   .suite-row:focus-visible {
-    border-color: var(--color-border-accent);
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
+    border-bottom-color: var(--color-border-accent);
+  }
+
+  /* R-06 active / selected — inset cyan contour. The row is the selected
+     suite; pairs with parent's SuiteDetailView mount so the visual
+     selection matches the data-driven detail surface. */
+  .suite-row[data-selected='true'] {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-neon-cyan) 40%, transparent);
+    background: color-mix(in srgb, var(--color-neon-cyan) 6%, transparent);
   }
 
   .status-dot {
@@ -171,11 +271,11 @@
   }
 
   .suite-row[data-status='nominal'] .status-dot {
-    background: var(--color-neon-green, #22ff88);
+    background: var(--color-neon-green);
   }
 
   .suite-row[data-status='firing'] .status-dot {
-    background: var(--color-neon-red, #ff3366);
+    background: var(--color-neon-red);
   }
 
   .suite-label {
@@ -185,20 +285,60 @@
     min-width: 0;
   }
 
+  /* R-18 — data cells (numerics) stay mono; container is sans. */
   .suite-prompts {
     color: var(--color-text-dim);
     flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
 
   .suite-baseline {
     color: var(--color-text-dim);
     flex-shrink: 0;
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
 
   .suite-delta {
     color: var(--color-text-primary);
     flex-shrink: 0;
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Kebab — sized to the 20px row, no border so the rail reads as quiet
+     until hover. Uses the shared text-dim → text-primary hover token. */
+  .suite-kebab {
+    width: 16px;
+    height: 20px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: var(--color-text-dim);
+    font-size: 12px;
+    line-height: 20px;
+    text-align: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color var(--duration-hover) var(--ease-spring);
+  }
+  .suite-kebab:hover,
+  .suite-kebab:focus-visible {
+    color: var(--color-text-primary);
+  }
+  .suite-kebab:focus-visible {
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
+  }
+
+  /* R-19 — reduced-motion neutralization covers every transition site
+     declared above. */
+  @media (prefers-reduced-motion: reduce) {
+    .suite-row,
+    .suite-kebab {
+      transition: none !important;
+    }
   }
 </style>

@@ -350,9 +350,11 @@ describe('SuiteRow', () => {
     expect(src).toMatch(/border-accent|border-border-accent|--color-border-accent/);
     expect(src).toMatch(/bg-hover|bg-bg-hover|--color-bg-hover/);
 
-    // Single uniform-duration transition (spec § 6 axiom 5) — accept any
-    // 200ms binding tied to background/border-color/color.
-    expect(src).toMatch(/200ms|0\.2s/);
+    // Single uniform-duration transition (spec § 6 axiom 5) — accept the
+    // R-04 token tuple `var(--duration-hover) var(--ease-spring)` OR the
+    // legacy literal `200ms ease` form. v0.4.39 brand-compliance sweeps
+    // the literal in favour of the token; either is a valid GREEN landing.
+    expect(src).toMatch(/200ms|0\.2s|var\(--duration-hover\)/);
 
     // Recipe E translate lift is FORBIDDEN on h-5 rows per spec § 6
     // contour-tier table ("no `translateY` — active-state lift is

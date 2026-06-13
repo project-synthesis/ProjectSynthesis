@@ -92,14 +92,14 @@ describe('RegressionBadge', () => {
     expect(txt).not.toMatch(/\bOK\b/); // catches OK / Ok variants
   });
 
-  // ── Test 10: firing lower-case "2 alarm" ────────────────────────────
+  // ── Test 10: firing lower-case "2 firing" ───────────────────────────
   //
-  // When `suites_in_alarm > 0` the badge reads `"<suites_in_alarm> alarm"`
-  // (singular noun — the chromatic red is the load-bearing urgency
-  // signal). Per spec § 6 voice table: `"2 alarm" (lower-case noun)`.
-  // We deliberately verify "alarm" not "alarms" — the noun is
-  // status-condition (uncountable use), not a plural count of events.
-  it('test_regression_badge_firing_lower_case_2_alarm', async () => {
+  // When `suites_in_alarm > 0` the badge reads `"<suites_in_alarm> firing"`
+  // (active verb — the chromatic red is the load-bearing urgency signal).
+  // Per spec § 6 voice table + R-20/R-26 (v0.4.39): instrument-voice
+  // prefers the active-state verb `firing` over the noun `alarm` — the
+  // suite is firing a regression alert, not "in alarm". Lower-case.
+  it('test_regression_badge_firing_lower_case_2_firing', async () => {
     suitesStoreMock.suitesStore.regressionAlarmBlock = makeAlarmBlock({
       suites_total: 12,
       suites_in_alarm: 2,
@@ -113,9 +113,11 @@ describe('RegressionBadge', () => {
     const { container } = render(RegressionBadge);
 
     const txt = (container.textContent ?? '').trim();
-    expect(txt).toMatch(/\b2 alarm\b/);
-    expect(txt).not.toMatch(/\bALARM\b/);
-    expect(txt).not.toMatch(/\bAlarm\b/);
+    expect(txt).toMatch(/\b2 firing\b/);
+    expect(txt).not.toMatch(/\bFIRING\b/);
+    expect(txt).not.toMatch(/\bFiring\b/);
+    // Vocab change pinned — `alarm` voice retired in v0.4.39.
+    expect(txt).not.toMatch(/\balarm\b/i);
   });
 
   // ── Test 11: edge-to-edge inside the 20px status bar ────────────────

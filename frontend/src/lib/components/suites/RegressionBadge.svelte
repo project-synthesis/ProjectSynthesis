@@ -81,7 +81,7 @@
         : `${block.suites_total} suites nominal`}
     >
       {#if isFiring}
-        {block.suites_in_alarm} alarm
+        {block.suites_in_alarm} firing
       {:else}
         {block.suites_total} ok
       {/if}
