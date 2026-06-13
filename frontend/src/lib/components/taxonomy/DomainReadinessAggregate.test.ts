@@ -80,9 +80,11 @@ describe('DomainReadinessAggregate', () => {
 
   it('renders empty-state copy when readinessStore.reports is empty (R1)', () => {
     render(DomainReadinessAggregate);
-    // v0.4.39 R-20: instrument-voice — was "No domains yet — the taxonomy
-    // is warming up." (anthropomorphic). Now: "No domains." (terse + factual).
-    expect(screen.getByText(/no domains\./i)).toBeTruthy();
+    // v0.4.39 R-20 + reviewer-followup: was "No domains yet — the taxonomy
+    // is warming up." (anthropomorphic). Now: "No domains — warming."
+    // (terse but preserves the "system is doing work" affordance per the
+    // visual-diff reviewer's note that pure "No domains." reads as broken).
+    expect(screen.getByText(/no domains — warming\./i)).toBeTruthy();
   });
 
   it('renders one card per domain report (R2)', () => {
