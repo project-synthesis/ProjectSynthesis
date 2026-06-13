@@ -307,9 +307,10 @@
     white-space: nowrap;
   }
 
+  /* R-18: operator-facing chip floor is 9px (was 8px). */
   .sel-source-badge {
     font-family: var(--font-mono);
-    font-size: 8px;
+    font-size: 9px;
     font-weight: 500;
     padding: 0 3px;
     border: 1px solid;
@@ -341,13 +342,18 @@
       background-color var(--duration-progress) var(--ease-spring);
   }
 
+  /*
+   * Chromatic threshold marker (OBS-063): neon-yellow 60% — yellow encodes
+   * the boundary state across the brand (sampling tier accent, warning
+   * severity). Distinct from the stability meter's neon-red floor (which
+   * means danger, not opportunity). No emission falloff — 1px solid line.
+   */
   .sel-marker {
     position: absolute;
     top: 0;
     height: 100%;
     width: 1px;
-    background: var(--color-text-primary);
-    opacity: 0.6;
+    background: color-mix(in srgb, var(--color-neon-yellow) 60%, transparent);
     pointer-events: none;
   }
 
@@ -367,11 +373,19 @@
     font-weight: 500;
   }
 
+  /*
+   * Blocked label as a contour chip (OBS-064): renders as a 1px contour
+   * box to read as a discrete state signal (`emergence cannot proceed`)
+   * rather than ambient row prose. Dim text + dim contour stays
+   * subordinate to the meter's chromatic tier color.
+   */
   .sel-blocked {
     font-family: var(--font-sans);
     font-size: 10px;
     color: var(--color-text-dim);
-    padding: 2px 0;
+    padding: 2px 6px;
+    border: 1px solid var(--color-border-subtle);
+    align-self: flex-start;
   }
 
   .sel-breakdown {
@@ -405,8 +419,9 @@
     border-color: color-mix(in srgb, var(--chip-color) 50%, transparent);
   }
 
+  /* R-18 floor: 9px minimum on operator-facing controls (was 8px). */
   .sel-breakdown-source {
-    font-size: 8px;
+    font-size: 9px;
     font-weight: 500;
     letter-spacing: 0.05em;
   }
@@ -441,9 +456,10 @@
     min-width: 0;
   }
 
+  /* R-18 floor: 9px minimum on operator-facing controls (was 8px). */
   .sel-runner-source {
     font-family: var(--font-mono);
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.05em;
   }
 
@@ -461,7 +477,8 @@
 
   @media (prefers-reduced-motion: reduce) {
     .sel-fill {
-      transition: none;
+      transition: none !important;
+      animation: none !important;
     }
   }
 </style>

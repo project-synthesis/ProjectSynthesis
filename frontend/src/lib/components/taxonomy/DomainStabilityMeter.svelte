@@ -4,7 +4,7 @@
    *
    * Visualizes the Source-1 (`domain_raw`) consistency against the dissolution
    * floor (default 0.15) and creation hysteresis threshold (0.60). Pure 1px
-   * contour — zero glow, zero shadow, chromatic encoding only.
+   * contour, no shadow — chromatic encoding only.
    */
   import type { DomainStabilityReport } from '$lib/api/readiness';
   import { tooltip } from '$lib/actions/tooltip';
@@ -67,9 +67,10 @@
     use:tooltip={tipText}
   >
     <div class="dsm-fill" style="width: {consistencyPct}%; background: {tierColor}"></div>
-    <!-- 1px contour marker for dissolution floor — never a glow -->
+    <!-- 1px contour marker for dissolution floor — neon-red 60% (chromatic
+         encoding: red = danger boundary). No shadow, no emission falloff. -->
     <div class="dsm-marker dsm-floor" style="left: {floorPct}%" aria-hidden="true"></div>
-    <!-- 1px contour marker for creation hysteresis threshold -->
+    <!-- 1px contour marker for creation hysteresis threshold — neutral dim. -->
     <div
       class="dsm-marker dsm-hysteresis"
       style="left: {hysteresisPct}%"
@@ -152,9 +153,16 @@
     pointer-events: none;
   }
 
+  /*
+   * Chromatic encoding (OBS-060): the dissolution floor marker reads in
+   * neon-red 60% so the eye picks up the danger boundary at a glance —
+   * any fill that crosses to the LEFT of this marker means the domain is
+   * eligible for dissolution. The hysteresis marker stays neutral dim
+   * (positive boundary — fill must cross RIGHT of it to trigger a new
+   * domain candidate).
+   */
   .dsm-floor {
-    background: var(--color-text-primary);
-    opacity: 0.6;
+    background: color-mix(in srgb, var(--color-neon-red) 60%, transparent);
   }
 
   .dsm-hysteresis {
@@ -197,9 +205,10 @@
     margin-top: 1px;
   }
 
+  /* R-18 floor: 9px minimum on operator-facing controls (was 8px). */
   .dsm-guard-chip {
     font-family: var(--font-mono);
-    font-size: 8px;
+    font-size: 9px;
     padding: 0 3px;
     color: var(--color-neon-yellow);
     border: 1px solid
@@ -209,7 +218,8 @@
 
   @media (prefers-reduced-motion: reduce) {
     .dsm-fill {
-      transition: none;
+      transition: none !important;
+      animation: none !important;
     }
   }
 </style>

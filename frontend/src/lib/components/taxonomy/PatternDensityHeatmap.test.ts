@@ -32,7 +32,12 @@ describe('PatternDensityHeatmap', () => {
   it('renders the canonical column headers (H1)', () => {
     observatoryStore.patternDensity = [makeRow()];
     render(PatternDensityHeatmap);
-    for (const header of ['clusters', 'meta', 'avg score', 'global', 'x-cluster inj. rate']) {
+    // v0.4.39 R-18/R-20: header markup uses uppercase canonical strings.
+    // The brand display tier (Syne 10px uppercase 0.1em) renders the same
+    // visual cap-only treatment whether the source string is lowercase or
+    // uppercase, but uppercase source matches the canonical text pattern
+    // of every other operator-facing header in the app.
+    for (const header of ['CLUSTERS', 'META', 'AVG SCORE', 'GLOBAL', 'x-cluster inj. rate']) {
       expect(screen.getByText(header)).toBeTruthy();
     }
   });

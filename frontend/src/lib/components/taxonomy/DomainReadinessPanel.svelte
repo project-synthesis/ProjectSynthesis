@@ -5,8 +5,9 @@
    * emergence). Click-through dispatches a `domain:select` CustomEvent with
    * the selected `domain_id` so parent views can focus the topology.
    *
-   * Dense 20px-row layout per brand spec. Zero glow/shadow — chromatic tier
-   * dots + 1px contour accents.
+   * Dense 20px-row layout per brand spec. Zero shadow, contour-only —
+   * chromatic tier dots + 1px contour accents are the entire visual
+   * language.
    */
   import { onMount } from 'svelte';
   import type { DomainReadinessReport } from '$lib/api/readiness';
@@ -472,13 +473,14 @@
     padding: 6px;
   }
 
+  /* R-18 floor: 9px minimum on operator-facing column labels (was 8px). */
   .drp-columns {
     display: grid;
     grid-template-columns: 1fr 36px 28px 40px 22px 16px 16px;
     gap: 6px;
     align-items: baseline;
     font-family: var(--font-mono);
-    font-size: 8px;
+    font-size: 9px;
     color: var(--color-text-dim);
     letter-spacing: 0.05em;
     padding: 0 6px 2px;

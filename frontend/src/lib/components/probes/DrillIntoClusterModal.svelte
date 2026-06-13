@@ -105,7 +105,7 @@
     aria-labelledby="drill-modal-title"
     tabindex="-1"
     class="rounded-none border border-border-subtle bg-bg-card p-1.5 space-y-1.5 min-w-[320px] max-w-[480px]"
-    style="animation: dialog-in 300ms cubic-bezier(0.16, 1, 0.3, 1);"
+    style="animation: dialog-in var(--duration-structural) var(--ease-spring);"
     onclick={(e) => e.stopPropagation()}
   >
     <h2

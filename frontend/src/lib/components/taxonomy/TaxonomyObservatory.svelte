@@ -43,12 +43,13 @@
   class="observatory"
   data-test="taxonomy-observatory"
   role="tabpanel"
+  aria-labelledby="tab-observatory"
   bind:this={rootEl}
 >
   <header class="observatory-shell-header" data-test="observatory-shell-header">
     <h2 class="shell-title">OBSERVATORY</h2>
     <p class="observatory-legend" data-test="observatory-legend">
-      Readiness reflects current state — the period selector applies to Timeline and Pattern Density only.
+      Readiness reflects current state — period applies to Timeline + Heatmap.
     </p>
   </header>
 
