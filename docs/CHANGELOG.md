@@ -4,6 +4,8 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+## v0.4.39 — 2026-06-13
+
 ### Changed
 - **Brand-compliance pass on Suites navbar, Runs navbar, and the Observability page** — full-surface audit identified 269 findings (66 suites + 69 runs + 84 observatory + 50 shared) and 27 fix recipes (R-01..R-27) covering padding/density drift (h-7/h-8/p-2/gap-2 → h-5/p-1.5/gap-1.5), focus-ring inconsistencies (custom outlines → `var(--color-focus-ring)` + `var(--focus-offset-inset)`), motion-token drift (hardcoded `200ms cubic-bezier(0.16, 1, 0.3, 1)` → `var(--duration-hover) var(--ease-spring)` and `150ms` → `var(--duration-micro) var(--ease-spring)`), residual neon-tube violations, anthropomorphic copy ("No domains yet — the taxonomy is warming up." → "No domains — warming."), and a long-standing RU-009 HTML-semantics BLOCKER (RunRowItem rename input was nested inside the row's `<button>` — refactored to a conditional `{#if renaming}<div class="rename-wrap"><input></div>{:else}<button>...</button>{/if}` swap so the input is genuinely a sibling). Includes a probes/ surface sweep (15 motion-token sites in `TopicProbeForm.svelte` + `TopicProbeProgressView.svelte`). All Observatory-panel changes apply 2D-UI rules (the directory is mixed-medium: 3D taxonomy graph code stays on F1–F19 canon; panel chrome is 2D). 4 implementer commits + 1 polish + 1 test-update; brand-compliance reviewer and code-quality reviewer subagents both APPROVED; vitest 2359/2367, svelte-check 0 errors, taxonomy 734/734.
 
