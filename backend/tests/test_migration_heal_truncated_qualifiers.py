@@ -6,9 +6,11 @@ Spec: docs/superpowers/specs/2026-06-12-v0.4.38-sub-domain-telemetry-design.md �
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,37 @@ def _make_cfg(db_url: str) -> Config:
     return cfg
 
 
+@contextmanager
+def _preserve_logging_state():
+    """Snapshot + restore Python logging state around alembic command calls.
+
+    ``alembic/env.py:15`` calls ``logging.config.fileConfig(...)`` which
+    defaults to ``disable_existing_loggers=True`` — this disables every
+    logger pytest's ``caplog`` has configured, breaking subsequent tests
+    that assert on captured log messages. Snapshot the ``disabled`` flag
+    on every existing logger BEFORE the alembic call, then restore.
+    Without this, importing alembic-driven migration commands in a test
+    poisons caplog for the rest of the pytest session.
+    """
+    manager = logging.root.manager
+    snapshot = {
+        name: lg.disabled
+        for name, lg in manager.loggerDict.items()
+        if isinstance(lg, logging.Logger)
+    }
+    snapshot["__root__"] = logging.root.disabled
+    try:
+        yield
+    finally:
+        for name, was_disabled in snapshot.items():
+            if name == "__root__":
+                logging.root.disabled = was_disabled
+                continue
+            lg = manager.loggerDict.get(name)
+            if isinstance(lg, logging.Logger):
+                lg.disabled = was_disabled
+
+
 @pytest.fixture()
 def migrated_db(tmp_path):
     db_path = tmp_path / "synthesis.db"
@@ -36,7 +69,8 @@ def migrated_db(tmp_path):
     sync_url = f"sqlite:///{db_path}"
     cfg = _make_cfg(async_url)
     # Run up to the PRIOR head so we can seed legacy data, then upgrade.
-    command.upgrade(cfg, "1fa50d7f82b7")
+    with _preserve_logging_state():
+        command.upgrade(cfg, "1fa50d7f82b7")
     eng = create_engine(sync_url)
     yield eng, cfg
     eng.dispose()
@@ -94,7 +128,8 @@ def test_ac10_strips_only_len20_keys(migrated_db):
     })
 
     # Upgrade past head — our new migration runs.
-    command.upgrade(cfg, "head")
+    with _preserve_logging_state():
+        command.upgrade(cfg, "head")
 
     meta = _read_meta(eng, "dom-a")
     gq = meta["generated_qualifiers"]
@@ -110,7 +145,8 @@ def test_ac10_count_unchanged_on_clean_domain(migrated_db):
         "generated_qualifiers": {"embeddings": ["e"]},
         "generated_qualifiers_cluster_count": 5,
     })
-    command.upgrade(cfg, "head")
+    with _preserve_logging_state():
+        command.upgrade(cfg, "head")
     meta = _read_meta(eng, "dom-clean")
     # No len-20 keys → count untouched.
     assert meta["generated_qualifiers_cluster_count"] == 5
@@ -122,11 +158,14 @@ def test_ac10_idempotent_on_rerun(migrated_db):
         "generated_qualifiers": {"pipeline-observabili": ["a"]},
         "generated_qualifiers_cluster_count": 4,
     })
-    command.upgrade(cfg, "head")
+    with _preserve_logging_state():
+        command.upgrade(cfg, "head")
     # Downgrade is a no-op; re-upgrade must not change state again.
     meta_after_first = _read_meta(eng, "dom-idem")
-    command.downgrade(cfg, "1fa50d7f82b7")
-    command.upgrade(cfg, "head")
+    with _preserve_logging_state():
+        command.downgrade(cfg, "1fa50d7f82b7")
+    with _preserve_logging_state():
+        command.upgrade(cfg, "head")
     meta_after_second = _read_meta(eng, "dom-idem")
     assert meta_after_first == meta_after_second
 
@@ -134,14 +173,16 @@ def test_ac10_idempotent_on_rerun(migrated_db):
 def test_ac10_handles_null_metadata(migrated_db):
     eng, cfg = migrated_db
     _insert_domain(eng, "dom-null", None)
-    command.upgrade(cfg, "head")
+    with _preserve_logging_state():
+        command.upgrade(cfg, "head")
     assert _read_meta(eng, "dom-null") is None
 
 
 def test_ac10_handles_missing_generated_qualifiers_key(migrated_db):
     eng, cfg = migrated_db
     _insert_domain(eng, "dom-noseed", {"other_key": "ok"})
-    command.upgrade(cfg, "head")
+    with _preserve_logging_state():
+        command.upgrade(cfg, "head")
     meta = _read_meta(eng, "dom-noseed")
     assert "generated_qualifiers" not in meta or meta["generated_qualifiers"] == {}
     assert "other_key" in meta
