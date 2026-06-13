@@ -42,8 +42,7 @@ class RebuildSubDomainsRequest(BaseModel):
     dry_run: bool = Field(
         default=False,
         description=(
-            "When True, computes which sub-domains WOULD be created without "
-            "modifying state. Returns the planned list."
+            "When True, computes which sub-domains WOULD be created without modifying state. Returns the planned list."
         ),
     )
 
@@ -85,17 +84,11 @@ class DissolveEmptyResult(BaseModel):
     )
     domain_label: str | None = Field(
         default=None,
-        description=(
-            "The domain's label at time of dissolution "
-            "(None if already dissolved)."
-        ),
+        description=("The domain's label at time of dissolution (None if already dissolved)."),
     )
     reason: str | None = Field(
         default=None,
-        description=(
-            "Reason if dissolved=False: 'already_dissolved' | 'not_empty' | "
-            "'too_young' | None on success."
-        ),
+        description=("Reason if dissolved=False: 'already_dissolved' | 'not_empty' | 'too_young' | None on success."),
     )
     age_hours: float = Field(
         description="Domain age in hours at time of call.",

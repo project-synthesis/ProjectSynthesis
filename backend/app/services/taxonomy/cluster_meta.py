@@ -27,39 +27,39 @@ class ClusterMeta(TypedDict, total=False):
     """
 
     # --- Domain metadata (written by domain creation / signal refresh) ---
-    source: str                          # "seed" | "manual" | "discovered"
-    signal_keywords: list[str]           # TF-IDF keywords for domain matching
-    discovered_at: str | None            # ISO8601 timestamp or None
-    proposed_by_snapshot: str | None      # Snapshot ID that proposed creation
+    source: str  # "seed" | "manual" | "discovered"
+    signal_keywords: list[str]  # TF-IDF keywords for domain matching
+    discovered_at: str | None  # ISO8601 timestamp or None
+    proposed_by_snapshot: str | None  # Snapshot ID that proposed creation
     signal_member_count_at_generation: int  # member_count when signals were last generated
-    signal_generated_at: str             # ISO8601 timestamp of last signal refresh
+    signal_generated_at: str  # ISO8601 timestamp of last signal refresh
 
     # --- Warm-path lifecycle tracking ---
-    split_failures: int                  # Consecutive HDBSCAN split failures (cooldown after 3)
-    split_attempt_member_count: int   # member_count when last split was attempted (growth-based cooldown reset)
-    coherence_member_count: int          # member_count at last coherence recomputation
-    pattern_member_count: int            # member_count at last meta-pattern extraction
-    pattern_stale: bool                  # True when cluster composition changed since last pattern extraction
-    merge_protected_until: str           # ISO8601 timestamp — skip merge until this time (split child protection)
-    split_content_hash: str              # SHA-256 prefix of sorted member opt_ids at last split attempt
-    label_refreshed_at: str              # ISO8601 timestamp of last label refresh
+    split_failures: int  # Consecutive HDBSCAN split failures (cooldown after 3)
+    split_attempt_member_count: int  # member_count when last split was attempted (growth-based cooldown reset)
+    coherence_member_count: int  # member_count at last coherence recomputation
+    pattern_member_count: int  # member_count at last meta-pattern extraction
+    pattern_stale: bool  # True when cluster composition changed since last pattern extraction
+    merge_protected_until: str  # ISO8601 timestamp — skip merge until this time (split child protection)
+    split_content_hash: str  # SHA-256 prefix of sorted member opt_ids at last split attempt
+    label_refreshed_at: str  # ISO8601 timestamp of last label refresh
 
     # --- Adaptive learning ---
     learned_phase_weights: dict[str, dict[str, float]] | None  # per-phase learned weight profiles (set by warm-path)
-    output_coherence: float | None       # mean pairwise cosine of optimized_embeddings within cluster
+    output_coherence: float | None  # mean pairwise cosine of optimized_embeddings within cluster
 
     # --- Positional metadata ---
-    position_source: str                 # "interpolated" when UMAP position was interpolated
+    position_source: str  # "interpolated" when UMAP position was interpolated
 
     # --- Groundhog Day prevention (domain-level) ---
     split_blocked_hashes: list[dict[str, str]]  # [{hash, ts, label}] ring buffer on domain nodes
 
     # --- Intent label coherence (Tier 5b) ---
-    intent_label_coherence: float | None         # mean pairwise Jaccard of member intent labels
+    intent_label_coherence: float | None  # mean pairwise Jaccard of member intent labels
 
     # --- Sub-domain vocabulary cache (written by Phase 4.95) ---
-    generated_qualifiers: dict[str, list[str]]   # group_name → keyword list
-    generated_qualifiers_cluster_count: int      # member_count at last regen; -1 = "heal pending" (v0.4.38)
+    generated_qualifiers: dict[str, list[str]]  # group_name → keyword list
+    generated_qualifiers_cluster_count: int  # member_count at last regen; -1 = "heal pending" (v0.4.38)
 
 
 # -------------------------------------------------------------------------

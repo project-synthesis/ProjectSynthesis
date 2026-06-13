@@ -97,6 +97,7 @@ _VOCAB_QUALITY_SCORES_MAXLEN = 500  # rolling window for engine._vocab_quality_s
 @dataclass
 class WarmCycleMeasurement:
     """Single warm cycle measurement for adaptive scheduling."""
+
     dirty_count: int
     duration_ms: int
 
@@ -104,6 +105,7 @@ class WarmCycleMeasurement:
 @dataclass
 class SchedulerDecision:
     """Result of adaptive scheduler mode decision."""
+
     mode: str  # "all_dirty" | "round_robin"
     project_id: str | None = None
     scoped_dirty_ids: set[str] | None = None
@@ -127,8 +129,8 @@ class AdaptiveScheduler:
     _WINDOW_SIZE = 10
     _BOOTSTRAP_TARGET_MS = 10_000  # 10s default until enough data
     _BOOTSTRAP_BOUNDARY: int = 20  # dirty count fallback during bootstrap
-    _STARVATION_LIMIT: int = 3     # max consecutive skipped cycles
-    _MIN_QUOTA: int = 3            # minimum clusters per project in budget mode
+    _STARVATION_LIMIT: int = 3  # max consecutive skipped cycles
+    _MIN_QUOTA: int = 3  # minimum clusters per project in budget mode
 
     def __init__(self) -> None:
         self._window: list[WarmCycleMeasurement] = []
@@ -147,7 +149,7 @@ class AdaptiveScheduler:
         """Record a warm cycle measurement and update target."""
         self._window.append(WarmCycleMeasurement(dirty_count, duration_ms))
         if len(self._window) > self._WINDOW_SIZE:
-            self._window = self._window[-self._WINDOW_SIZE:]
+            self._window = self._window[-self._WINDOW_SIZE :]
 
         # Update target after bootstrap period
         if len(self._window) >= self._WINDOW_SIZE:
@@ -187,9 +189,10 @@ class AdaptiveScheduler:
 
         if result == 1:
             logger.warning(
-                "AdaptiveScheduler: boundary clamped to 1 "
-                "(slope=%.2f intercept=%.0f target=%d)",
-                slope, intercept, self._target_cycle_ms,
+                "AdaptiveScheduler: boundary clamped to 1 (slope=%.2f intercept=%.0f target=%d)",
+                slope,
+                intercept,
+                self._target_cycle_ms,
             )
         return result
 
@@ -257,14 +260,9 @@ class AdaptiveScheduler:
             budgets[pid] = min(max(self._MIN_QUOTA, raw), len(cids))
 
         # Step 2: Starvation boost — starved projects steal from largest donor
-        starved_pids = [
-            pid for pid in dirty_by_project
-            if self._skip_counts.get(pid, 0) >= self._STARVATION_LIMIT
-        ]
+        starved_pids = [pid for pid in dirty_by_project if self._skip_counts.get(pid, 0) >= self._STARVATION_LIMIT]
         if starved_pids:
-            non_starved = [
-                pid for pid in dirty_by_project if pid not in starved_pids
-            ]
+            non_starved = [pid for pid in dirty_by_project if pid not in starved_pids]
             if non_starved:
                 for spid in starved_pids:
                     boost = max(0, self._MIN_QUOTA - budgets[spid])
@@ -279,7 +277,7 @@ class AdaptiveScheduler:
         # Step 3: Build scoped_dirty_ids from budget-limited subsets
         scoped: set[str] = set()
         for pid, cids in dirty_by_project.items():
-            scoped.update(list(cids)[:budgets[pid]])
+            scoped.update(list(cids)[: budgets[pid]])
 
         # Step 4: Update starvation counters
         for pid in dirty_by_project:
@@ -297,9 +295,9 @@ class AdaptiveScheduler:
         total_budget = sum(budgets.values())
         if total_budget > boundary:
             logger.warning(
-                "AdaptiveScheduler: per-project floors (%d) exceed boundary (%d); "
-                "cycle may exceed target time",
-                total_budget, boundary,
+                "AdaptiveScheduler: per-project floors (%d) exceed boundary (%d); cycle may exceed target time",
+                total_budget,
+                boundary,
             )
 
         return budgets, scoped
@@ -316,10 +314,7 @@ class AdaptiveScheduler:
             "skip_counts": counters,
             "starvation_counters": counters,
             "last_project_id": self._last_project_id,
-            "dirty_by_project_counts": {
-                pid: len(cids)
-                for pid, cids in (self._last_dirty_by_project or {}).items()
-            },
+            "dirty_by_project_counts": {pid: len(cids) for pid, cids in (self._last_dirty_by_project or {}).items()},
             "project_budgets": dict(self._last_project_budgets) if self._last_project_budgets else None,
         }
 
@@ -359,10 +354,13 @@ class TaxonomyEngine:
         # Populated by vocab generation pass; read by health endpoint (Task 5).
         self._vocab_quality_scores: deque[float] = deque(maxlen=_VOCAB_QUALITY_SCORES_MAXLEN)
         from app.services.taxonomy.transformation_index import TransformationIndex
+
         self._transformation_index = TransformationIndex(dim=384)
         from app.services.taxonomy.qualifier_index import QualifierIndex
+
         self._qualifier_index = QualifierIndex(dim=384)
         from app.services.taxonomy.optimized_index import OptimizedEmbeddingIndex
+
         self._optimized_index = OptimizedEmbeddingIndex(dim=384)
         # Lock gates concurrent hot-path writes to shared centroid state.
         self._lock: asyncio.Lock = asyncio.Lock()
@@ -482,9 +480,7 @@ class TaxonomyEngine:
         """
         # TransformationIndex
         try:
-            ti_loaded = await self._transformation_index.load_cache(
-                data_dir / "transformation_index.pkl"
-            )
+            ti_loaded = await self._transformation_index.load_cache(data_dir / "transformation_index.pkl")
             if ti_loaded:
                 logger.info(
                     "TransformationIndex warm-loaded from cache: %d vectors",
@@ -497,9 +493,7 @@ class TaxonomyEngine:
 
         # QualifierIndex
         try:
-            qi_loaded = await self._qualifier_index.load_cache(
-                data_dir / "qualifier_index.pkl"
-            )
+            qi_loaded = await self._qualifier_index.load_cache(data_dir / "qualifier_index.pkl")
             if qi_loaded:
                 logger.info(
                     "QualifierIndex warm-loaded from cache: %d vectors",
@@ -512,9 +506,7 @@ class TaxonomyEngine:
 
         # OptimizedEmbeddingIndex
         try:
-            oi_loaded = await self._optimized_index.load_cache(
-                data_dir / "optimized_index.pkl"
-            )
+            oi_loaded = await self._optimized_index.load_cache(data_dir / "optimized_index.pkl")
             if oi_loaded:
                 logger.info(
                     "OptimizedEmbeddingIndex warm-loaded from cache: %d vectors",
@@ -562,6 +554,7 @@ class TaxonomyEngine:
                 pass ``db=`` directly.
         """
         if write_queue is not None:
+
             async def _do_extract(write_db: AsyncSession) -> None:
                 await self._process_optimization_impl(
                     optimization_id,
@@ -570,17 +563,19 @@ class TaxonomyEngine:
                 )
 
             await write_queue.submit(
-                _do_extract, operation_label="hot_path_assign_cluster",
+                _do_extract,
+                operation_label="hot_path_assign_cluster",
             )
             return
 
         if db is None:
             raise TypeError(
-                "process_optimization requires either write_queue= or "
-                "a positional AsyncSession (legacy form).",
+                "process_optimization requires either write_queue= or a positional AsyncSession (legacy form).",
             )
         await self._process_optimization_impl(
-            optimization_id, db, repo_full_name=repo_full_name,
+            optimization_id,
+            db,
+            repo_full_name=repo_full_name,
         )
 
     async def _process_optimization_impl(
@@ -592,9 +587,7 @@ class TaxonomyEngine:
     ) -> None:
         """Internal: hot-path extraction body. See ``process_optimization``."""
         try:
-            result = await db.execute(
-                select(Optimization).where(Optimization.id == optimization_id)
-            )
+            result = await db.execute(select(Optimization).where(Optimization.id == optimization_id))
             opt = result.scalar_one_or_none()
 
             if not opt or opt.status != "completed":
@@ -607,12 +600,9 @@ class TaxonomyEngine:
 
             # ADR-005 Phase 2A: resolve project_id from repo
             from app.services.project_service import resolve_project_id
+
             if self._legacy_project_id is None:
-                _legacy_q = await db.execute(
-                    select(PromptCluster).where(
-                        PromptCluster.state == "project"
-                    ).limit(1)
-                )
+                _legacy_q = await db.execute(select(PromptCluster).where(PromptCluster.state == "project").limit(1))
                 _legacy = _legacy_q.scalar_one_or_none()
                 if _legacy:
                     self._legacy_project_id = _legacy.id
@@ -665,6 +655,7 @@ class TaxonomyEngine:
                 domain_primary_raw, domain_qualifier = parse_domain(opt.domain_raw or "")
                 if domain_qualifier:
                     from app.services.domain_signal_loader import get_signal_loader
+
                     loader = get_signal_loader()
                     if loader:
                         qualifiers = loader.get_qualifiers(domain_primary_raw)
@@ -696,9 +687,7 @@ class TaxonomyEngine:
             # ``assign_cluster()`` so we never write ``opt.cluster_id``
             # while the cold path holds the flag.
             _q_check = await db.execute(
-                select(PromptCluster).where(
-                    PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
-                )
+                select(PromptCluster).where(PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES))
             )
             _quiesced_active: list[tuple[PromptCluster, datetime]] = []
             for _qn in _q_check.scalars().all():
@@ -714,8 +703,10 @@ class TaxonomyEngine:
                     # is honored.
                     try:
                         from app.services.taxonomy import event_logger as _event_logger_mod
+
                         _event_logger_mod.get_event_logger().log_decision(
-                            path="cold", op="refit_quiesce_check",
+                            path="cold",
+                            op="refit_quiesce_check",
                             decision="peer_skipped",
                             context={
                                 "writer_path": "hot",
@@ -726,9 +717,9 @@ class TaxonomyEngine:
                     except RuntimeError:
                         pass
                 logger.info(
-                    "Peer-writer SKIP (hot): %d quiesced cluster(s) — "
-                    "opt %s deferred to next warm cycle",
-                    len(_quiesced_active), optimization_id[:8],
+                    "Peer-writer SKIP (hot): %d quiesced cluster(s) — opt %s deferred to next warm cycle",
+                    len(_quiesced_active),
+                    optimization_id[:8],
                 )
                 return
 
@@ -754,15 +745,13 @@ class TaxonomyEngine:
             # cluster_id (often NULL); this is the canonical assignment.
             old_cluster_id = opt.cluster_id
             if old_cluster_id and old_cluster_id != cluster.id:
-                old_cluster_q = await db.execute(
-                    select(PromptCluster).where(PromptCluster.id == old_cluster_id)
-                )
+                old_cluster_q = await db.execute(select(PromptCluster).where(PromptCluster.id == old_cluster_id))
                 old_cluster = old_cluster_q.scalar_one_or_none()
                 if old_cluster is None:
                     logger.warning(
-                        "Old cluster %s not found during reassignment of opt %s — "
-                        "member_count may be inconsistent",
-                        old_cluster_id, optimization_id,
+                        "Old cluster %s not found during reassignment of opt %s — member_count may be inconsistent",
+                        old_cluster_id,
+                        optimization_id,
                     )
                 elif old_cluster.state != "archived":
                     old_cluster.member_count = max(0, (old_cluster.member_count or 1) - 1)
@@ -770,13 +759,14 @@ class TaxonomyEngine:
                         old_cluster.scored_count = max(0, old_cluster.scored_count - 1)
                     # Mark old cluster pattern-stale — it lost a member
                     old_cluster.cluster_metadata = write_meta(
-                        old_cluster.cluster_metadata, pattern_stale=True,
+                        old_cluster.cluster_metadata,
+                        pattern_stale=True,
                     )
                     self.mark_dirty(old_cluster.id, project_id=project_id)  # ADR-005: old cluster lost a member
                     logger.info(
-                        "Decremented old cluster '%s' member_count to %d "
-                        "(reassigned to '%s')",
-                        old_cluster.label, old_cluster.member_count,
+                        "Decremented old cluster '%s' member_count to %d (reassigned to '%s')",
+                        old_cluster.label,
+                        old_cluster.member_count,
                         cluster.label,
                     )
             opt.cluster_id = cluster.id
@@ -791,7 +781,9 @@ class TaxonomyEngine:
                 if cluster.centroid_embedding:
                     _centroid = np.frombuffer(cluster.centroid_embedding, dtype=np.float32)
                     await self._embedding_index.upsert(
-                        cluster.id, _centroid, project_id=project_id,
+                        cluster.id,
+                        _centroid,
+                        project_id=project_id,
                     )
 
             # ----- Intent label hardening (Tier 2) -----
@@ -811,7 +803,9 @@ class TaxonomyEngine:
                         opt.intent_label = cluster_label[:MAX_INTENT_LABEL_LENGTH]
                         logger.info(
                             "Upgraded generic intent_label '%s' → '%s' from cluster '%s'",
-                            old_label, opt.intent_label, cluster.id,
+                            old_label,
+                            opt.intent_label,
+                            cluster.id,
                         )
 
             # 2b: Deduplicate exact-match labels within cluster
@@ -824,6 +818,7 @@ class TaxonomyEngine:
             # Prevents OP↔Optimization.cluster_id mismatch after reassignment.
             if old_cluster_id and old_cluster_id != cluster.id:
                 from sqlalchemy import update as sa_update
+
                 await db.execute(
                     sa_update(OptimizationPattern)
                     .where(
@@ -852,9 +847,7 @@ class TaxonomyEngine:
             # Update TransformationIndex with running mean of cluster transformations
             if opt.transformation_embedding:
                 try:
-                    transform_vec = np.frombuffer(
-                        opt.transformation_embedding, dtype=np.float32
-                    )
+                    transform_vec = np.frombuffer(opt.transformation_embedding, dtype=np.float32)
                     existing_vec = self._transformation_index.get_vector(cluster.id)
                     if existing_vec is not None:
                         # Weighted running mean: blend existing mean with new sample
@@ -863,34 +856,30 @@ class TaxonomyEngine:
                         blended = (existing_vec * member_ct + transform_vec) / (member_ct + 1)
                         await self._transformation_index.upsert(cluster.id, blended)
                     else:
-                        await self._transformation_index.upsert(
-                            cluster.id, transform_vec
-                        )
+                        await self._transformation_index.upsert(cluster.id, transform_vec)
                 except Exception as ti_exc:
                     logger.warning(
                         "TransformationIndex upsert failed for cluster %s: %s",
-                        cluster.id, ti_exc,
+                        cluster.id,
+                        ti_exc,
                     )
 
             # Update OptimizedEmbeddingIndex with running mean of cluster output embeddings
             if opt.optimized_embedding:
                 try:
-                    optimized_vec = np.frombuffer(
-                        opt.optimized_embedding, dtype=np.float32
-                    )
+                    optimized_vec = np.frombuffer(opt.optimized_embedding, dtype=np.float32)
                     existing_opt = self._optimized_index.get_vector(cluster.id)
                     if existing_opt is not None:
                         member_ct = max(1, (cluster.member_count or 1) - 1)
                         blended = (existing_opt * member_ct + optimized_vec) / (member_ct + 1)
                         await self._optimized_index.upsert(cluster.id, blended)
                     else:
-                        await self._optimized_index.upsert(
-                            cluster.id, optimized_vec
-                        )
+                        await self._optimized_index.upsert(cluster.id, optimized_vec)
                 except Exception as oi_exc:
                     logger.warning(
                         "OptimizedEmbeddingIndex upsert failed for cluster %s: %s",
-                        cluster.id, oi_exc,
+                        cluster.id,
+                        oi_exc,
                     )
 
             # 3d. Update QualifierIndex
@@ -902,7 +891,10 @@ class TaxonomyEngine:
 
             # 3. Extract meta-patterns
             meta_texts = await extract_meta_patterns(
-                opt, db, self._provider, self._prompt_loader,
+                opt,
+                db,
+                self._provider,
+                self._prompt_loader,
             )
 
             # 4. Merge meta-patterns and update freshness flag
@@ -934,18 +926,24 @@ class TaxonomyEngine:
             # 6. Publish taxonomy_changed event (Spec Section 6.5)
             try:
                 from app.services.event_bus import event_bus
-                event_bus.publish("taxonomy_changed", {
-                    "optimization_id": optimization_id,
-                    "cluster_id": cluster.id,
-                    "cluster_label": cluster.label,
-                    "meta_patterns_added": len(meta_texts),
-                })
+
+                event_bus.publish(
+                    "taxonomy_changed",
+                    {
+                        "optimization_id": optimization_id,
+                        "cluster_id": cluster.id,
+                        "cluster_label": cluster.label,
+                        "meta_patterns_added": len(meta_texts),
+                    },
+                )
             except Exception as evt_exc:
                 logger.warning("Failed to publish taxonomy_changed: %s", evt_exc)
 
             try:
                 get_event_logger().log_decision(
-                    path="hot", op="extract", decision="complete",
+                    path="hot",
+                    op="extract",
+                    decision="complete",
                     cluster_id=cluster.id,
                     optimization_id=optimization_id,
                     context={
@@ -966,7 +964,9 @@ class TaxonomyEngine:
             )
             try:
                 get_event_logger().log_decision(
-                    path="hot", op="error", decision="failed",
+                    path="hot",
+                    op="error",
+                    decision="failed",
                     optimization_id=optimization_id,
                     context={
                         "source": "process_optimization",
@@ -984,7 +984,9 @@ class TaxonomyEngine:
     # ------------------------------------------------------------------
 
     async def match_prompt(
-        self, prompt_text: str, db: AsyncSession,
+        self,
+        prompt_text: str,
+        db: AsyncSession,
     ) -> PatternMatch | None:
         """Hierarchical pattern matching for on-paste suggestion.
 
@@ -1033,7 +1035,9 @@ class TaxonomyEngine:
             logger.debug("Warm path skipped — lock already held")
             try:
                 get_event_logger().log_decision(
-                    path="warm", op="skip", decision="lock_held",
+                    path="warm",
+                    op="skip",
+                    decision="lock_held",
                     context={"reason": "warm_path_lock already held"},
                 )
             except RuntimeError:
@@ -1043,7 +1047,9 @@ class TaxonomyEngine:
         async with self._warm_path_lock:
             try:
                 return await execute_warm_path(
-                    self, session_factory, write_queue=write_queue,
+                    self,
+                    session_factory,
+                    write_queue=write_queue,
                 )
             except Exception as exc:
                 logger.error("Warm path failed: %s", exc, exc_info=True)
@@ -1065,13 +1071,17 @@ class TaxonomyEngine:
                 # the dirty_set and skips when nothing changed -- a
                 # natural recovery path.
                 self._warm_path_age += 1
+
                 # Return a minimal result so callers don't break.
                 # Cycle 6: queue path threads via write_queue.submit; legacy
                 # path opens a fresh session_factory session unchanged.
                 async def _do_error_snapshot(db: AsyncSession) -> str:
                     snap = await self._create_warm_snapshot(
-                        db, q_system=0.0, operations=[],
-                        ops_attempted=0, ops_accepted=0,
+                        db,
+                        q_system=0.0,
+                        operations=[],
+                        ops_attempted=0,
+                        ops_accepted=0,
                     )
                     sid = snap.id
                     await db.commit()
@@ -1092,7 +1102,8 @@ class TaxonomyEngine:
                 except Exception as snap_exc:
                     logger.error(
                         "Warm path error-recovery snapshot also failed: %s",
-                        snap_exc, exc_info=True,
+                        snap_exc,
+                        exc_info=True,
                     )
                     snapshot_id = "error-no-snapshot"
                 return WarmPathResult(
@@ -1111,7 +1122,8 @@ class TaxonomyEngine:
     # ------------------------------------------------------------------
 
     async def reassign_all_clusters(
-        self, db: AsyncSession,
+        self,
+        db: AsyncSession,
     ) -> dict:
         """Replay hot-path cluster assignment for every optimization.
 
@@ -1137,9 +1149,7 @@ class TaxonomyEngine:
 
         # Load all optimizations with embeddings
         opt_result = await db.execute(
-            select(Optimization)
-            .where(Optimization.embedding.isnot(None))
-            .order_by(Optimization.created_at.asc())
+            select(Optimization).where(Optimization.embedding.isnot(None)).order_by(Optimization.created_at.asc())
         )
         optimizations = list(opt_result.scalars().all())
         if not optimizations:
@@ -1202,7 +1212,9 @@ class TaxonomyEngine:
 
         logger.info(
             "Reassign complete: %d optimizations, %d→%d clusters",
-            reassigned, clusters_before, clusters_after,
+            reassigned,
+            clusters_before,
+            clusters_after,
         )
         return {
             "reassigned": reassigned,
@@ -1248,11 +1260,17 @@ class TaxonomyEngine:
         stats["join_deleted"] = del_op.rowcount  # type: ignore[attr-defined]
 
         # Recreate source records for every optimization with a cluster
-        opts = (await db.execute(
-            select(Optimization).where(
-                Optimization.cluster_id.isnot(None),
+        opts = (
+            (
+                await db.execute(
+                    select(Optimization).where(
+                        Optimization.cluster_id.isnot(None),
+                    )
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
 
         join_created = 0
         for opt in opts:
@@ -1264,11 +1282,13 @@ class TaxonomyEngine:
                 )
             )
             if cluster_q.scalar_one_or_none():
-                db.add(OptimizationPattern(
-                    optimization_id=opt.id,
-                    cluster_id=opt.cluster_id,
-                    relationship="source",
-                ))
+                db.add(
+                    OptimizationPattern(
+                        optimization_id=opt.id,
+                        cluster_id=opt.cluster_id,
+                        relationship="source",
+                    )
+                )
                 join_created += 1
         stats["join_created"] = join_created
         await db.flush()
@@ -1300,31 +1320,48 @@ class TaxonomyEngine:
                     continue
                 for text in pattern_texts:
                     await merge_meta_pattern(
-                        db, opt.cluster_id, text, self._embedding,
+                        db,
+                        opt.cluster_id,
+                        text,
+                        self._embedding,
                     )
                     patterns_created += 1
             except Exception as exc:
                 logger.debug(
-                    "Pattern extraction failed for opt=%s: %s", opt.id, exc,
+                    "Pattern extraction failed for opt=%s: %s",
+                    opt.id,
+                    exc,
                 )
         stats["meta_patterns_created"] = patterns_created
         await db.flush()
 
         # --- 3. Compute coherence ---
-        active_clusters = (await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+        active_clusters = (
+            (
+                await db.execute(
+                    select(PromptCluster).where(
+                        PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
+                    )
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
 
         coherence_computed = 0
         for cluster in active_clusters:
-            emb_rows = (await db.execute(
-                select(Optimization.embedding).where(
-                    Optimization.cluster_id == cluster.id,
-                    Optimization.embedding.isnot(None),
+            emb_rows = (
+                (
+                    await db.execute(
+                        select(Optimization.embedding).where(
+                            Optimization.cluster_id == cluster.id,
+                            Optimization.embedding.isnot(None),
+                        )
+                    )
                 )
-            )).scalars().all()
+                .scalars()
+                .all()
+            )
 
             if len(emb_rows) < 2:
                 cluster.coherence = 1.0 if len(emb_rows) == 1 else 0.0
@@ -1359,20 +1396,12 @@ class TaxonomyEngine:
         # Find optimizations whose project_id references a non-existent
         # PromptCluster (state='project') and fix them via the cluster
         # ancestry chain: cluster → domain (parent_id) → project (parent_id).
-        valid_project_ids = {
-            c.id for c in active_clusters if c.state == "project"
-        }
+        valid_project_ids = {c.id for c in active_clusters if c.state == "project"}
         # Also include domain-state nodes for the ancestry walk
-        all_nodes_q = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state.in_(["project", "domain"])
-            )
-        )
+        all_nodes_q = await db.execute(select(PromptCluster).where(PromptCluster.state.in_(["project", "domain"])))
         all_structural = {n.id: n for n in all_nodes_q.scalars().all()}
         # Build parent lookup
-        parent_map: dict[str, str | None] = {
-            n.id: n.parent_id for n in all_structural.values()
-        }
+        parent_map: dict[str, str | None] = {n.id: n.parent_id for n in all_structural.values()}
         # Also need domain parents for active clusters
         for cluster in active_clusters:
             if cluster.parent_id:
@@ -1412,8 +1441,10 @@ class TaxonomyEngine:
             "Data integrity repair: join=%d created/%d deleted, "
             "meta=%d created/%d deleted, coherence=%d computed, "
             "project_id=%d fixed",
-            stats["join_created"], stats["join_deleted"],
-            stats["meta_patterns_created"], stats["meta_patterns_deleted"],
+            stats["join_created"],
+            stats["join_deleted"],
+            stats["meta_patterns_created"],
+            stats["meta_patterns_deleted"],
             stats["coherence_computed"],
             project_fixed,
         )
@@ -1437,7 +1468,9 @@ class TaxonomyEngine:
             logger.debug("Cold path skipped — warm/cold lock already held")
             try:
                 get_event_logger().log_decision(
-                    path="cold", op="skip", decision="lock_held",
+                    path="cold",
+                    op="skip",
+                    decision="lock_held",
                     context={"reason": "warm_path_lock already held"},
                 )
             except RuntimeError:
@@ -1451,6 +1484,7 @@ class TaxonomyEngine:
                 logger.error("Cold path failed: %s", exc, exc_info=True)
                 try:
                     from app.services.taxonomy.snapshot import create_snapshot
+
                     snap = await create_snapshot(
                         db,
                         trigger="cold_path",
@@ -1463,7 +1497,8 @@ class TaxonomyEngine:
                 except Exception as snap_exc:
                     logger.error(
                         "Cold path error-recovery snapshot also failed: %s",
-                        snap_exc, exc_info=True,
+                        snap_exc,
+                        exc_info=True,
                     )
                     snapshot_id = "error-no-snapshot"
                 return ColdPathResult(
@@ -1492,6 +1527,7 @@ class TaxonomyEngine:
         async with self._warm_path_lock:
             try:
                 from app.services.taxonomy.cold_path import execute_umap_projection
+
                 return await execute_umap_projection(self, db)
             except Exception as exc:
                 logger.error("UMAP projection failed: %s", exc, exc_info=True)
@@ -1502,7 +1538,8 @@ class TaxonomyEngine:
     # ------------------------------------------------------------------
 
     async def _restore_silhouette_from_snapshot(
-        self, db: AsyncSession,
+        self,
+        db: AsyncSession,
     ) -> None:
         """v0.4.16 P1a Cycle 1: defensive recovery for engine bootstrap.
 
@@ -1547,7 +1584,8 @@ class TaxonomyEngine:
             self._last_silhouette = candidate
             logger.info(
                 "Restored _last_silhouette=%.4f from snapshot %s",
-                candidate, snap.id,
+                candidate,
+                snap.id,
             )
             # v0.4.16: include snapshot_age_seconds in the event payload
             # per spec § 5.1 row 7 + § 3.6 row 11 — operators reading the
@@ -1559,9 +1597,7 @@ class TaxonomyEngine:
                 if snap_created is not None:
                     if snap_created.tzinfo is None:
                         snap_created = snap_created.replace(tzinfo=timezone.utc)
-                    age_seconds = (
-                        datetime.now(timezone.utc) - snap_created
-                    ).total_seconds()
+                    age_seconds = (datetime.now(timezone.utc) - snap_created).total_seconds()
                 else:
                     age_seconds = None
             except Exception:
@@ -1572,8 +1608,10 @@ class TaxonomyEngine:
             # time and would bypass the patch.
             try:
                 from app.services.taxonomy import event_logger as _event_logger_mod
+
                 _event_logger_mod.get_event_logger().log_decision(
-                    path="cold", op="bootstrap",
+                    path="cold",
+                    op="bootstrap",
                     decision="silhouette_restored_from_snapshot",
                     context={
                         "silhouette_value": candidate,
@@ -1584,9 +1622,7 @@ class TaxonomyEngine:
             except RuntimeError:
                 pass
 
-    def _compute_q_from_nodes(
-        self, nodes: list[PromptCluster], silhouette: float = 0.0
-    ) -> float | None:
+    def _compute_q_from_nodes(self, nodes: list[PromptCluster], silhouette: float = 0.0) -> float | None:
         """Compute Q_system from a list of PromptCluster rows.
 
         A5: Returns ``None`` when fewer than 2 active (non-structural) nodes
@@ -1628,7 +1664,9 @@ class TaxonomyEngine:
         return compute_q_system(metrics, weights, dbcv=silhouette)
 
     def _compute_q_health_from_nodes(
-        self, nodes: list, silhouette: float = 0.0,
+        self,
+        nodes: list,
+        silhouette: float = 0.0,
     ):  # -> QHealthResult (local import)
         """Compute member-weighted Q_health from PromptCluster rows."""
         from app.services.taxonomy.quality import (
@@ -1640,10 +1678,14 @@ class TaxonomyEngine:
 
         if not nodes:
             return QHealthResult(
-                q_health=0.0, coherence_weighted=0.0, separation_weighted=0.0,
-                coverage=1.0, dbcv=0.0,
+                q_health=0.0,
+                coherence_weighted=0.0,
+                separation_weighted=0.0,
+                coverage=1.0,
+                dbcv=0.0,
                 weights={"w_c": 0.4, "w_s": 0.35, "w_v": 0.25, "w_d": 0.0},
-                total_members=0, cluster_count=0,
+                total_members=0,
+                cluster_count=0,
             )
 
         metrics = []
@@ -1687,7 +1729,8 @@ class TaxonomyEngine:
             except (ValueError, TypeError) as _sep_exc:
                 logger.warning(
                     "Corrupt centroid in separation computation, cluster='%s': %s",
-                    n.label, _sep_exc,
+                    n.label,
+                    _sep_exc,
                 )
                 n.separation = 1.0  # default for corrupt centroid
 
@@ -1701,7 +1744,7 @@ class TaxonomyEngine:
         norms = np.where(norms == 0, 1.0, norms)
         mat_norm = mat / norms
         sim_matrix = mat_norm @ mat_norm.T  # cosine similarity
-        dist_matrix = 1.0 - sim_matrix       # cosine distance
+        dist_matrix = 1.0 - sim_matrix  # cosine distance
 
         # Fill diagonal with inf so self-distance is ignored
         np.fill_diagonal(dist_matrix, np.inf)
@@ -1749,7 +1792,8 @@ class TaxonomyEngine:
             except (ValueError, TypeError) as _emg_exc:
                 logger.warning(
                     "Corrupt embedding in emerge family, cluster='%s': %s",
-                    f.label, _emg_exc,
+                    f.label,
+                    _emg_exc,
                 )
                 continue
 
@@ -1783,7 +1827,9 @@ class TaxonomyEngine:
                 operations.append({"type": "emerge", "node_id": node.id})
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="emerge", decision="created",
+                        path="warm",
+                        op="emerge",
+                        decision="created",
                         cluster_id=node.id,
                         context={
                             "member_count": node.member_count or 0,
@@ -1828,9 +1874,12 @@ class TaxonomyEngine:
         from app.services.taxonomy._constants import (
             DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS,
         )
+
         # --- Step a: Check domain ceiling ---
         ceiling_q = await db.execute(
-            select(func.count()).select_from(PromptCluster).where(
+            select(func.count())
+            .select_from(PromptCluster)
+            .where(
                 PromptCluster.state == "domain",
             )
         )
@@ -1839,14 +1888,19 @@ class TaxonomyEngine:
         if domain_count >= DOMAIN_COUNT_CEILING:
             logger.warning(
                 "Domain ceiling reached (%d >= %d) — skipping discovery",
-                domain_count, DOMAIN_COUNT_CEILING,
+                domain_count,
+                DOMAIN_COUNT_CEILING,
             )
             try:
                 from app.services.event_bus import event_bus
-                event_bus.publish("domain_ceiling_reached", {
-                    "domain_count": domain_count,
-                    "ceiling": DOMAIN_COUNT_CEILING,
-                })
+
+                event_bus.publish(
+                    "domain_ceiling_reached",
+                    {
+                        "domain_count": domain_count,
+                        "ceiling": DOMAIN_COUNT_CEILING,
+                    },
+                )
             except Exception as _dc_exc:
                 logger.debug("Failed to publish domain_ceiling_reached event: %s", _dc_exc)
             return []
@@ -1867,9 +1921,7 @@ class TaxonomyEngine:
         # per-cluster member floor relaxes by 1 so a 2-prompt signal on a fresh
         # DB can promote. Above the threshold, the standard floor applies.
         # ADR-006 compliant: applies to ANY label, not just seeds.
-        total_opts_q = await db.execute(
-            select(func.count()).select_from(Optimization)
-        )
+        total_opts_q = await db.execute(select(func.count()).select_from(Optimization))
         total_opts = int(total_opts_q.scalar() or 0)
         if total_opts < DOMAIN_DISCOVERY_BOOTSTRAP_DB_THRESHOLD:
             effective_min_members = max(2, DOMAIN_DISCOVERY_MIN_MEMBERS - 1)
@@ -1898,9 +1950,7 @@ class TaxonomyEngine:
                 PromptCluster.state == "domain",
             )
         )
-        existing_domains: set[str] = {
-            row[0] for row in existing_q.all() if row[0]
-        }
+        existing_domains: set[str] = {row[0] for row in existing_q.all() if row[0]}
 
         created: list[str] = []
 
@@ -1909,9 +1959,7 @@ class TaxonomyEngine:
         # Each entry in primary_to_clusters[primary] is a tuple of
         # (candidate, top_count, total) where the per-cluster consistency
         # gate has already passed.
-        primary_to_clusters: dict[
-            str, list[tuple[PromptCluster, int, int]]
-        ] = {}
+        primary_to_clusters: dict[str, list[tuple[PromptCluster, int, int]]] = {}
 
         for candidate in candidates:
             try:
@@ -1953,7 +2001,8 @@ class TaxonomyEngine:
             except Exception:
                 logger.error(
                     "Domain discovery failed for cluster %s — skipping",
-                    candidate.id, exc_info=True,
+                    candidate.id,
+                    exc_info=True,
                 )
                 continue
 
@@ -1963,7 +2012,8 @@ class TaxonomyEngine:
             if len(_entries) < DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS:
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover",
+                        path="warm",
+                        op="discover",
                         decision="proposal_rejected_min_source_clusters",
                         context={
                             "domain_label": _primary,
@@ -2003,7 +2053,10 @@ class TaxonomyEngine:
 
                 # Create the domain node
                 _domain_node, _members_reparented = await self._create_domain_node(
-                    db, top_primary, existing_domains, seed_candidate,
+                    db,
+                    top_primary,
+                    existing_domains,
+                    seed_candidate,
                     general_node_id=general_node.id,
                 )
                 created.append(top_primary)
@@ -2018,21 +2071,22 @@ class TaxonomyEngine:
                     c.domain = top_primary
 
                 try:
-                    _total_domains_q = await db.execute(
-                        select(func.count()).where(PromptCluster.state == "domain")
-                    )
+                    _total_domains_q = await db.execute(select(func.count()).where(PromptCluster.state == "domain"))
                     _total_domains_after = int(_total_domains_q.scalar() or 0)
                 except Exception:
                     _total_domains_after = len(existing_domains)
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover", decision="domain_created",
+                        path="warm",
+                        op="discover",
+                        decision="domain_created",
                         cluster_id=_domain_node.id,
                         context={
                             "domain_label": top_primary,
                             "seed_cluster_id": seed_candidate.id,
                             "consistency_pct": round(
-                                seed_top_count / seed_total, 4,
+                                seed_top_count / seed_total,
+                                4,
                             ),
                             "members_reparented": _members_reparented,
                             "source_cluster_count": len(entries),
@@ -2044,7 +2098,8 @@ class TaxonomyEngine:
             except Exception:
                 logger.error(
                     "Domain discovery promotion failed for primary %s — skipping",
-                    top_primary, exc_info=True,
+                    top_primary,
+                    exc_info=True,
                 )
                 continue
 
@@ -2090,14 +2145,16 @@ class TaxonomyEngine:
                     if top_count / len(raws) < DOMAIN_DISCOVERY_CONSISTENCY:
                         continue
                     entry = pooled.setdefault(
-                        top_label, {"members": 0, "clusters": []},
+                        top_label,
+                        {"members": 0, "clusters": []},
                     )
                     entry["members"] += top_count
                     entry["clusters"].append(candidate)
                 except Exception:
                     logger.debug(
                         "Pooled-pass cluster scan failed for %s — skipping",
-                        getattr(candidate, "id", "?"), exc_info=True,
+                        getattr(candidate, "id", "?"),
+                        exc_info=True,
                     )
                     continue
 
@@ -2124,7 +2181,8 @@ class TaxonomyEngine:
                 if len(bucket["clusters"]) < DOMAIN_PROPOSAL_MIN_SOURCE_CLUSTERS:
                     try:
                         get_event_logger().log_decision(
-                            path="warm", op="discover",
+                            path="warm",
+                            op="discover",
                             decision="proposal_rejected_min_source_clusters",
                             context={
                                 "domain_label": label,
@@ -2149,11 +2207,12 @@ class TaxonomyEngine:
                     key=lambda c: c.member_count or 0,
                 )
                 try:
-                    _domain_node, _members_reparented = (
-                        await self._create_domain_node(
-                            db, label, existing_domains, seed_cluster,
-                            general_node_id=general_node.id,
-                        )
+                    _domain_node, _members_reparented = await self._create_domain_node(
+                        db,
+                        label,
+                        existing_domains,
+                        seed_cluster,
+                        general_node_id=general_node.id,
                     )
                     created.append(label)
                     existing_domains.add(label)
@@ -2165,7 +2224,8 @@ class TaxonomyEngine:
                         c.domain = label
                     try:
                         get_event_logger().log_decision(
-                            path="warm", op="discover",
+                            path="warm",
+                            op="discover",
                             decision="domain_created",
                             cluster_id=_domain_node.id,
                             context={
@@ -2173,9 +2233,7 @@ class TaxonomyEngine:
                                 "source": "cross_cluster_pool",
                                 "pooled_members": bucket["members"],
                                 "contributing_clusters": len(bucket["clusters"]),
-                                "total_domains_after": (
-                                    domain_count + len(created)
-                                ),
+                                "total_domains_after": (domain_count + len(created)),
                             },
                         )
                     except RuntimeError:
@@ -2183,12 +2241,14 @@ class TaxonomyEngine:
                 except Exception:
                     logger.error(
                         "Pooled domain promotion failed for label %s",
-                        label, exc_info=True,
+                        label,
+                        exc_info=True,
                     )
                     continue
         except Exception as pool_exc:
             logger.warning(
-                "Cross-cluster pooled pass failed (non-fatal): %s", pool_exc,
+                "Cross-cluster pooled pass failed (non-fatal): %s",
+                pool_exc,
             )
 
         # --- Post-discovery re-parenting sweep ---
@@ -2223,7 +2283,8 @@ class TaxonomyEngine:
             general_children = list(general_children_q.scalars().all())
             logger.info(
                 "Re-parenting sweep: checking %d general-parented clusters against %d domains",
-                len(general_children), len(domain_lookup),
+                len(general_children),
+                len(domain_lookup),
             )
             sweep_reparented = 0
             for cluster in general_children:
@@ -2257,8 +2318,12 @@ class TaxonomyEngine:
                         effective_domain = _sub_domain_to_parent.get(top_primary, top_primary)
                         logger.info(
                             "Re-parenting '%s' → '%s' (domain=%s, consistency=%.0f%%, %d/%d members)",
-                            cluster.label, top_primary, effective_domain,
-                            consistency * 100, top_ct, total,
+                            cluster.label,
+                            top_primary,
+                            effective_domain,
+                            consistency * 100,
+                            top_ct,
+                            total,
                         )
                         cluster.parent_id = target_id
                         cluster.domain = effective_domain
@@ -2328,26 +2393,20 @@ class TaxonomyEngine:
         created: list[str] = []
 
         # Check domain ceiling
-        domain_count_q = await db.execute(
-            select(func.count()).where(PromptCluster.state == "domain")
-        )
+        domain_count_q = await db.execute(select(func.count()).where(PromptCluster.state == "domain"))
         current_domain_count = int(domain_count_q.scalar() or 0)
         if current_domain_count >= DOMAIN_COUNT_CEILING:
             return created
 
         # Gather existing domain labels for dedup
-        existing_q = await db.execute(
-            select(PromptCluster.label).where(PromptCluster.state == "domain")
-        )
+        existing_q = await db.execute(select(PromptCluster.label).where(PromptCluster.state == "domain"))
         existing_labels = {r[0].lower() for r in existing_q.all() if r[0]}
 
         # --- Vocabulary generation pass: ALL domains including "general" ---
         # Every domain gets organic qualifier vocabulary. This is decoupled
         # from sub-domain discovery (which skips "general") because vocab is
         # useful for hot-path enrichment regardless of sub-domain formation.
-        all_domain_q = await db.execute(
-            select(PromptCluster).where(PromptCluster.state == "domain")
-        )
+        all_domain_q = await db.execute(select(PromptCluster).where(PromptCluster.state == "domain"))
         all_domains = list(all_domain_q.scalars().all())
         for domain_node in all_domains:
             # Get child cluster IDs for this domain (direct children only)
@@ -2367,10 +2426,8 @@ class TaxonomyEngine:
             current_cluster_count = len(child_ids)
 
             is_first_generation = not cached_vocab
-            stale = (
-                is_first_generation
-                or abs(current_cluster_count - cached_cluster_count)
-                > max(2, cached_cluster_count * 0.3)
+            stale = is_first_generation or abs(current_cluster_count - cached_cluster_count) > max(
+                2, cached_cluster_count * 0.3
             )
             if stale and self._provider:
                 import time as _vocab_time
@@ -2414,7 +2471,7 @@ class TaxonomyEngine:
                     for cid, intent, domain_raw in opt_rows:
                         if intent:
                             intents_by_cluster.setdefault(cid, _Counter())[intent.lower()] += 1
-                        if domain_raw and ':' in domain_raw:
+                        if domain_raw and ":" in domain_raw:
                             _, q = parse_domain(domain_raw)
                             if q:
                                 q_norm = q.strip().lower()
@@ -2449,7 +2506,8 @@ class TaxonomyEngine:
                             similarity_matrix = None
                             try:
                                 get_event_logger().log_decision(
-                                    path="warm", op="discover",
+                                    path="warm",
+                                    op="discover",
                                     decision="vocab_enrichment_fallback",
                                     context={
                                         "domain": domain_node.label,
@@ -2463,12 +2521,14 @@ class TaxonomyEngine:
                     except Exception as matrix_exc:
                         logger.warning(
                             "Vocab matrix computation failed for '%s': %s",
-                            domain_node.label, matrix_exc,
+                            domain_node.label,
+                            matrix_exc,
                         )
                         similarity_matrix = None
                         try:
                             get_event_logger().log_decision(
-                                path="warm", op="discover",
+                                path="warm",
+                                op="discover",
                                 decision="vocab_enrichment_fallback",
                                 context={
                                     "domain": domain_node.label,
@@ -2486,25 +2546,26 @@ class TaxonomyEngine:
                         top_intents = [intent for intent, _ in intent_counter.most_common(10)]
                         qual_counter = qualifiers_by_cluster.get(cid, _Counter())
                         qual_dist = dict(qual_counter.most_common(5))
-                        cluster_contexts.append(ClusterVocabContext(
-                            label=label,
-                            member_count=mc or 0,
-                            intent_labels=top_intents,
-                            qualifier_distribution=qual_dist,
-                        ))
+                        cluster_contexts.append(
+                            ClusterVocabContext(
+                                label=label,
+                                member_count=mc or 0,
+                                intent_labels=top_intents,
+                                qualifier_distribution=qual_dist,
+                            )
+                        )
                 except Exception as enrich_exc:
                     logger.warning(
                         "Vocab enrichment failed for '%s' (falling back to labels): %s",
-                        domain_node.label, enrich_exc,
+                        domain_node.label,
+                        enrich_exc,
                     )
-                    cluster_contexts = [
-                        ClusterVocabContext(label=r[1], member_count=r[2] or 0)
-                        for r in cluster_rows
-                    ]
+                    cluster_contexts = [ClusterVocabContext(label=r[1], member_count=r[2] or 0) for r in cluster_rows]
                     similarity_matrix = None
                     try:
                         get_event_logger().log_decision(
-                            path="warm", op="discover",
+                            path="warm",
+                            op="discover",
                             decision="vocab_enrichment_fallback",
                             context={
                                 "domain": domain_node.label,
@@ -2535,13 +2596,13 @@ class TaxonomyEngine:
                         continue
                     if isinstance(_kw, str):
                         _signal_kws_typed.append((_kw, _w))
-                _existing_vocab_dict = _domain_meta_for_hints.get(
-                    "generated_qualifiers",
-                ) or {}
-                _existing_groups = (
-                    list(_existing_vocab_dict.keys())
-                    if isinstance(_existing_vocab_dict, dict) else []
+                _existing_vocab_dict = (
+                    _domain_meta_for_hints.get(
+                        "generated_qualifiers",
+                    )
+                    or {}
                 )
+                _existing_groups = list(_existing_vocab_dict.keys()) if isinstance(_existing_vocab_dict, dict) else []
 
                 try:
                     generated = await generate_qualifier_vocabulary(
@@ -2567,6 +2628,7 @@ class TaxonomyEngine:
                     _qm_ms: float | None = None
                     try:
                         import time as _qm_time
+
                         _qm_start = _qm_time.monotonic()
 
                         group_embeddings: dict[str, np.ndarray] = {}
@@ -2596,15 +2658,14 @@ class TaxonomyEngine:
                             self._vocab_quality_scores.append(_quality_score)
                             try:
                                 get_event_logger().log_decision(
-                                    path="warm", op="discover",
+                                    path="warm",
+                                    op="discover",
                                     decision="vocab_quality_assessed",
                                     context={
                                         "domain": domain_node.label,
                                         "quality_score": _quality_score,
                                         "max_pairwise_cosine": (
-                                            round(_max_pairwise, 4)
-                                            if _max_pairwise is not None
-                                            else None
+                                            round(_max_pairwise, 4) if _max_pairwise is not None else None
                                         ),
                                         "overlapping_pair": (
                                             _overlapping_pair
@@ -2623,45 +2684,42 @@ class TaxonomyEngine:
                             if _quality_score < _VOCAB_QUALITY_POOR_THRESHOLD:
                                 logger.warning(
                                     "Vocab quality poor for '%s': score=%.2f (max_pairwise=%.2f between %s)",
-                                    domain_node.label, _quality_score,
-                                    _max_pairwise if _max_pairwise is not None else float('nan'),
+                                    domain_node.label,
+                                    _quality_score,
+                                    _max_pairwise if _max_pairwise is not None else float("nan"),
                                     _overlapping_pair,
                                 )
                             elif _quality_score < _VOCAB_QUALITY_ACCEPTABLE_THRESHOLD:
                                 logger.warning(
                                     "Vocab quality acceptable (overlapping groups) for '%s': "
                                     "score=%.2f (max_pairwise=%.2f between %s)",
-                                    domain_node.label, _quality_score,
-                                    _max_pairwise if _max_pairwise is not None else float('nan'),
+                                    domain_node.label,
+                                    _quality_score,
+                                    _max_pairwise if _max_pairwise is not None else float("nan"),
                                     _overlapping_pair,
                                 )
                     except Exception as qm_exc:
                         logger.warning(
                             "Vocab quality metric failed for '%s': %s",
-                            domain_node.label, qm_exc,
+                            domain_node.label,
+                            qm_exc,
                         )
 
                     # Emit enriched vocab observability event (per spec § Observability)
-                    clusters_with_intents = sum(
-                        1 for ctx in cluster_contexts if ctx.intent_labels
-                    )
+                    clusters_with_intents = sum(1 for ctx in cluster_contexts if ctx.intent_labels)
                     clusters_with_centroids = 0
                     if similarity_matrix:
                         # A cluster has a centroid iff its row has any non-None cell
-                        clusters_with_centroids = sum(
-                            1 for row in similarity_matrix
-                            if any(v is not None for v in row)
-                        )
+                        clusters_with_centroids = sum(1 for row in similarity_matrix if any(v is not None for v in row))
                     n_ctx = len(cluster_contexts) or 1
-                    matrix_coverage_pct = round(
-                        100.0 * clusters_with_centroids / n_ctx, 1
-                    )
+                    matrix_coverage_pct = round(100.0 * clusters_with_centroids / n_ctx, 1)
 
                     # R7 (audit 2026-04-27): vocab regeneration overlap telemetry.
                     # Jaccard intersection-over-union between previous and new group names.
                     # v0.4.38 F5a: normalize BOTH sets through the canonicalizer so
                     # stored legacy 20-char truncations don't fire false low-overlap.
                     from app.utils.text_cleanup import normalize_sub_domain_label as _norm
+
                     prev_set = {_norm(g) for g in (_existing_groups or []) if g}
                     new_set = {_norm(g) for g in generated.keys() if g}
                     # Filter empties produced by normalize on bogus input.
@@ -2684,30 +2742,27 @@ class TaxonomyEngine:
                             "Vocab regen low overlap for '%s': overlap=%.1f%% "
                             "previous=%s new=%s — sub-domains anchored to the previous "
                             "vocab may dissolve on next Phase 5 (audit R7)",
-                            domain_node.label, overlap_pct,
-                            prev_groups_sorted, new_groups_sorted,
+                            domain_node.label,
+                            overlap_pct,
+                            prev_groups_sorted,
+                            new_groups_sorted,
                         )
 
                     try:
                         get_event_logger().log_decision(
-                            path="warm", op="discover",
+                            path="warm",
+                            op="discover",
                             decision="vocab_generated_enriched",
                             context={
                                 "domain": domain_node.label,
                                 "groups": len(generated),
                                 "quality_score": _quality_score,
-                                "max_pairwise_cosine": (
-                                    round(_max_pairwise, 4)
-                                    if _max_pairwise is not None
-                                    else None
-                                ),
+                                "max_pairwise_cosine": (round(_max_pairwise, 4) if _max_pairwise is not None else None),
                                 "clusters_with_intents": clusters_with_intents,
                                 "clusters_with_centroids": clusters_with_centroids,
                                 "matrix_coverage_pct": matrix_coverage_pct,
                                 "generation_ms": _vocab_ms,
-                                "quality_ms": (
-                                    _qm_ms if _quality_score is not None else None
-                                ),
+                                "quality_ms": (_qm_ms if _quality_score is not None else None),
                                 "previous_groups": prev_groups_sorted,
                                 "new_groups": new_groups_sorted,
                                 "overlap_pct": overlap_pct,
@@ -2723,6 +2778,7 @@ class TaxonomyEngine:
                     )
                     try:
                         from app.services.domain_signal_loader import get_signal_loader
+
                         loader = get_signal_loader()
                         if loader:
                             loader.refresh_qualifiers(domain_node.label, generated)
@@ -2732,6 +2788,7 @@ class TaxonomyEngine:
                 # Push existing cached vocab to DomainSignalLoader
                 try:
                     from app.services.domain_signal_loader import get_signal_loader
+
                     loader = get_signal_loader()
                     if loader:
                         loader.refresh_qualifiers(domain_node.label, cached_vocab)
@@ -2772,7 +2829,8 @@ class TaxonomyEngine:
             if existing_sub_count > 0:
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover",
+                        path="warm",
+                        op="discover",
                         decision="sub_domain_domain_reevaluated",
                         context={
                             "domain": domain_node.label,
@@ -2786,7 +2844,9 @@ class TaxonomyEngine:
             dissolved_this_cycle: set[str] = set()
             if existing_sub_count > 0:
                 dissolved = await self._reevaluate_sub_domains(
-                    db, domain_node, existing_labels,
+                    db,
+                    domain_node,
+                    existing_labels,
                 )
                 # Block same-cycle re-creation of dissolved labels (flip-flop prevention)
                 dissolved_this_cycle.update(d.lower().replace(" ", "-") for d in dissolved)
@@ -2816,7 +2876,8 @@ class TaxonomyEngine:
             if dynamic_keywords:
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover",
+                        path="warm",
+                        op="discover",
                         decision="sub_domain_dynamic_vocab",
                         context={
                             "domain": domain_node.label,
@@ -2834,17 +2895,20 @@ class TaxonomyEngine:
             source_from_raw = cascade.source_breakdown.get("domain_raw", 0)
             source_from_intent = cascade.source_breakdown.get("intent_label", 0)
             source_from_tfidf = cascade.source_breakdown.get("tf_idf", 0)
-            intent_qualifier_counts: Counter[str] = Counter({
-                q: srcs.get("intent_label", 0)
-                for q, srcs in cascade.per_qualifier_sources.items()
-                if srcs.get("intent_label", 0) > 0
-            })
+            intent_qualifier_counts: Counter[str] = Counter(
+                {
+                    q: srcs.get("intent_label", 0)
+                    for q, srcs in cascade.per_qualifier_sources.items()
+                    if srcs.get("intent_label", 0) > 0
+                }
+            )
 
             # Log signal scan (source key "tf_idf" standardized per ROADMAP
             # engine-cascade-extraction naming reconciliation — was "dynamic").
             try:
                 get_event_logger().log_decision(
-                    path="warm", op="discover",
+                    path="warm",
+                    op="discover",
                     decision="sub_domain_signal_scan",
                     context={
                         "domain": domain_node.label,
@@ -2866,7 +2930,8 @@ class TaxonomyEngine:
             if source_from_intent > 0:
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover",
+                        path="warm",
+                        op="discover",
                         decision="sub_domain_intent_fallback",
                         context={
                             "domain": domain_node.label,
@@ -2884,22 +2949,19 @@ class TaxonomyEngine:
             # Adaptive threshold
             threshold = max(
                 SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
-                SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH
-                - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts,
+                SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts,
             )
 
             # Evaluate each qualifier
             for qualifier, count in qualifier_counts.most_common():
                 consistency = count / total_opts
-                passed = (
-                    count >= SUB_DOMAIN_QUALIFIER_MIN_MEMBERS
-                    and consistency >= threshold
-                )
+                passed = count >= SUB_DOMAIN_QUALIFIER_MIN_MEMBERS and consistency >= threshold
 
                 # Log evaluation
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover",
+                        path="warm",
+                        op="discover",
                         decision="sub_domain_qualifier_eval",
                         context={
                             "domain": domain_node.label,
@@ -2930,13 +2992,11 @@ class TaxonomyEngine:
                 if not sub_label:
                     continue
                 if sub_label in existing_labels or sub_label in dissolved_this_cycle:
-                    skip_reason = (
-                        "dissolved_this_cycle" if sub_label in dissolved_this_cycle
-                        else "already_exists"
-                    )
+                    skip_reason = "dissolved_this_cycle" if sub_label in dissolved_this_cycle else "already_exists"
                     try:
                         get_event_logger().log_decision(
-                            path="warm", op="discover",
+                            path="warm",
+                            op="discover",
                             decision="sub_domain_skipped",
                             context={
                                 "qualifier": sub_label,
@@ -2952,13 +3012,12 @@ class TaxonomyEngine:
                 # cluster is a 1:1 wrapper that adds hierarchy depth without
                 # navigational value.  Require at least 2 distinct clusters
                 # to justify the sub-domain level.
-                matching_cluster_count = len(
-                    qualifier_to_cluster_ids.get(qualifier, set())
-                )
+                matching_cluster_count = len(qualifier_to_cluster_ids.get(qualifier, set()))
                 if matching_cluster_count < SUB_DOMAIN_MIN_CLUSTER_BREADTH:
                     try:
                         get_event_logger().log_decision(
-                            path="warm", op="discover",
+                            path="warm",
+                            op="discover",
                             decision="sub_domain_skipped",
                             context={
                                 "qualifier": sub_label,
@@ -2988,16 +3047,20 @@ class TaxonomyEngine:
                     if matching_cluster_ids:
                         # Order by member_count desc for representativeness.
                         seed_q = await db.execute(
-                            select(PromptCluster).where(
+                            select(PromptCluster)
+                            .where(
                                 PromptCluster.id.in_(matching_cluster_ids),
                                 PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
-                            ).order_by(PromptCluster.member_count.desc())
+                            )
+                            .order_by(PromptCluster.member_count.desc())
                             .limit(1)
                         )
                         seed_for_keywords = seed_q.scalars().first()
 
                     sub_node, _ = await self._create_domain_node(
-                        db, sub_label, existing_labels,
+                        db,
+                        sub_label,
+                        existing_labels,
                         seed_cluster=seed_for_keywords,
                         parent_domain_id=domain_node.id,
                     )
@@ -3021,22 +3084,28 @@ class TaxonomyEngine:
                     # Update resolver cache
                     try:
                         from app.services.domain_resolver import get_domain_resolver
+
                         get_domain_resolver().add_label(
-                            sub_label, parent_label=domain_node.label,
+                            sub_label,
+                            parent_label=domain_node.label,
                         )
                     except (ValueError, Exception):
                         pass
 
                     logger.info(
-                        "Created sub-domain '%s' under '%s': %d clusters, "
-                        "consistency=%.0f%% (%d/%d)",
-                        sub_label, domain_node.label, reparented,
-                        consistency * 100, count, total_opts,
+                        "Created sub-domain '%s' under '%s': %d clusters, consistency=%.0f%% (%d/%d)",
+                        sub_label,
+                        domain_node.label,
+                        reparented,
+                        consistency * 100,
+                        count,
+                        total_opts,
                     )
 
                     try:
                         get_event_logger().log_decision(
-                            path="warm", op="discover",
+                            path="warm",
+                            op="discover",
                             decision="sub_domain_created",
                             cluster_id=sub_node.id,
                             context={
@@ -3054,7 +3123,9 @@ class TaxonomyEngine:
                 except Exception as exc:
                     logger.warning(
                         "Sub-domain creation failed for '%s' under '%s': %s",
-                        sub_label, domain_node.label, exc,
+                        sub_label,
+                        domain_node.label,
+                        exc,
                         exc_info=True,
                     )
                     continue
@@ -3119,24 +3190,27 @@ class TaxonomyEngine:
                 min_consistency_override below dissolution floor.
         """
         if write_queue is not None:
+
             async def _do_rebuild(write_db: AsyncSession) -> dict:
                 return await self._rebuild_sub_domains_impl(
-                    write_db, domain_id,
+                    write_db,
+                    domain_id,
                     min_consistency_override=min_consistency_override,
                     dry_run=dry_run,
                 )
 
             return await write_queue.submit(
-                _do_rebuild, operation_label="engine_rebuild_sub_domains",
+                _do_rebuild,
+                operation_label="engine_rebuild_sub_domains",
             )
 
         if db is None:
             raise TypeError(
-                "rebuild_sub_domains requires either write_queue= or "
-                "a positional AsyncSession (legacy form).",
+                "rebuild_sub_domains requires either write_queue= or a positional AsyncSession (legacy form).",
             )
         return await self._rebuild_sub_domains_impl(
-            db, domain_id,
+            db,
+            domain_id,
             min_consistency_override=min_consistency_override,
             dry_run=dry_run,
         )
@@ -3174,18 +3248,11 @@ class TaxonomyEngine:
         if domain is None:
             raise ValueError(f"domain not found: {domain_id}")
         if domain.state != "domain":
-            raise ValueError(
-                f"cluster {domain_id} is not a domain node "
-                f"(state='{domain.state}')"
-            )
+            raise ValueError(f"cluster {domain_id} is not a domain node (state='{domain.state}')")
 
         # 2. Defense-in-depth floor check (Pydantic also enforces ge=0.25
         # at the router layer).
-        if (
-            min_consistency_override is not None
-            and min_consistency_override
-            < SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR
-        ):
+        if min_consistency_override is not None and min_consistency_override < SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR:
             raise ValueError(
                 f"min_consistency_override={min_consistency_override} "
                 f"below SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR="
@@ -3207,24 +3274,16 @@ class TaxonomyEngine:
         view = await compute_unified_qualifier_view(db, domain)
         qualifier_source = view.source
         qualifier_counts: Counter[str] = Counter(view.qualifier_counts)
-        qualifier_to_cluster_ids: dict[str, set[str]] = {
-            k: set(v) for k, v in view.qualifier_to_cluster_ids.items()
-        }
+        qualifier_to_cluster_ids: dict[str, set[str]] = {k: set(v) for k, v in view.qualifier_to_cluster_ids.items()}
         # Track per-qualifier source label for telemetry.
         proposal_source_by_label: dict[str, str] = {}
         for q in qualifier_counts:
-            proposal_source_by_label[q] = (
-                "literal_fallback"
-                if view.source == "literal_fallback"
-                else "cascade_group"
-            )
+            proposal_source_by_label[q] = "literal_fallback" if view.source == "literal_fallback" else "cascade_group"
         # Residue merge — only when cascade admitted something but operator
         # wants the strict-superset recovery (AC-6).
         if view.source == "cascade":
             for res_q, res_count in view.residue_counts.items():
-                qualifier_counts[res_q] = (
-                    qualifier_counts.get(res_q, 0) + res_count
-                )
+                qualifier_counts[res_q] = qualifier_counts.get(res_q, 0) + res_count
                 qualifier_to_cluster_ids.setdefault(res_q, set()).update(
                     view.residue_cluster_ids.get(res_q, set()),
                 )
@@ -3237,8 +3296,7 @@ class TaxonomyEngine:
         else:
             threshold_used = max(
                 SUB_DOMAIN_QUALIFIER_CONSISTENCY_LOW,
-                SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH
-                - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts,
+                SUB_DOMAIN_QUALIFIER_CONSISTENCY_HIGH - SUB_DOMAIN_QUALIFIER_SCALE_RATE * total_opts,
             )
 
         # 5. Identify existing sub-domain labels under this domain.
@@ -3248,9 +3306,7 @@ class TaxonomyEngine:
                 PromptCluster.state == "domain",
             )
         )
-        existing_labels: set[str] = {
-            (row[0] or "").lower() for row in existing_q.all() if row[0]
-        }
+        existing_labels: set[str] = {(row[0] or "").lower() for row in existing_q.all() if row[0]}
 
         # 6. Walk eligible qualifiers — apply threshold + breadth gates.
         # Idempotency note: a qualifier whose label already exists as a
@@ -3277,14 +3333,13 @@ class TaxonomyEngine:
                 if sub_label not in skipped_existing:
                     skipped_existing.append(sub_label)
                 continue
-            cluster_breadth = len(
-                qualifier_to_cluster_ids.get(qualifier, set())
-            )
+            cluster_breadth = len(qualifier_to_cluster_ids.get(qualifier, set()))
             if cluster_breadth < SUB_DOMAIN_MIN_CLUSTER_BREADTH:
                 continue
             proposed.append(sub_label)
             proposal_source_by_sub_label[sub_label] = proposal_source_by_label.get(
-                qualifier, "cascade_group",
+                qualifier,
+                "cascade_group",
             )
             eligible.append(
                 (qualifier, sub_label, qualifier_to_cluster_ids.get(qualifier, set())),
@@ -3306,7 +3361,8 @@ class TaxonomyEngine:
             )
             variants = view.literal_members.get(original_qualifier, {})
             sorted_variants = sorted(
-                variants.items(), key=lambda kv: (-kv[1], kv[0]),
+                variants.items(),
+                key=lambda kv: (-kv[1], kv[0]),
             )[:5]
             if sorted_variants:
                 literal_member_counts[sub_label] = sorted_variants
@@ -3332,15 +3388,20 @@ class TaxonomyEngine:
                     seed_for_keywords: PromptCluster | None = None
                     if matching_cluster_ids:
                         seed_q = await db.execute(
-                            select(PromptCluster).where(
+                            select(PromptCluster)
+                            .where(
                                 PromptCluster.id.in_(matching_cluster_ids),
                                 PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES),
-                            ).order_by(PromptCluster.member_count.desc()).limit(1)
+                            )
+                            .order_by(PromptCluster.member_count.desc())
+                            .limit(1)
                         )
                         seed_for_keywords = seed_q.scalars().first()
 
                     sub_node, _ = await self._create_domain_node(
-                        db, sub_label, existing_labels,
+                        db,
+                        sub_label,
+                        existing_labels,
                         seed_cluster=seed_for_keywords,
                         parent_domain_id=domain_id_str,
                     )
@@ -3348,10 +3409,7 @@ class TaxonomyEngine:
                     # Reparent matching clusters under the new sub-domain.
                     for cid in matching_cluster_ids:
                         cluster = await db.get(PromptCluster, cid)
-                        if (
-                            cluster
-                            and cluster.state not in EXCLUDED_STRUCTURAL_STATES
-                        ):
+                        if cluster and cluster.state not in EXCLUDED_STRUCTURAL_STATES:
                             cluster.parent_id = sub_node.id
                             cluster.domain = domain_label_str
 
@@ -3381,8 +3439,7 @@ class TaxonomyEngine:
                     # v0.4.38 additive (spec §3.3):
                     "qualifier_source": qualifier_source,
                     "proposal_sources": {
-                        label: proposal_source_by_sub_label.get(label, "cascade_group")
-                        for label in proposed
+                        label: proposal_source_by_sub_label.get(label, "cascade_group") for label in proposed
                     },
                     "literal_member_counts": literal_member_counts,
                 },
@@ -3393,11 +3450,14 @@ class TaxonomyEngine:
         # 9. Publish taxonomy_changed only when created is non-empty AND
         # not dry_run.
         if created and not dry_run:
-            event_bus.publish("taxonomy_changed", {
-                "source": "rebuild_sub_domains",
-                "domain": domain_label_str,
-                "created_sub_domains": list(created),
-            })
+            event_bus.publish(
+                "taxonomy_changed",
+                {
+                    "source": "rebuild_sub_domains",
+                    "domain": domain_label_str,
+                    "created_sub_domains": list(created),
+                },
+            )
 
         return {
             "domain_id": domain_id_str,
@@ -3535,7 +3595,8 @@ class TaxonomyEngine:
         # cache invalidation, member_count zeroing, and label release.
         existing_labels: set[str] = {domain.label.lower()}
         await self._dissolve_node(
-            db, domain,
+            db,
+            domain,
             dissolution_target_id=general_node.id,
             existing_labels=existing_labels,
             clear_signal_loader=True,
@@ -3559,11 +3620,14 @@ class TaxonomyEngine:
 
         # 9. Cross-process notification so other engine instances refresh.
         try:
-            event_bus.publish("taxonomy_changed", {
-                "source": "dissolve_empty_domain",
-                "domain": domain_label_str,
-                "domain_id": domain_id,
-            })
+            event_bus.publish(
+                "taxonomy_changed",
+                {
+                    "source": "dissolve_empty_domain",
+                    "domain": domain_label_str,
+                    "domain_id": domain_id,
+                },
+            )
         except Exception:
             # Event bus failure must not undo a successful dissolution.
             pass
@@ -3620,16 +3684,12 @@ class TaxonomyEngine:
 
         # --- Reparent any direct optimizations (defensive) ---
         await db.execute(
-            _sa_update(Optimization)
-            .where(Optimization.cluster_id == node.id)
-            .values(cluster_id=dissolution_target_id)
+            _sa_update(Optimization).where(Optimization.cluster_id == node.id).values(cluster_id=dissolution_target_id)
         )
 
         # --- Merge meta-patterns into target (UPDATE, not DELETE) ---
         mp_result = await db.execute(
-            _sa_update(MetaPattern)
-            .where(MetaPattern.cluster_id == node.id)
-            .values(cluster_id=dissolution_target_id)
+            _sa_update(MetaPattern).where(MetaPattern.cluster_id == node.id).values(cluster_id=dissolution_target_id)
         )
         patterns_merged = mp_result.rowcount  # type: ignore[attr-defined]
 
@@ -3669,6 +3729,7 @@ class TaxonomyEngine:
         # --- Clear DomainResolver cache ---
         try:
             from app.services.domain_resolver import get_domain_resolver
+
             resolver = get_domain_resolver()
             if resolver:
                 resolver.remove_label(node.label)
@@ -3679,6 +3740,7 @@ class TaxonomyEngine:
         if clear_signal_loader:
             try:
                 from app.services.domain_signal_loader import get_signal_loader
+
                 loader = get_signal_loader()
                 if loader:
                     loader.remove_domain(node.label)
@@ -3758,7 +3820,8 @@ class TaxonomyEngine:
                 self._domain_lifecycle_stats["dissolution_blocked"] += 1
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover",
+                        path="warm",
+                        op="discover",
                         decision="domain_dissolution_blocked",
                         context={
                             "domain": domain.label,
@@ -3784,7 +3847,8 @@ class TaxonomyEngine:
                 self._domain_lifecycle_stats["dissolution_blocked"] += 1
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover",
+                        path="warm",
+                        op="discover",
                         decision="domain_dissolution_blocked",
                         context={
                             "domain": domain.label,
@@ -3808,7 +3872,8 @@ class TaxonomyEngine:
                 self._domain_lifecycle_stats["dissolution_blocked"] += 1
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover",
+                        path="warm",
+                        op="discover",
                         decision="domain_dissolution_blocked",
                         context={
                             "domain": domain.label,
@@ -3849,7 +3914,8 @@ class TaxonomyEngine:
             # Log re-evaluation
             try:
                 get_event_logger().log_decision(
-                    path="warm", op="discover",
+                    path="warm",
+                    op="discover",
                     decision="domain_reevaluated",
                     context={
                         "domain": domain.label,
@@ -3872,11 +3938,15 @@ class TaxonomyEngine:
             # --- Dissolve ---
             logger.info(
                 "Dissolving domain '%s': consistency=%.1f%% < floor=%.1f%%, %d clusters",
-                domain.label, consistency * 100,
-                DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100, len(child_ids),
+                domain.label,
+                consistency * 100,
+                DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100,
+                len(child_ids),
             )
             result = await self._dissolve_node(
-                db, domain, dissolution_target_id=general_node.id,
+                db,
+                domain,
+                dissolution_target_id=general_node.id,
                 existing_labels=existing_labels,
                 clear_signal_loader=True,
             )
@@ -3885,7 +3955,8 @@ class TaxonomyEngine:
 
             try:
                 get_event_logger().log_decision(
-                    path="warm", op="discover",
+                    path="warm",
+                    op="discover",
                     decision="domain_dissolved",
                     cluster_id=domain.id,
                     context={
@@ -4067,7 +4138,8 @@ class TaxonomyEngine:
             if not sub_generated_qualifiers:
                 try:
                     get_event_logger().log_decision(
-                        path="warm", op="discover",
+                        path="warm",
+                        op="discover",
                         decision="sub_domain_reevaluation_skipped",
                         cluster_id=sub.id,
                         context={
@@ -4081,11 +4153,7 @@ class TaxonomyEngine:
                 except RuntimeError:
                     pass
                 continue
-            sub_vocab_groups: set[str] = {
-                str(k).lower()
-                for k in sub_generated_qualifiers.keys()
-                if isinstance(k, str)
-            }
+            sub_vocab_groups: set[str] = {str(k).lower() for k in sub_generated_qualifiers.keys() if isinstance(k, str)}
             sub_vocab_terms: set[str] = {
                 str(t).lower()
                 for terms in sub_generated_qualifiers.values()
@@ -4136,24 +4204,21 @@ class TaxonomyEngine:
 
             sample_failures: list[dict] = []
             for (domain_raw, intent_label, _raw_prompt, cluster_id), result in zip(
-                opt_rows, match_results,
+                opt_rows,
+                match_results,
             ):
                 if result.matched:
                     continue
                 if len(sample_failures) >= SUB_DOMAIN_FAILURE_SAMPLES:
                     break
-                sample_failures.append({
-                    "cluster_id": str(cluster_id) if cluster_id else None,
-                    "domain_raw": (
-                        (domain_raw or "")[:SUB_DOMAIN_FAILURE_FIELD_TRUNCATE]
-                        or None
-                    ),
-                    "intent_label": (
-                        (intent_label or "")[:SUB_DOMAIN_FAILURE_FIELD_TRUNCATE]
-                        or None
-                    ),
-                    "reason": result.reason,
-                })
+                sample_failures.append(
+                    {
+                        "cluster_id": str(cluster_id) if cluster_id else None,
+                        "domain_raw": ((domain_raw or "")[:SUB_DOMAIN_FAILURE_FIELD_TRUNCATE] or None),
+                        "intent_label": ((intent_label or "")[:SUB_DOMAIN_FAILURE_FIELD_TRUNCATE] or None),
+                        "reason": result.reason,
+                    }
+                )
 
             consistency: float = matching / total_opts
 
@@ -4178,7 +4243,8 @@ class TaxonomyEngine:
             # Log re-evaluation result
             try:
                 get_event_logger().log_decision(
-                    path="warm", op="discover",
+                    path="warm",
+                    op="discover",
                     decision="sub_domain_reevaluated",
                     context={
                         "domain": domain_node.label,
@@ -4203,7 +4269,9 @@ class TaxonomyEngine:
 
             # --- Dissolve via shared method ---
             result = await self._dissolve_node(
-                db, sub, dissolution_target_id=domain_node.id,
+                db,
+                sub,
+                dissolution_target_id=domain_node.id,
                 existing_labels=existing_labels,
                 clear_signal_loader=False,
             )
@@ -4216,15 +4284,19 @@ class TaxonomyEngine:
                 "Dissolved sub-domain '%s' under '%s': "
                 "consistency=%.1f%% (shrunk=%.1f%%) < floor=%.1f%%, "
                 "%d clusters reparented, %d patterns merged",
-                sub.label, domain_node.label,
-                consistency * 100, shrunk_consistency * 100,
+                sub.label,
+                domain_node.label,
+                consistency * 100,
+                shrunk_consistency * 100,
                 SUB_DOMAIN_DISSOLUTION_CONSISTENCY_FLOOR * 100,
-                reparented, patterns_merged,
+                reparented,
+                patterns_merged,
             )
 
             try:
                 get_event_logger().log_decision(
-                    path="warm", op="discover",
+                    path="warm",
+                    op="discover",
                     decision="sub_domain_dissolved",
                     cluster_id=sub.id,
                     context={
@@ -4271,22 +4343,31 @@ class TaxonomyEngine:
         for candidate in near_q.scalars():
             logger.info(
                 "Domain candidate detected: '%s' (members=%d/%d, coherence=%.2f)",
-                candidate.label, candidate.member_count or 0,
-                DOMAIN_DISCOVERY_MIN_MEMBERS, candidate.coherence or 0,
+                candidate.label,
+                candidate.member_count or 0,
+                DOMAIN_DISCOVERY_MIN_MEMBERS,
+                candidate.coherence or 0,
             )
             try:
                 from app.services.event_bus import event_bus
-                event_bus.publish("domain_candidate_detected", {
-                    "label": candidate.label,
-                    "member_count": candidate.member_count or 0,
-                    "threshold": DOMAIN_DISCOVERY_MIN_MEMBERS,
-                    "coherence": candidate.coherence or 0,
-                })
+
+                event_bus.publish(
+                    "domain_candidate_detected",
+                    {
+                        "label": candidate.label,
+                        "member_count": candidate.member_count or 0,
+                        "threshold": DOMAIN_DISCOVERY_MIN_MEMBERS,
+                        "coherence": candidate.coherence or 0,
+                    },
+                )
             except Exception as _dcd_exc:
                 logger.debug("Failed to publish domain_candidate_detected event: %s", _dcd_exc)
 
     async def _extract_domain_keywords(
-        self, db: AsyncSession, cluster: PromptCluster, top_k: int = 15,
+        self,
+        db: AsyncSession,
+        cluster: PromptCluster,
+        top_k: int = 15,
     ) -> list:
         """Extract top TF-IDF keywords from member prompts.
 
@@ -4360,13 +4441,17 @@ class TaxonomyEngine:
 
         try:
             vectorizer = TfidfVectorizer(
-                max_features=top_k, stop_words="english", ngram_range=(1, 2),
+                max_features=top_k,
+                stop_words="english",
+                ngram_range=(1, 2),
             )
             tfidf = vectorizer.fit_transform(texts)
             feature_names = vectorizer.get_feature_names_out()
             scores = tfidf.mean(axis=0).A1
             ranked = sorted(
-                zip(feature_names, scores), key=lambda x: x[1], reverse=True,
+                zip(feature_names, scores),
+                key=lambda x: x[1],
+                reverse=True,
             )
             # Min-max normalize the top-K mean scores so the top keyword
             # gets weight 1.0 and the K-th gets the relative ratio.
@@ -4382,13 +4467,11 @@ class TaxonomyEngine:
             top_score = float(ranked[0][1]) if ranked else 0.0
             if top_score <= 0.0:
                 return []
-            return [
-                [kw, round(float(score) / top_score, 2)]
-                for kw, score in ranked[:top_k]
-            ]
+            return [[kw, round(float(score) / top_score, 2)] for kw, score in ranked[:top_k]]
         except Exception:
             logger.warning(
-                "TF-IDF extraction failed for cluster %s", cluster.id,
+                "TF-IDF extraction failed for cluster %s",
+                cluster.id,
                 exc_info=True,
             )
             return []
@@ -4435,6 +4518,7 @@ class TaxonomyEngine:
             # compute a temporary parent color via max-distance then derive
             # from that — prevents fallback to an unrelated random color.
             from app.services.taxonomy.coloring import derive_sub_domain_color
+
             parent_color_q = await db.execute(
                 select(PromptCluster.color_hex).where(PromptCluster.id == parent_domain_id)
             )
@@ -4445,13 +4529,12 @@ class TaxonomyEngine:
                 # of this parent will be consistent.
                 parent_color = compute_max_distance_color(existing_colors)
                 await db.execute(
-                    update(PromptCluster)
-                    .where(PromptCluster.id == parent_domain_id)
-                    .values(color_hex=parent_color)
+                    update(PromptCluster).where(PromptCluster.id == parent_domain_id).values(color_hex=parent_color)
                 )
                 logger.info(
                     "Assigned color %s to parent domain %s (was NULL)",
-                    parent_color, parent_domain_id,
+                    parent_color,
+                    parent_domain_id,
                 )
             color_hex = derive_sub_domain_color(parent_color)
         else:
@@ -4465,7 +4548,8 @@ class TaxonomyEngine:
                 color_hex = seed_color
                 logger.info(
                     "Assigned seed palette color %s to domain '%s' (re-promotion)",
-                    color_hex, label,
+                    color_hex,
+                    label,
                 )
             else:
                 color_hex = compute_max_distance_color(existing_colors)
@@ -4501,14 +4585,20 @@ class TaxonomyEngine:
 
         logger.info(
             "Created discovered domain node: label=%s color=%s id=%s keywords=%d",
-            label, color_hex, node.id, len(keywords),
+            label,
+            color_hex,
+            node.id,
+            len(keywords),
         )
 
         # Re-parent matching clusters from "general" to the new domain
         reparented = 0
         if general_node_id:
             reparented = await self._reparent_to_domain(
-                db, node, label, general_node_id,
+                db,
+                node,
+                label,
+                general_node_id,
             )
             if reparented:
                 await self._backfill_optimization_domain(db, node)
@@ -4519,12 +4609,16 @@ class TaxonomyEngine:
 
         try:
             from app.services.event_bus import event_bus
-            event_bus.publish("domain_created", {
-                "label": label,
-                "color_hex": color_hex,
-                "node_id": node.id,
-                "source": "discovered",
-            })
+
+            event_bus.publish(
+                "domain_created",
+                {
+                    "label": label,
+                    "color_hex": color_hex,
+                    "node_id": node.id,
+                    "source": "discovered",
+                },
+            )
         except Exception as _dc_evt_exc:
             logger.warning("Failed to publish domain_created event for '%s': %s", label, _dc_evt_exc)
 
@@ -4565,12 +4659,15 @@ class TaxonomyEngine:
         if reparented:
             logger.info(
                 "Re-parented %d clusters from 'general' to '%s'",
-                reparented, label,
+                reparented,
+                label,
             )
         return reparented
 
     async def _backfill_optimization_domain(
-        self, db: AsyncSession, domain_node: PromptCluster,
+        self,
+        db: AsyncSession,
+        domain_node: PromptCluster,
     ) -> int:
         """Update Optimization.domain for re-parented clusters."""
         from sqlalchemy import update
@@ -4590,12 +4687,15 @@ class TaxonomyEngine:
         if result.rowcount:  # type: ignore[attr-defined]
             logger.info(
                 "Backfilled %d optimizations from 'general' to '%s'",
-                result.rowcount, domain_node.label,  # type: ignore[attr-defined]
+                result.rowcount,  # type: ignore[attr-defined]
+                domain_node.label,
             )
         return result.rowcount  # type: ignore[attr-defined]
 
     async def _set_domain_umap_from_children(
-        self, db: AsyncSession, domain_node: PromptCluster,
+        self,
+        db: AsyncSession,
+        domain_node: PromptCluster,
     ) -> None:
         """Set a domain node's UMAP position as the centroid of its children.
 
@@ -4622,31 +4722,35 @@ class TaxonomyEngine:
         ]
 
         # Strategy 1: match by domain field (top-level domains)
-        row = (await db.execute(
-            select(
-                sa_func.avg(PromptCluster.umap_x),
-                sa_func.avg(PromptCluster.umap_y),
-                sa_func.avg(PromptCluster.umap_z),
-                sa_func.count(),
-            ).where(
-                PromptCluster.domain == domain_node.label,
-                *_umap_filter,
-            )
-        )).one_or_none()
-
-        # Strategy 2: fall back to parent_id match (sub-domains)
-        if (not row or row[0] is None) and domain_node.id:
-            row = (await db.execute(
+        row = (
+            await db.execute(
                 select(
                     sa_func.avg(PromptCluster.umap_x),
                     sa_func.avg(PromptCluster.umap_y),
                     sa_func.avg(PromptCluster.umap_z),
                     sa_func.count(),
                 ).where(
-                    PromptCluster.parent_id == domain_node.id,
+                    PromptCluster.domain == domain_node.label,
                     *_umap_filter,
                 )
-            )).one_or_none()
+            )
+        ).one_or_none()
+
+        # Strategy 2: fall back to parent_id match (sub-domains)
+        if (not row or row[0] is None) and domain_node.id:
+            row = (
+                await db.execute(
+                    select(
+                        sa_func.avg(PromptCluster.umap_x),
+                        sa_func.avg(PromptCluster.umap_y),
+                        sa_func.avg(PromptCluster.umap_z),
+                        sa_func.count(),
+                    ).where(
+                        PromptCluster.parent_id == domain_node.id,
+                        *_umap_filter,
+                    )
+                )
+            ).one_or_none()
 
         if row and row[0] is not None:
             domain_node.umap_x = float(row[0])
@@ -4669,8 +4773,11 @@ class TaxonomyEngine:
 
             logger.info(
                 "Set domain '%s' UMAP from %d children: (%.3f, %.3f, %.3f)",
-                domain_node.label, child_count,
-                domain_node.umap_x, domain_node.umap_y, domain_node.umap_z,
+                domain_node.label,
+                child_count,
+                domain_node.umap_x,
+                domain_node.umap_y,
+                domain_node.umap_z,
             )
 
     # ------------------------------------------------------------------
@@ -4695,9 +4802,7 @@ class TaxonomyEngine:
         cutoff = _utcnow() - timedelta(days=DOMAIN_ARCHIVAL_IDLE_DAYS)
 
         # Pre-compute domain IDs for sub-domain detection
-        domain_id_q = await db.execute(
-            select(PromptCluster.id).where(PromptCluster.state == "domain")
-        )
+        domain_id_q = await db.execute(select(PromptCluster.id).where(PromptCluster.state == "domain"))
         domain_id_set = set(domain_id_q.scalars().all())
 
         stale = await db.execute(
@@ -4723,11 +4828,14 @@ class TaxonomyEngine:
             suggestions.append(domain.label)
             logger.info(
                 "Domain archival suggested: '%s' (members=%d, usage=%d)",
-                domain.label, domain.member_count or 0, domain.usage_count or 0,
+                domain.label,
+                domain.member_count or 0,
+                domain.usage_count or 0,
             )
         if suggestions:
             try:
                 from app.services.event_bus import event_bus
+
                 event_bus.publish("domain_archival_suggested", {"labels": suggestions})
             except Exception as _das_exc:
                 logger.debug("Failed to publish domain_archival_suggested event: %s", _das_exc)
@@ -4738,9 +4846,7 @@ class TaxonomyEngine:
         from app.services.pipeline_constants import SIGNAL_REFRESH_MEMBER_RATIO
 
         stale = []
-        domains = await db.execute(
-            select(PromptCluster).where(PromptCluster.state == "domain")
-        )
+        domains = await db.execute(select(PromptCluster).where(PromptCluster.state == "domain"))
         for domain in domains.scalars():
             meta = read_meta(domain.cluster_metadata)
             gen_count = meta["signal_member_count_at_generation"]
@@ -4750,12 +4856,16 @@ class TaxonomyEngine:
                 stale.append(domain)
                 logger.info(
                     "Signal staleness detected: domain '%s' generated at %d members, now has %d",
-                    domain.label, gen_count, domain.member_count or 0,
+                    domain.label,
+                    gen_count,
+                    domain.member_count or 0,
                 )
         return stale
 
     async def _refresh_domain_signals(
-        self, db: AsyncSession, domain: PromptCluster,
+        self,
+        db: AsyncSession,
+        domain: PromptCluster,
     ) -> None:
         """Regenerate TF-IDF keywords for a domain with stale signals."""
 
@@ -4768,14 +4878,20 @@ class TaxonomyEngine:
         )
         logger.info(
             "Signals refreshed for domain '%s': %d keywords from %d members",
-            domain.label, len(keywords), domain.member_count or 0,
+            domain.label,
+            len(keywords),
+            domain.member_count or 0,
         )
         try:
             from app.services.event_bus import event_bus
-            event_bus.publish("domain_signals_refreshed", {
-                "label": domain.label,
-                "keyword_count": len(keywords),
-            })
+
+            event_bus.publish(
+                "domain_signals_refreshed",
+                {
+                    "label": domain.label,
+                    "keyword_count": len(keywords),
+                },
+            )
         except Exception as _dsr_exc:
             logger.debug("Failed to publish domain_signals_refreshed event: %s", _dsr_exc)
 
@@ -4791,30 +4907,40 @@ class TaxonomyEngine:
         if not general_node:
             return
 
-        child_count = await db.scalar(
-            select(func.count()).where(
-                PromptCluster.parent_id == general_node.id,
-                PromptCluster.state.in_(["active", "mature"]),
+        child_count = (
+            await db.scalar(
+                select(func.count()).where(
+                    PromptCluster.parent_id == general_node.id,
+                    PromptCluster.state.in_(["active", "mature"]),
+                )
             )
-        ) or 0
+            or 0
+        )
 
-        near_threshold = await db.scalar(
-            select(func.count()).where(
-                PromptCluster.parent_id == general_node.id,
-                PromptCluster.state.in_(["active", "mature"]),
-                PromptCluster.member_count >= DOMAIN_DISCOVERY_MIN_MEMBERS - 2,
-                PromptCluster.coherence >= DOMAIN_DISCOVERY_MIN_COHERENCE - 0.1,
+        near_threshold = (
+            await db.scalar(
+                select(func.count()).where(
+                    PromptCluster.parent_id == general_node.id,
+                    PromptCluster.state.in_(["active", "mature"]),
+                    PromptCluster.member_count >= DOMAIN_DISCOVERY_MIN_MEMBERS - 2,
+                    PromptCluster.coherence >= DOMAIN_DISCOVERY_MIN_COHERENCE - 0.1,
+                )
             )
-        ) or 0
+            or 0
+        )
 
-        opt_count = await db.scalar(
-            select(func.count()).where(Optimization.domain == "general"),
-        ) or 0
+        opt_count = (
+            await db.scalar(
+                select(func.count()).where(Optimization.domain == "general"),
+            )
+            or 0
+        )
 
         logger.info(
-            "General domain health: %d child clusters, %d near discovery threshold, "
-            "%d total optimizations",
-            child_count, near_threshold, opt_count,
+            "General domain health: %d child clusters, %d near discovery threshold, %d total optimizations",
+            child_count,
+            near_threshold,
+            opt_count,
         )
         if opt_count > 50 and child_count > 5 and near_threshold == 0:
             logger.warning(
@@ -4822,8 +4948,10 @@ class TaxonomyEngine:
                 "but none near threshold. Consider lowering "
                 "DOMAIN_DISCOVERY_MIN_MEMBERS (current=%d) or "
                 "DOMAIN_DISCOVERY_MIN_COHERENCE (current=%.2f).",
-                opt_count, child_count,
-                DOMAIN_DISCOVERY_MIN_MEMBERS, DOMAIN_DISCOVERY_MIN_COHERENCE,
+                opt_count,
+                child_count,
+                DOMAIN_DISCOVERY_MIN_MEMBERS,
+                DOMAIN_DISCOVERY_MIN_COHERENCE,
             )
 
     async def _create_warm_snapshot(
@@ -4839,11 +4967,7 @@ class TaxonomyEngine:
         from app.services.taxonomy.snapshot import create_snapshot
 
         # Load non-domain/non-archived nodes for metrics (Fix #10)
-        result = await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
-            )
-        )
+        result = await db.execute(select(PromptCluster).where(PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)))
         active_nodes = list(result.scalars().all())
 
         mean_coherence, separation = self._snapshot_metrics(active_nodes)
@@ -4852,7 +4976,8 @@ class TaxonomyEngine:
         q_health_val = None
         try:
             _health = self._compute_q_health_from_nodes(
-                active_nodes, silhouette=self._last_silhouette,
+                active_nodes,
+                silhouette=self._last_silhouette,
             )
             q_health_val = _health.q_health
         except Exception as _qh_exc:
@@ -4892,9 +5017,7 @@ class TaxonomyEngine:
 
         Delegates to :func:`matching.map_domain`.
         """
-        return await _map_domain(
-            domain_raw, db, self._embedding, applied_pattern_ids
-        )
+        return await _map_domain(domain_raw, db, self._embedding, applied_pattern_ids)
 
     # ------------------------------------------------------------------
     # Read API (Spec Section 6.3)
@@ -4918,9 +5041,9 @@ class TaxonomyEngine:
 
         # Precompute meta-pattern counts per cluster (single GROUP BY query)
         from app.models import MetaPattern
+
         pattern_count_q = await db.execute(
-            select(MetaPattern.cluster_id, func.count().label("cnt"))
-            .group_by(MetaPattern.cluster_id)
+            select(MetaPattern.cluster_id, func.count().label("cnt")).group_by(MetaPattern.cluster_id)
         )
         pattern_counts: dict[str, int] = dict(pattern_count_q.all())  # type: ignore[arg-type]
 
@@ -4936,17 +5059,13 @@ class TaxonomyEngine:
         node_id: str,
         db: AsyncSession,
     ) -> dict | None:
-        result = await db.execute(
-            select(PromptCluster).where(PromptCluster.id == node_id)
-        )
+        result = await db.execute(select(PromptCluster).where(PromptCluster.id == node_id))
         node = result.scalar_one_or_none()
         if not node:
             return None
         node_dict = self._node_to_dict(node)
         # Add children
-        children_result = await db.execute(
-            select(PromptCluster).where(PromptCluster.parent_id == node_id)
-        )
+        children_result = await db.execute(select(PromptCluster).where(PromptCluster.parent_id == node_id))
         children = children_result.scalars().all()
         node_dict["children"] = [self._node_to_dict(c) for c in children]
         # Add breadcrumb
@@ -4978,7 +5097,8 @@ class TaxonomyEngine:
             except (ValueError, TypeError) as _sm_exc:
                 logger.warning(
                     "Corrupt centroid in snapshot metrics, cluster='%s': %s",
-                    n.label, _sm_exc,
+                    n.label,
+                    _sm_exc,
                 )
                 continue
 
@@ -5008,7 +5128,9 @@ class TaxonomyEngine:
         )
 
     async def get_stats(
-        self, db: AsyncSession, project_id: str | None = None,
+        self,
+        db: AsyncSession,
+        project_id: str | None = None,
     ) -> dict:
         """Return system/taxonomy health metrics.
 
@@ -5030,7 +5152,8 @@ class TaxonomyEngine:
 
         # Node state counts via GROUP BY (avoids loading full ORM objects + blobs)
         state_stmt = select(
-            PromptCluster.state, func.count(PromptCluster.id),
+            PromptCluster.state,
+            func.count(PromptCluster.id),
         ).group_by(PromptCluster.state)
         if scope_clause is not None:
             state_stmt = state_stmt.where(scope_clause)
@@ -5043,7 +5166,9 @@ class TaxonomyEngine:
 
         # max_depth + leaf_count: lightweight projection (id + parent_id + state only)
         tree_stmt = select(
-            PromptCluster.id, PromptCluster.parent_id, PromptCluster.state,
+            PromptCluster.id,
+            PromptCluster.parent_id,
+            PromptCluster.state,
         )
         if scope_clause is not None:
             tree_stmt = tree_stmt.where(scope_clause)
@@ -5071,9 +5196,7 @@ class TaxonomyEngine:
         leaf_count = sum(1 for nid in active_ids if nid not in parent_ids)
 
         # Total pattern families (leaf clusters with a parent) via scalar COUNT
-        fam_stmt = select(func.count(PromptCluster.id)).where(
-            PromptCluster.parent_id.isnot(None)
-        )
+        fam_stmt = select(func.count(PromptCluster.id)).where(PromptCluster.parent_id.isnot(None))
         if scope_clause is not None:
             fam_stmt = fam_stmt.where(scope_clause)
         fam_count_result = await db.execute(fam_stmt)
@@ -5107,11 +5230,7 @@ class TaxonomyEngine:
         # snapshots (q_health=None) are skipped rather than falling back
         # to q_system, which is on a different scale (0.78 vs 0.66) and
         # creates misleading oscillations in the sparkline.
-        q_values = [
-            s.q_health
-            for s in snapshots
-            if s.q_health is not None
-        ]
+        q_values = [s.q_health for s in snapshots if s.q_health is not None]
         sparkline = compute_sparkline_data(q_values)
 
         q_history = []
@@ -5178,19 +5297,16 @@ class TaxonomyEngine:
         result["q_health_total_members"] = None
         result["q_health_cluster_count"] = None
         try:
-            _health_stmt = select(PromptCluster).where(
-                PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES)
-            )
+            _health_stmt = select(PromptCluster).where(PromptCluster.state.notin_(EXCLUDED_STRUCTURAL_STATES))
             if project_id is not None:
                 # Scoped q_health — in-project clusters only (drop the structural
                 # domain/project nodes that the wider scope clause lets through).
-                _health_stmt = _health_stmt.where(
-                    PromptCluster.dominant_project_id == project_id
-                )
+                _health_stmt = _health_stmt.where(PromptCluster.dominant_project_id == project_id)
             _health_nodes_q = await db.execute(_health_stmt)
             _health_nodes = list(_health_nodes_q.scalars().all())
             _health_result = self._compute_q_health_from_nodes(
-                _health_nodes, silhouette=self._last_silhouette,
+                _health_nodes,
+                silhouette=self._last_silhouette,
             )
             result["q_health"] = _health_result.q_health
             result["q_health_coherence_w"] = _health_result.coherence_weighted
@@ -5266,7 +5382,9 @@ class TaxonomyEngine:
         await db.refresh(cluster)
         logger.info(
             "Usage incremented: '%s' (usage=%d, domain=%s)",
-            cluster.label, cluster.usage_count, cluster.domain,
+            cluster.label,
+            cluster.usage_count,
+            cluster.domain,
         )
 
     # ------------------------------------------------------------------
@@ -5285,28 +5403,25 @@ class TaxonomyEngine:
         # 1. Check for duplicate domain labels under the same parent
         # Multi-project: same label under different parents is valid (ADR-005)
         result = await db.execute(
-            select(PromptCluster.parent_id, PromptCluster.label, func.count()).where(
-                PromptCluster.state == "domain"
-            ).group_by(PromptCluster.parent_id, PromptCluster.label)
+            select(PromptCluster.parent_id, PromptCluster.label, func.count())
+            .where(PromptCluster.state == "domain")
+            .group_by(PromptCluster.parent_id, PromptCluster.label)
         )
         for parent_id, label, count in result:
             if count > 1:
-                violations.append(
-                    f"Duplicate domain label: '{label}' appears {count} times "
-                    f"under parent {parent_id}"
-                )
+                violations.append(f"Duplicate domain label: '{label}' appears {count} times under parent {parent_id}")
 
         # 2. Check for orphaned clusters (parent_id points to non-existent node)
-        orphans = await db.execute(text("""
+        orphans = await db.execute(
+            text("""
             SELECT c.id, c.label, c.parent_id
             FROM prompt_cluster c
             LEFT JOIN prompt_cluster p ON c.parent_id = p.id
             WHERE c.parent_id IS NOT NULL AND p.id IS NULL
-        """))
+        """)
+        )
         for row in orphans:
-            violations.append(
-                f"Orphan cluster: '{row[1]}' (id={row[0]}) references missing parent {row[2]}"
-            )
+            violations.append(f"Orphan cluster: '{row[1]}' (id={row[0]}) references missing parent {row[2]}")
 
         # 3. Check domain nodes have persistence=1.0
         weak = await db.execute(
@@ -5316,33 +5431,26 @@ class TaxonomyEngine:
             )
         )
         for d in weak.scalars():
-            violations.append(
-                f"Domain node '{d.label}' has persistence={d.persistence} (expected 1.0)"
-            )
+            violations.append(f"Domain node '{d.label}' has persistence={d.persistence} (expected 1.0)")
 
         # 4. Check for self-referencing parents
-        self_refs = await db.execute(
-            text("SELECT id, label FROM prompt_cluster WHERE parent_id = id")
-        )
+        self_refs = await db.execute(text("SELECT id, label FROM prompt_cluster WHERE parent_id = id"))
         for row in self_refs:
-            violations.append(
-                f"Self-referencing parent: '{row[1]}' (id={row[0]})"
-            )
+            violations.append(f"Self-referencing parent: '{row[1]}' (id={row[0]})")
 
         # 5. Every non-domain cluster's domain field must match a domain node label
         #    Case-insensitive: analyzer may emit "Backend" while domain label is "backend"
-        mismatch_result = await db.execute(text("""
+        mismatch_result = await db.execute(
+            text("""
             SELECT c.id, c.label, c.domain
             FROM prompt_cluster c
             WHERE c.state != 'domain'
               AND LOWER(c.domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
               AND c.domain IS NOT NULL
-        """))
+        """)
+        )
         for row in mismatch_result:
-            violations.append(
-                f"Domain mismatch: cluster '{row[1]}' has domain='{row[2]}' "
-                f"which is not a domain node"
-            )
+            violations.append(f"Domain mismatch: cluster '{row[1]}' has domain='{row[2]}' which is not a domain node")
 
         # 6. Non-domain clusters must only have domain node parents
         non_domain_parent_q = await db.execute(
@@ -5352,9 +5460,7 @@ class TaxonomyEngine:
             )
         )
         domain_ids: set[str] = set(
-            (await db.execute(
-                select(PromptCluster.id).where(PromptCluster.state == "domain")
-            )).scalars().all()
+            (await db.execute(select(PromptCluster.id).where(PromptCluster.state == "domain"))).scalars().all()
         )
         for row in non_domain_parent_q:
             if row[2] not in domain_ids:  # row[2] = parent_id
@@ -5373,10 +5479,7 @@ class TaxonomyEngine:
             )
         )
         for row in archived_used_q:
-            violations.append(
-                f"Archived with usage: '{row[1]}' (id={row[0][:8]}) "
-                f"has usage_count={row[2]}"
-            )
+            violations.append(f"Archived with usage: '{row[1]}' (id={row[0][:8]}) has usage_count={row[2]}")
 
         # 8. Empty sub-domains — domain nodes parented to another domain
         #    with 0 active children.  These are typically orphaned by cold
@@ -5394,10 +5497,7 @@ class TaxonomyEngine:
                 )
             )
             if (child_count_q.scalar() or 0) == 0:
-                violations.append(
-                    f"Empty sub-domain: '{d_node.label}' (id={did[:8]}) "
-                    f"has 0 active children"
-                )
+                violations.append(f"Empty sub-domain: '{d_node.label}' (id={did[:8]}) has 0 active children")
 
         if violations:
             for v in violations:
@@ -5407,9 +5507,7 @@ class TaxonomyEngine:
 
         return violations
 
-    async def _repair_tree_violations(
-        self, db: AsyncSession, violations: list[str]
-    ) -> int:
+    async def _repair_tree_violations(self, db: AsyncSession, violations: list[str]) -> int:
         """Auto-repair detected violations. Returns count of repairs.
 
         Emits one ``tree_integrity_repair`` taxonomy_activity event per
@@ -5449,12 +5547,14 @@ class TaxonomyEngine:
 
         # Repair weak domain persistence — select-then-update so each repair
         # can emit its own event with the affected cluster id/label.
-        weak_nodes = (await db.execute(
-            select(PromptCluster.id, PromptCluster.label, PromptCluster.persistence).where(
-                PromptCluster.state == "domain",
-                PromptCluster.persistence < 1.0,
+        weak_nodes = (
+            await db.execute(
+                select(PromptCluster.id, PromptCluster.label, PromptCluster.persistence).where(
+                    PromptCluster.state == "domain",
+                    PromptCluster.persistence < 1.0,
+                )
             )
-        )).all()
+        ).all()
         if weak_nodes:
             await db.execute(
                 update(PromptCluster)
@@ -5477,13 +5577,17 @@ class TaxonomyEngine:
 
         general_node = await get_canonical_general(db)
         if general_node is not None:
-            orphan_rows = (await db.execute(text("""
+            orphan_rows = (
+                await db.execute(
+                    text("""
                 SELECT c.id, c.label, c.parent_id
                 FROM prompt_cluster c
                 WHERE c.parent_id IS NOT NULL
                   AND c.parent_id NOT IN (SELECT id FROM prompt_cluster)
                   AND c.state != 'domain'
-            """))).all()
+            """)
+                )
+            ).all()
             if orphan_rows:
                 await db.execute(
                     text("""
@@ -5516,21 +5620,29 @@ class TaxonomyEngine:
         # sub-domain) walk one level up to the top-level domain — the canonical
         # storage convention is `domain = top_level_label` (sub-domain identity
         # lives in parent_id only).
-        mismatch_rows = (await db.execute(text("""
+        mismatch_rows = (
+            await db.execute(
+                text("""
             SELECT c.id, c.label, c.domain, c.parent_id
             FROM prompt_cluster c
             WHERE c.state != 'domain'
               AND LOWER(c.domain) NOT IN (SELECT LOWER(label) FROM prompt_cluster WHERE state = 'domain')
               AND c.domain IS NOT NULL
-        """))).all()
+        """)
+            )
+        ).all()
         if mismatch_rows:
             # Build parent_id → top_level_domain_label map once.  Walk up to
             # the root domain so a cluster parented to a sub-domain inherits
             # the top-level label (sub-domain children carry the top-level
             # `domain` field, not the sub-domain label).
-            domain_nodes = (await db.execute(text("""
+            domain_nodes = (
+                await db.execute(
+                    text("""
                 SELECT id, label, parent_id FROM prompt_cluster WHERE state = 'domain'
-            """))).all()
+            """)
+                )
+            ).all()
             id_to_node = {row[0]: row for row in domain_nodes}
             top_level_label_for: dict[str, str] = {}
             for did, dlabel, dparent in domain_nodes:
@@ -5560,11 +5672,7 @@ class TaxonomyEngine:
                     repaired_to_parent += 1
                 _emit(
                     violation_type="domain_mismatch",
-                    action=(
-                        "domain_reset_to_general"
-                        if target == "general"
-                        else "domain_reset_to_parent"
-                    ),
+                    action=("domain_reset_to_general" if target == "general" else "domain_reset_to_parent"),
                     cluster_id=cid,
                     label=clabel,
                     extra={"previous_domain": prev_domain, "new_domain": target},
@@ -5572,7 +5680,9 @@ class TaxonomyEngine:
             repaired += len(mismatch_rows)
             logger.info(
                 "Auto-repaired %d domain mismatches (→parent: %d, →general: %d)",
-                len(mismatch_rows), repaired_to_parent, repaired_to_general,
+                len(mismatch_rows),
+                repaired_to_parent,
+                repaired_to_general,
             )
 
         # Repair self-referencing parents → re-parent under matching domain node
@@ -5583,12 +5693,14 @@ class TaxonomyEngine:
         )
         for node in self_ref_q.scalars():
             domain_label = (node.domain or "general").lower().split(":")[0].strip()
-            domain_node = (await db.execute(
-                select(PromptCluster).where(
-                    PromptCluster.state == "domain",
-                    func.lower(PromptCluster.label) == domain_label,
+            domain_node = (
+                await db.execute(
+                    select(PromptCluster).where(
+                        PromptCluster.state == "domain",
+                        func.lower(PromptCluster.label) == domain_label,
+                    )
                 )
-            )).scalar()
+            ).scalar()
             if domain_node and domain_node.id != node.id:
                 node.parent_id = domain_node.id
                 repaired += 1
@@ -5603,9 +5715,9 @@ class TaxonomyEngine:
 
         # Repair non-domain clusters with non-domain parents
         domain_id_map: dict[str, str] = {}
-        for row in (await db.execute(
+        for row in await db.execute(
             select(PromptCluster.id, PromptCluster.label).where(PromptCluster.state == "domain")
-        )):
+        ):
             domain_id_map[row[1].lower()] = row[0]
 
         non_domain_parent_q2 = await db.execute(
@@ -5641,20 +5753,28 @@ class TaxonomyEngine:
         # Clusters with usage_count > 0 but member_count == 0 are ghosts —
         # their content was reassigned and the usage is stale. Only unarchive
         # when members exist to back the usage data.
-        archived_used = (await db.execute(
-            select(PromptCluster).where(
-                PromptCluster.state == "archived",
-                PromptCluster.usage_count > 0,
-                PromptCluster.member_count > 0,
+        archived_used = (
+            (
+                await db.execute(
+                    select(PromptCluster).where(
+                        PromptCluster.state == "archived",
+                        PromptCluster.usage_count > 0,
+                        PromptCluster.member_count > 0,
+                    )
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
         for node in archived_used:
             node.state = "active"
             node.archived_at = None
             repaired += 1
             logger.info(
                 "Unarchived cluster with usage: '%s' (usage=%d, members=%d)",
-                node.label, node.usage_count, node.member_count,
+                node.label,
+                node.usage_count,
+                node.member_count,
             )
             _emit(
                 violation_type="archived_with_usage",
