@@ -6,6 +6,7 @@
  */
 
 import type { ClusterStats } from '$lib/api/clusters';
+import { formatRelativeTime } from '$lib/utils/formatting';
 
 export interface HealthAssessment {
   /** Primary status line — the headline */
@@ -236,7 +237,7 @@ export function generatePanelInsight(input: PanelInsightInput): string {
 
     const lastCold = stats?.last_cold_path;
     if (lastCold) {
-      const ago = formatTimeAgo(lastCold);
+      const ago = formatRelativeTime(lastCold, { suffix: 'ago' });
       parts.push(`last recluster ${ago}`);
     }
     return capitalize(parts.join('. ')) + '.';
@@ -296,12 +297,3 @@ export function generatePanelInsight(input: PanelInsightInput): string {
   return '';
 }
 
-function formatTimeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}

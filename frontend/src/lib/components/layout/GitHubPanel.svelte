@@ -432,11 +432,10 @@
     margin-left: auto;
   }
   .connection-badge--pulse {
-    animation: badge-pulse 1.6s ease-in-out infinite;
-  }
-  @keyframes badge-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.55; }
+    /* v0.4.39 R-05: shared status-pulse keyframe (shared-keyframes.css)
+       so the indexing badge pulses on the same cadence as every other
+       status indicator. */
+    animation: status-pulse 1.6s ease-in-out infinite;
   }
   .data-row--error {
     border-top: 1px solid color-mix(in srgb, var(--color-neon-red) 25%, transparent);

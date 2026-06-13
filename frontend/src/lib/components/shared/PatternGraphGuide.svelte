@@ -28,7 +28,7 @@
       title: 'Inspect clusters',
       description:
         'Click any node to see its details in the Inspector panel on the right. The sidebar automatically switches to show the selected cluster.',
-      detail: 'The state filter tabs (ALL/ACT/CAN/MAT/TPL/ARC) dim non-matching nodes in the graph. Matching nodes glow at full opacity while others fade to 25%.',
+      detail: 'The state filter tabs (ALL/ACT/CAN/MAT/TPL/ARC) dim non-matching nodes in the graph. Matching nodes brighten to full opacity while others fade to 25%.',
       accent: 'cyan',
     },
     {

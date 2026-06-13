@@ -4,7 +4,9 @@
  * Usage: <span use:tooltip={'Score spread — low = consistent, high = variable'}>0.42</span>
  *
  * Renders a positioned overlay appended to document.body (avoids overflow clipping).
- * Brand: dark bg, 1px neon-cyan contour, monospace font, sharp corners, no glow.
+ * Brand: dark bg, 1px neon-cyan contour, monospace font, sharp corners,
+ * zero shadow. All chrome lives in the `.synthesis-tooltip` rule in app.css
+ * (v0.4.39 R-17 consolidation); the action only positions the element.
  */
 
 const SHOW_DELAY_MS = 400;
@@ -18,26 +20,10 @@ function createTooltipElement(): HTMLDivElement {
   const el = document.createElement('div');
   el.className = 'synthesis-tooltip';
   el.setAttribute('role', 'tooltip');
-
-  // Inline styles for portability — no external CSS dependency.
-  // Matches brand: bg-card, 1px neon-cyan border, mono font, sharp corners.
-  Object.assign(el.style, {
-    position: 'fixed',
-    zIndex: '9999',
-    padding: '4px 8px',
-    background: '#11111e',
-    border: '1px solid rgba(0, 229, 255, 0.35)',
-    color: '#8b8ba8',
-    fontFamily: "'Geist Mono', 'JetBrains Mono', ui-monospace, monospace",
-    fontSize: '10px',
-    lineHeight: '1.4',
-    maxWidth: '280px',
-    pointerEvents: 'none',
-    whiteSpace: 'pre-line',
-    opacity: '0',
-    transition: 'opacity var(--duration-micro, 150ms) var(--ease-spring, cubic-bezier(0.16, 1, 0.3, 1))',
-  });
-
+  // All styling lives in `.synthesis-tooltip` (app.css). The action sets
+  // only the `left`/`top` + final `opacity` at runtime (see positionTooltip
+  // + show). Brand tokens (z-tooltip, bg-card, focus-ring, mono font) are
+  // resolved by the cascade — never re-derived inline.
   return el;
 }
 

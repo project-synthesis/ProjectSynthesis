@@ -66,7 +66,16 @@
 
 /* T3.3 (v0.4.30): brand-compliant dialog entrance keyframe per
    .claude/skills/brand-guidelines/references/component-patterns.md:213.
-   Used by DrillIntoClusterModal + future centered dialogs. */
+   Used by DrillIntoClusterModal + RunsPanel (confirm modal) — both
+   centered dialogs that pre-date the AnimatedDialog primitive. v0.4.39
+   audit kept both `dialog-in` and `modal-in` because:
+     - `modal-in` (translate(-50%, -50%) + subtle scale) is for dialogs
+        positioned via translate-50% centering (AnimatedDialog, legacy
+        DestructiveConfirmModal).
+     - `dialog-in` (pure scale) is for dialogs that own their own
+        translation (DrillIntoClusterModal, RunsPanel confirm).
+   When those two surfaces migrate to AnimatedDialog, this keyframe can
+   be removed. Confirmed live consumers via tree-wide grep on 2026-06-13. */
 @keyframes dialog-in {
   from {
     transform: scale(0.95);

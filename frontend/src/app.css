@@ -74,8 +74,8 @@ html, body {
 
 /* ---- Focus & Accessibility ---- */
 :focus-visible {
-  outline: 1px solid rgba(var(--tier-accent-rgb, 0, 229, 255), 0.3);
-  outline-offset: 2px;
+  outline: 1px solid var(--color-focus-ring);
+  outline-offset: var(--focus-offset-external);
 }
 
 :focus:not(:focus-visible) {
@@ -108,6 +108,34 @@ html, body {
      Centralized here. Consumed via JS through useCopyFlash() in
      utils/copy-feedback.ts which reads the same value via getComputedStyle. */
   --duration-copy-flash: 1500ms;
+
+  /* v0.4.39 brand-globals (R-03): shared focus, scrim, focus-offset and
+     z-stack tokens. Pre-v0.4.39 these values were duplicated across
+     modal/dropdown/tooltip surfaces (z-index: 60/61/9999 etc.). The
+     z-stack ladder reserves explicit slots so layering is predictable:
+       dropdown (50) < scrim (60) < modal (61) < command-palette (70) < tooltip (80)
+     Modals sit just above their own scrim; tooltips win the top slot so
+     they read above any chrome they may anchor to. */
+  --color-focus-ring: rgba(var(--tier-accent-rgb, 0, 229, 255), 0.3);
+  --color-scrim: color-mix(in srgb, var(--color-bg-primary) 60%, transparent);
+  --focus-offset-external: 2px;
+  --focus-offset-inset: -1px;
+  --z-dropdown: 50;
+  --z-modal-scrim: 60;
+  --z-modal: 61;
+  --z-command-palette: 70;
+  --z-tooltip: 80;
+
+  /* v0.4.39 brand-globals (R-11 prerequisite): lifecycle state colors.
+     Centralized here so stateColor() in utils/colors.ts resolves through
+     var() rather than inline hex. Source of truth for the cluster state
+     palette referenced by StateFilterTabs, badges, and topology dimming. */
+  --color-state-candidate: #7a7a9e;
+  --color-state-active: #4d8eff;
+  --color-state-mature: #a855f7;
+  --color-state-archived: #3a3a52;
+  /* warm platinum — structural foundation (distinct from neon-yellow/passthrough #fbbf24) */
+  --color-state-domain: #c0a060;
 }
 
 /* ---- Interactive Defaults ---- */
@@ -146,7 +174,7 @@ input, textarea, select {
 }
 
 input:focus, textarea:focus, select:focus {
-  border-color: rgba(var(--tier-accent-rgb, 0, 229, 255), 0.3);
+  border-color: var(--color-focus-ring);
 }
 
 /* ---- Utility Classes ---- */
@@ -401,7 +429,7 @@ input:focus, textarea:focus, select:focus {
   line-height: 18px;
   border-radius: 0;
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all var(--duration-hover) var(--ease-spring);
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -432,7 +460,7 @@ input:focus, textarea:focus, select:focus {
   line-height: 18px;
   border-radius: 0;
   cursor: pointer;
-  transition: all 200ms ease;
+  transition: all var(--duration-hover) var(--ease-spring);
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -459,7 +487,8 @@ input:focus, textarea:focus, select:focus {
   font-family: var(--font-sans);
   font-size: 11px;
   border-radius: 0;
-  transition: border-color 0.3s ease, background-color 0.3s ease;
+  transition: border-color var(--duration-structural) var(--ease-spring),
+    background-color var(--duration-structural) var(--ease-spring);
 }
 .input-field:focus {
   outline: none;
@@ -509,7 +538,7 @@ input:focus, textarea:focus, select:focus {
   line-height: 18px;
   border-radius: 0;
   cursor: pointer;
-  transition: all 200ms ease;
+  transition: all var(--duration-hover) var(--ease-spring);
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -533,7 +562,7 @@ input:focus, textarea:focus, select:focus {
   height: 20px;
   border-radius: 0;
   cursor: pointer;
-  transition: color 200ms ease;
+  transition: color var(--duration-hover) var(--ease-spring);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -544,4 +573,101 @@ input:focus, textarea:focus, select:focus {
 .btn-icon:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ===========================================================================
+   v0.4.39 brand-globals: shared utility consolidations.
+
+   The following classes were previously re-declared inside individual panel
+   components with subtly different spacing/colors. Promoted to the global
+   stylesheet so add-a-panel work no longer needs to re-derive the chrome.
+
+   See .claude/skills/brand-guidelines/references/component-patterns.md.
+   =========================================================================== */
+
+/* Panel header count badge (R-25) — surfaces N>0 items in the sidebar
+   panel header. Use as `<span class="panel-count font-mono">{N}</span>`. */
+.panel-count {
+  font-size: 10px;
+  color: var(--color-text-dim);
+  margin-left: auto;
+}
+
+/* Domain dot (R-15) — chromatic encoding swatch for domain identity.
+   8px default (cluster row, domain group, templates section) +
+   `.domain-dot--sm` 6px variant (context panel, readiness aggregate)
+   where dot lives in a smaller, denser row. */
+.domain-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  outline: 1px solid color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+  outline-offset: var(--focus-offset-inset);
+}
+.domain-dot--sm {
+  width: 6px;
+  height: 6px;
+  outline: none;
+}
+
+/* Chevron (R-? consolidation) — progressive-disclosure indicator.
+   The `--open` modifier rotates 90deg. Animation rides the shared
+   hover token so all chevrons settle on the same curve. */
+.chevron {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-dim);
+  width: 8px;
+  flex-shrink: 0;
+  line-height: 1;
+  transition: transform var(--duration-hover) var(--ease-spring);
+}
+.chevron--open {
+  transform: rotate(90deg);
+}
+
+/* Chip pressed-state (active filter pill) — pairs with the existing
+   `.chip` rule above. Pre-v0.4.39 each chip-bearing panel hand-rolled
+   the active state with a different cyan tint depth. */
+.chip[aria-pressed="true"] {
+  color: var(--tier-accent, var(--color-neon-cyan));
+  border-color: var(--tier-accent, var(--color-neon-cyan));
+  background: color-mix(in srgb, var(--tier-accent, var(--color-neon-cyan)) 10%, transparent);
+}
+
+/* Skeleton row + bar (R-12) — loading placeholder utility. Pre-v0.4.39
+   HistoryPanel + ClusterRow each declared `.skeleton-row` with 80% vs
+   85% width variants. Consolidated here; consumers pick a width via
+   the `--skeleton-bar-width` custom property or rely on the default. */
+.skeleton-row {
+  height: 12px;
+  padding: 2px 6px;
+}
+.skeleton-bar {
+  height: 8px;
+  width: var(--skeleton-bar-width, 80%);
+  background: color-mix(in srgb, var(--color-text-dim) 18%, transparent);
+  animation: skeleton-pulse var(--duration-skeleton) ease-in-out infinite;
+}
+
+/* Branded tooltip (R-17) — the `tooltip` action attaches this class to
+   the floating element. Pre-v0.4.39 the action wrote ~12 inline styles
+   to every tooltip on hover; the chrome lives here instead. */
+.synthesis-tooltip {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  padding: 4px 8px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-focus-ring);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  max-width: 280px;
+  pointer-events: none;
+  white-space: pre-line;
+  opacity: 0;
+  transition: opacity var(--duration-micro) var(--ease-spring);
 }
