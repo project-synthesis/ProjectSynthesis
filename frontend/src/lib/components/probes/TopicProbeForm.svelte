@@ -289,9 +289,9 @@
     box-sizing: border-box;
     cursor: pointer;
     /* Atomic multi-property transition per axiom 5 + spec §6 line 1133-1140. */
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring),
+                border-color var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
 
   .probe-select:focus-visible {
@@ -319,9 +319,9 @@
     letter-spacing: 0.05em;
     height: 20px;
     line-height: 18px;
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring),
+                border-color var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
 
   .probe-segment + .probe-segment {
@@ -365,10 +365,10 @@
     line-height: 18px;
     box-sizing: border-box;
     /* Atomic multi-property hover transition — spec §6 line 1133-1140. */
-    transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-hover) var(--ease-spring),
+                border-color var(--duration-hover) var(--ease-spring),
+                transform var(--duration-hover) var(--ease-spring),
+                color var(--duration-hover) var(--ease-spring);
   }
 
   .probe-submit:hover:not(:disabled) {
@@ -378,10 +378,10 @@
 
   .probe-submit:active:not(:disabled) {
     transform: translateY(0);
-    transition: background 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
-                color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background var(--duration-micro) var(--ease-spring),
+                border-color var(--duration-micro) var(--ease-spring),
+                transform var(--duration-micro) var(--ease-spring),
+                color var(--duration-micro) var(--ease-spring);
   }
 
   .probe-submit:disabled {
