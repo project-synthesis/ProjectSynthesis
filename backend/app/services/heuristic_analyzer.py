@@ -40,6 +40,7 @@ from app.services.domain_detector import (
     get_signal_loader,
     set_signal_loader,
 )
+from app.services import task_type_classifier as _task_type_classifier_module
 from app.services.task_type_classifier import (
     LLM_CLASSIFICATION_CONFIDENCE_GATE as _LLM_CLASSIFICATION_CONFIDENCE_GATE,
 )
@@ -49,7 +50,6 @@ from app.services.task_type_classifier import (
 from app.services.task_type_classifier import (
     check_technical_disambiguation,
     classify_task_type,
-    classify_with_llm,
     extract_first_sentence,
     get_task_type_signals,
     rescue_task_type_via_structural_evidence,
@@ -57,6 +57,15 @@ from app.services.task_type_classifier import (
     set_task_type_signals,
     task_type_has_dynamic_signals,
 )
+
+
+async def classify_with_llm(*args, **kwargs):
+    """Module-attribute proxy so tests that patch
+    ``app.services.task_type_classifier.classify_with_llm`` intercept the
+    call here too. v0.4.40: the previous direct ``from ... import
+    classify_with_llm`` froze a local binding that bypassed source-of-truth
+    patches; this proxy resolves the attribute fresh at call time."""
+    return await _task_type_classifier_module.classify_with_llm(*args, **kwargs)
 from app.services.weakness_detector import (
     detect_strengths,
     detect_weaknesses,

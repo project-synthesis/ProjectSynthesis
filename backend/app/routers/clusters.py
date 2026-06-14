@@ -29,13 +29,18 @@ from app.schemas.clusters import (
     ClusterStats,
     ClusterTreeResponse,
     ClusterUpdateRequest,
+    DivergencePreview,
+    EnrichmentPreviewResponse,
     InjectionEdge,
     InjectionEdgesResponse,
     LinkedOptimization,
     MetaPatternItem,
+    PreviewEnrichmentRequest,
     ReclusterResponse,
     SimilarityEdge,
     SimilarityEdgesResponse,
+    StrategyPreview,
+    TaskTypePreview,
     TaxonomyActivityEvent,
 )
 from app.schemas.probes import DrillInitiatedOutput, DrillRequest
@@ -820,6 +825,147 @@ async def match_cluster(
     except Exception as exc:
         logger.error("Cluster match failed: %s", exc, exc_info=True)
         raise HTTPException(500, "Cluster matching failed") from exc
+
+
+async def _lookup_divergence_alerts(
+    db: AsyncSession,
+    *,
+    project_id: str,
+    prompt_text: str,
+) -> list[DivergencePreview]:
+    """Resolve project_id → LinkedRepo → RepoIndexMeta.explore_synthesis →
+    detect_divergences. Returns [] on any miss (missing link, missing meta,
+    missing synthesis) or on any exception — never raises."""
+    try:
+        from app.models import LinkedRepo, RepoIndexMeta
+        from app.services.divergence_detector import detect_divergences
+
+        link_q = await db.execute(
+            select(LinkedRepo).where(
+                LinkedRepo.project_node_id == project_id,
+            ).limit(1)
+        )
+        link = link_q.scalars().first()
+        if link is None:
+            return []
+        branch = link.branch or link.default_branch or "main"
+        meta_q = await db.execute(
+            select(RepoIndexMeta).where(
+                RepoIndexMeta.repo_full_name == link.full_name,
+                RepoIndexMeta.branch == branch,
+            ).limit(1)
+        )
+        meta = meta_q.scalars().first()
+        if meta is None or not meta.explore_synthesis:
+            return []
+        return [
+            DivergencePreview(
+                category=d.category,
+                prompt_tech=d.prompt_tech,
+                codebase_tech=d.codebase_tech,
+                severity=d.severity,
+            )
+            for d in detect_divergences(prompt_text, meta.explore_synthesis)
+        ]
+    except Exception:
+        logger.debug("preview_enrichment divergence lookup failed", exc_info=True)
+        return []
+
+
+@router.post("/api/clusters/preview-enrichment")
+async def preview_enrichment(
+    request: Request,
+    body: PreviewEnrichmentRequest,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(RateLimit(lambda: "30/minute")),
+    enable_llm_fallback: bool = Query(default=False),
+) -> EnrichmentPreviewResponse:
+    """Structured analyzer + strategy intelligence preview for the live ContextPanel.
+
+    Zero LLM calls in the default path; ``enable_llm_fallback=true`` opts into
+    the A4 Haiku confidence-gated classifier (~15-20% of prompts; slower).
+
+    See docs/superpowers/specs/2026-06-13-v0.4.40-live-pattern-intelligence-tier-2-design.md.
+    """
+    started = datetime.now(UTC)
+    try:
+        from app.services.heuristic_analyzer import HeuristicAnalyzer
+        from app.services.strategy_intelligence import (
+            resolve_strategy_intelligence_structured,
+        )
+        from app.services.task_type_classifier import task_type_has_dynamic_signals
+
+        routing = getattr(request.app.state, "routing", None)
+        provider = None
+        if enable_llm_fallback and routing is not None:
+            provider = routing.state.provider
+
+        analyzer = HeuristicAnalyzer()
+        analysis = await analyzer.analyze(
+            body.prompt_text, db,
+            provider=provider,
+            enable_llm_fallback=enable_llm_fallback,
+        )
+
+        # Signal source — best-effort, default to "bootstrap" on any error.
+        try:
+            signal_source = (
+                "dynamic"
+                if task_type_has_dynamic_signals(analysis.task_type)
+                else "bootstrap"
+            )
+        except Exception:
+            signal_source = "bootstrap"
+
+        structured = await resolve_strategy_intelligence_structured(
+            db, analysis.task_type, analysis.domain,
+        )
+
+        # Low-confidence gate — replace top_strategies with [] when the prompt
+        # is ambiguous AND the heuristic landed on the "general" default bucket.
+        top_strategies: list[StrategyPreview] = []
+        if not (analysis.task_type == "general" and analysis.confidence < 0.4):
+            top_strategies = [
+                StrategyPreview(name=s.name, score=s.score, source=s.source)
+                for s in structured.top_strategies
+            ]
+
+        weaknesses = list(analysis.weaknesses)[:3]
+
+        # Divergence: only when project_id maps to a LinkedRepo with cached synthesis.
+        divergence_alerts: list[DivergencePreview] = []
+        if body.project_id:
+            divergence_alerts = await _lookup_divergence_alerts(
+                db, project_id=body.project_id, prompt_text=body.prompt_text,
+            )
+
+        elapsed_ms = max(
+            1,
+            int((datetime.now(UTC) - started).total_seconds() * 1000),
+        )
+
+        return EnrichmentPreviewResponse(
+            task_type=TaskTypePreview(
+                task_type=analysis.task_type,
+                confidence=analysis.confidence,
+                signal_source=signal_source,
+            ),
+            domain=analysis.domain,
+            intent_label=analysis.intent_label,
+            recommended_strategy=analysis.recommended_strategy,
+            top_strategies=top_strategies,
+            blocked_strategies=structured.blocked_strategies,
+            weaknesses=weaknesses,
+            divergence_alerts=divergence_alerts,
+            domain_relaxed_fallback=structured.domain_relaxed_fallback,
+            elapsed_ms=elapsed_ms,
+        )
+    except OperationalError as exc:
+        logger.warning("Preview-enrichment DB contention: %s", exc)
+        raise HTTPException(503, "Database busy — retry in a moment") from exc
+    except Exception as exc:
+        logger.error("Preview-enrichment failed: %s", exc, exc_info=True)
+        raise HTTPException(500, "Enrichment preview failed") from exc
 
 
 @router.post("/api/clusters/recluster")
