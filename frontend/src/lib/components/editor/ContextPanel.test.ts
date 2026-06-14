@@ -407,4 +407,139 @@ describe('ContextPanel', () => {
       expect(header.classList.contains('panel-header--error')).toBe(true);
     });
   });
+
+  describe('ANALYSIS section (Tier 2)', () => {
+    function makePreview(overrides: Record<string, unknown> = {}) {
+      return {
+        task_type: { task_type: 'coding', confidence: 0.82, signal_source: 'bootstrap' as const },
+        domain: 'backend: auth',
+        intent_label: 'build authentication endpoint',
+        recommended_strategy: 'meta-prompting',
+        top_strategies: [
+          { name: 'meta-prompting', score: 8.4, source: 'performance' as const },
+          { name: 'role-playing', score: 7.2, source: 'performance' as const },
+        ],
+        blocked_strategies: ['bad-strategy'],
+        weaknesses: ['vague language reduces precision', 'no examples to anchor expected output'],
+        divergence_alerts: [],
+        domain_relaxed_fallback: false,
+        elapsed_ms: 53,
+        ...overrides,
+      };
+    }
+
+    it('renders the ANALYSIS section heading when preview !== null', () => {
+      clustersStore.preview = makePreview();
+      render(ContextPanel);
+      expect(screen.getByText('ANALYSIS')).toBeTruthy();
+    });
+
+    it('renders the task-type chip + confidence percent (one decimal)', () => {
+      clustersStore.preview = makePreview();
+      const { container } = render(ContextPanel);
+      const chip = container.querySelector('[data-test="analysis-task-chip"]') as HTMLElement;
+      expect(chip).not.toBeNull();
+      expect(chip.textContent).toMatch(/coding/);
+      expect(chip.textContent).toMatch(/82\.0%/);
+    });
+
+    it('renders the domain row with the full qualifier', () => {
+      clustersStore.preview = makePreview({ domain: 'backend: auth' });
+      const { container } = render(ContextPanel);
+      const row = container.querySelector('[data-test="analysis-domain"]') as HTMLElement;
+      expect(row.textContent).toMatch(/backend: auth/);
+    });
+
+    it('renders the recommended strategy chip', () => {
+      clustersStore.preview = makePreview();
+      const { container } = render(ContextPanel);
+      const chip = container.querySelector('[data-test="analysis-strategy"]') as HTMLElement;
+      expect(chip.textContent).toMatch(/meta-prompting/);
+    });
+
+    it('renders top-strategy rows with score percent', () => {
+      clustersStore.preview = makePreview();
+      const { container } = render(ContextPanel);
+      const rows = container.querySelectorAll('[data-test="analysis-strategy-row"]');
+      expect(rows.length).toBe(2);
+    });
+
+    it('renders the "low confidence" dim hint when top_strategies is empty AND task_type is general', () => {
+      clustersStore.preview = makePreview({
+        task_type: { task_type: 'general', confidence: 0.2, signal_source: 'bootstrap' as const },
+        top_strategies: [],
+      });
+      render(ContextPanel);
+      expect(screen.getByText(/low confidence — keep refining/i)).toBeTruthy();
+    });
+
+    it('renders the blocked row only when blocked_strategies is non-empty', () => {
+      clustersStore.preview = makePreview({ blocked_strategies: [] });
+      const { container } = render(ContextPanel);
+      expect(container.querySelector('[data-test="analysis-blocked"]')).toBeNull();
+    });
+
+    it('renders one weakness row per item, capped at 3', () => {
+      clustersStore.preview = makePreview({
+        weaknesses: ['w1', 'w2', 'w3', 'w4'],
+      });
+      const { container } = render(ContextPanel);
+      const rows = container.querySelectorAll('[data-test="analysis-weakness-row"]');
+      expect(rows.length).toBe(3);
+    });
+
+    it('renders divergence rows when present', () => {
+      clustersStore.preview = makePreview({
+        divergence_alerts: [
+          { category: 'database', prompt_tech: 'mongodb', codebase_tech: 'postgresql', severity: 'conflict' as const },
+        ],
+      });
+      const { container } = render(ContextPanel);
+      const rows = container.querySelectorAll('[data-test="analysis-divergence-row"]');
+      expect(rows.length).toBe(1);
+    });
+
+    it('renders the empty-state copy when preview === null and _previewInFlight === false', () => {
+      clustersStore.preview = null;
+      clustersStore._previewInFlight = false;
+      // Make sure the cluster suggestion also is null so the wider panel
+      // falls back to its existing empty state and we can verify the
+      // ANALYSIS-specific copy below the patterns area.
+      clustersStore.suggestion = null;
+      render(ContextPanel);
+      expect(screen.getByText(/type 30\+ chars to preview/i)).toBeTruthy();
+    });
+
+    it('ANALYSIS section is hidden when activeTab type is not "prompt"', () => {
+      forgeStore.status = 'optimizing'; // covers SYNTHESIS_STATES gate
+      clustersStore.preview = makePreview();
+      render(ContextPanel);
+      expect(screen.queryByText('ANALYSIS')).toBeNull();
+    });
+
+    it('brand-compliance grep — no glow/halo/bloom/breathing vocab in source', () => {
+      // Source-level grep gate on ContextPanel.svelte — locks the brand
+      // grammar required by frontend CLAUDE.md (v0.4.39 standard).
+      const forbidden = ['glow', 'halo', 'bloom', 'radiance', 'breathing'];
+      for (const word of forbidden) {
+        expect(contextPanelSource.toLowerCase()).not.toContain(word);
+      }
+    });
+
+    it('brand-compliance grep — no h-7/h-8/p-2/gap-2 padding-drift in source', () => {
+      // R-01..R-05 brand recipes — locks the IDE density (20px rows, p-1.5,
+      // gap-1.5) per the v0.4.39 brand pass.
+      const driftPatterns = [
+        /\bh-7\b/, /\bh-8\b/, /\bp-2\b(?!\.|[0-9]|-)/, /\bgap-2\b(?!\.|[0-9]|-)/,
+      ];
+      for (const pat of driftPatterns) {
+        expect(contextPanelSource).not.toMatch(pat);
+      }
+    });
+
+    it('brand-compliance grep — no shadow-blur vocabulary in source', () => {
+      // Multi-px blurred box-shadow violates the v0.4.39 1px-tube standard.
+      expect(contextPanelSource).not.toMatch(/box-shadow:.*\d+px\s+[1-9]\d*px/);
+    });
+  });
 });
