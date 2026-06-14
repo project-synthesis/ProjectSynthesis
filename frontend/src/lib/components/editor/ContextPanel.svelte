@@ -96,6 +96,28 @@
   const inFlight = $derived(clustersStore._matchInFlight);
   const errorState = $derived(clustersStore._matchError !== null);
   const attemptedMatch = $derived(clustersStore._lastMatchedText !== '');
+
+  // Tier 2 — live enrichment preview
+  const preview = $derived(clustersStore.preview);
+  const previewInFlight = $derived(clustersStore._previewInFlight);
+  const previewError = $derived(clustersStore._previewError !== null);
+  const showLowConfidenceHint = $derived(
+    preview !== null
+      && preview.task_type.task_type === 'general'
+      && preview.task_type.confidence < 0.4
+      && preview.top_strategies.length === 0,
+  );
+
+  function fmtPercent(n: number, digits = 1): string {
+    return `${(n * 100).toFixed(digits)}%`;
+  }
+  function fmtScorePercent(n: number): string {
+    // Performance score is on a 1-10 scale; render as integer %.
+    return `${Math.round((n / 10) * 100)}%`;
+  }
+  function truncatePlain(text: string, n: number): string {
+    return text.length <= n ? text : text.slice(0, n - 1) + '…';
+  }
 </script>
 
 {#if !isSynthesizing}
@@ -220,6 +242,89 @@
       </button>
     </footer>
   {/if}
+
+  <!-- ANALYSIS section (Tier 2, v0.4.40) -->
+  <section class="analysis-section" data-test="analysis-section" aria-label="Prompt analysis preview">
+    <header class="section-heading">
+      <span class="section-title">ANALYSIS</span>
+    </header>
+    {#if preview === null}
+      {#if previewError}
+        <div class="empty-state">
+          <p class="empty-copy panel-error">Preview failed.</p>
+        </div>
+      {:else if !previewInFlight}
+        <div class="empty-state">
+          <p class="empty-copy">Type 30+ chars to preview.</p>
+        </div>
+      {/if}
+    {:else}
+      <div class="analysis-row" data-test="analysis-task-chip">
+        <span
+          class="task-dot"
+          style="background-color: {taxonomyColor(preview.task_type.task_type)};"
+        ></span>
+        <span class="task-label">{preview.task_type.task_type}</span>
+        <span class="task-confidence">{fmtPercent(preview.task_type.confidence)}</span>
+      </div>
+      <div class="analysis-row" data-test="analysis-domain">
+        <span class="domain-dot" style="background-color: {taxonomyColor(preview.domain)};"></span>
+        <span class="domain-label">{preview.domain}</span>
+      </div>
+      <div class="analysis-row" data-test="analysis-strategy">
+        <span class="strategy-chip">{preview.recommended_strategy}</span>
+      </div>
+
+      {#if showLowConfidenceHint}
+        <div class="analysis-row analysis-row--hint" data-test="analysis-low-confidence">
+          <span class="hint-text">low confidence — keep refining</span>
+        </div>
+      {:else}
+        <ul class="analysis-list" data-test="analysis-strategy-list">
+          {#each preview.top_strategies as s (s.name)}
+            <li class="analysis-row analysis-row--strategy" data-test="analysis-strategy-row">
+              <span class="strategy-name">{s.name}</span>
+              <span class="strategy-score">{fmtScorePercent(s.score)}</span>
+              <span class="strategy-source">{s.source[0]}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+
+      {#if preview.blocked_strategies.length > 0}
+        <div class="analysis-row analysis-row--blocked" data-test="analysis-blocked">
+          <span class="blocked-label">Blocked: {preview.blocked_strategies.join(', ')}</span>
+        </div>
+      {/if}
+
+      {#if preview.weaknesses.length > 0}
+        <ul class="analysis-list" data-test="analysis-weakness-list">
+          {#each preview.weaknesses.slice(0, 3) as w, i (i)}
+            <li class="analysis-row analysis-row--weakness" data-test="analysis-weakness-row">
+              <span class="weakness-dot"></span>
+              <span class="weakness-text">{truncatePlain(w, 120)}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+
+      {#if preview.divergence_alerts.length > 0}
+        <ul class="analysis-list" data-test="analysis-divergence-list">
+          {#each preview.divergence_alerts as d, i (i)}
+            <li class="analysis-row analysis-row--divergence" data-test="analysis-divergence-row">
+              <span
+                class="divergence-dot"
+                class:divergence-dot--migration={d.severity === 'migration'}
+              ></span>
+              <span class="divergence-category">{d.category}</span>
+              <span class="divergence-severity">{d.severity}</span>
+              <span class="divergence-tail">prompt: <code>{d.prompt_tech}</code> ↔ codebase: <code>{d.codebase_tech}</code></span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    {/if}
+  </section>
   </div>
 </aside>
 {/if}
@@ -430,6 +535,95 @@
   }
   .panel-body {
     transition: opacity var(--duration-hover) var(--ease-spring);
+  }
+
+  /* ANALYSIS section (Tier 2, v0.4.40) — IDE-density 20px rows. */
+  .analysis-section { border-top: 1px solid var(--color-border-subtle); }
+  .analysis-list { list-style: none; padding: 0; margin: 0; }
+  .analysis-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 20px;
+    padding: 0 6px;
+    border-top: 1px solid var(--color-border-subtle);
+    font-family: var(--font-sans);
+    font-size: 10px;
+    color: var(--color-text-primary);
+  }
+  .analysis-row--strategy,
+  .analysis-row--weakness,
+  .analysis-row--divergence,
+  .analysis-row--blocked,
+  .analysis-row--hint { font-size: 10px; }
+  .task-dot,
+  .domain-dot,
+  .weakness-dot,
+  .divergence-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    flex-shrink: 0;
+    background-color: var(--color-neon-cyan);
+  }
+  .divergence-dot { background-color: var(--color-neon-red); }
+  .divergence-dot--migration { background-color: var(--color-neon-yellow); }
+  .task-label,
+  .domain-label { font-size: 10px; }
+  .task-confidence {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-dim);
+    margin-left: auto;
+  }
+  .strategy-chip {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-neon-cyan);
+    padding: 0 4px;
+    border: 1px solid var(--color-border-subtle);
+  }
+  .strategy-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .strategy-score,
+  .strategy-source {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-dim);
+  }
+  .weakness-text,
+  .blocked-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-secondary);
+  }
+  .divergence-category {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-primary);
+  }
+  .divergence-severity {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-dim);
+  }
+  .divergence-tail {
+    font-size: 10px;
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hint-text {
+    font-size: 10px;
+    color: var(--color-text-dim);
+    font-style: italic;
+  }
+  .panel-error { color: var(--color-neon-red); }
+  .analysis-row:focus-visible {
+    outline: 1px solid var(--color-focus-ring);
+    outline-offset: var(--focus-offset-inset);
   }
 
   @media (prefers-reduced-motion: reduce) {
