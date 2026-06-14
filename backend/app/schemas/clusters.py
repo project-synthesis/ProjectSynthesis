@@ -198,3 +198,42 @@ class ActivityHistoryResponse(BaseModel):
     events: list[TaxonomyActivityEvent]
     total: int
     has_more: bool
+
+
+class PreviewEnrichmentRequest(BaseModel):
+    prompt_text: str = Field(..., min_length=1, max_length=8000)
+    project_id: str | None = None
+
+
+class TaskTypePreview(BaseModel):
+    task_type: str
+    confidence: float
+    signal_source: Literal["bootstrap", "dynamic"]
+
+
+class StrategyPreview(BaseModel):
+    name: str
+    score: float
+    source: Literal["performance", "feedback"]
+
+
+class DivergencePreview(BaseModel):
+    """1:1 mirror of services.divergence_detector.Divergence dataclass."""
+
+    category: str
+    prompt_tech: str
+    codebase_tech: str
+    severity: Literal["conflict", "migration"]
+
+
+class EnrichmentPreviewResponse(BaseModel):
+    task_type: TaskTypePreview
+    domain: str
+    intent_label: str
+    recommended_strategy: str
+    top_strategies: list[StrategyPreview] = Field(default_factory=list)
+    blocked_strategies: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    divergence_alerts: list[DivergencePreview] = Field(default_factory=list)
+    domain_relaxed_fallback: bool = False
+    elapsed_ms: int
