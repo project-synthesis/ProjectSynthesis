@@ -325,3 +325,57 @@ export async function getClusterActivityHistory(
   );
 }
 
+// -- Preview enrichment (Tier 2, v0.4.40) --
+
+export interface TaskTypePreview {
+  task_type: string;
+  confidence: number;
+  signal_source: 'bootstrap' | 'dynamic';
+}
+
+export interface StrategyPreview {
+  name: string;
+  score: number;
+  source: 'performance' | 'feedback';
+}
+
+export interface DivergencePreview {
+  category: string;
+  prompt_tech: string;
+  codebase_tech: string;
+  severity: 'conflict' | 'migration';
+}
+
+export interface EnrichmentPreview {
+  task_type: TaskTypePreview;
+  domain: string;
+  intent_label: string;
+  recommended_strategy: string;
+  top_strategies: StrategyPreview[];
+  blocked_strategies: string[];
+  weaknesses: string[];
+  divergence_alerts: DivergencePreview[];
+  domain_relaxed_fallback: boolean;
+  elapsed_ms: number;
+}
+
+export async function previewEnrichment(
+  prompt_text: string,
+  project_id: string | null,
+  signal: AbortSignal,
+): Promise<EnrichmentPreview | null> {
+  try {
+    return await apiFetch<EnrichmentPreview>('/clusters/preview-enrichment', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt_text,
+        project_id: project_id ?? undefined,
+      }),
+      signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return null;
+    throw err;
+  }
+}
+
