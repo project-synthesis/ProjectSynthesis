@@ -4,6 +4,10 @@ All notable changes to Project Synthesis. Format follows [Keep a Changelog](http
 
 ## Unreleased
 
+### Added
+- **`POST /api/clusters/preview-enrichment` — live analyzer + strategy intel preview** (Tier 2 backend). New endpoint returns structured `task_type` (with `signal_source: bootstrap|dynamic`), `domain`, `intent_label`, `recommended_strategy`, top strategies (≤3, sorted desc by score), blocked strategies (sorted), top weaknesses (≤3 raw sentence fragments), and divergence alerts mirroring the `services.divergence_detector.Divergence` dataclass (`category`/`prompt_tech`/`codebase_tech`/`severity`). Rate-limited at `30/minute` (same surface as `/api/clusters/match`). Zero LLM calls in the default path; explicit `enable_llm_fallback=true` query routes through the A4 Haiku confidence-gated classifier. Low-confidence gate replaces `top_strategies` with `[]` when `task_type=="general"` and `confidence < 0.4` so the panel never surfaces stale rankings from the default bucket. Divergence alerts populate only when `project_id` resolves a `LinkedRepo` with a cached `RepoIndexMeta.explore_synthesis`; otherwise the field is an empty list. `elapsed_ms` field surfaces server-measured wall-clock for SLO tracking; representative warm-process latency p50 < 100 ms / p95 < 200 ms.
+- **`StructuredStrategyIntel` + `resolve_strategy_intelligence_structured()`** — new structured form of strategy intelligence in `services/strategy_intelligence.py`. The legacy formatted-string `resolve_strategy_intelligence()` now delegates blocked-set resolution to the structured helper so the live ContextPanel preview cannot drift from the prompt-injected advisory. Formatted-output stays byte-identical pre/post the split, locked by a per-task-type parity oracle covering all 7 task types + low/high feedback volumes + empty/populated blocked sets.
+
 ## v0.4.39 — 2026-06-13
 
 ### Changed
