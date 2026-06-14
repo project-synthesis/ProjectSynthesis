@@ -112,8 +112,9 @@
     return `${(n * 100).toFixed(digits)}%`;
   }
   function fmtScorePercent(n: number): string {
-    // Performance score is on a 1-10 scale; render as integer %.
-    return `${Math.round((n / 10) * 100)}%`;
+    // StrategyRanking.score is 0.0-1.0 on the wire (backend normalizes
+    // performance avg_score /10; feedback uses approval_rate directly).
+    return `${Math.round(n * 100)}%`;
   }
   function truncatePlain(text: string, n: number): string {
     return text.length <= n ? text : text.slice(0, n - 1) + '…';

@@ -34,7 +34,7 @@ class StrategyRanking:
     """A single strategy ranked by performance or feedback signal."""
 
     name: str
-    score: float  # 0.0-1.0 for feedback approval_rate, raw avg_score (1-10) for performance
+    score: float  # 0.0-1.0 always — performance avg_score normalized /10; feedback uses approval_rate directly
     source: Literal["performance", "feedback"]
 
 
@@ -234,8 +234,15 @@ async def resolve_strategy_intelligence_structured(
             if rows:
                 domain_relaxed_fallback = True
 
+        # Normalize avg_score (1-10) → 0.0-1.0 so StrategyRanking.score is a
+        # single-scale contract regardless of source (frontend renders directly
+        # as n*100 percent).
         top: list[StrategyRanking] = [
-            StrategyRanking(name=r.strategy_used, score=float(r.avg_score), source="performance")
+            StrategyRanking(
+                name=r.strategy_used,
+                score=float(r.avg_score) / 10.0,
+                source="performance",
+            )
             for r in rows
         ]
         top.sort(key=lambda r: r.score, reverse=True)
