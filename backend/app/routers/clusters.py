@@ -7,7 +7,7 @@ Replaces the separate /api/taxonomy/ and /api/patterns/ routers with a single
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -858,15 +858,20 @@ async def _lookup_divergence_alerts(
         meta = meta_q.scalars().first()
         if meta is None or not meta.explore_synthesis:
             return []
-        return [
-            DivergencePreview(
-                category=d.category,
-                prompt_tech=d.prompt_tech,
-                codebase_tech=d.codebase_tech,
-                severity=d.severity,
+        previews: list[DivergencePreview] = []
+        for d in detect_divergences(prompt_text, meta.explore_synthesis):
+            # Divergence.severity is `str` upstream; narrow at the wire boundary.
+            if d.severity not in ("conflict", "migration"):
+                continue
+            previews.append(
+                DivergencePreview(
+                    category=d.category,
+                    prompt_tech=d.prompt_tech,
+                    codebase_tech=d.codebase_tech,
+                    severity=cast(Literal["conflict", "migration"], d.severity),
+                )
             )
-            for d in detect_divergences(prompt_text, meta.explore_synthesis)
-        ]
+        return previews
     except Exception:
         logger.debug("preview_enrichment divergence lookup failed", exc_info=True)
         return []
@@ -908,12 +913,10 @@ async def preview_enrichment(
         )
 
         # Signal source — best-effort, default to "bootstrap" on any error.
+        signal_source: Literal["bootstrap", "dynamic"] = "bootstrap"
         try:
-            signal_source = (
-                "dynamic"
-                if task_type_has_dynamic_signals(analysis.task_type)
-                else "bootstrap"
-            )
+            if task_type_has_dynamic_signals(analysis.task_type):
+                signal_source = "dynamic"
         except Exception:
             signal_source = "bootstrap"
 

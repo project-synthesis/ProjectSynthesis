@@ -350,25 +350,93 @@ class TestPreviewEnrichmentEndpoint:
         assert body["weaknesses"]  # still populated
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# AC-8 strategy-intel formatted-output PARITY SNAPSHOT.
+#
+# Captured ONCE from the pre-refactor source on `main` (commit prior to
+# 2596144c) via /tmp/capture_parity.py, which loads the pre-refactor module
+# from /tmp/strategy_intelligence_main.py and exercises the same scenario
+# sequence below against an in-memory SQLite session.
+#
+# Each entry is (task_type, domain, expected_text, expected_fallback).
+# The scenario sequence MUST match the seed loop ordering exactly — the db
+# session accumulates between scenarios (e.g. scenario 9 inherits scenario
+# 2's writing/general/few-shot rows; coding scenarios 0, 1, 8 share blocked
+# strategy "bad-a" through the task-type-scoped affinity table).
+#
+# DO NOT regenerate these constants without a true pre/post snapshot — that
+# would silently allow regressions. If a future cycle intentionally changes
+# the formatted output, the change should be made AND captured here in the
+# same commit, with the diff visible in PR review.
+# ──────────────────────────────────────────────────────────────────────────────
+_PARITY_SNAPSHOT: list[tuple[str, str, str | None, bool]] = [
+    ("coding", "backend",
+     "Top strategies for backend+coding: meta-prompting (8.0, n=3)\n\n"
+     "User feedback:\n  bad-a: 9% approval (11 feedbacks)\n\n"
+     "Blocked strategies (low approval): bad-a",
+     False),
+    ("coding", "frontend",
+     "Top strategies for coding (across all domains): meta-prompting (8.0, n=3)\n\n"
+     "User feedback:\n  bad-a: 9% approval (11 feedbacks)\n\n"
+     "Blocked strategies (low approval): bad-a",
+     True),
+    ("writing", "general",
+     "Top strategies for general+writing: few-shot (7.5, n=3)\n\n"
+     "User feedback:\n  bad-b: 0% approval (8 feedbacks)\n\n"
+     "Blocked strategies (low approval): bad-b",
+     False),
+    ("analysis", "data",
+     "Top strategies for data+analysis: chain-of-thought (8.2, n=3)",
+     False),
+    ("creative", "general",
+     "User feedback:\n  bad-c: 9% approval (11 feedbacks)\n\n"
+     "Blocked strategies (low approval): bad-c",
+     False),
+    ("data", "database",
+     "Top strategies for database+data: structured-output (7.8, n=4)",
+     False),
+    ("system", "devops",
+     "Top strategies for devops+system: role-playing (6.5, n=3)",
+     False),
+    ("general", "general", None, False),
+    ("coding", "security",
+     "Top strategies for security+coding: alpha (9.0, n=3), beta (8.5, n=3), gamma (7.8, n=3)\n\n"
+     "User feedback:\n  bad-a: 9% approval (11 feedbacks)\n\n"
+     "Blocked strategies (low approval): bad-a",
+     False),
+    ("writing", "general",
+     "Top strategies for general+writing: few-shot (5.5, n=7)\n\n"
+     "User feedback:\n  bad-b: 0% approval (8 feedbacks)\n  bad-d: 0% approval (6 feedbacks)\n\n"
+     "Blocked strategies (low approval): bad-b, bad-d",
+     False),
+]
+
+
 class TestStrategyIntelligenceParity:
-    """AC-8: byte-identical formatted output pre/post structured refactor."""
+    """AC-8: byte-identical formatted output pre/post structured refactor.
+
+    Snapshot pinned against the pre-refactor source captured from `main`.
+    See the ``_PARITY_SNAPSHOT`` docstring above for the capture provenance.
+    """
 
     @pytest.mark.asyncio
-    async def test_formatted_output_byte_identical_across_scenarios(
+    async def test_formatted_output_byte_identical_against_pre_refactor_snapshot(
         self, db_session,
     ):
         """≥10 (task_type, domain) pairs across all 7 task types + empty/populated
         blocked sets + low/high feedback volumes.
 
-        The test snapshots the current formatted output, captures it, and re-runs
-        the refactored helper. Because Cycle 1 refactors
-        ``resolve_strategy_intelligence`` to delegate to the structured helper,
-        the formatted output must remain BYTE-IDENTICAL.
+        Post-refactor ``resolve_strategy_intelligence`` (which now delegates to
+        the structured helper) MUST produce byte-identical formatted output to
+        the pre-refactor snapshot. If this test fails after a future refactor,
+        either the refactor is broken OR an intentional output change requires
+        a matching snapshot update in the same commit.
         """
         from app.services.strategy_intelligence import resolve_strategy_intelligence
 
-        # Pairs covering all 7 task types + edge cases.
-        scenarios: list[tuple[str, str, list[tuple[str, float, int]], list[tuple[str, int, int]]]] = [
+        # Seed-data sequence — must mirror the capture script in /tmp/capture_parity.py
+        # so the accumulating session state matches what produced the snapshot.
+        scenario_seeds: list[tuple[str, str, list[tuple[str, float, int]], list[tuple[str, int, int]]]] = [
             ("coding", "backend", [("meta-prompting", 8.0, 3)], [("bad-a", 1, 10)]),
             ("coding", "frontend", [], []),
             ("writing", "general", [("few-shot", 7.5, 3)], [("bad-b", 0, 8)]),
@@ -377,28 +445,39 @@ class TestStrategyIntelligenceParity:
             ("data", "database", [("structured-output", 7.8, 4)], []),
             ("system", "devops", [("role-playing", 6.5, 3)], []),
             ("general", "general", [], []),
-            ("coding", "security", [("alpha", 9.0, 3), ("beta", 8.5, 3), ("gamma", 7.8, 3)], []),
-            ("writing", "general", [("few-shot", 4.0, 4)], [("bad-d", 0, 6)]),  # anti-pattern path
+            ("coding", "security",
+             [("alpha", 9.0, 3), ("beta", 8.5, 3), ("gamma", 7.8, 3)], []),
+            ("writing", "general", [("few-shot", 4.0, 4)], [("bad-d", 0, 6)]),
         ]
+        assert len(scenario_seeds) == len(_PARITY_SNAPSHOT), (
+            "Seed scenario count must match snapshot count"
+        )
 
-        for task_type, domain, opts, affs in scenarios:
+        for (task_type, domain, opts, affs), (
+            exp_tt, exp_dom, exp_text, exp_fallback,
+        ) in zip(scenario_seeds, _PARITY_SNAPSHOT, strict=True):
+            assert (task_type, domain) == (exp_tt, exp_dom), (
+                "Seed and snapshot scenario ordering drift"
+            )
             for strategy, score, n in opts:
                 for _ in range(n):
-                    await _seed_optimization(db_session, strategy, task_type, domain, score)
+                    await _seed_optimization(
+                        db_session, strategy, task_type, domain, score,
+                    )
             for strategy, up, down in affs:
                 await _seed_affinity(db_session, strategy, task_type, up, down)
             await db_session.commit()
 
-            # Capture the formatted output once
-            captured, fb_a = await resolve_strategy_intelligence(
+            text, fb = await resolve_strategy_intelligence(
                 db_session, task_type, domain,
             )
-            # Re-run — must be identical (covers idempotency + structured delegation)
-            captured_again, fb_b = await resolve_strategy_intelligence(
-                db_session, task_type, domain,
+            assert text == exp_text, (
+                f"Strategy intel formatted output drifted from pre-refactor "
+                f"snapshot for ({task_type}, {domain}, idx).\n"
+                f"  expected: {exp_text!r}\n"
+                f"  actual:   {text!r}"
             )
-            assert captured == captured_again, (
-                f"Strategy intel formatted output is not idempotent "
-                f"for ({task_type}, {domain})"
+            assert fb == exp_fallback, (
+                f"fallback_used drifted for ({task_type}, {domain}): "
+                f"expected {exp_fallback}, got {fb}"
             )
-            assert fb_a == fb_b
