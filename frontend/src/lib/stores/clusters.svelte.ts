@@ -9,9 +9,10 @@ import {
   matchPattern, getClusterDetail, getClusterTree, getClusterStats,
   getClusterSimilarityEdges, getClusterInjectionEdges,
   getClusterActivity, getClusterActivityHistory,
+  previewEnrichment,
   type ClusterMatchResponse, type ClusterDetail, type ClusterNode, type ClusterStats,
   type SimilarityEdge, type InjectionEdge, type TaxonomyActivityEvent,
-  type MetaPatternItem,
+  type MetaPatternItem, type EnrichmentPreview,
 } from '$lib/api/clusters';
 import { projectStore } from '$lib/stores/project.svelte';
 
@@ -139,6 +140,13 @@ class ClusterStore {
   private _loadGeneration = 0;
   private _clusterGeneration = 0;
 
+  // Tier 2 — live enrichment preview state (v0.4.40)
+  preview = $state<EnrichmentPreview | null>(null);
+  _previewInFlight = $state(false);
+  _previewError: 'network' | null = $state(null);
+  _lastPreviewedText: string | null = $state(null);
+  private _previewAbort: AbortController | null = null;
+
   setStateFilter(filter: StateFilter): void {
     this.stateFilter = filter;
     // Only clear selection if the selected cluster wouldn't be visible in the
@@ -166,12 +174,20 @@ class ClusterStore {
     const delta = Math.abs(text.length - this._lastLength);
     this._lastLength = text.length;
 
-    // Don't match fragments
-    if (text.length < MIN_PROMPT_LENGTH) return;
+    // Don't match fragments — and clear any prior preview state so the
+    // ANALYSIS section returns to its empty state.
+    if (text.length < MIN_PROMPT_LENGTH) {
+      this.preview = null;
+      this._lastPreviewedText = null;
+      this._previewError = null;
+      return;
+    }
 
-    // Skip if content hasn't meaningfully changed from last match
+    // Skip if content hasn't meaningfully changed from last match AND
+    // last preview — both lanes share the same trim semantics so the
+    // gate is symmetric.
     const trimmed = text.trim();
-    if (trimmed === this._lastMatchedText) return;
+    if (trimmed === this._lastMatchedText && trimmed === this._lastPreviewedText) return;
 
     // Determine debounce: fast for paste, slow for typing
     const isPaste = delta >= PASTE_CHAR_DELTA;
@@ -187,37 +203,71 @@ class ClusterStore {
       this._matchInFlight = true;
       this._matchError = null;
 
-      const signal = this._matchAbort.signal;
-      try {
-        // ADR-005 F3 — scope pattern matching to the current project so
-        // cross-project patterns don't surface suggestions for unrelated
-        // work.  null ("All projects") keeps legacy global behaviour.
-        const resp = await matchPattern(
-          trimmed,
-          signal,
-          projectStore.currentProjectId,
-        );
-        this._lastMatchedText = trimmed;
+      // Tier 2 — abort any in-flight preview-enrichment request and fire a
+      // fresh one in parallel with matchPattern (both controlled by sibling
+      // AbortControllers so a new keystroke cancels both at once).
+      if (this._previewAbort) this._previewAbort.abort();
+      this._previewAbort = new AbortController();
+      this._previewInFlight = true;
+      this._previewError = null;
 
-        if (resp.match && resp.match.meta_patterns.length > 0) {
-          // Defensive defaults for legacy responses (backwards compat).
-          this.suggestion = {
-            ...resp.match,
-            cross_cluster_patterns: resp.match.cross_cluster_patterns ?? [],
-            match_level: resp.match.match_level ?? 'cluster',
-          };
-          this.suggestionVisible = true;
-        } else {
-          this.suggestion = null;
-          this.suggestionVisible = false;
+      const signal = this._matchAbort.signal;
+      const previewSignal = this._previewAbort.signal;
+
+      const matchPromise = (async () => {
+        try {
+          // ADR-005 F3 — scope pattern matching to the current project so
+          // cross-project patterns don't surface suggestions for unrelated
+          // work.  null ("All projects") keeps legacy global behaviour.
+          const resp = await matchPattern(
+            trimmed,
+            signal,
+            projectStore.currentProjectId,
+          );
+          this._lastMatchedText = trimmed;
+
+          if (resp.match && resp.match.meta_patterns.length > 0) {
+            // Defensive defaults for legacy responses (backwards compat).
+            this.suggestion = {
+              ...resp.match,
+              cross_cluster_patterns: resp.match.cross_cluster_patterns ?? [],
+              match_level: resp.match.match_level ?? 'cluster',
+            };
+            this.suggestionVisible = true;
+          } else {
+            this.suggestion = null;
+            this.suggestionVisible = false;
+          }
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+          this._matchError = 'network';
+          console.warn('Pattern match failed:', err);
+        } finally {
+          this._matchInFlight = false;
         }
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        this._matchError = 'network';
-        console.warn('Pattern match failed:', err);
-      } finally {
-        this._matchInFlight = false;
-      }
+      })();
+
+      const previewPromise = (async () => {
+        try {
+          const resp = await previewEnrichment(
+            trimmed,
+            projectStore.currentProjectId,
+            previewSignal,
+          );
+          if (resp !== null) {
+            this.preview = resp;
+            this._lastPreviewedText = trimmed;
+          }
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+          this._previewError = 'network';
+          console.warn('Preview enrichment failed:', err);
+        } finally {
+          this._previewInFlight = false;
+        }
+      })();
+
+      await Promise.all([matchPromise, previewPromise]);
     }, debounceMs);
   }
 
@@ -449,12 +499,18 @@ class ClusterStore {
     this.seedBatchProgress = { completed: 0, total: 0, current: '' };
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     if (this._matchAbort) this._matchAbort.abort();
+    if (this._previewAbort) this._previewAbort.abort();
     this._debounceTimer = null;
     this._matchAbort = null;
+    this._previewAbort = null;
     this._lastLength = 0;
     this._lastMatchedText = '';
     this._matchInFlight = false;
     this._matchError = null;
+    this.preview = null;
+    this._previewInFlight = false;
+    this._previewError = null;
+    this._lastPreviewedText = null;
     this._loadGeneration = 0;
     this._clusterGeneration = 0;
   }
