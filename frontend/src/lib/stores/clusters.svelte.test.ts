@@ -59,23 +59,33 @@ describe('ClusterStore', () => {
       const clusterMatch = mockClusterMatch();
       const fetchMock = mockFetch([
         { match: '/clusters/match', response: { match: clusterMatch } },
+        // Tier 2 — preview lane fires in parallel; satisfy it to keep the
+        // test focused on the match-lane assertion.
+        { match: '/clusters/preview-enrichment', response: { task_type: { task_type: 'coding', confidence: 0.8, signal_source: 'bootstrap' }, domain: 'backend', intent_label: '', recommended_strategy: 'auto', top_strategies: [], blocked_strategies: [], weaknesses: [], divergence_alerts: [], domain_relaxed_fallback: false, elapsed_ms: 1 } },
       ]);
       clustersStore.checkForPatterns(bigText);
       await flushAll();
-      expect(fetchMock).toHaveBeenCalledOnce();
+      const matchCalls = fetchMock.mock.calls.filter(
+        ([url]) => String(url).includes('/clusters/match'),
+      );
+      expect(matchCalls.length).toBe(1);
     });
 
     it('debounces multiple rapid calls into one API call', async () => {
       const bigText = 'A'.repeat(60);
       const fetchMock = mockFetch([
         { match: '/clusters/match', response: { match: null } },
+        { match: '/clusters/preview-enrichment', response: { task_type: { task_type: 'coding', confidence: 0.8, signal_source: 'bootstrap' }, domain: 'backend', intent_label: '', recommended_strategy: 'auto', top_strategies: [], blocked_strategies: [], weaknesses: [], divergence_alerts: [], domain_relaxed_fallback: false, elapsed_ms: 1 } },
       ]);
       // Rapid calls — each resets the debounce timer
       clustersStore.checkForPatterns(bigText);
       clustersStore.checkForPatterns(bigText + 'B');
       clustersStore.checkForPatterns(bigText + 'BC');
       await flushAll();
-      expect(fetchMock).toHaveBeenCalledOnce();
+      const matchCalls = fetchMock.mock.calls.filter(
+        ([url]) => String(url).includes('/clusters/match'),
+      );
+      expect(matchCalls.length).toBe(1);
     });
 
     it('sets suggestion and shows it when match found', async () => {
@@ -117,6 +127,7 @@ describe('ClusterStore', () => {
     it('fires on typing path when prompt >= 30 chars with 800ms debounce', async () => {
       const fetchMock = mockFetch([
         { match: '/clusters/match', response: { match: null } },
+        { match: '/clusters/preview-enrichment', response: { task_type: { task_type: 'coding', confidence: 0.8, signal_source: 'bootstrap' }, domain: 'backend', intent_label: '', recommended_strategy: 'auto', top_strategies: [], blocked_strategies: [], weaknesses: [], divergence_alerts: [], domain_relaxed_fallback: false, elapsed_ms: 1 } },
       ]);
       // Type 30 chars one at a time — delta=1 each time (typing path)
       for (let i = 1; i <= 30; i++) {
@@ -126,7 +137,10 @@ describe('ClusterStore', () => {
       vi.advanceTimersByTime(300);
       await vi.runAllTimersAsync();
       // At this point the 800ms timer should have fired
-      expect(fetchMock).toHaveBeenCalledOnce();
+      const matchCalls = fetchMock.mock.calls.filter(
+        ([url]) => String(url).includes('/clusters/match'),
+      );
+      expect(matchCalls.length).toBe(1);
     });
   });
 
@@ -161,10 +175,14 @@ describe('ClusterStore', () => {
       // Simulate a paste that sets _lastLength to 60
       const fetchMock = mockFetch([
         { match: '/clusters/match', response: { match: null } },
+        { match: '/clusters/preview-enrichment', response: { task_type: { task_type: 'coding', confidence: 0.8, signal_source: 'bootstrap' }, domain: 'backend', intent_label: '', recommended_strategy: 'auto', top_strategies: [], blocked_strategies: [], weaknesses: [], divergence_alerts: [], domain_relaxed_fallback: false, elapsed_ms: 1 } },
       ]);
       clustersStore.checkForPatterns('A'.repeat(60));
       await flushAll();
-      expect(fetchMock).toHaveBeenCalledOnce();
+      const matchCalls = fetchMock.mock.calls.filter(
+        ([url]) => String(url).includes('/clusters/match'),
+      );
+      expect(matchCalls.length).toBe(1);
 
       fetchMock.mockClear();
 
@@ -179,17 +197,26 @@ describe('ClusterStore', () => {
 
     it('allows re-triggering paste detection after reset', async () => {
       // Set _lastLength to 60 via a paste
-      mockFetch([{ match: '/clusters/match', response: { match: null } }]);
+      mockFetch([
+        { match: '/clusters/match', response: { match: null } },
+        { match: '/clusters/preview-enrichment', response: { task_type: { task_type: 'coding', confidence: 0.8, signal_source: 'bootstrap' }, domain: 'backend', intent_label: '', recommended_strategy: 'auto', top_strategies: [], blocked_strategies: [], weaknesses: [], divergence_alerts: [], domain_relaxed_fallback: false, elapsed_ms: 1 } },
+      ]);
       clustersStore.checkForPatterns('A'.repeat(60));
       await flushAll();
 
       clustersStore.resetTracking();
 
       // Now a 60-char input from 0 = delta 60, should trigger
-      const fetchMock2 = mockFetch([{ match: '/clusters/match', response: { match: null } }]);
+      const fetchMock2 = mockFetch([
+        { match: '/clusters/match', response: { match: null } },
+        { match: '/clusters/preview-enrichment', response: { task_type: { task_type: 'coding', confidence: 0.8, signal_source: 'bootstrap' }, domain: 'backend', intent_label: '', recommended_strategy: 'auto', top_strategies: [], blocked_strategies: [], weaknesses: [], divergence_alerts: [], domain_relaxed_fallback: false, elapsed_ms: 1 } },
+      ]);
       clustersStore.checkForPatterns('B'.repeat(60));
       await flushAll();
-      expect(fetchMock2).toHaveBeenCalledOnce();
+      const matchCalls = fetchMock2.mock.calls.filter(
+        ([url]) => String(url).includes('/clusters/match'),
+      );
+      expect(matchCalls.length).toBe(1);
     });
   });
 
@@ -448,9 +475,22 @@ describe('transient fetch flags (Tier 1)', () => {
   });
 
   it('exposes _matchInFlight as public state (S7)', async () => {
-    // Delayed-resolve fetch so we can observe the in-flight transition.
+    // Delayed-resolve fetch so we can observe the in-flight transition. The
+    // preview lane (Tier 2) fires in parallel; resolve it eagerly so only the
+    // match lane's deferred state is observed.
     let resolveFetch!: (value: unknown) => void;
-    const fakeFetch = vi.fn(() => new Promise((r) => { resolveFetch = r; }));
+    const fakeFetch = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/clusters/preview-enrichment')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          task_type: { task_type: 'coding', confidence: 0.8, signal_source: 'bootstrap' },
+          domain: 'backend', intent_label: '', recommended_strategy: 'auto',
+          top_strategies: [], blocked_strategies: [], weaknesses: [],
+          divergence_alerts: [], domain_relaxed_fallback: false, elapsed_ms: 1,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      }
+      return new Promise((r) => { resolveFetch = r; });
+    });
     (globalThis as unknown as { fetch: typeof fetch }).fetch = fakeFetch as unknown as typeof fetch;
 
     expect(clustersStore._matchInFlight).toBe(false);
