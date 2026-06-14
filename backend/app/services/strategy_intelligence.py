@@ -9,11 +9,11 @@ Merges three signal sources into a single strategy advisory:
    AdaptationTracker.
 3. **Domain vocabulary** — keyword signals from ``DomainSignalLoader``.
 
-Standalone async functions — callable from the enrichment service, the
-sampling pipeline, the batch pipeline, and the refinement fallback path.
-
-Extracted from ``context_enrichment.py`` (Phase 3A).  Public API is preserved
-via re-exports in ``context_enrichment.py``.
+v0.4.40 (Tier 2): the formatted-string ``resolve_strategy_intelligence`` now
+delegates to ``resolve_strategy_intelligence_structured`` for the
+ranking/blocked computation so the live ContextPanel preview surfaces the
+same data as the prompt-injected advisory. Formatted-output is byte-identical
+pre/post the split (parity test in ``tests/test_preview_enrichment.py``).
 
 Copyright 2025-2026 Project Synthesis contributors.
 """
@@ -21,10 +21,32 @@ Copyright 2025-2026 Project Synthesis contributors.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StrategyRanking:
+    """A single strategy ranked by performance or feedback signal."""
+
+    name: str
+    score: float  # 0.0-1.0 for feedback approval_rate, raw avg_score (1-10) for performance
+    source: Literal["performance", "feedback"]
+
+
+@dataclass(frozen=True)
+class StructuredStrategyIntel:
+    """Structured form of strategy intelligence — consumed by both the
+    formatted prompt-injection advisory and the Tier 2 live ContextPanel
+    preview endpoint."""
+
+    top_strategies: list[StrategyRanking]
+    blocked_strategies: list[str]
+    domain_relaxed_fallback: bool
 
 
 async def resolve_performance_signals(
@@ -152,6 +174,94 @@ async def resolve_performance_signals(
         return None, False
 
 
+async def resolve_strategy_intelligence_structured(
+    db: AsyncSession,
+    task_type: str,
+    domain: str,
+) -> StructuredStrategyIntel:
+    """Return a structured form of strategy intelligence for UI consumption.
+
+    Consumed by the Tier 2 live ContextPanel preview endpoint AND
+    delegated to internally by ``resolve_strategy_intelligence`` so the
+    formatted prompt-injection advisory cannot drift from the panel view.
+
+    Returns:
+        StructuredStrategyIntel with:
+          - top_strategies: ≤3 StrategyRanking entries, sorted by score desc.
+            Pulled from the same Optimization table query as the formatted
+            helper. The ``source`` field reads "performance" because the
+            top-strategies entry-point uses score-based rankings only;
+            feedback approvals contribute to ``blocked_strategies`` and
+            the formatted helper but are not surfaced as ranked entries
+            (avoids ambiguity between rank-by-score and rank-by-approval).
+          - blocked_strategies: sorted alphabetically.
+          - domain_relaxed_fallback: True iff resolve_performance_signals
+            returned fallback_used=True (mirror exactly; blocked path
+            never moves this flag — task-type-only by construction).
+    """
+    try:
+        from sqlalchemy import func, select
+
+        from app.models import Optimization
+
+        _strategy_base = select(
+            Optimization.strategy_used,
+            func.avg(Optimization.overall_score).label("avg_score"),
+            func.count().label("n"),
+        ).where(
+            Optimization.task_type == task_type,
+            Optimization.overall_score.isnot(None),
+            Optimization.strategy_used.isnot(None),
+        )
+        perf_q = await db.execute(
+            _strategy_base.where(Optimization.domain == domain)
+            .group_by(Optimization.strategy_used)
+            .having(func.count() >= 3)
+            .order_by(func.avg(Optimization.overall_score).desc())
+            .limit(3)
+        )
+        rows = perf_q.all()
+        domain_relaxed_fallback = False
+        if not rows:
+            fallback_q = await db.execute(
+                _strategy_base
+                .group_by(Optimization.strategy_used)
+                .having(func.count() >= 3)
+                .order_by(func.avg(Optimization.overall_score).desc())
+                .limit(3)
+            )
+            rows = fallback_q.all()
+            if rows:
+                domain_relaxed_fallback = True
+
+        top: list[StrategyRanking] = [
+            StrategyRanking(name=r.strategy_used, score=float(r.avg_score), source="performance")
+            for r in rows
+        ]
+        top.sort(key=lambda r: r.score, reverse=True)
+        top = top[:3]
+    except Exception:
+        logger.debug("structured strategy ranking failed", exc_info=True)
+        top = []
+        domain_relaxed_fallback = False
+
+    blocked: list[str] = []
+    try:
+        from app.services.adaptation_tracker import AdaptationTracker
+
+        tracker = AdaptationTracker(db)
+        blocked_set = await tracker.get_blocked_strategies(task_type)
+        blocked = sorted(blocked_set)
+    except Exception:
+        logger.debug("structured blocked resolution failed", exc_info=True)
+
+    return StructuredStrategyIntel(
+        top_strategies=top,
+        blocked_strategies=blocked,
+        domain_relaxed_fallback=domain_relaxed_fallback,
+    )
+
+
 async def resolve_strategy_intelligence(
     db: AsyncSession,
     task_type: str,
@@ -159,21 +269,15 @@ async def resolve_strategy_intelligence(
 ) -> tuple[str | None, bool]:
     """Unified strategy intelligence — merges performance signals + user adaptation feedback.
 
-    Combines domain+task-type strategy performance data with user approval ratings
-    into a single strategy advisory.
-
-    Standalone function — callable from the enrichment service, sampling pipeline,
-    batch pipeline, and refinement fallback paths.
-
-    Returns:
-        Tuple of (formatted strategy intelligence string or None, fallback_used flag).
-        The fallback flag indicates whether the domain-relaxed fallback (C1) was used
-        for performance signals.
+    v0.4.40: delegates blocked-set resolution to the structured helper for
+    zero-drift parity with the Tier 2 ContextPanel preview endpoint. The
+    formatted-string output is byte-identical pre/post the split (locked by
+    ``tests/test_preview_enrichment.py::TestStrategyIntelligenceParity``).
     """
     sections: list[str] = []
     fallback_used = False
 
-    # 1. Score-based strategy rankings + anti-patterns + domain keywords
+    # 1. Score-based strategy rankings + anti-patterns + domain keywords (formatted)
     perf, fallback_used = await resolve_performance_signals(db, task_type, domain)
     if perf:
         sections.append(perf)
@@ -198,18 +302,28 @@ async def resolve_strategy_intelligence(
                     f"  {strategy}: {rate:.0%} approval ({total} feedbacks)"
                 )
             sections.append("User feedback:\n" + "\n".join(aff_lines))
-
-        # 3. Blocked strategies (approval < 0.3 with 5+ feedbacks)
-        blocked = await tracker.get_blocked_strategies(task_type)
-        if blocked:
-            sections.append(
-                "Blocked strategies (low approval): "
-                + ", ".join(sorted(blocked))
-            )
     except Exception:
         logger.debug("Adaptation data resolution failed", exc_info=True)
+
+    # 3. Blocked strategies — sourced from the structured helper so the panel
+    # and the prompt-injection advisory cannot drift.
+    try:
+        structured = await resolve_strategy_intelligence_structured(db, task_type, domain)
+        if structured.blocked_strategies:
+            sections.append(
+                "Blocked strategies (low approval): "
+                + ", ".join(structured.blocked_strategies)
+            )
+    except Exception:
+        logger.debug("Structured blocked resolution failed", exc_info=True)
 
     return ("\n\n".join(sections) if sections else None, fallback_used)
 
 
-__all__ = ["resolve_performance_signals", "resolve_strategy_intelligence"]
+__all__ = [
+    "StrategyRanking",
+    "StructuredStrategyIntel",
+    "resolve_performance_signals",
+    "resolve_strategy_intelligence",
+    "resolve_strategy_intelligence_structured",
+]
